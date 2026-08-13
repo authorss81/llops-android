@@ -9,8 +9,14 @@ package com.authorss81.noteflow.plugins
  * declares that capability and hands the caller a typed result (or a loud,
  * user-facing failure when nothing can serve it).
  *
+ * @param exclusive when true, only ONE enabled, available plugin may serve this
+ *   capability at a time. If two enabled plugins claim it, [PluginRegistry]
+ *   arbitration deterministically picks a winner (higher version; tie → earlier
+ *   registration) and reports the loser as disabled with a reason.
+ *
  * Adding a NEW capability is a framework change:
- * 1. Add an `object` to this sealed class.
+ * 1. Add an `object` to this sealed class (mark it `exclusive` if only one
+ *    engine may serve it at a time).
  * 2. Define the *serving interface* the plugin must implement (e.g.
  *    [TextTransformPlugin]) in `NoteflowPlugin.kt`.
  * 3. Route through `PluginManager` (see docs/PLUGINS.md).
@@ -21,26 +27,27 @@ package com.authorss81.noteflow.plugins
  */
 sealed class PluginCapability(
     val key: String,
-    val label: String
+    val label: String,
+    val exclusive: Boolean = false
 ) {
     /**
      * Transform note text (e.g. ROT13, case changes). Served by
-     * [TextTransformPlugin]. The only capability shipped this phase.
+     * [TextTransformPlugin]. Not exclusive — several transforms may coexist.
      */
     data object TextTransform : PluginCapability("text_transform", "Text Transform")
 
-    /** Extract text from images (Phase 12). */
-    data object OCR : PluginCapability("ocr", "OCR")
+    /** Extract text from images. Exclusive — one OCR engine at a time (Phase 12). */
+    data object OCR : PluginCapability("ocr", "OCR", exclusive = true)
 
-    /** Perform a web search (Phase 12 — requires INTERNET). */
-    data object WebSearch : PluginCapability("web_search", "Web Search")
+    /** Perform a web search (requires INTERNET). Exclusive (Phase 12). */
+    data object WebSearch : PluginCapability("web_search", "Web Search", exclusive = true)
 
-    /** Transfer files off-device (Phase 17). */
-    data object FileTransfer : PluginCapability("file_transfer", "File Transfer")
+    /** Transfer files off-device. Exclusive (Phase 17). */
+    data object FileTransfer : PluginCapability("file_transfer", "File Transfer", exclusive = true)
 
-    /** On-device AI assistance (future). */
-    data object Assistant : PluginCapability("assistant", "Assistant")
+    /** On-device AI assistance. Exclusive — one assistant at a time (future). */
+    data object Assistant : PluginCapability("assistant", "Assistant", exclusive = true)
 
-    /** Export vault content to external formats (future). */
-    data object Export : PluginCapability("export", "Export")
+    /** Export vault content to external formats. Exclusive (future). */
+    data object Export : PluginCapability("export", "Export", exclusive = true)
 }

@@ -16,4 +16,7 @@ class SettingsPluginEnableStore(
     override fun setEnabled(pluginId: String, enabled: Boolean) {
         settings.setPluginEnabled(pluginId, enabled)
     }
+
+    override fun hasEverBeenEnabled(pluginId: String): Boolean =
+        settings.hasPluginEverBeenEnabled(pluginId)
 }

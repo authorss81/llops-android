@@ -2,6 +2,7 @@ package com.authorss81.noteflow.services
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.authorss81.noteflow.plugins.PluginSettingKey
 import com.authorss81.noteflow.theme.AppThemeMode
 
 class SettingsManager(context: Context) {
@@ -155,6 +156,42 @@ class SettingsManager(context: Context) {
 
     fun setPluginEnabled(pluginId: String, enabled: Boolean) {
         prefs.edit().putBoolean("plugin_enabled_$pluginId", enabled).apply()
+        if (enabled) markPluginEverEnabled(pluginId)
+    }
+
+    // Phase 11: distinguishes REGISTERED (never enabled, off) from DISABLED
+    // (user turned it off) in the derived plugin lifecycle states.
+    fun hasPluginEverBeenEnabled(pluginId: String): Boolean =
+        prefs.getBoolean("plugin_ever_enabled_$pluginId", false)
+
+    fun markPluginEverEnabled(pluginId: String) {
+        prefs.edit().putBoolean("plugin_ever_enabled_$pluginId", true).apply()
+    }
+
+    // Phase 11: per-plugin namespaced settings. Every key lives under
+    // plugins.<id>.<key> (see PluginSettingKey) so two plugins never collide.
+    fun getPluginSetting(pluginId: String, key: String): String? =
+        prefs.getString(PluginSettingKey.key(pluginId, key), null)
+
+    fun setPluginSetting(pluginId: String, key: String, value: String?) {
+        val full = PluginSettingKey.key(pluginId, key)
+        prefs.edit().apply {
+            if (value == null) remove(full) else putString(full, value)
+        }.apply()
+    }
+
+    fun getPluginIntSetting(pluginId: String, key: String, default: Int): Int =
+        prefs.getInt(PluginSettingKey.key(pluginId, key), default)
+
+    fun setPluginIntSetting(pluginId: String, key: String, value: Int) {
+        prefs.edit().putInt(PluginSettingKey.key(pluginId, key), value).apply()
+    }
+
+    fun getPluginBooleanSetting(pluginId: String, key: String, default: Boolean): Boolean =
+        prefs.getBoolean(PluginSettingKey.key(pluginId, key), default)
+
+    fun setPluginBooleanSetting(pluginId: String, key: String, value: Boolean) {
+        prefs.edit().putBoolean(PluginSettingKey.key(pluginId, key), value).apply()
     }
 
     fun clearSecuritySettings() {

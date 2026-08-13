@@ -7,17 +7,24 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.authorss81.noteflow.plugins.PluginStatus
+import com.authorss81.noteflow.plugins.PluginDiagnostics
+import com.authorss81.noteflow.plugins.PluginEnableResult
+import com.authorss81.noteflow.plugins.PluginLifecycleState
+import com.authorss81.noteflow.plugins.PluginStateInfo
 import com.authorss81.noteflow.ui.viewmodel.NoteflowViewModel
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 
 /**
- * Phase 10: Settings → Plugins. Lists every compile-time-installed plugin with
- * its availability status and an opt-in toggle. A plugin that fails
- * [isAvailable] shows "Unavailable" and cannot be enabled; otherwise the toggle
- * reflects the persisted enable state.
+ * Phase 10/11: Settings → Plugins. Lists every compile-time-installed plugin
+ * with its derived lifecycle state, reason, version, last invocation outcome and
+ * a "Test now" diagnostics action. Enabling is refused with an inline reason when
+ * the registry's requirements (dependency / conflict / manifest) are unmet; the
+ * refusal is never silent and never a crash.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -27,7 +34,32 @@ fun PluginSettingsDialog(
 ) {
     val context = LocalContext.current
     val enabledIds by viewModel.pluginEnabledIds.collectAsState()
-    val plugins = viewModel.pluginRegistry.allPlugins
+    val states by viewModel.pluginStates.collectAsState()
+    val diagnostics by viewModel.pluginDiagnosticsEntries.collectAsState()
+    // Inline per-plugin messages (e.g. an enable refusal with its reason).
+    var localMessages by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+
+    val colorScheme = MaterialTheme.colorScheme
+    val stateColor: (PluginLifecycleState) -> Color = { state ->
+        when (state) {
+            PluginLifecycleState.AVAILABLE -> colorScheme.primary
+            PluginLifecycleState.ENABLED -> colorScheme.primary
+            PluginLifecycleState.UNAVAILABLE -> colorScheme.error
+            PluginLifecycleState.DISABLED -> colorScheme.onSurfaceVariant
+            PluginLifecycleState.REGISTERED -> colorScheme.onSurfaceVariant
+            PluginLifecycleState.REJECTED -> colorScheme.error
+        }
+    }
+    val stateLabel: (PluginLifecycleState) -> String = { state ->
+        when (state) {
+            PluginLifecycleState.AVAILABLE -> "Active"
+            PluginLifecycleState.ENABLED -> "Enabled — verifying"
+            PluginLifecycleState.UNAVAILABLE -> "Unavailable"
+            PluginLifecycleState.DISABLED -> "Disabled"
+            PluginLifecycleState.REGISTERED -> "Available — off"
+            PluginLifecycleState.REJECTED -> "Rejected"
+        }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -38,15 +70,21 @@ fun PluginSettingsDialog(
             }
         },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
                 Text(
-                    "Plugins are optional capabilities. Enable the ones you want — they are off by default.",
+                    "Plugins are optional capabilities. Enable the ones you want — they are off by default. " +
+                        "Each plugin shows its current state; use Test now to run its self-check.",
                     style = MaterialTheme.typography.bodyMedium
                 )
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-                plugins.forEach { plugin ->
-                    val status = viewModel.pluginRegistry.statusOf(plugin, context)
-                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                viewModel.pluginRegistry.allPlugins.forEach { plugin ->
+                    val info: PluginStateInfo? = states[plugin.id]
+                    val entry: PluginDiagnostics.Entry? = diagnostics.firstOrNull { it.plugin.id == plugin.id }
+                    val localMessage = localMessages[plugin.id]
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             verticalAlignment = Alignment.CenterVertically,
@@ -67,26 +105,51 @@ fun PluginSettingsDialog(
                             }
                             Switch(
                                 checked = enabledIds[plugin.id] == true,
-                                // An unavailable-but-enabled plugin can still be
+                                // A unavailable-but-enabled plugin can still be
                                 // toggled OFF so the user isn't stuck with it.
-                                enabled = status != PluginStatus.UNAVAILABLE ||
+                                enabled = info?.state != PluginLifecycleState.UNAVAILABLE ||
                                     enabledIds[plugin.id] == true,
-                                onCheckedChange = { viewModel.setPluginEnabled(plugin.id, it) }
+                                onCheckedChange = { wantOn ->
+                                    localMessages = localMessages - plugin.id
+                                    val result = viewModel.setPluginEnabled(plugin.id, wantOn)
+                                    if (result is PluginEnableResult.Refused) {
+                                        localMessages = localMessages + (plugin.id to result.reason)
+                                    }
+                                }
                             )
                         }
+                        val state = info?.state
                         Text(
-                            when (status) {
-                                PluginStatus.ENABLED -> "Enabled"
-                                PluginStatus.DISABLED -> "Available — off"
-                                PluginStatus.UNAVAILABLE -> "Unavailable on this device"
-                            },
+                            "${stateLabel(state ?: PluginLifecycleState.REGISTERED)}" +
+                                (info?.reason?.let { " — $it" } ?: ""),
                             style = MaterialTheme.typography.labelMedium,
-                            color = when (status) {
-                                PluginStatus.ENABLED -> MaterialTheme.colorScheme.primary
-                                PluginStatus.UNAVAILABLE -> MaterialTheme.colorScheme.error
-                                PluginStatus.DISABLED -> MaterialTheme.colorScheme.onSurfaceVariant
-                            }
+                            color = stateColor(state ?: PluginLifecycleState.REGISTERED)
                         )
+                        if (localMessage != null) {
+                            Text(
+                                localMessage,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+                        entry?.lastInvocation?.let { last ->
+                            Text(
+                                "Last: ${if (last.ok) "OK" else "failed"} — ${last.summary}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.outline
+                            )
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            OutlinedButton(
+                                onClick = {
+                                    localMessages = localMessages - plugin.id
+                                    viewModel.testPlugin(plugin.id)
+                                },
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp)
+                            ) {
+                                Text("Test now", style = MaterialTheme.typography.labelMedium)
+                            }
+                        }
                     }
                 }
             }

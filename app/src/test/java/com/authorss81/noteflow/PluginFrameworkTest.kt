@@ -2,11 +2,13 @@ package com.authorss81.noteflow
 
 import android.content.Context
 import com.authorss81.noteflow.plugins.NoteflowPlugin
+import com.authorss81.noteflow.plugins.PluginAvailability
 import com.authorss81.noteflow.plugins.PluginCapability
 import com.authorss81.noteflow.plugins.PluginEnableStore
 import com.authorss81.noteflow.plugins.PluginManager
 import com.authorss81.noteflow.plugins.PluginRegistry
 import com.authorss81.noteflow.plugins.PluginResult
+import com.authorss81.noteflow.plugins.PluginSettings
 import com.authorss81.noteflow.plugins.Rot13TransformPlugin
 import com.authorss81.noteflow.plugins.TextTransformPlugin
 import org.junit.Assert.assertEquals
@@ -15,37 +17,44 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Phase 10: the plugin framework must be genuinely testable on the JVM — the
- * framework core never touches Android (the production enable-store is the only
- * Android-backed piece), so these tests use an in-memory store and a null
- * context, exactly as [PluginRegistry]/[PluginManager] expect.
+ * Phase 10 + 11: the plugin framework must be genuinely testable on the JVM —
+ * the framework core never touches Android (the production enable/settings
+ * stores are the only Android-backed pieces), so these tests use an in-memory
+ * store and a null context, exactly as [PluginRegistry]/[PluginManager] expect.
  */
 class PluginFrameworkTest {
 
     private class InMemoryPluginEnableStore : PluginEnableStore {
         val state = mutableMapOf<String, Boolean>()
+        val ever = mutableSetOf<String>()
         override fun isEnabled(pluginId: String): Boolean = state[pluginId] == true
         override fun setEnabled(pluginId: String, enabled: Boolean) {
             state[pluginId] = enabled
+            if (enabled) ever.add(pluginId)
         }
+        override fun hasEverBeenEnabled(pluginId: String): Boolean = pluginId in ever
     }
 
     /** A plugin that declares WebSearch but can never run on this device. */
     private class UnavailablePlugin : NoteflowPlugin {
-        override val id = "test.unavailable"
-        override val name = "Unavailable Test Plugin"
-        override val description = "Always unavailable."
-        override val version = "0.0.1"
-        override val capabilities: Set<PluginCapability> = setOf(PluginCapability.WebSearch)
-        override fun isAvailable(context: Context?): Boolean = false
-        override fun onEnable(context: Context?) {}
+        override val manifest = com.authorss81.noteflow.plugins.PluginManifest(
+            id = "test.unavailable",
+            name = "Unavailable Test Plugin",
+            version = com.authorss81.noteflow.plugins.SemanticVersion(0, 0, 1),
+            minSupportedApi = 26,
+            description = "Always unavailable.",
+            capabilities = setOf(PluginCapability.WebSearch)
+        )
+        override fun availability(context: Context?): PluginAvailability =
+            PluginAvailability.Unavailable("always unavailable")
+        override fun onEnable(context: Context?, settings: PluginSettings) {}
     }
 
     private val rot13 = Rot13TransformPlugin()
 
     @Test
     fun registryDiscoveryListsSamplePlugin() {
-        val registry = PluginRegistry(InMemoryPluginEnableStore())
+        val registry = PluginRegistry(InMemoryPluginEnableStore(), currentApiLevel = 26)
         assertTrue(registry.allPlugins.any { it.id == rot13.id && it.name == rot13.name })
         val found = registry.allPlugins.first { it.id == rot13.id }
         assertTrue(PluginCapability.TextTransform in found.capabilities)
@@ -56,7 +65,7 @@ class PluginFrameworkTest {
     @Test
     fun enablingAndDisablingPersists() {
         val store = InMemoryPluginEnableStore()
-        val registry = PluginRegistry(store)
+        val registry = PluginRegistry(store, currentApiLevel = 26)
         assertEquals(false, store.isEnabled(rot13.id))
 
         registry.setEnabled(rot13.id, enabled = true)
@@ -72,7 +81,7 @@ class PluginFrameworkTest {
 
     @Test
     fun capabilityRoutingInvokesEnabledPlugin() {
-        val registry = PluginRegistry(InMemoryPluginEnableStore())
+        val registry = PluginRegistry(InMemoryPluginEnableStore(), currentApiLevel = 26)
         registry.setEnabled(rot13.id, enabled = true)
         val manager = PluginManager(registry)
 
@@ -85,7 +94,7 @@ class PluginFrameworkTest {
 
     @Test
     fun disabledPluginIsSkippedWithLoudFailure() {
-        val registry = PluginRegistry(InMemoryPluginEnableStore()) // nothing enabled
+        val registry = PluginRegistry(InMemoryPluginEnableStore(), currentApiLevel = 26) // nothing enabled
         val manager = PluginManager(registry)
 
         val result = manager.withPlugin(PluginCapability.TextTransform, null) { plugin ->
@@ -100,7 +109,7 @@ class PluginFrameworkTest {
 
     @Test
     fun unavailableCapabilityFailsClearlyWithoutCrashing() {
-        val registry = PluginRegistry(InMemoryPluginEnableStore()) // no plugin declares OCR
+        val registry = PluginRegistry(InMemoryPluginEnableStore(), currentApiLevel = 26) // no plugin declares OCR
         val manager = PluginManager(registry)
 
         val result = manager.withPlugin(PluginCapability.OCR, null) { it.id }
@@ -111,19 +120,19 @@ class PluginFrameworkTest {
 
     @Test
     fun unavailablePluginOnDeviceFailsClearly() {
-        val registry = PluginRegistry(InMemoryPluginEnableStore(), listOf(UnavailablePlugin()))
+        val registry = PluginRegistry(InMemoryPluginEnableStore(), plugins = listOf(UnavailablePlugin()), currentApiLevel = 26)
         registry.setEnabled(UnavailablePlugin().id, enabled = true)
         val manager = PluginManager(registry)
 
         val result = manager.withPlugin(PluginCapability.WebSearch, null) { it.id }
 
-        assertTrue(result is PluginResult.Failure)
-        assertTrue((result as PluginResult.Failure).message.contains("unavailable on this device"))
+        assertTrue(result is PluginResult.Unavailable)
+        assertTrue((result as PluginResult.Unavailable).message.contains("unavailable on this device"))
     }
 
     @Test
     fun enabledPluginsExcludesDeviceUnavailable() {
-        val registry = PluginRegistry(InMemoryPluginEnableStore(), listOf(rot13, UnavailablePlugin()))
+        val registry = PluginRegistry(InMemoryPluginEnableStore(), plugins = listOf(rot13, UnavailablePlugin()), currentApiLevel = 26)
         registry.setEnabled(rot13.id, enabled = true)
         registry.setEnabled(UnavailablePlugin().id, enabled = true)
 
@@ -137,15 +146,18 @@ class PluginFrameworkTest {
         val store = InMemoryPluginEnableStore()
         var calls = 0
         val counting = object : NoteflowPlugin {
-            override val id = "test.counting"
-            override val name = "Counting"
-            override val description = ""
-            override val version = "1.0.0"
-            override val capabilities: Set<PluginCapability> = emptySet()
-            override fun isAvailable(context: Context?): Boolean = true
-            override fun onEnable(context: Context?) { calls++ }
+            override val manifest = com.authorss81.noteflow.plugins.PluginManifest(
+                id = "test.counting",
+                name = "Counting",
+                version = com.authorss81.noteflow.plugins.SemanticVersion(1, 0, 0),
+                minSupportedApi = 26,
+                description = "counting test plugin",
+                capabilities = setOf(PluginCapability.TextTransform)
+            )
+            override fun availability(context: Context?): PluginAvailability = PluginAvailability.Ok
+            override fun onEnable(context: Context?, settings: PluginSettings) { calls++ }
         }
-        val registry = PluginRegistry(store, listOf(counting))
+        val registry = PluginRegistry(store, plugins = listOf(counting), currentApiLevel = 26)
         registry.setEnabled(counting.id, enabled = true)
         registry.setEnabled(counting.id, enabled = true) // no-op re-enable
         registry.setEnabled(counting.id, enabled = false)
@@ -158,18 +170,21 @@ class PluginFrameworkTest {
         val store = InMemoryPluginEnableStore()
         var calls = 0
         val counting = object : NoteflowPlugin {
-            override val id = "test.coldstart"
-            override val name = "Counting"
-            override val description = ""
-            override val version = "1.0.0"
-            override val capabilities: Set<PluginCapability> = emptySet()
-            override fun isAvailable(context: Context?): Boolean = true
-            override fun onEnable(context: Context?) { calls++ }
+            override val manifest = com.authorss81.noteflow.plugins.PluginManifest(
+                id = "test.coldstart",
+                name = "Counting",
+                version = com.authorss81.noteflow.plugins.SemanticVersion(1, 0, 0),
+                minSupportedApi = 26,
+                description = "counting test plugin",
+                capabilities = setOf(PluginCapability.TextTransform)
+            )
+            override fun availability(context: Context?): PluginAvailability = PluginAvailability.Ok
+            override fun onEnable(context: Context?, settings: PluginSettings) { calls++ }
         }
         // Simulate a previous process that enabled the plugin in the store.
         store.setEnabled(counting.id, enabled = true)
 
-        val registry = PluginRegistry(store, listOf(counting))
+        val registry = PluginRegistry(store, plugins = listOf(counting), currentApiLevel = 26)
         assertEquals(0, calls) // not yet reconciled
         registry.onProcessStart(context = null)
         assertEquals(1, calls) // fired exactly once at cold start

@@ -8,9 +8,13 @@ import com.authorss81.noteflow.data.db.NoteflowDatabase
 import com.authorss81.noteflow.data.model.*
 import com.authorss81.noteflow.data.repository.NoteRepository
 import com.authorss81.noteflow.plugins.PluginCapability
+import com.authorss81.noteflow.plugins.PluginDiagnostics
+import com.authorss81.noteflow.plugins.PluginEnableResult
+import com.authorss81.noteflow.plugins.PluginLifecycleState
 import com.authorss81.noteflow.plugins.PluginManager
 import com.authorss81.noteflow.plugins.PluginRegistry
 import com.authorss81.noteflow.plugins.PluginResult
+import com.authorss81.noteflow.plugins.PluginStateInfo
 import com.authorss81.noteflow.plugins.TextTransformPlugin
 import com.authorss81.noteflow.services.DatabaseSecurityHelper
 import com.authorss81.noteflow.services.EncryptionService
@@ -18,8 +22,10 @@ import com.authorss81.noteflow.services.ImportExportService
 import com.authorss81.noteflow.services.SecurityService
 import com.authorss81.noteflow.services.SettingsManager
 import com.authorss81.noteflow.services.SettingsPluginEnableStore
+import com.authorss81.noteflow.services.SettingsPluginSettingsStore
 import com.authorss81.noteflow.theme.AppThemeMode
 import com.authorss81.noteflow.ui.components.WorkspaceTemplate
+import com.authorss81.noteflow.plugins.AndroidPluginLogger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -38,24 +44,64 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     private val db by lazy { NoteflowDatabase.getDatabase(appContext) }
     val repository by lazy { NoteRepository(db) }
 
-    // Phase 10: plugin framework (see docs/PLUGINS.md). Core registry/manager are
-    // dependency-free; persist opt-in via SettingsManager.
+    // Phase 10/11: plugin framework (see docs/PLUGINS.md + docs/PLUGIN_SDK.md).
+    // Core registry/manager are dependency-free; persist opt-in + per-plugin
+    // settings via SettingsManager; log lifecycle events to logcat (ids/names
+    // and exception classes only — never content).
     private val pluginEnableStore = SettingsPluginEnableStore(settings)
-    val pluginRegistry = PluginRegistry(pluginEnableStore)
-    val pluginManager = PluginManager(pluginRegistry)
+    private val pluginSettingsStore = SettingsPluginSettingsStore(settings)
+    val pluginRegistry = PluginRegistry(
+        pluginEnableStore,
+        pluginSettingsStore,
+        logger = AndroidPluginLogger()
+    )
+    val pluginManager = PluginManager(pluginRegistry, AndroidPluginLogger())
+    val pluginDiagnostics = PluginDiagnostics(pluginRegistry, pluginManager)
 
     init {
         // Fire onEnable once per process for plugins already enabled in a
         // previous session (see PluginRegistry.onProcessStart).
         pluginRegistry.onProcessStart(appContext)
+        refreshPluginStates()
     }
 
     private val _pluginEnabledIds = MutableStateFlow(pluginRegistry.allPlugins.associate { it.id to pluginRegistry.isEnabled(it.id) })
     val pluginEnabledIds: StateFlow<Map<String, Boolean>> = _pluginEnabledIds.asStateFlow()
 
-    fun setPluginEnabled(pluginId: String, enabled: Boolean) {
-        pluginRegistry.setEnabled(pluginId, enabled, appContext)
+    private val _pluginStates = MutableStateFlow<Map<String, PluginStateInfo>>(emptyMap())
+    val pluginStates: StateFlow<Map<String, PluginStateInfo>> = _pluginStates.asStateFlow()
+
+    private val _pluginDiagnostics = MutableStateFlow<List<PluginDiagnostics.Entry>>(emptyList())
+    val pluginDiagnosticsEntries: StateFlow<List<PluginDiagnostics.Entry>> = _pluginDiagnostics.asStateFlow()
+
+    private fun refreshPluginStates() {
         _pluginEnabledIds.value = pluginRegistry.allPlugins.associate { it.id to pluginRegistry.isEnabled(it.id) }
+        _pluginStates.value = pluginRegistry.resolve(appContext)
+        _pluginDiagnostics.value = pluginDiagnostics.snapshot(appContext)
+    }
+
+    /**
+     * Toggle a plugin's opt-in. Enabling may be refused by the registry with a
+     * clear reason (unmet dependency / conflict / invalid manifest); the result
+     * is typed so the UI can surface the refusal instead of silently failing.
+     */
+    fun setPluginEnabled(pluginId: String, enabled: Boolean): PluginEnableResult {
+        val result = pluginRegistry.setEnabled(pluginId, enabled, appContext)
+        refreshPluginStates()
+        return result
+    }
+
+    /** Run a plugin's self-check for the diagnostics "Test now" action. */
+    fun testPlugin(pluginId: String) {
+        viewModelScope.launch(Dispatchers.Default) {
+            pluginDiagnostics.testNow(pluginId, appContext)
+            withContext(Dispatchers.Main) { refreshPluginStates() }
+        }
+    }
+
+    /** Call after a user changes a `plugins.<id>.<key>` setting. */
+    fun notifyPluginConfigChanged(pluginId: String) {
+        pluginRegistry.notifyConfigChanged(pluginId, appContext)
     }
 
     /**
@@ -68,6 +114,10 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
                 ?: throw IllegalStateException("${plugin.name} does not implement TextTransformPlugin")
             transformer.transformText(text)
         }
+
+    /** True when a plugin currently sits in a state that can serve requests. */
+    fun isPluginUsable(pluginId: String): Boolean =
+        _pluginStates.value[pluginId]?.state == PluginLifecycleState.AVAILABLE
 
     private val _databaseTampered = MutableStateFlow(false)
     val databaseTampered: StateFlow<Boolean> = _databaseTampered.asStateFlow()

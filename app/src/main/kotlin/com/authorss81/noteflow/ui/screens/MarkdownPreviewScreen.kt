@@ -492,6 +492,8 @@ fun MarkdownPreviewScreen(
                                 }
                                 is PluginResult.Failure ->
                                     viewModel.showSnackbar(result.message, isLong = true)
+                                is PluginResult.Unavailable ->
+                                    viewModel.showSnackbar(result.message, isLong = true)
                             }
                         }) { Text("Apply") }
                     },
