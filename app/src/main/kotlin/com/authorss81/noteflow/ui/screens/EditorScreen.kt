@@ -48,6 +48,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.authorss81.noteflow.data.model.*
 import com.authorss81.noteflow.services.ImportExportService
+import com.authorss81.noteflow.services.HarmonyScheme
+import com.authorss81.noteflow.services.PressureCurve
+import com.authorss81.noteflow.services.SymmetryMode
 import com.authorss81.noteflow.services.VoiceNoteManager
 import com.authorss81.noteflow.ui.components.AnnotationCanvas
 import com.authorss81.noteflow.ui.components.BacklinksInspectorBottomSheet
@@ -123,6 +126,18 @@ fun EditorScreen(
         }
     }
 
+    // Phase 07: custom paper-texture pack (tiled page background, per-page pref).
+    var paperTexturePath by remember(page.id) { mutableStateOf(viewModel.settings.paperTexturePathForPage(page.id)) }
+    var paperTexture by remember { mutableStateOf<ImageBitmap?>(null) }
+    LaunchedEffect(page.id, paperTexturePath) {
+        paperTexture = if (paperTexturePath.isNullOrBlank()) {
+            null
+        } else {
+            val bmp = withContext(Dispatchers.IO) { decodeBoundedBitmap(paperTexturePath!!, targetWidth = 512) }
+            bmp?.asImageBitmap()
+        }
+    }
+
     val bgImagePicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: android.net.Uri? ->
@@ -140,6 +155,29 @@ fun EditorScreen(
                 }
             } catch (e: Exception) {
                 viewModel.showSnackbar("Failed to load custom background image")
+            }
+        }
+    }
+
+    // Phase 07: custom paper-texture pack picker (tiled page background).
+    val paperTexturePicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: android.net.Uri? ->
+        uri?.let {
+            try {
+                val inputStream = context.contentResolver.openInputStream(it)
+                val bytes = inputStream?.readBytes()
+                if (bytes != null) {
+                    val fileName = "paper_texture_${System.currentTimeMillis()}.png"
+                    scope.launch {
+                        val savedPath = com.authorss81.noteflow.services.ImportExportService.persistFile(context, fileName, bytes)
+                        paperTexturePath = savedPath
+                        viewModel.settings.setPaperTexturePathForPage(page.id, savedPath)
+                        viewModel.showSnackbar("Paper texture applied (tiled)")
+                    }
+                }
+            } catch (e: Exception) {
+                viewModel.showSnackbar("Failed to load paper texture")
             }
         }
     }
@@ -222,6 +260,11 @@ fun EditorScreen(
     var divideIntoPages by remember { mutableStateOf(true) }
     var gpuWetBrushesEnabled by remember { mutableStateOf(viewModel.settings.gpuWetBrushesEnabled) }
     var shapeAutoSnapEnabled by remember { mutableStateOf(viewModel.settings.shapeAutoSnapEnabled) }
+
+    // Phase 07 painting features: stabilizer / pressure curve / symmetry mode.
+    var stabilizerEnabled by remember { mutableStateOf(viewModel.settings.strokeStabilizerEnabled) }
+    var pressureCurve by remember { mutableStateOf(PressureCurve.fromSettingKey(viewModel.settings.pressureCurveKey)) }
+    var symmetryMode by remember { mutableStateOf(SymmetryMode.fromSettingKey(viewModel.settings.symmetryModeKey)) }
 
         LaunchedEffect(Unit) {
             val detectedTier = com.authorss81.noteflow.utils.DeviceCompatibilityManager.getDeviceTier(context, viewModel.settings)
@@ -879,6 +922,34 @@ fun EditorScreen(
                             }
                         )
                         DropdownMenuItem(
+                            text = { Text("Export Page as WebP") },
+                            leadingIcon = { Icon(Icons.Outlined.Image, contentDescription = null) },
+                            onClick = {
+                                showOverflowMenu = false
+                                scope.launch {
+                                    val bgBmp = pdfPageBitmaps[currentPdfPage]?.asAndroidBitmap()
+                                    val file = ImportExportService.exportAnnotatedPage(
+                                        context = context,
+                                        title = "${page.title}_Page_${currentPdfPage + 1}",
+                                        strokes = strokes,
+                                        bgBitmap = bgBmp,
+                                        template = template,
+                                        exportAsPdf = false,
+                                        layers = layers,
+                                        stickyNotes = stickyNotes,
+                                        mediaEmbeds = mediaEmbeds,
+                                        pageIndex = currentPdfPage,
+                                        exportImageFormat = com.authorss81.noteflow.services.ImportExportService.ExportImageFormat.WEBP
+                                    )
+                                    if (file != null) {
+                                        viewModel.showSnackbar("Exported Page WebP to Downloads: ${file.name}", isLong = true)
+                                    } else {
+                                        viewModel.showSnackbar("Export failed")
+                                    }
+                                }
+                            }
+                        )
+                        DropdownMenuItem(
                             text = { Text("Export Page as PDF") },
                             leadingIcon = { Icon(Icons.Outlined.PictureAsPdf, contentDescription = null) },
                             onClick = {
@@ -1060,6 +1131,7 @@ fun EditorScreen(
                 paperColorHex = paperColorHex,
                 divideIntoPages = divideIntoPages,
                 backgroundImage = pdfPageBitmaps[currentPdfPage],
+                paperTexture = paperTexture,
                 layers = layers,
                 activeLayerId = activeLayerId,
                 pdfPageBitmaps = pdfPageBitmaps,
@@ -1082,6 +1154,9 @@ fun EditorScreen(
                 activeVoiceSpeed = activeVoiceSpeed,
                 gpuWetBrushesEnabled = gpuWetBrushesEnabled,
                 shapeAutoSnapEnabled = shapeAutoSnapEnabled,
+                stabilizerEnabled = stabilizerEnabled,
+                pressureCurve = pressureCurve,
+                symmetryMode = symmetryMode,
                 onZoomScaleChanged = { zoomScale = it },
                 onPanOffsetChanged = { panOffset = it },
                 onVisiblePageWindowChanged = { newWindow ->
@@ -1336,11 +1411,33 @@ fun EditorScreen(
                     shapeAutoSnapEnabled = enabled
                     viewModel.settings.shapeAutoSnapEnabled = enabled
                 },
+                stabilizerEnabled = stabilizerEnabled,
+                onStabilizerToggle = { enabled ->
+                    stabilizerEnabled = enabled
+                    viewModel.settings.strokeStabilizerEnabled = enabled
+                },
+                pressureCurve = pressureCurve,
+                onPressureCurveSelect = { curve ->
+                    pressureCurve = curve
+                    viewModel.settings.pressureCurveKey = curve.settingKey
+                },
+                symmetryMode = symmetryMode,
+                onSymmetryModeSelect = { mode ->
+                    symmetryMode = mode
+                    viewModel.settings.symmetryModeKey = mode.settingKey
+                },
                 onContinuousModeToggle = { isContinuousMode = !isContinuousMode },
                 onDividePagesToggle = { divideIntoPages = !divideIntoPages },
                 onTemplateSelect = { selectedTemplate ->
                     template = selectedTemplate
                     viewModel.updatePageTemplate(page.id, selectedTemplate)
+                },
+                paperTexturePath = paperTexturePath,
+                onUploadPaperTexture = { paperTexturePicker.launch("image/*") },
+                onClearPaperTexture = {
+                    paperTexturePath = null
+                    paperTexture = null
+                    viewModel.settings.setPaperTexturePathForPage(page.id, null)
                 },
                 onPaperColorSelect = { selectedHex ->
                     paperColorHex = selectedHex
@@ -2133,7 +2230,67 @@ private fun ColorPickerBottomSheet(
                     }
                 }
             }
+            // Phase 07: deterministic color-harmony swatches (HSL rotation math).
+            Spacer(modifier = Modifier.height(20.dp))
+            HarmonySwatchesRow(
+                sourceColor = currentColor,
+                onColorSelect = onColorSelect
+            )
             Spacer(modifier = Modifier.height(24.dp))
+        }
+    }
+}
+
+/**
+ * Color-harmony swatch rows derived from [sourceColor] via deterministic HSL
+ * rotation (ColorHarmonyHelper). Selecting a swatch just picks that color —
+ * the sheet stays open so the user can audition several harmonies.
+ */
+@Composable
+private fun HarmonySwatchesRow(
+    sourceColor: Color,
+    onColorSelect: (Color) -> Unit
+) {
+    val sourceRgb = com.authorss81.noteflow.services.ColorHarmonyHelper.Rgb(
+        android.graphics.Color.red(sourceColor.toArgb()).toFloat(),
+        android.graphics.Color.green(sourceColor.toArgb()).toFloat(),
+        android.graphics.Color.blue(sourceColor.toArgb()).toFloat()
+    )
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = "Color Harmonies",
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.primary
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        HarmonyScheme.entries.forEach { scheme ->
+            val swatches = remember(sourceRgb.r, sourceRgb.g, sourceRgb.b, scheme) {
+                com.authorss81.noteflow.services.ColorHarmonyHelper.generate(sourceRgb, scheme)
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = scheme.label,
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.width(96.dp)
+                )
+                swatches.forEach { sw ->
+                    val argb = android.graphics.Color.rgb(sw.r.toInt().coerceIn(0, 255), sw.g.toInt().coerceIn(0, 255), sw.b.toInt().coerceIn(0, 255))
+                    val c = Color(argb)
+                    Box(
+                        modifier = Modifier
+                            .size(30.dp)
+                            .clip(CircleShape)
+                            .background(c)
+                            .border(1.dp, MaterialTheme.colorScheme.outline, CircleShape)
+                            .clickable { onColorSelect(c) }
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
         }
     }
 }
@@ -2360,6 +2517,15 @@ private fun CanvasSettingsBottomSheet(
     onGpuWetBrushesToggle: (Boolean) -> Unit = {},
     shapeAutoSnapEnabled: Boolean = true,
     onShapeAutoSnapToggle: (Boolean) -> Unit = {},
+    stabilizerEnabled: Boolean = false,
+    onStabilizerToggle: (Boolean) -> Unit = {},
+    pressureCurve: PressureCurve = PressureCurve.LINEAR,
+    onPressureCurveSelect: (PressureCurve) -> Unit = {},
+    symmetryMode: SymmetryMode = SymmetryMode.OFF,
+    onSymmetryModeSelect: (SymmetryMode) -> Unit = {},
+    paperTexturePath: String? = null,
+    onUploadPaperTexture: () -> Unit = {},
+    onClearPaperTexture: () -> Unit = {},
     onContinuousModeToggle: () -> Unit,
     onDividePagesToggle: () -> Unit,
     onTemplateSelect: (String) -> Unit,
@@ -2495,6 +2661,36 @@ private fun CanvasSettingsBottomSheet(
                 Icon(Icons.Outlined.Image, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(8.dp))
                 Text("Upload Custom Paper Background Image")
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                OutlinedButton(
+                    onClick = onUploadPaperTexture,
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(Icons.Outlined.Texture, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Upload Paper Texture")
+                }
+                if (paperTexturePath != null) {
+                    Button(
+                        onClick = onClearPaperTexture,
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.errorContainer
+                        )
+                    ) {
+                        Icon(Icons.Outlined.DeleteForever, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Clear")
+                    }
+                }
             }
 
             Spacer(modifier = Modifier.height(16.dp))
@@ -2655,6 +2851,114 @@ private fun CanvasSettingsBottomSheet(
                     checked = shapeAutoSnapEnabled,
                     onCheckedChange = onShapeAutoSnapToggle
                 )
+            }
+
+            // Phase 07: Painting Assist section.
+            Text(
+                text = "Painting Assist",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    // Stroke Stabilizer toggle (rolling-window EWMA smoothing).
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Icon(Icons.Outlined.Waves, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                            Column {
+                                Text("Stroke Stabilizer", style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    "Smooth pen jitter for cleaner strokes",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        Switch(
+                            checked = stabilizerEnabled,
+                            onCheckedChange = onStabilizerToggle
+                        )
+                    }
+
+                    // Pressure response curve selector.
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Icon(Icons.Outlined.Speed, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                            Column {
+                                Text("Pressure Curve", style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    "Tune stylus pressure feel",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        PressureCurve.entries.forEach { curve ->
+                            FilterChip(
+                                selected = pressureCurve == curve,
+                                onClick = { onPressureCurveSelect(curve) },
+                                label = { Text(curve.label, style = MaterialTheme.typography.labelSmall) },
+                                modifier = Modifier.weight(1f)
+                            )
+                            if (curve != PressureCurve.entries.last()) {
+                                Spacer(modifier = Modifier.width(4.dp))
+                            }
+                        }
+                    }
+
+                    // Symmetry / mirror mode selector.
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Icon(Icons.Outlined.Flip, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                            Column {
+                                Text("Symmetry", style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    "Mirror strokes live while painting",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        SymmetryMode.entries.forEach { mode ->
+                            FilterChip(
+                                selected = symmetryMode == mode,
+                                onClick = { onSymmetryModeSelect(mode) },
+                                label = { Text(mode.label, style = MaterialTheme.typography.labelSmall) },
+                                modifier = Modifier.weight(1f)
+                            )
+                            if (mode != SymmetryMode.entries.last()) {
+                                Spacer(modifier = Modifier.width(4.dp))
+                            }
+                        }
+                    }
+                }
             }
 
             Spacer(modifier = Modifier.height(16.dp))

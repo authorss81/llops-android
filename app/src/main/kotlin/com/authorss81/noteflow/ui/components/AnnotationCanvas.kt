@@ -45,7 +45,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.authorss81.noteflow.data.model.CanvasMediaEmbed
 import com.authorss81.noteflow.services.BrushTextureEngine
+import com.authorss81.noteflow.services.PressureCurve
+import com.authorss81.noteflow.services.PressureCurveHelper
 import com.authorss81.noteflow.services.ProtobufBrushLoader
+import com.authorss81.noteflow.services.StrokeStabilizer
+import com.authorss81.noteflow.services.SymmetryHelper
+import com.authorss81.noteflow.services.SymmetryMode
 import com.authorss81.noteflow.data.model.CanvasStickyNote
 import com.authorss81.noteflow.data.model.CanvasTextStyle
 import com.authorss81.noteflow.data.model.MediaEmbedType
@@ -87,6 +92,7 @@ fun AnnotationCanvas(
     paperColorHex: String = "#FFFFFF",
     divideIntoPages: Boolean = true,
     backgroundImage: ImageBitmap? = null,
+    paperTexture: ImageBitmap? = null,
     pdfPageBitmaps: Map<Int, ImageBitmap> = emptyMap(),
     activeRawBitmapMap: Map<Int, android.graphics.Bitmap> = emptyMap(),
     pdfTotalPages: Int = 1,
@@ -121,7 +127,10 @@ fun AnnotationCanvas(
     onDrawingEnd: () -> Unit = {},
     onCanvasTap: () -> Unit = {},
     gpuWetBrushesEnabled: Boolean = true,
-    shapeAutoSnapEnabled: Boolean = true
+    shapeAutoSnapEnabled: Boolean = true,
+    stabilizerEnabled: Boolean = false,
+    pressureCurve: PressureCurve = PressureCurve.LINEAR,
+    symmetryMode: SymmetryMode = SymmetryMode.OFF
 ) {
     var internalZoomScale by remember { mutableFloatStateOf(zoomScale) }
     var internalPanOffset by remember { mutableStateOf(panOffset) }
@@ -196,6 +205,9 @@ fun AnnotationCanvas(
     var activeTargetPage by remember { mutableIntStateOf(pdfPageFilter) }
     var dynamicPageCount by remember { mutableIntStateOf(1) }
     var isPanningBlackSpace by remember { mutableStateOf(false) }
+
+    // Phase 07: stroke stabilizer (one filter instance per continuous stroke).
+    val stabilizerFilter = remember { StrokeStabilizer.create() }
 
     // Eyedropper Magnifying Loupe State
     var sampledColorPreview by remember { mutableStateOf<Color?>(null) }
@@ -527,10 +539,15 @@ fun AnnotationCanvas(
                             isPanningBlackSpace = false
 
                             activeTargetPage = targetPage
+                            // Phase 07: fresh smoothing window + remapped pressure per stroke.
+                            if (stabilizerEnabled) {
+                                stabilizerFilter.reset()
+                            }
+                            val startPressure = PressureCurveHelper.remapPressure(lastPressure, pressureCurve)
                             val startPoint = PointF(
                                 x = canvasOffset.x.coerceIn(0f, pageWidthPx),
                                 y = canvasOffset.y.coerceIn(targetPageYStart, targetPageYEnd),
-                                pressure = lastPressure,
+                                pressure = startPressure,
                                 tilt = lastTilt,
                                 timestampMs = lastTimestampMs
                             )
@@ -578,10 +595,11 @@ fun AnnotationCanvas(
                                 return@detectDragGestures
                             }
 
+                            val currentPressure = PressureCurveHelper.remapPressure(lastPressure, pressureCurve)
                             val currentPoint = PointF(
                                 x = rawCanvasX.coerceIn(0f, pageWidthPx),
                                 y = rawCanvasY.coerceIn(targetPageYStart, targetPageYEnd),
-                                pressure = lastPressure,
+                                pressure = currentPressure,
                                 tilt = lastTilt,
                                 timestampMs = lastTimestampMs
                             )
@@ -602,23 +620,31 @@ fun AnnotationCanvas(
                                     onStrokesChanged(otherStrokes + remaining)
                                 }
                             } else if (currentTool.isFreehandTool) {
+                                // Phase 07: stabilizer (per-axis EWMA) smooths touch jitter
+                                // while staying responsive; disabled => identical behaviour.
+                                val drawPoint = if (stabilizerEnabled) {
+                                    val s = stabilizerFilter.next(currentPoint.x, currentPoint.y)
+                                    PointF(s.x, s.y, currentPoint.pressure, currentPoint.tilt, currentPoint.timestampMs)
+                                } else {
+                                    currentPoint
+                                }
                                 // Vector Stroke Smoothing & Touch jitter filtering: add point if distance > 1.5px
                                 val last = activePoints.lastOrNull()
                                 val lastTime = if (activePoints.size >= 2) System.currentTimeMillis() - 16L else System.currentTimeMillis() - 100L
                                 val curTime = System.currentTimeMillis()
 
-                                if (wetBrushEngine.shouldProcessPoint(last?.let { Offset(it.x, it.y) }, Offset(currentPoint.x, currentPoint.y), lastTime, curTime)) {
+                                if (wetBrushEngine.shouldProcessPoint(last?.let { Offset(it.x, it.y) }, Offset(drawPoint.x, drawPoint.y), lastTime, curTime)) {
                                     if (last != null && (currentTool == StrokeTool.WATERCOLOR || currentTool == StrokeTool.OIL_PAINT || currentTool == StrokeTool.SMUDGE || currentTool == StrokeTool.SPLATTER)) {
                                         val interpolated = wetBrushEngine.interpolateSegment(
                                             prev = Offset(last.x, last.y),
-                                            cur = Offset(currentPoint.x, currentPoint.y),
+                                            cur = Offset(drawPoint.x, drawPoint.y),
                                             radius = currentWidth * 1.5f
                                         )
                                         for (interp in interpolated) {
                                             val interpPt = PointF(
                                                 x = interp.x,
                                                 y = interp.y,
-                                                pressure = lastPressure,
+                                                pressure = currentPressure,
                                                 tilt = lastTilt,
                                                 timestampMs = lastTimestampMs
                                             )
@@ -626,10 +652,10 @@ fun AnnotationCanvas(
 
                                             wetCanvasEngine.markPaintDeposited(currentTool)
                                         }
-                                        activeEnd = activePoints.lastOrNull() ?: currentPoint
+                                        activeEnd = activePoints.lastOrNull() ?: drawPoint
                                     } else {
-                                        activePoints.add(currentPoint)
-                                        activeEnd = currentPoint
+                                        activePoints.add(drawPoint)
+                                        activeEnd = drawPoint
                                     }
                                 }
                             } else {
@@ -1049,7 +1075,7 @@ fun AnnotationCanvas(
                 if (!isContinuousMode) {
                     // Single Page Canvas
                     drawPaperCard(0f, 0f, size.width, size.height, paperColor = parsedPaperColor, isDarkPaper = isDarkPaper)
-                    drawPaperTemplate(template, 0f, 0f, size.width, size.height, isDarkPaper = isDarkPaper)
+                    drawPaperTemplate(template, 0f, 0f, size.width, size.height, isDarkPaper = isDarkPaper, paperTexture = paperTexture)
 
                     val bg = pdfPageBitmaps[pdfPageFilter] ?: backgroundImage
                     bg?.let { bitmap ->
@@ -1107,14 +1133,17 @@ fun AnnotationCanvas(
                         activeStart = activeStart,
                         wetCanvasEngine = wetCanvasEngine,
                         wetBrushEngine = wetBrushEngine,
-                        gpuWetBrushesEnabled = gpuWetBrushesEnabled
+                        gpuWetBrushesEnabled = gpuWetBrushesEnabled,
+                        symmetryMode = symmetryMode,
+                        symmetryCenterX = size.width / 2f,
+                        symmetryCenterY = size.height / 2f
                     )
                 } else if (!divideIntoPages) {
                     // Continuous Infinite Canvas (Seamless, without page division gaps)
                     val (canvasW, infiniteH) = computeCanvasWorld(size.width)
 
                     drawPaperCard(0f, 0f, canvasW, infiniteH, paperColor = parsedPaperColor, isDarkPaper = isDarkPaper, pageLabel = null)
-                    drawPaperTemplate(template, 0f, 0f, canvasW, infiniteH, isDarkPaper = isDarkPaper)
+                    drawPaperTemplate(template, 0f, 0f, canvasW, infiniteH, isDarkPaper = isDarkPaper, paperTexture = paperTexture)
 
                     val previewStroke = if (activePoints.isNotEmpty() || (activeStart != null && activeEnd != null)) {
                         Stroke(
@@ -1154,7 +1183,10 @@ fun AnnotationCanvas(
                         activeStart = activeStart,
                         wetCanvasEngine = wetCanvasEngine,
                         wetBrushEngine = wetBrushEngine,
-                        gpuWetBrushesEnabled = gpuWetBrushesEnabled
+                        gpuWetBrushesEnabled = gpuWetBrushesEnabled,
+                        symmetryMode = symmetryMode,
+                        symmetryCenterX = canvasW / 2f,
+                        symmetryCenterY = infiniteH / 2f
                     )
                 } else {
                     // Continuous Infinite Canvas with Page Divisions & Page Break Badges
@@ -1166,7 +1198,7 @@ fun AnnotationCanvas(
 
                         // 1. Differentiated Page Paper Container with Card Shadow & Page Badge
                         drawPaperCard(0f, pageTopY, canvasW, pageHeightPx, paperColor = parsedPaperColor, isDarkPaper = isDarkPaper, pageLabel = "Page ${pageIdx + 1}", showPageLabel = showPageIndicator)
-                        drawPaperTemplate(template, 0f, pageTopY, canvasW, pageHeightPx, isDarkPaper = isDarkPaper)
+                        drawPaperTemplate(template, 0f, pageTopY, canvasW, pageHeightPx, isDarkPaper = isDarkPaper, paperTexture = paperTexture)
 
                         // 2. Render Page Bitmap (if in window)
                         val pageBitmap = pdfPageBitmaps[pageIdx]
@@ -1246,7 +1278,10 @@ fun AnnotationCanvas(
                             activeStart = activeStart,
                             wetCanvasEngine = wetCanvasEngine,
                             wetBrushEngine = wetBrushEngine,
-                            gpuWetBrushesEnabled = gpuWetBrushesEnabled
+                            gpuWetBrushesEnabled = gpuWetBrushesEnabled,
+                            symmetryMode = symmetryMode,
+                            symmetryCenterX = canvasW / 2f,
+                            symmetryCenterY = pageTopY + pageHeightPx / 2f
                         )
                     }
                 }
@@ -1590,8 +1625,30 @@ private fun DrawScope.drawPaperTemplate(
     yOffset: Float,
     width: Float,
     height: Float,
-    isDarkPaper: Boolean = false
+    isDarkPaper: Boolean = false,
+    paperTexture: ImageBitmap? = null
 ) {
+    // Phase 07: tiled custom paper texture pack (drawn first so the classic
+    // template grid/lines overlay it when both are configured).
+    if (paperTexture != null) {
+        val tw = paperTexture.width.toFloat()
+        val th = paperTexture.height.toFloat()
+        if (tw > 0f && th > 0f) {
+            var ty = yOffset
+            while (ty < yOffset + height) {
+                var tx = xOffset
+                while (tx < xOffset + width) {
+                    drawImage(
+                        image = paperTexture,
+                        dstOffset = IntOffset(tx.toInt(), ty.toInt()),
+                        dstSize = IntSize(tw.toInt(), th.toInt())
+                    )
+                    tx += tw
+                }
+                ty += th
+            }
+        }
+    }
     val gridColor = if (isDarkPaper) Color(0xFF94A3B8).copy(alpha = 0.35f) else Color.Gray.copy(alpha = 0.22f)
     when (template) {
         "lined" -> {
@@ -1862,14 +1919,46 @@ private fun DrawScope.drawCompositedLayersStrokes(
     activeStart: PointF? = null,
     wetCanvasEngine: com.authorss81.noteflow.services.WetCanvasEngine? = null,
     wetBrushEngine: com.authorss81.noteflow.services.WetBrushEngine? = null,
-    gpuWetBrushesEnabled: Boolean = true
+    gpuWetBrushesEnabled: Boolean = true,
+    symmetryMode: SymmetryMode = SymmetryMode.OFF,
+    symmetryCenterX: Float = 0f,
+    symmetryCenterY: Float = 0f
 ) {
+    // Phase 07: view-time mirror. Symmetry never touches stored point data —
+    // committed strokes keep the real points so saved notes stay portable and
+    // export correctly. TEXT strokes are never mirrored (text cannot sensibly
+    // reflect).
+    fun DrawScope.drawStrokeWithSymmetry(stroke: Stroke, offsetY: Float, sMode: SymmetryMode) {
+        drawSingleStroke(stroke, offsetY, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer)
+        if (sMode != SymmetryMode.OFF && stroke.tool != StrokeTool.TEXT) {
+            drawSingleStroke(
+                stroke.copy(
+                    points = stroke.points.map { p ->
+                        val m = SymmetryHelper.mirrorPoint(p.x, p.y, sMode, symmetryCenterX, symmetryCenterY)
+                        p.copy(x = m.x, y = m.y)
+                    },
+                    start = stroke.start?.let { p ->
+                        val m = SymmetryHelper.mirrorPoint(p.x, p.y, sMode, symmetryCenterX, symmetryCenterY)
+                        p.copy(x = m.x, y = m.y)
+                    },
+                    end = stroke.end?.let { p ->
+                        val m = SymmetryHelper.mirrorPoint(p.x, p.y, sMode, symmetryCenterX, symmetryCenterY)
+                        p.copy(x = m.x, y = m.y)
+                    }
+                ),
+                offsetY,
+                isDarkPaper = isDarkPaper,
+                inkRenderer = inkRenderer
+            )
+        }
+    }
+
     if (layers.isEmpty()) {
         for (stroke in strokes) {
-            drawSingleStroke(stroke, offsetY, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer)
+            drawStrokeWithSymmetry(stroke, offsetY, symmetryMode)
         }
         if (previewStroke != null) {
-            drawSingleStroke(previewStroke, offsetY, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer)
+            drawStrokeWithSymmetry(previewStroke, offsetY, symmetryMode)
         }
         return
     }
@@ -1903,6 +1992,7 @@ private fun DrawScope.drawCompositedLayersStrokes(
                 graphicsLayer != null &&
                 wetBrushEngine != null &&
                 !wetBrushEngine.useVectorFallback &&
+                symmetryMode == SymmetryMode.OFF &&
                 isWetLayer &&
                 isPreviewOnThisLayer
 
@@ -1933,7 +2023,10 @@ private fun DrawScope.drawCompositedLayersStrokes(
         val cacheKey = "${pageIdx}_${layer.id}"
         val strokesHash = layerStrokes.hashCode()
 
-        if (layerBitmapCache != null && canvasDrawScope != null && density != null && layoutDirection != null && pageWidth > 0f && pageHeight > 0f) {
+        // Symmetry is a view-time transform: the layer bitmap cache bakes in the
+        // untransformed points, so bypass the cache (and mirror live) while a
+        // symmetry mode is active.
+        if (layerBitmapCache != null && canvasDrawScope != null && density != null && layoutDirection != null && pageWidth > 0f && pageHeight > 0f && symmetryMode == SymmetryMode.OFF) {
             var cache = layerBitmapCache[cacheKey]
             val pw = pageWidth.toInt().coerceAtLeast(1)
             val ph = pageHeight.toInt().coerceAtLeast(1)
@@ -1980,10 +2073,10 @@ private fun DrawScope.drawCompositedLayersStrokes(
     
             if (isNormal && isOpaque) {
                 for (stroke in layerStrokes) {
-                    drawSingleStroke(stroke, offsetY, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer)
+                    drawStrokeWithSymmetry(stroke, offsetY, symmetryMode)
                 }
                 if (isPreviewOnThisLayer && previewStroke != null) {
-                    drawSingleStroke(previewStroke, offsetY, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer)
+                    drawStrokeWithSymmetry(previewStroke, offsetY, symmetryMode)
                 }
             } else {
                 val nativeCanvas = drawContext.canvas.nativeCanvas
@@ -1996,10 +2089,10 @@ private fun DrawScope.drawCompositedLayersStrokes(
                 val saveCount = nativeCanvas.saveLayer(bounds, paint)
                 try {
                     for (stroke in layerStrokes) {
-                        drawSingleStroke(stroke, offsetY, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer)
+                        drawStrokeWithSymmetry(stroke, offsetY, symmetryMode)
                     }
                     if (isPreviewOnThisLayer && previewStroke != null) {
-                        drawSingleStroke(previewStroke, offsetY, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer)
+                        drawStrokeWithSymmetry(previewStroke, offsetY, symmetryMode)
                     }
                 } finally {
                     nativeCanvas.restoreToCount(saveCount)

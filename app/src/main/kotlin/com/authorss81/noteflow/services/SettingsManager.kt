@@ -74,6 +74,37 @@ class SettingsManager(context: Context) {
         get() = prefs.getBoolean("shape_auto_snap_enabled", true)
         set(value) = prefs.edit().putBoolean("shape_auto_snap_enabled", value).apply()
 
+    // Phase 07 painting features (see PressureCurveHelper / SymmetryMode / StrokeStabilizer):
+    // stroke stabilizer defaults OFF so classic rendering is unchanged.
+    var strokeStabilizerEnabled: Boolean
+        get() = prefs.getBoolean("stroke_stabilizer_enabled", false)
+        set(value) = prefs.edit().putBoolean("stroke_stabilizer_enabled", value).apply()
+
+    // Pressure-response curve (LINEAR = identity, so default behaviour is unchanged).
+    var pressureCurveKey: String
+        get() = prefs.getString("pressure_curve_key", "linear") ?: "linear"
+        set(value) = prefs.edit().putString("pressure_curve_key", value).apply()
+
+    // Mirror mode (OFF = unchanged classic rendering).
+    var symmetryModeKey: String
+        get() = prefs.getString("symmetry_mode_key", "off") ?: "off"
+        set(value) = prefs.edit().putString("symmetry_mode_key", value).apply()
+
+    // Phase 07: custom paper-texture packs. Stored in a preference keyed by
+    // page id (NOT the DB schema) so tiled paper backgrounds persist per page.
+    fun paperTexturePathForPage(pageId: String): String? =
+        prefs.getString("paper_texture_$pageId", null)
+
+    fun setPaperTexturePathForPage(pageId: String, path: String?) {
+        prefs.edit().apply {
+            if (path == null) {
+                remove("paper_texture_$pageId")
+            } else {
+                putString("paper_texture_$pageId", path)
+            }
+        }.apply()
+    }
+
     var deviceTierOverride: String?
         get() = prefs.getString("device_tier_override", null)
         set(value) = prefs.edit().putString("device_tier_override", value).apply()

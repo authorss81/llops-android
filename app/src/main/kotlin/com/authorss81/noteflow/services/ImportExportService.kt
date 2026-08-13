@@ -28,6 +28,30 @@ import com.authorss81.noteflow.data.model.StrokeTool
 
 object ImportExportService {
 
+    /**
+     * Bitmap (non-PDF) export encoders for the annotated-page export.
+     * WEBP_LOSSY requires API 30+; older devices fall back to the (deprecated
+     * but API 14+) WEBP constant so API 26 stays supported.
+     */
+    enum class ExportImageFormat {
+        PNG,
+        WEBP
+    }
+
+    fun compressBitmap(format: ExportImageFormat, bitmap: android.graphics.Bitmap, stream: java.io.OutputStream) {
+        when (format) {
+            ExportImageFormat.PNG -> bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, stream)
+            ExportImageFormat.WEBP -> {
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                    bitmap.compress(android.graphics.Bitmap.CompressFormat.WEBP_LOSSY, 90, stream)
+                } else {
+                    @Suppress("DEPRECATION")
+                    bitmap.compress(android.graphics.Bitmap.CompressFormat.WEBP, 90, stream)
+                }
+            }
+        }
+    }
+
     fun getImportsDir(context: Context): File {
         val dir = File(context.filesDir, "noteflow/imports")
         if (!dir.exists()) dir.mkdirs()
@@ -136,7 +160,8 @@ object ImportExportService {
         stickyNotes: List<CanvasStickyNote> = emptyList(),
         mediaEmbeds: List<CanvasMediaEmbed> = emptyList(),
         pageIndex: Int = 0,
-        sourceFilePath: String? = null
+        sourceFilePath: String? = null,
+        exportImageFormat: ExportImageFormat = ExportImageFormat.PNG
     ): File? = withContext(Dispatchers.IO) {
         try {
             val resolvedBg = bgBitmap ?: if (!sourceFilePath.isNullOrBlank()) {
@@ -193,8 +218,8 @@ object ImportExportService {
                 pdfDoc.close()
                 file
             } else {
-                val file = File(exportDir, "$sanitizeTitle.png")
-                FileOutputStream(file).use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+                val file = File(exportDir, "$sanitizeTitle.${if (exportImageFormat == ExportImageFormat.WEBP) "webp" else "png"}")
+                FileOutputStream(file).use { compressBitmap(exportImageFormat, bitmap, it) }
                 file
             }
             bitmap.recycle()
