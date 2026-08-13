@@ -42,7 +42,8 @@ fun PhotoEmbedCard(
     embed: CanvasMediaEmbed,
     zoomScale: Float = 1f,
     onUpdateCaption: (String) -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    onExtractOcr: ((String) -> Unit)? = null
 ) {
     var captionText by remember(embed.textContent) { mutableStateOf(embed.textContent ?: "") }
     var isEditingCaption by remember { mutableStateOf(false) }
@@ -192,6 +193,26 @@ fun PhotoEmbedCard(
                             imageVector = Icons.Outlined.Refresh,
                             contentDescription = "Reset Image Rotation and Scale",
                             modifier = Modifier.size(18.dp)
+                        )
+                    }
+                    // Phase 12: on-device OCR (extract text from this image).
+                    // Enabled only when an OCR handler is wired in — i.e. the
+                    // On-Device OCR plugin is enabled + device-available. The
+                    // click handler receives the image file path.
+                    IconButton(
+                        onClick = { onExtractOcr?.invoke(embed.contentUrlOrPath.orEmpty()) },
+                        enabled = onExtractOcr != null,
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.TextFields,
+                            contentDescription = "Extract text (OCR)",
+                            modifier = Modifier.size(18.dp),
+                            tint = if (onExtractOcr != null) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.outline
+                            }
                         )
                     }
                 }

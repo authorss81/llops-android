@@ -13,6 +13,7 @@ import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Hub
 import androidx.compose.material.icons.outlined.Save
+import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -29,6 +30,7 @@ import com.authorss81.noteflow.plugins.NoteflowPlugin
 import com.authorss81.noteflow.plugins.PluginCapability
 import com.authorss81.noteflow.plugins.PluginResult
 import com.authorss81.noteflow.ui.components.VersionHistoryBottomSheet
+import com.authorss81.noteflow.ui.components.WebSearchDialog
 import kotlinx.coroutines.launch
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -157,6 +159,7 @@ fun MarkdownPreviewScreen(
     var showSlashCommands by remember { mutableStateOf(false) }
     var showVersionHistory by remember { mutableStateOf(false) }
     var showPluginMenu by remember { mutableStateOf(false) }
+    var showWebSearch by remember { mutableStateOf(false) }
     var pendingTransformPlugin by remember { mutableStateOf<NoteflowPlugin?>(null) }
     val transformScope = rememberCoroutineScope()
 
@@ -269,6 +272,27 @@ fun MarkdownPreviewScreen(
                                         onClick = {
                                             showPluginMenu = false
                                             pendingTransformPlugin = plugin
+                                        }
+                                    )
+                                }
+                            }
+                            // Phase 12: real web search — the Web Search plugin
+                            // (DuckDuckGo) opens the search dialog, which inserts
+                            // a [title](url) link into the note.
+                            val webSearchPlugins = viewModel.pluginRegistry.pluginsForCapability(PluginCapability.WebSearch)
+                            if (webSearchPlugins.isNotEmpty()) {
+                                HorizontalDivider()
+                                webSearchPlugins.forEach { plugin ->
+                                    val runnable = viewModel.isPluginUsable(plugin.id)
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(if (runnable) "Search the web…" else "Web Search (off)")
+                                        },
+                                        leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
+                                        enabled = runnable,
+                                        onClick = {
+                                            showPluginMenu = false
+                                            showWebSearch = true
                                         }
                                     )
                                 }
@@ -460,6 +484,23 @@ fun MarkdownPreviewScreen(
                     viewModel = viewModel,
                     onOpenPage = onOpenPage,
                     onDismiss = { showBacklinks = false }
+                )
+            }
+
+            if (showWebSearch) {
+                WebSearchDialog(
+                    viewModel = viewModel,
+                    onInsertLink = { link ->
+                        // Append the [title](url) link to the note (never overwrite).
+                        contentText = if (contentText.isBlank()) {
+                            link
+                        } else {
+                            contentText.trimEnd() + "\n\n$link\n"
+                        }
+                        flushSave()
+                        viewModel.showSnackbar("Web result inserted into note")
+                    },
+                    onDismiss = { showWebSearch = false }
                 )
             }
 

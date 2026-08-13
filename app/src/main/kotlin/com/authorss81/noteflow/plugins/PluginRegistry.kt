@@ -2,6 +2,8 @@ package com.authorss81.noteflow.plugins
 
 import android.content.Context
 import android.os.Build
+import com.authorss81.noteflow.plugins.ocr.OnDeviceOcrPlugin
+import com.authorss81.noteflow.plugins.websearch.DuckDuckGoWebSearchPlugin
 
 /**
  * Compile-time registry of installed plugins.
@@ -549,9 +551,17 @@ class PluginRegistry(
         /**
          * The built-in plugin set. Extend this list to install a new plugin;
          * keep it as the single registration point (compile-time discovery).
+         *
+         * Phase 12: the two real high-level plugins (on-device OCR + keyless
+         * web search) live here next to the ROT13 proof-of-wiring plugin. The
+         * OCR plugin is engine-injected at construction (null engine → bundled
+         * ML Kit created lazily on device); the Web Search plugin's network
+         * client is the default DDG client.
          */
         fun defaultPlugins(): List<NoteflowPlugin> = listOf(
-            Rot13TransformPlugin()
+            Rot13TransformPlugin(),
+            OnDeviceOcrPlugin(),
+            DuckDuckGoWebSearchPlugin()
         )
     }
 }

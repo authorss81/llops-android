@@ -47,6 +47,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.authorss81.noteflow.data.model.*
+import com.authorss81.noteflow.plugins.PluginCapability
 import com.authorss81.noteflow.services.ImportExportService
 import com.authorss81.noteflow.services.HarmonyScheme
 import com.authorss81.noteflow.services.PressureCurve
@@ -54,6 +55,7 @@ import com.authorss81.noteflow.services.SymmetryMode
 import com.authorss81.noteflow.services.VoiceNoteManager
 import com.authorss81.noteflow.ui.components.AnnotationCanvas
 import com.authorss81.noteflow.ui.components.BacklinksInspectorBottomSheet
+import com.authorss81.noteflow.ui.components.OcrResultDialog
 import com.authorss81.noteflow.ui.components.PromptNameDialog
 import com.authorss81.noteflow.ui.viewmodel.NoteflowViewModel
 import androidx.lifecycle.viewModelScope
@@ -103,7 +105,16 @@ fun EditorScreen(
     var showBacklinks by remember { mutableStateOf(false) }
     var showClearCanvasWarning by remember { mutableStateOf(false) }
 
+    // Phase 12: OCR target — set when the user taps "Extract text (OCR)" on an
+    // attached photo; drives the OcrResultDialog rendered at the Scaffold level.
+    var ocrTargetPath by remember { mutableStateOf<String?>(null) }
+
     val context = LocalContext.current
+    // Phase 12: OCR is offered on attached photos only while an OCR plugin is
+    // actually enabled and device-available (never a dead button).
+    val ocrAvailable = viewModel.pluginRegistry
+        .availablePlugins(PluginCapability.OCR, context)
+        .isNotEmpty()
     com.authorss81.noteflow.utils.JankStatsHelper.MonitorJank("EditorScreen")
     // 22.9: tactile feedback for high-value affordances (skipped when the user
     // has reduce-motion/remove-animations enabled system-wide).
@@ -1214,6 +1225,9 @@ fun EditorScreen(
                 },
                 onCanvasTap = {
                     toolbarState = FloatingToolbarState.COLLAPSED
+                },
+                onExtractOcr = { path ->
+                    if (ocrAvailable) ocrTargetPath = path
                 }
             )
 
@@ -1304,6 +1318,31 @@ fun EditorScreen(
                     onUndo = { handleUndo() },
                     onRedo = { handleRedo() },
                     isLandscape = isLandscape
+                )
+            }
+
+            // Phase 12: on-device OCR — result dialog + insert the extracted text
+            // into the note as a sticky note placed just below the source image.
+            ocrTargetPath?.let { path ->
+                OcrResultDialog(
+                    imagePath = path,
+                    viewModel = viewModel,
+                    onInsertIntoNote = { text ->
+                        val pageStride = 1528f + 64f
+                        val sourceEmbed = mediaEmbeds.firstOrNull { it.contentUrlOrPath == path }
+                        val anchorY = sourceEmbed?.y ?: ((-panOffset.y / zoomScale) + 300f)
+                        val note = CanvasStickyNote(
+                            x = sourceEmbed?.x ?: 120f,
+                            y = anchorY + (sourceEmbed?.height ?: 260f) + 40f,
+                            width = 260f,
+                            height = 220f,
+                            text = text,
+                            pdfPage = sourceEmbed?.pdfPage ?: currentPdfPage
+                        )
+                        handleStickyNotesChange(stickyNotes + note)
+                        viewModel.showSnackbar("OCR text inserted as a sticky note")
+                    },
+                    onDismiss = { ocrTargetPath = null }
                 )
             }
         }

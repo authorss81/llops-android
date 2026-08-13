@@ -1,6 +1,7 @@
 package com.authorss81.noteflow.plugins
 
 import android.content.Context
+import kotlinx.coroutines.withContext
 
 /**
  * Failure categories for a plugin capability request. The user-facing message
@@ -100,46 +101,28 @@ class PluginManager(
         capability: PluginCapability,
         context: Context?,
         action: (NoteflowPlugin) -> T
-    ): PluginResult<T> {
-        val declarers = registry.pluginsForCapability(capability)
-        if (declarers.isEmpty()) {
-            return PluginResult.Failure(
-                PluginFailureReason.NO_PLUGIN_INSTALLED,
-                "No plugin is installed for '${capability.label}'. " +
-                    "Check Settings \u2192 Plugins for what's available."
-            )
-        }
-        val states = registry.resolve(context)
-        val optedIn = declarers.filter { states[it.id]?.enabled == true }
-        if (optedIn.isEmpty()) {
-            return PluginResult.Failure(
-                PluginFailureReason.NONE_ENABLED,
-                "No plugin is enabled for '${capability.label}' — " +
-                    "enable one in Settings \u2192 Plugins, then try again."
-            )
-        }
-        val winner = optedIn.firstOrNull { states[it.id]?.state == PluginLifecycleState.AVAILABLE }
-        if (winner == null) {
-            val first = optedIn.first()
-            val info = states[first.id]
-            return unavailableFor(first, info, capability)
-        }
-        return invokeGuarded(winner) { action(winner) }
+    ): PluginResult<T> = when (val resolved = resolvePlugin(capability, context)) {
+        is Resolution.Success -> invokeGuarded(resolved.plugin) { action(resolved.plugin) }
+        is Resolution.Rejected -> resolved.result
     }
 
     /**
      * [withPlugin] variant that runs the plugin work on [kotlinx.coroutines.Dispatchers.Default]
-     * so a slow/hung plugin can never block the main thread. The plugin action is
-     * non-suspend, so a genuinely hung plugin still ties up ONE background worker
-     * until it returns — but the UI stays responsive and the caller's coroutine is
-     * simply suspended. A throwing plugin is contained exactly like [withPlugin].
+     * so a slow/hung plugin can never block the main thread. The plugin action may
+     * be a suspension function (e.g. a network/model call that itself hops to
+     * `Dispatchers.IO`), so the caller's coroutine is suspended for the whole
+     * request and the UI stays responsive. A throwing plugin is contained exactly
+     * like [withPlugin].
      */
     suspend fun <T> withPluginAsync(
         capability: PluginCapability,
         context: Context?,
-        action: (NoteflowPlugin) -> T
-    ): PluginResult<T> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
-        withPlugin(capability, context, action)
+        action: suspend (NoteflowPlugin) -> T
+    ): PluginResult<T> = withContext(kotlinx.coroutines.Dispatchers.Default) {
+        when (val resolved = resolvePlugin(capability, context)) {
+            is Resolution.Success -> invokeGuardedSuspend(resolved.plugin) { action(resolved.plugin) }
+            is Resolution.Rejected -> resolved.result
+        }
     }
 
     /**
@@ -178,7 +161,74 @@ class PluginManager(
 
     // ---- internals ---------------------------------------------------------
 
+    private sealed class Resolution {
+        class Success(val plugin: NoteflowPlugin) : Resolution()
+        class Rejected(val result: PluginResult<Nothing>) : Resolution()
+    }
+
+    /**
+     * Apply the routing rules (installed → enabled → available) and return the
+     * winning plugin, or a rejected [PluginResult] explaining why no plugin can
+     * serve the capability right now. Shared by the sync and async entry points.
+     */
+    private fun resolvePlugin(
+        capability: PluginCapability,
+        context: Context?
+    ): Resolution {
+        val declarers = registry.pluginsForCapability(capability)
+        if (declarers.isEmpty()) {
+            return Resolution.Rejected(
+                PluginResult.Failure(
+                    PluginFailureReason.NO_PLUGIN_INSTALLED,
+                    "No plugin is installed for '${capability.label}'. " +
+                        "Check Settings \u2192 Plugins for what's available."
+                )
+            )
+        }
+        val states = registry.resolve(context)
+        val optedIn = declarers.filter { states[it.id]?.enabled == true }
+        if (optedIn.isEmpty()) {
+            return Resolution.Rejected(
+                PluginResult.Failure(
+                    PluginFailureReason.NONE_ENABLED,
+                    "No plugin is enabled for '${capability.label}' — " +
+                        "enable one in Settings \u2192 Plugins, then try again."
+                )
+            )
+        }
+        val winner = optedIn.firstOrNull { states[it.id]?.state == PluginLifecycleState.AVAILABLE }
+            ?: return Resolution.Rejected(
+                unavailableFor(optedIn.first(), states[optedIn.first().id], capability)
+            )
+        return Resolution.Success(winner)
+    }
+
     private fun <T> invokeGuarded(plugin: NoteflowPlugin, action: () -> T): PluginResult<T> {
+        return try {
+            val value = action()
+            if (value == null) {
+                record(plugin.id, ok = false, summary = "Returned no result")
+                PluginResult.Failure(
+                    PluginFailureReason.PLUGIN_ERROR,
+                    "Plugin '${plugin.name}' returned no result."
+                )
+            } else {
+                record(plugin.id, ok = true, summary = "Success")
+                PluginResult.Success(value)
+            }
+        } catch (e: Throwable) {
+            val detail = e::class.java.simpleName
+            record(plugin.id, ok = false, summary = "Threw $detail")
+            logger.error(plugin.id, plugin.name, "invocation threw $detail")
+            PluginResult.Failure(
+                PluginFailureReason.PLUGIN_ERROR,
+                "Plugin '${plugin.name}' failed ($detail). Check Settings \u2192 Plugins for diagnostics."
+            )
+        }
+    }
+
+    /** Suspend sibling of [invokeGuarded] for plugin actions that perform their own IO. */
+    private suspend fun <T> invokeGuardedSuspend(plugin: NoteflowPlugin, action: suspend () -> T): PluginResult<T> {
         return try {
             val value = action()
             if (value == null) {

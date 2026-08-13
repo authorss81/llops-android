@@ -126,6 +126,7 @@ fun AnnotationCanvas(
     onDrawingStart: () -> Unit = {},
     onDrawingEnd: () -> Unit = {},
     onCanvasTap: () -> Unit = {},
+    onExtractOcr: ((String) -> Unit)? = null,
     gpuWetBrushesEnabled: Boolean = true,
     shapeAutoSnapEnabled: Boolean = true,
     stabilizerEnabled: Boolean = false,
@@ -1354,7 +1355,8 @@ fun AnnotationCanvas(
                     onMediaEmbedsChanged = onMediaEmbedsChanged,
                     onToggleVoicePlay = onToggleVoicePlay,
                     onVoiceSeekTo = onVoiceSeekTo,
-                    onVoiceSpeedChange = onVoiceSpeedChange
+                    onVoiceSpeedChange = onVoiceSpeedChange,
+                    onExtractOcr = onExtractOcr
                 )
             }
 
@@ -3219,7 +3221,8 @@ private fun DraggableMediaEmbedCard(
     onMediaEmbedsChanged: (List<CanvasMediaEmbed>) -> Unit,
     onToggleVoicePlay: (String) -> Unit,
     onVoiceSeekTo: (Long) -> Unit,
-    onVoiceSpeedChange: (Float) -> Unit
+    onVoiceSpeedChange: (Float) -> Unit,
+    onExtractOcr: ((String) -> Unit)? = null
 ) {
     val currentEmbed by rememberUpdatedState(embed)
     val currentZoom by rememberUpdatedState(zoomScale)
@@ -3313,7 +3316,8 @@ private fun DraggableMediaEmbedCard(
                             activeMediaEmbedList.remove(currentEmbed)
                             val other = if (isContinuousMode) emptyList() else mediaEmbeds.filter { it.pdfPage != pdfPageFilter }
                             currentOnMediaEmbedsChanged(other + activeMediaEmbedList.toList())
-                        }
+                        },
+                        onExtractOcr = onExtractOcr
                     )
                 }
                 MediaEmbedType.CODE_BLOCK -> {

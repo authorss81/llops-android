@@ -7,6 +7,8 @@ import androidx.lifecycle.viewModelScope
 import com.authorss81.noteflow.data.db.NoteflowDatabase
 import com.authorss81.noteflow.data.model.*
 import com.authorss81.noteflow.data.repository.NoteRepository
+import com.authorss81.noteflow.plugins.OcrOutcome
+import com.authorss81.noteflow.plugins.OcrPlugin
 import com.authorss81.noteflow.plugins.PluginCapability
 import com.authorss81.noteflow.plugins.PluginDiagnostics
 import com.authorss81.noteflow.plugins.PluginEnableResult
@@ -16,6 +18,8 @@ import com.authorss81.noteflow.plugins.PluginRegistry
 import com.authorss81.noteflow.plugins.PluginResult
 import com.authorss81.noteflow.plugins.PluginStateInfo
 import com.authorss81.noteflow.plugins.TextTransformPlugin
+import com.authorss81.noteflow.plugins.WebSearchOutcome
+import com.authorss81.noteflow.plugins.WebSearchPlugin
 import com.authorss81.noteflow.services.DatabaseSecurityHelper
 import com.authorss81.noteflow.services.EncryptionService
 import com.authorss81.noteflow.services.ImportExportService
@@ -109,6 +113,33 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
             val transformer = plugin as? TextTransformPlugin
                 ?: throw IllegalStateException("${plugin.name} does not implement TextTransformPlugin")
             transformer.transformText(text)
+        }
+
+    /**
+     * Route an on-device OCR request (image file → text) through the plugin
+     * manager off the main thread. The plugin runs the model on
+     * `Dispatchers.IO` and is cancelable end-to-end. Returns a typed result:
+     * `Success(OcrOutcome)` (recognized text / no-text / validated error),
+     * or Failure/Unavailable from the framework — never throws.
+     */
+    suspend fun extractTextFromImage(imagePath: String): PluginResult<OcrOutcome> =
+        pluginManager.withPluginAsync(PluginCapability.OCR, appContext) { plugin ->
+            val ocr = plugin as? OcrPlugin
+                ?: throw IllegalStateException("${plugin.name} does not implement OcrPlugin")
+            ocr.recognizeText(appContext, imagePath)
+        }
+
+    /**
+     * Route a web-search request through the plugin manager off the main thread.
+     * The plugin makes the network call on `Dispatchers.IO` and returns typed
+     * results for insertion as `[title](url)` links; connectivity failures
+     * surface as `WebSearchOutcome.Error` ("offline — check connection").
+     */
+    suspend fun searchWeb(query: String): PluginResult<WebSearchOutcome> =
+        pluginManager.withPluginAsync(PluginCapability.WebSearch, appContext) { plugin ->
+            val searcher = plugin as? WebSearchPlugin
+                ?: throw IllegalStateException("${plugin.name} does not implement WebSearchPlugin")
+            searcher.searchWeb(query.trim())
         }
 
     /**

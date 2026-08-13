@@ -142,5 +142,9 @@ dependencies {
     implementation(libs.commonmark)
     implementation(libs.commonmark.ext.gfm.tables)
 
+    // Phase 12: on-device, offline OCR (ML Kit text-recognition, bundled model).
+    // Runs offline with no API key and no INTERNET. See plugins/ocr/OnDeviceOcrPlugin.
+    implementation(libs.mlkit.text.recognition)
+
     testImplementation("junit:junit:4.13.2")
 }

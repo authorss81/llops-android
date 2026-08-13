@@ -108,3 +108,81 @@ interface NoteflowPlugin {
 interface TextTransformPlugin {
     fun transformText(text: String): String
 }
+
+/**
+ * Result of an OCR request, returned by [OcrPlugin.recognizeText].
+ *
+ * Typed so the UI can distinguish a real extraction ([Success]), a genuinely
+ * empty image ([NoText], with a user-facing reason) and a validated, user-facing
+ * failure ([Error]) — while the plugin still fails loudly instead of silently
+ * returning nothing. A plugin must NEVER return null (the manager treats that as
+ * [PluginResult.Failure]).
+ */
+sealed class OcrOutcome {
+    /** The recognized text (may still need trimming). */
+    data class Success(val text: String) : OcrOutcome()
+
+    /** The model ran but found no readable text; [message] is user-facing. */
+    data class NoText(val message: String) : OcrOutcome()
+
+    /** The request failed; [message] is a validated, user-facing reason. */
+    data class Error(val message: String) : OcrOutcome()
+}
+
+/**
+ * A single web-search hit, as inserted into a note as `[title](url)`.
+ *
+ * @param title link label (never blank; falls back to a generic label).
+ * @param url absolute http(s) URL of the result.
+ * @param snippet optional one-line context from the search API.
+ */
+data class WebSearchResult(
+    val title: String,
+    val url: String,
+    val snippet: String? = null
+)
+
+/**
+ * Result of a web-search request, returned by [WebSearchPlugin.searchWeb].
+ *
+ * Typed so the UI can show real results ([Success]) or a clear, user-facing
+ * connectivity/service error ([Error], e.g. "offline — check connection")
+ * without ever silently degrading.
+ */
+sealed class WebSearchOutcome {
+    /** One or more real results (may be empty for a valid-but-empty response). */
+    data class Success(val results: List<WebSearchResult>) : WebSearchOutcome()
+
+    /** The request could not be served; [message] is user-facing. */
+    data class Error(val message: String) : WebSearchOutcome()
+}
+
+/**
+ * Serving interface for the [PluginCapability.OCR] capability.
+ *
+ * A plugin that implements this interface extracts text from an on-device image
+ * (the file at [imagePath]). Implementations MUST run the model off the main
+ * thread (e.g. `withContext(Dispatchers.IO)`) and MUST be cancelable when the
+ * calling coroutine is cancelled. The returned [OcrOutcome] carries extracted
+ * text or a user-facing failure — never a silent empty result.
+ *
+ * [context] is nullable exactly like the plugin lifecycle hooks — production
+ * always passes a real Context; tests pass null.
+ */
+interface OcrPlugin {
+    suspend fun recognizeText(context: Context?, imagePath: String): OcrOutcome
+}
+
+/**
+ * Serving interface for the [PluginCapability.WebSearch] capability.
+ *
+ * A plugin that implements this interface performs a real, keyless web search
+ * and returns typed results for insertion into a note as `[title](url)` links.
+ * Implementations MUST make network calls off the main thread
+ * (`withContext(Dispatchers.IO)`) and return [WebSearchOutcome.Error] with a
+ * clear "offline — check connection" message on connectivity failure rather than
+ * throwing or silently returning nothing.
+ */
+interface WebSearchPlugin {
+    suspend fun searchWeb(query: String): WebSearchOutcome
+}
