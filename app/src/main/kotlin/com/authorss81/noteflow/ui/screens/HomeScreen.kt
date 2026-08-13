@@ -96,14 +96,16 @@ fun HomeScreen(
     var deleteConfirmType by remember { mutableStateOf<String?>(null) } // "nb", "sec", "page", "empty_trash"
     var deleteWarningMessage by remember { mutableStateOf("") }
 
+    // 22.9: restore needs a restart — confirm visibly instead of a snackbar that
+    // is killed by exitProcess before it can ever be shown.
+    var showRestartConfirmDialog by remember { mutableStateOf(false) }
+
     fun performRestore(context: android.content.Context, bytes: ByteArray, password: String? = null) {
         scope.launch {
             try {
                 viewModel.repository.closeDatabase()
                 ImportExportService.importBackup(context, bytes, viewModel.repository.encryptionKey, password)
-                viewModel.showSnackbar("Restore successful. Restarting...", isLong = true)
-                kotlinx.coroutines.delay(1000)
-                kotlin.system.exitProcess(0)
+                showRestartConfirmDialog = true
             } catch (e: Exception) {
                 viewModel.showSnackbar("Restore failed: ${e.message}", isLong = true)
             }
@@ -1171,6 +1173,19 @@ fun HomeScreen(
                         pendingRestoreBytes = null
                     }) {
                         Text("Cancel")
+                    }
+                }
+            )
+        }
+
+        if (showRestartConfirmDialog) {
+            AlertDialog(
+                onDismissRequest = { },
+                title = { Text("Restore successful") },
+                text = { Text("Your vault has been restored. The app will restart to load the restored data.") },
+                confirmButton = {
+                    TextButton(onClick = { kotlin.system.exitProcess(0) }) {
+                        Text("Restart now")
                     }
                 }
             )

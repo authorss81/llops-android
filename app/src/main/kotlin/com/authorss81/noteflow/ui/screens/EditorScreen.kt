@@ -102,8 +102,10 @@ fun EditorScreen(
 
     val context = LocalContext.current
     com.authorss81.noteflow.utils.JankStatsHelper.MonitorJank("EditorScreen")
-    // 22.9: tactile feedback for high-value affordances.
+    // 22.9: tactile feedback for high-value affordances (skipped when the user
+    // has reduce-motion/remove-animations enabled system-wide).
     val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+    val reduceMotion = com.authorss81.noteflow.theme.LocalReduceMotion.current
     val voiceNoteManager = remember { VoiceNoteManager(context) }
 
     // Release recorder/player & cancel timer jobs when leaving the editor
@@ -379,7 +381,7 @@ fun EditorScreen(
     }
 
     fun onAddLayer() {
-        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+        if (!reduceMotion) haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
         val nextZ = (layers.maxOfOrNull { it.zOrder } ?: -1) + 1
         val newLayerId = "layer_" + java.util.UUID.randomUUID().toString()
         val newLayer = LayerEntity(
@@ -404,7 +406,7 @@ fun EditorScreen(
 
     fun onDeleteLayer(deletedLayerId: String) {
         if (layers.size <= 1) return
-        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+        if (!reduceMotion) haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
         val remainingLayers = layers.filter { it.id != deletedLayerId }
         val targetLayerId = remainingLayers.firstOrNull()?.id ?: "layer_default"
 
@@ -613,7 +615,7 @@ fun EditorScreen(
             redoStack = redoStack + listOf(strokes)
             strokes = previousState
             triggerAutoSave(previousState)
-            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+            if (!reduceMotion) haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
         }
     }
 
@@ -624,7 +626,7 @@ fun EditorScreen(
             undoStack = undoStack + listOf(strokes)
             strokes = nextState
             triggerAutoSave(nextState)
-            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+            if (!reduceMotion) haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
         }
     }
 
@@ -707,7 +709,7 @@ fun EditorScreen(
                     FilterChip(
                         selected = isRecordingVoice,
                         onClick = {
-                            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                            if (!reduceMotion) haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
                             if (isRecordingVoice) {
                                 val result = voiceNoteManager.stopRecording()
                                 if (result != null) {
@@ -1740,6 +1742,7 @@ private fun ToolPickerBottomSheet(
     onSnackbar: (String, Boolean) -> Unit = { _, _ -> }
 ) {
     val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+    val reduceMotion = com.authorss81.noteflow.theme.LocalReduceMotion.current
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
@@ -1781,7 +1784,7 @@ private fun ToolPickerBottomSheet(
                     
                     Surface(
                         onClick = {
-                            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                            if (!reduceMotion) haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
                             onToolSelect(tool)
                             onDismiss()
                         },
@@ -1851,7 +1854,7 @@ private fun ToolPickerBottomSheet(
 
                     Surface(
                         onClick = {
-                            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                            if (!reduceMotion) haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
                             if (isUnsupported && !hasShownShaderWarning) {
                                 hasShownShaderWarning = true
                                 onSnackbar(

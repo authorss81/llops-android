@@ -125,18 +125,26 @@ fun MarkdownPreviewScreen(
     var contentText by remember { mutableStateOf(initialContent) }
 
     // 22.9: never silently discard edits — flush content before navigating back.
-    val latestContent by rememberUpdatedState(contentText)
+    // Dedupe: only write when the content actually changed, and never twice for the
+    // same snapshot (BackHandler and onDispose both funnel through flushSave, so a
+    // back press results in exactly one write, and an unchanged screen writes zero).
+    var savedContent by remember(page.id) { mutableStateOf(initialContent) }
+    fun flushSave() {
+        if (savedContent != contentText) {
+            savedContent = contentText
+            onSaveContent(contentText)
+        }
+    }
+
     androidx.activity.compose.BackHandler {
-        onSaveContent(latestContent)
+        flushSave()
         onBack()
     }
 
     // 22.9: also flush when the editor leaves composition for any other reason
-    // (lock, nav elsewhere, split-pane layout changes).
+    // (nav elsewhere, split-pane layout changes, page switch).
     DisposableEffect(Unit) {
-        onDispose {
-            onSaveContent(latestContent)
-        }
+        onDispose { flushSave() }
     }
     var splitRatio by remember { mutableFloatStateOf(0.5f) }
     var showBacklinks by remember { mutableStateOf(false) }
@@ -219,7 +227,7 @@ fun MarkdownPreviewScreen(
                     }
                     IconButton(
                         onClick = {
-                            onSaveContent(contentText)
+                            flushSave()
                             viewModel.createNoteVersion(page.id, page.title, contentText, "Manual save in Live Editor")
                         }
                     ) {
@@ -383,7 +391,7 @@ fun MarkdownPreviewScreen(
                     viewModel = viewModel,
                     onRestoreVersion = { restoredVer ->
                         contentText = restoredVer.extractedText ?: ""
-                        onSaveContent(contentText)
+                        flushSave()
                     },
                     onDismiss = { showVersionHistory = false }
                 )

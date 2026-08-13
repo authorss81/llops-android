@@ -126,8 +126,9 @@ fun AnnotationCanvas(
     var internalZoomScale by remember { mutableFloatStateOf(zoomScale) }
     var internalPanOffset by remember { mutableStateOf(panOffset) }
 
-    // 22.9: light tick when a stroke is committed.
+    // 22.9: light tick when a stroke is committed (skipped under reduce-motion).
     val hapticFeedback = androidx.compose.ui.platform.LocalHapticFeedback.current
+    val reduceMotion = com.authorss81.noteflow.theme.LocalReduceMotion.current
 
     var layoutZoomScale by remember { mutableFloatStateOf(zoomScale) }
     var layoutPanOffset by remember { mutableStateOf(panOffset) }
@@ -693,7 +694,7 @@ fun AnnotationCanvas(
                                             activeStrokeList.add(newStroke)
                                             val otherStrokes = if (isContinuousMode) emptyList() else strokes.filter { it.pdfPage != pdfPageFilter }
                                             onStrokesChanged(otherStrokes + activeStrokeList)
-                                            hapticFeedback.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                                            if (!reduceMotion) hapticFeedback.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
                                         }
                                     }
                                 }
