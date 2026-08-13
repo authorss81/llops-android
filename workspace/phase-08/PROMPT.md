@@ -1,79 +1,95 @@
-# Phase 8: Full regression + release readiness (THE CHECKPOINT)
+# Phase 8: Performance optimization (make it feel fast, keep it honest)
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
-app. This is the FINAL phase of the pipeline. Its job is NOT to add new features —
-it is to verify everything Phases 2–7 claimed to do, fix any remaining defects,
-and produce a signed release artifact. Think of it as the "did we actually make
-the app better, and can we ship it?" checkpoint.
+app. The app now WORKS and is honest (Phases 2–7). This phase is about
+**performance and responsiveness**: find real, verifiable inefficiencies and fix
+them. No new features. No visual changes. Build must stay green.
 
-## Your goals, in order
+The app targets API 26+, including low-end 2-core devices (per the project's
+compatibility policy). Optimizations must respect the existing capability/tier
+helpers (`DeviceCompatibilityManager`, `ShaderCapabilityHelper`).
 
-### 1. Full regression verification
-Run the complete verification suite and fix anything that fails:
-- `gradle assembleDebug` — must succeed.
-- `gradle testDebugUnitTest` — all tests must pass (including every unit test
-  added in Phases 4–7: stabilizer, pressure curves, symmetry math, color harmony).
-- `gradle assembleRelease` — must succeed (this is what the release workflow
-  builds).
+## Verified problem areas (from the perf audit — fix each)
 
-For every failure, fix the root cause. Cite `file:line` in a summary of what was
-fixed. Do NOT silence a failing test by deleting or weakening it unless the test
-itself is genuinely wrong (then say so explicitly).
+### 1. Main-thread work (jank)
+Search the app for blocking work on the main thread. Known suspects to verify:
+- `NoteflowViewModel`/`MainActivity` loading pages or decrypting on the main
+  thread at startup or on navigation.
+- Any `db.` DAO calls or `EncryptionService` calls invoked synchronously from
+  UI (Compose) callbacks instead of a coroutine/`Dispatchers.IO`.
+- `AnnotationCanvas.kt` doing bitmap allocation or pixel reads during draw.
+- `ImportExportService` / `PsdExportService` / `WebDavSyncService` heavy work
+  done inline in a UI callback rather than a worker.
 
-### 2. Cross-phase consistency audit
-Verify the previous phases' claims against the actual code. For each, confirm
-it is REAL (wired, called, works) — not just claimed:
-- Phase 2: restore/sync data-loss paths fixed; search corpus cache present in
-  `NoteRepository` and invalidated on mutation.
-- Phase 3: all dead/fake features actually removed (no orphaned references,
-  no leftover UI entries, no lingering imports of deleted classes).
-- Phase 4: AGSL wet-mix shaders actually wired into the render path (not just
-  defined); fallbacks for API <33 in place.
-- Phase 5: UX/accessibility items (data-loss warnings, touch targets, feedback)
-  present and reachable.
-- Phase 6: WebDAV sync is real (no fake local-copy); encryption/decryption of
-  synced payloads works; sync is honest about failures.
-- Phase 7: stabilizer, pressure curves, symmetry, harmony (and any extras) are
-  implemented with their unit tests.
+For every confirmed main-thread offender, move the work to `Dispatchers.IO` (or a
+bounded coroutine scope), or make it lazy. Verify with a grep/call-site audit
+recorded in a findings list — do not guess.
 
-Where a claim is FALSE or a feature is still dead/stub, either fix it honestly
-or remove the misleading claim (delete the code / update the roadmap). NEVER
-leave a known false claim in place.
+### 2. Per-frame allocation in the canvas hot path
+`AnnotationCanvas.kt` pointer/stroke path processes points per frame. Look for:
+- Allocations inside the pointer-move handler (new `Path`, `List`, `FloatArray`,
+  `RectF` per event) that could be pooled or reused.
+- `WetBrushEngine` / `WetMixingMath` allocating per stroke point.
+- String/formatting work inside draw.
 
-### 3. Security & honesty re-scan
-- Confirm no secrets/keys/decrypted content are logged or committed.
-- Confirm `allowBackup="false"` and `data_extraction_rules.xml` are intact.
-- Confirm the app does not claim features it does not have (no fake UI entries).
-- Confirm `ROADMAP.md` truth table and CHANGELOG accurately reflect reality.
-  Update `CHANGELOG.md` with a clear, honest summary of Phases 2–8.
+Fix by reusing buffers (a small object pool or pre-allocated working objects).
+Keep behavior identical. Pure-math helpers that were made unit-testable in
+earlier phases must stay testable.
 
-### 4. Produce the release artifact
-- Ensure the release build is signed (the workflow uses AGP built-in debug
-  signing when no keystore is present — that is fine for this pipeline).
-- Verify `app/build/outputs` contains a release APK after `assembleRelease`.
-- If anything blocks the release build, fix it.
+### 3. Bitmap memory (OOM risk on low-RAM devices)
+Audit `ImageViewer.kt`, `LayerBitmapCache.kt`, `BitmapPool.kt`, gallery/media
+components:
+- Confirm image decode is bounded (`inSampleSize`/`decodeBounded`), never
+  full-resolution `BitmapFactory.decodeFile` for large images.
+- Confirm `LayerBitmapCache`/`BitmapPool` have real capacity limits and are
+  released on config change / note close (no unbounded caching).
+- Confirm no full-canvas `Bitmap.createBitmap` per stroke without reuse.
 
-### 5. Final report
-Write `workspace/phase-08/REPORT.md` with:
-- A table of every phase (2–8), its claim, and the verification verdict
-  (PASS / FIXED / REMOVED) with `file:line` evidence.
-- The list of defects found and fixed in this phase.
-- The release artifact path and build results.
+Fix leaks/oversized allocs; keep existing behavior identical.
+
+### 4. Recomposition / stability in Compose
+Audit the main screens (`HomeScreen.kt`, `EditorScreen.kt`, `UnifiedSidebar.kt`,
+`GalleryView.kt`, `SpreadsheetTableView.kt`):
+- Any `LaunchedEffect` keyed on volatile state that re-runs heavy work on every
+  recomposition.
+- Unstable lambdas/params causing large subtrees to recompose (add `remember`/
+  stable holders where it clearly helps — do NOT over-annotate or chase
+  micro-optimizations that hurt readability).
+- Lists without keys/`LazyColumn` misuse causing full relayouts.
+
+Fix the clear, high-value ones only. No speculative rewrites.
+
+### 5. Startup time
+- `MainActivity` / `NoteflowViewModel` init: confirm vault unlock, DB open, and
+  `EncryptionService` key derivation (PBKDF2 600k) are NOT on the main thread.
+- Move expensive one-time init off the critical path (lazy VM, delayed heavy
+  init, async unlock) without changing behavior.
+- Confirm `AppStartupLogger.kt` isn't doing expensive work itself.
+
+### 6. Storage / I/O
+- `NoteRepository` save/insert paths: confirm writes go through Room off-thread
+  and are batched where cheap (no per-stroke transaction churn).
+- `DocumentTextExtractor` / `HtmlToMarkdownConverter`: confirm no accidental
+  O(n²) string concatenation; use `StringBuilder`.
+- WAL checkpoint: verify the fix from Phase 2 is still present (backups include
+  latest edits).
 
 ## Definition of done
-- `gradle assembleDebug`, `gradle testDebugUnitTest`, and
-  `gradle assembleRelease` ALL succeed.
-- Every phase claim is verified with `file:line` evidence in `REPORT.md`.
-- `CHANGELOG.md` updated honestly.
-- `REPORT.md` committed alongside the phase.
+- `gradle assembleDebug` succeeds.
+- `gradle testDebugUnitTest` passes (existing tests unchanged except where an
+  optimization legitimately requires a test update — say so explicitly).
+- Every change is a perf fix with a `file:line` justification, NOT a rewrite.
+- A `workspace/phase-08/PERF_REPORT.md` is written listing: the confirmed
+  bottleneck, the `file:line`, the fix, and (where measurable in a JVM test)
+  the before/after.
 
 ## Constraints
 - NO new third-party dependencies. NO new permissions. NO `INTERNET`.
-- Do NOT change the DB schema unless required to fix a real Phase 2–7 defect
-  (and then say so explicitly — schema changes need user approval, so prefer a
-  fix that avoids one).
+- Do NOT change the DB schema.
 - Do NOT edit `.github/workflows/`.
-- Do not weaken tests to make them pass. Fix the code, or justify removing a
-  genuinely-broken test in `REPORT.md`.
-- Be honest above all: if something cannot be verified or fixed in this phase,
-  say so clearly in `REPORT.md` rather than claiming it works.
+- Do NOT change user-visible behavior or visuals. No feature changes.
+- No speculative micro-optimizations: if you cannot articulate a real benefit,
+  leave the code alone and note it as "considered, not applied".
+- Low-end device policy: optimizations must not assume fast hardware; they must
+  HELP slow devices (this is the point).
+- Be honest: `PERF_REPORT.md` must not overstate gains that were not measured.
