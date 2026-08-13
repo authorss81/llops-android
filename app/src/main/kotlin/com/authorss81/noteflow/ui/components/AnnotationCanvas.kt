@@ -383,9 +383,7 @@ fun AnnotationCanvas(
     }
 
     DisposableEffect(Unit) {
-        wetCanvasEngine.startSimulation()
         onDispose {
-            wetCanvasEngine.stopSimulation()
             layerBitmapCache.values.forEach {
                 com.authorss81.noteflow.utils.BitmapPool.release(it.bitmap.asAndroidBitmap())
             }
@@ -622,14 +620,7 @@ fun AnnotationCanvas(
                                             )
                                             activePoints.add(interpPt)
 
-                                            wetCanvasEngine.depositStrokePoint(
-                                                point = Offset(interp.x, interp.y - targetPageYStart),
-                                                canvasWidth = pageWidthPx,
-                                                canvasHeight = pageHeightPx,
-                                                brushRadius = currentWidth * 1.5f,
-                                                color = currentColor,
-                                                tool = currentTool
-                                            )
+                                            wetCanvasEngine.markPaintDeposited(currentTool)
                                         }
                                         activeEnd = activePoints.lastOrNull() ?: currentPoint
                                     } else {
@@ -1896,12 +1887,19 @@ private fun DrawScope.drawCompositedLayersStrokes(
 
         val isWetTool = currentTool == StrokeTool.WATERCOLOR || currentTool == StrokeTool.OIL_PAINT || currentTool == StrokeTool.SMUDGE || currentTool == StrokeTool.SPLATTER
         val isWetLayer = (isWetTool && isPreviewOnThisLayer) || layerStrokes.any { it.tool == StrokeTool.WATERCOLOR || it.tool == StrokeTool.OIL_PAINT || it.tool == StrokeTool.SMUDGE || it.tool == StrokeTool.SPLATTER }
+        // Gate the wet pass on an ACTIVE stroke on this layer: the shader's
+        // renderEffect is only meaningful while a brush is moving, and the dirty
+        // scoping below only covers that region. When idle (no preview on this
+        // layer) the wet layer renders through the normal path — pixel-identical
+        // but with ZERO shader/saveLayer work instead of a full-page per-frame
+        // offscreen passes (phase-04 audit item 3).
         val useAgslWetMixing = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU &&
                 gpuWetBrushesEnabled &&
                 graphicsLayer != null &&
                 wetBrushEngine != null &&
                 !wetBrushEngine.useVectorFallback &&
-                isWetLayer
+                isWetLayer &&
+                isPreviewOnThisLayer
 
         if (useAgslWetMixing && graphicsLayer != null && wetBrushEngine != null) {
             drawWetLayerPass(
@@ -2046,36 +2044,94 @@ private fun DrawScope.drawWetLayerPass(
                 mixStrength = preset.mixStrength,
                 impasto = preset.impasto,
                 hardness = preset.hardness,
-                paperGrain = wetCanvasEngine.brushParams.paperGrain
+                paperGrain = wetCanvasEngine.brushParams.paperGrain,
+                seed = ((pageWidth * 131f) + (pageHeight * 71f) + (offsetY * 29f)) % 1000f
             )
             hasEffect = true
         }
 
         val nativeCanvas = drawContext.canvas.nativeCanvas
-        val paint = android.graphics.Paint().apply {
+        val plainPaint = android.graphics.Paint().apply {
             isAntiAlias = true
             alpha = (layer.opacity * 255f).coerceIn(0f, 255f).toInt()
             applyLayerBlend(layer.blendMode)
-            if (hasEffect && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-                if (wetMixingEffect != null) {
-                    try {
-                        val method = android.graphics.Paint::class.java.getMethod("setRenderEffect", android.graphics.RenderEffect::class.java)
-                        method.invoke(this, wetMixingEffect.androidEffect)
-                    } catch (_: Exception) {}
-                }
-            }
         }
-        val bounds = android.graphics.RectF(0f, offsetY, pageWidth, offsetY + pageHeight)
-        val saveCount = nativeCanvas.saveLayer(bounds, paint)
-        try {
+        val effectPaint = if (hasEffect && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            val p = android.graphics.Paint(plainPaint)
+            try {
+                val method = android.graphics.Paint::class.java.getMethod("setRenderEffect", android.graphics.RenderEffect::class.java)
+                method.invoke(p, wetMixingEffect.androidEffect)
+            } catch (_: Exception) {}
+            p
+        } else {
+            null
+        }
+
+        val pageBounds = android.graphics.RectF(0f, offsetY, pageWidth, offsetY + pageHeight)
+
+        // Dirty-rect scoping (phase-04 audit item 3): only re-run the AGSL effect
+        // over the rect the active brush segment can alter, so the offscreen layer
+        // drops from a full-page raster (~1.65M px) to the stroke area. saveLayer
+        // keeps the canvas (absolute) coordinate space, so shader/Paint uniforms
+        // stay in page coordinates and no translate is required.
+        val dirty = if (hasEffect && brushPos != null) {
+            val baseX = prevPos?.x ?: brushPos.x
+            val baseY = prevPos?.y ?: brushPos.y
+            val radius = currentWidth * 1.5f + 8f
+            val rect = android.graphics.RectF(
+                minOf(baseX, brushPos.x) - radius,
+                minOf(baseY, brushPos.y) - radius,
+                maxOf(baseX, brushPos.x) + radius,
+                maxOf(baseY, brushPos.y) + radius
+            )
+            if (rect.intersect(pageBounds)) rect else null
+        } else {
+            null
+        }
+
+        fun drawStrokes() {
             for (stroke in layerStrokes) {
                 drawSingleStroke(stroke, 0f, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer)
             }
             if (previewStroke != null) {
                 drawSingleStroke(previewStroke, 0f, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer)
             }
-        } finally {
-            nativeCanvas.restoreToCount(saveCount)
+        }
+
+        if (effectPaint == null || dirty == null) {
+            // No active effect region (idle fallback): keep the existing full-page
+            // plain layer so layer opacity/blend still apply unchanged.
+            val saveCount = nativeCanvas.saveLayer(pageBounds, plainPaint)
+            try {
+                drawStrokes()
+            } finally {
+                nativeCanvas.restoreToCount(saveCount)
+            }
+        } else {
+            // 1) Full-layer plain pass with the dirty (effect) region punched out,
+            //    so the effect pass below supplies the ONLY pixels there and the
+            //    stroke alpha is not double-blended.
+            val baseSave = nativeCanvas.saveLayer(pageBounds, plainPaint)
+            try {
+                nativeCanvas.save()
+                nativeCanvas.clipOutRect(dirty)
+                drawStrokes()
+                nativeCanvas.restore()
+            } finally {
+                nativeCanvas.restoreToCount(baseSave)
+            }
+
+            // 2) Effect pass sized to the dirty rect only; shader coords stay
+            //    absolute because saveLayer preserves the canvas coordinate space.
+            val effectSave = nativeCanvas.saveLayer(dirty, effectPaint)
+            try {
+                nativeCanvas.save()
+                nativeCanvas.clipRect(dirty)
+                drawStrokes()
+                nativeCanvas.restore()
+            } finally {
+                nativeCanvas.restoreToCount(effectSave)
+            }
         }
     } else {
         for (stroke in layerStrokes) {

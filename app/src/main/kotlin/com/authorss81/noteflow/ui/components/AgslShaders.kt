@@ -37,9 +37,22 @@ object AgslShaders {
         uniform float uImpasto;      // 0.0 = flat, 1.0 = thick ridges
         uniform float uPaperGrain;   // 0.0 = smooth, 1.0 = heavy cold press granulation
         uniform float uHardness;     // 0.0 = soft, 1.0 = hard edge
+        uniform float uSeed;         // per-page seed so paper grain stays spatially coherent but dithers per sheet
 
-        float pseudoNoise(float2 p) {
-            return fract(sin(dot(p, float2(12.9898, 78.233))) * 43758.5453);
+        float hash21(float2 p) {
+            float2 q = p * 127.1 + float2(311.7, 74.7) + float2(uSeed, uSeed * 1.7);
+            return fract(sin(dot(q, float2(12.9898, 78.233))) * 43758.5453);
+        }
+
+        float valueNoise(float2 p) {
+            float2 i = floor(p);
+            float2 f = fract(p);
+            float2 s = f * f * (3.0 - 2.0 * f);
+            return mix(
+                mix(hash21(i), hash21(i + float2(1.0, 0.0)), s.x),
+                mix(hash21(i + float2(0.0, 1.0)), hash21(i + float2(1.0, 1.0)), s.x),
+                s.y
+            );
         }
 
         float distToSegment(float2 p, float2 a, float2 b) {
@@ -63,14 +76,18 @@ object AgslShaders {
             // Hardness uniform applied to falloff transition
             float falloff = smoothstep(1.0, uHardness, normDist);
             
-            // Cold press paper grain granulation modifier
-            float grainNoise = pseudoNoise(coord * 0.15) * 0.6 + pseudoNoise(coord * 0.35) * 0.4;
+            // Cold press paper grain granulation modifier (stable value noise, seeded per page)
+            float grainNoise = valueNoise(coord * 0.15) * 0.6 + valueNoise(coord * 0.35) * 0.4;
             float granulation = mix(1.0, 0.4 + 1.2 * grainNoise, uPaperGrain);
 
-            // Realistic color blending: avoid transparent black background darkening
+            // Pigment-space (subtractive) mixing: absorbances multiply
+            // (1-(1-base)(1-brush)) per channel instead of a linear-RGB lerp,
+            // which keeps overlapping complementary colors clean instead of muddy.
+            // Mirrors WetMixingMath.pigmentMix / pigmentMixRgb.
+            float pigmentFactor = clamp(uPigmentLoad * falloff * uMixStrength * granulation, 0.0, 1.0);
             half3 mixedRgb;
             if (base.a > 0.0) {
-                mixedRgb = mix(base.rgb, uBrushColor.rgb, uPigmentLoad * falloff * uMixStrength * granulation);
+                mixedRgb = base.rgb + (1.0 - (1.0 - base.rgb) * (1.0 - uBrushColor.rgb) - base.rgb) * pigmentFactor;
             } else {
                 mixedRgb = uBrushColor.rgb;
             }
@@ -111,16 +128,12 @@ object AgslShaders {
                 mixedRgb = mix(mixedRgb, mixedRgb * 0.65, fringe);
             }
 
-            // Realistic alpha blending based on wetness/viscosity
+            // Realistic alpha blending: source-over accumulation for wet AND dry.
+            // Overlapping washes darken monotonically (wet-on-wet watercolor)
+            // instead of the old max() shortcut which blocked overlap buildup.
+            // Mirrors WetMixingMath.sourceOverAlpha.
             float brushAlpha = uBrushColor.a * falloff * granulation;
-            float newAlpha;
-            if (uWetness > 0.5) {
-                // Watercolor bleed buildup
-                newAlpha = max(base.a, brushAlpha * 0.75) + base.a * brushAlpha * 0.25;
-            } else {
-                // Opaque layering
-                newAlpha = base.a + brushAlpha * (1.0 - base.a);
-            }
+            float newAlpha = base.a + brushAlpha * (1.0 - base.a);
             newAlpha = clamp(newAlpha, 0.0, 1.0);
 
             return half4(mixedRgb, newAlpha);
@@ -201,7 +214,8 @@ object AgslShaders {
             mixStrength: Float,
             impasto: Float,
             hardness: Float,
-            paperGrain: Float = 0.5f
+            paperGrain: Float = 0.5f,
+            seed: Float = 0f
         ) {
             runtimeShader.setFloatUniform("uPrevPos", prevX, prevY)
             runtimeShader.setFloatUniform("uBrushPos", brushX, brushY)
@@ -213,6 +227,7 @@ object AgslShaders {
             runtimeShader.setFloatUniform("uImpasto", impasto)
             runtimeShader.setFloatUniform("uPaperGrain", paperGrain)
             runtimeShader.setFloatUniform("uHardness", hardness)
+            runtimeShader.setFloatUniform("uSeed", seed)
         }
     }
 }
