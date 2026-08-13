@@ -72,6 +72,7 @@ fun HomeScreen(
     var showWelcomeDialog by remember { mutableStateOf(isFirstRun && !tutorialCompleted) }
     var showSecurityDialog by remember { mutableStateOf(false) }
     var showUpdateDialog by remember { mutableStateOf(false) }
+    var showPluginsDialog by remember { mutableStateOf(false) }
     var showBackupPasswordDialog by remember { mutableStateOf(false) }
     var showLegacyRestoreConfirmDialog by remember { mutableStateOf(false) }
     var pendingRestoreBytes by remember { mutableStateOf<ByteArray?>(null) }
@@ -439,6 +440,7 @@ fun HomeScreen(
                             onOpenTutorial = { showTutorial = true },
                             onOpenSecurity = { showSecurityDialog = true },
                             onOpenUpdate = { showUpdateDialog = true },
+                            onOpenPlugins = { showPluginsDialog = true },
                             onBackup = {
                                 if (viewModel.hasMasterPassword.value) {
                                     backupPasswordInput = ""
@@ -1065,6 +1067,13 @@ fun HomeScreen(
             SecuritySettingsDialog(
                 viewModel = viewModel,
                 onDismiss = { showSecurityDialog = false }
+            )
+        }
+
+        if (showPluginsDialog) {
+            PluginSettingsDialog(
+                viewModel = viewModel,
+                onDismiss = { showPluginsDialog = false }
             )
         }
 
@@ -2280,6 +2289,7 @@ private fun MaintenanceMenu(
     onOpenTutorial: () -> Unit,
     onOpenSecurity: () -> Unit,
     onOpenUpdate: () -> Unit,
+    onOpenPlugins: () -> Unit = {},
     onBackup: () -> Unit,
     onRestore: () -> Unit,
     onExportObsidianVault: () -> Unit = {},
@@ -2342,6 +2352,11 @@ private fun MaintenanceMenu(
                 text = { Text("Security Settings") },
                 leadingIcon = { Icon(Icons.Outlined.Security, contentDescription = null) },
                 onClick = { expanded = false; onOpenSecurity() }
+            )
+            DropdownMenuItem(
+                text = { Text("Plugins") },
+                leadingIcon = { Icon(Icons.Outlined.Extension, contentDescription = null) },
+                onClick = { expanded = false; onOpenPlugins() }
             )
             DropdownMenuItem(
                 text = { Text("App Version & Updates") },

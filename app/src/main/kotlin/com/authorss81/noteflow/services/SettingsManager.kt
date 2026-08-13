@@ -148,6 +148,15 @@ class SettingsManager(context: Context) {
         get() = prefs.getBoolean("database_integrity_check_enabled", true)
         set(value) = prefs.edit().putBoolean("database_integrity_check_enabled", value).apply()
 
+    // Phase 10: per-plugin opt-in persistence (Settings → Plugins). Plugins are
+    // DISABLED by default — the user opts in per plugin.
+    fun isPluginEnabled(pluginId: String): Boolean =
+        prefs.getBoolean("plugin_enabled_$pluginId", false)
+
+    fun setPluginEnabled(pluginId: String, enabled: Boolean) {
+        prefs.edit().putBoolean("plugin_enabled_$pluginId", enabled).apply()
+    }
+
     fun clearSecuritySettings() {
         prefs.edit()
             .remove("master_password_salt")

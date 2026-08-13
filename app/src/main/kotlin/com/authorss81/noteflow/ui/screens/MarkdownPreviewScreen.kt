@@ -24,6 +24,9 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Splitscreen
+import androidx.compose.material.icons.outlined.Extension
+import com.authorss81.noteflow.plugins.PluginCapability
+import com.authorss81.noteflow.plugins.PluginResult
 import com.authorss81.noteflow.ui.components.VersionHistoryBottomSheet
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -151,6 +154,7 @@ fun MarkdownPreviewScreen(
     var showSmartAssistant by remember { mutableStateOf(false) }
     var showSlashCommands by remember { mutableStateOf(false) }
     var showVersionHistory by remember { mutableStateOf(false) }
+    var showPluginMenu by remember { mutableStateOf(false) }
 
     val primaryColor = MaterialTheme.colorScheme.primary
     val configuration = androidx.compose.ui.platform.LocalConfiguration.current
@@ -232,6 +236,39 @@ fun MarkdownPreviewScreen(
                         }
                     ) {
                         Icon(Icons.Outlined.Save, contentDescription = "Save Content")
+                    }
+                    Box {
+                        IconButton(onClick = { showPluginMenu = true }) {
+                            Icon(Icons.Outlined.Extension, contentDescription = "Plugins", tint = primaryColor)
+                        }
+                        DropdownMenu(expanded = showPluginMenu, onDismissRequest = { showPluginMenu = false }) {
+                            val transformPlugins = viewModel.pluginRegistry.pluginsForCapability(PluginCapability.TextTransform)
+                            if (transformPlugins.isEmpty()) {
+                                DropdownMenuItem(
+                                    text = { Text("No text-transform plugins installed") },
+                                    enabled = false,
+                                    onClick = {}
+                                )
+                            } else {
+                                transformPlugins.forEach { plugin ->
+                                    DropdownMenuItem(
+                                        text = { Text("Run ${plugin.name}") },
+                                        leadingIcon = { Icon(Icons.Outlined.Extension, contentDescription = null) },
+                                        onClick = {
+                                            showPluginMenu = false
+                                            when (val result = viewModel.transformNoteText(contentText)) {
+                                                is PluginResult.Success -> {
+                                                    contentText = result.value
+                                                    flushSave()
+                                                }
+                                                is PluginResult.Failure ->
+                                                    viewModel.showSnackbar(result.message, isLong = true)
+                                            }
+                                        }
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             )

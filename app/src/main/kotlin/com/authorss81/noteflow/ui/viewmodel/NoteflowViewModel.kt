@@ -7,11 +7,17 @@ import androidx.lifecycle.viewModelScope
 import com.authorss81.noteflow.data.db.NoteflowDatabase
 import com.authorss81.noteflow.data.model.*
 import com.authorss81.noteflow.data.repository.NoteRepository
+import com.authorss81.noteflow.plugins.PluginCapability
+import com.authorss81.noteflow.plugins.PluginManager
+import com.authorss81.noteflow.plugins.PluginRegistry
+import com.authorss81.noteflow.plugins.PluginResult
+import com.authorss81.noteflow.plugins.TextTransformPlugin
 import com.authorss81.noteflow.services.DatabaseSecurityHelper
 import com.authorss81.noteflow.services.EncryptionService
 import com.authorss81.noteflow.services.ImportExportService
 import com.authorss81.noteflow.services.SecurityService
 import com.authorss81.noteflow.services.SettingsManager
+import com.authorss81.noteflow.services.SettingsPluginEnableStore
 import com.authorss81.noteflow.theme.AppThemeMode
 import com.authorss81.noteflow.ui.components.WorkspaceTemplate
 import kotlinx.coroutines.Dispatchers
@@ -31,6 +37,31 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     val security = SecurityService(appContext)
     private val db by lazy { NoteflowDatabase.getDatabase(appContext) }
     val repository by lazy { NoteRepository(db) }
+
+    // Phase 10: plugin framework (see docs/PLUGINS.md). Core registry/manager are
+    // dependency-free; persist opt-in via SettingsManager.
+    private val pluginEnableStore = SettingsPluginEnableStore(settings)
+    val pluginRegistry = PluginRegistry(pluginEnableStore)
+    val pluginManager = PluginManager(pluginRegistry)
+
+    private val _pluginEnabledIds = MutableStateFlow(pluginRegistry.allPlugins.associate { it.id to pluginRegistry.isEnabled(it.id) })
+    val pluginEnabledIds: StateFlow<Map<String, Boolean>> = _pluginEnabledIds.asStateFlow()
+
+    fun setPluginEnabled(pluginId: String, enabled: Boolean) {
+        pluginRegistry.setEnabled(pluginId, enabled, appContext)
+        _pluginEnabledIds.value = pluginRegistry.allPlugins.associate { it.id to pluginRegistry.isEnabled(it.id) }
+    }
+
+    /**
+     * Route a text-transform request through the plugin manager. Returns a typed
+     * result; failures carry a user-facing message (never throws).
+     */
+    fun transformNoteText(text: String): PluginResult<String> =
+        pluginManager.withPlugin(PluginCapability.TextTransform, appContext) { plugin ->
+            val transformer = plugin as? TextTransformPlugin
+                ?: throw IllegalStateException("${plugin.name} does not implement TextTransformPlugin")
+            transformer.transformText(text)
+        }
 
     private val _databaseTampered = MutableStateFlow(false)
     val databaseTampered: StateFlow<Boolean> = _databaseTampered.asStateFlow()
