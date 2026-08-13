@@ -5,7 +5,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 
 enum class StrokeTool {
-    PEN, FOUNTAIN_PEN, PENCIL, AIRBRUSH, MARKER, HIGHLIGHTER, CALLIGRAPHIC, DOTTED, NEON, FINELINER, CHISEL_MARKER, LASER, ERASER, TEXT, RECTANGLE, LINE, ARROW, ELLIPSE, TRIANGLE, STAR, PENTAGON, HEXAGON, SELECT, PAN, EYEDROPPER, WATERCOLOR, OIL_PAINT, SMUDGE, SPLATTER;
+    PEN, FOUNTAIN_PEN, PENCIL, AIRBRUSH, MARKER, HIGHLIGHTER, CALLIGRAPHIC, DOTTED, NEON, FINELINER, CHISEL_MARKER, LASER, ERASER, TEXT, RECTANGLE, LINE, ARROW, ELLIPSE, TRIANGLE, STAR, PENTAGON, HEXAGON, SELECT, PAN, EYEDROPPER, WATERCOLOR, OIL_PAINT, SMUDGE, SPLATTER, STICKER;
 
     val isShapeTool: Boolean
         get() = when (this) {
@@ -50,6 +50,7 @@ enum class StrokeTool {
             OIL_PAINT -> "Oil Paint (Wet)"
             SMUDGE -> "Smudge / Finger Blend"
             SPLATTER -> "Paint Splatter & Drops"
+            STICKER -> "Sticker"
         }
 }
 
@@ -128,7 +129,7 @@ data class Stroke(
 }
 
 enum class MediaEmbedType {
-    PHOTO, CODE_BLOCK, AUDIO_NOTE, STICKY_NOTE
+    PHOTO, CODE_BLOCK, AUDIO_NOTE, STICKY_NOTE, STICKER
 }
 
 data class CanvasMediaEmbed(
@@ -145,7 +146,8 @@ data class CanvasMediaEmbed(
     val durationMs: Long = 0L,
     val waveformAmplitudes: List<Float> = emptyList(),
     val pdfPage: Int = 0,
-    val isCollapsed: Boolean = type == MediaEmbedType.AUDIO_NOTE
+    val isCollapsed: Boolean = type == MediaEmbedType.AUDIO_NOTE,
+    val rotationDegrees: Float = 0f
 )
 
 data class CanvasStickyNote(
@@ -157,7 +159,8 @@ data class CanvasStickyNote(
     val text: String = "",
     val colorHex: String = "#FEF08A",
     val pdfPage: Int = 0,
-    val isCollapsed: Boolean = false
+    val isCollapsed: Boolean = false,
+    val rotationDegrees: Float = 0f
 )
 
 data class PenPreset(

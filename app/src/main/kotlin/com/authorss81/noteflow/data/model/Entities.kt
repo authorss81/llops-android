@@ -105,7 +105,8 @@ data class MediaEmbedEntity(
     val codeLanguage: String? = null,
     val durationMs: Long = 0L,
     val waveformJson: String = "[]",
-    val pdfPage: Int = 0
+    val pdfPage: Int = 0,
+    val rotationDegrees: Float = 0f
 )
 
 @Entity(tableName = "palette_items")

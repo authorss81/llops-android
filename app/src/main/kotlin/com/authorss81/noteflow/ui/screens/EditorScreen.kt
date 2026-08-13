@@ -46,6 +46,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.authorss81.noteflow.data.model.*
 import com.authorss81.noteflow.plugins.PluginCapability
 import com.authorss81.noteflow.services.ImportExportService
@@ -76,6 +77,8 @@ enum class FloatingToolbarState {
     COLOR_PICKER,   // Expanded popover/bottom-sheet with color swatches
     WIDTH_PICKER,   // Expanded popover/bottom-sheet with stroke width slider & presets
     SETTINGS_MENU,  // Expanded popover/bottom-sheet with canvas options (Infinite, Division, Grid, BG color, Zoom)
+    STICKER_PICKER, // Phase 13: offline emoji sticker gallery (STICKER tool active)
+    BRUSH_PRESETS,  // Phase 13: ready-made wet-brush preset gallery (BrushPresetPack)
     HIDDEN_DRAWING  // Fully hidden while actively drawing on the canvas
 }
 
@@ -101,6 +104,13 @@ fun EditorScreen(
     var strokes by remember { mutableStateOf<List<Stroke>>(emptyList()) }
     var stickyNotes by remember { mutableStateOf<List<CanvasStickyNote>>(emptyList()) }
     var mediaEmbeds by remember { mutableStateOf<List<CanvasMediaEmbed>>(emptyList()) }
+
+    // Phase 13: the sticker the STICKER tool currently places (id from
+    // StickerCatalog; "sparkles" default), persisted in memory for the session.
+    var selectedStickerId by remember { mutableStateOf<String?>(com.authorss81.noteflow.services.StickerCatalog.all().firstOrNull()?.id) }
+    // Phase 13: brush preset selected in Settings → Ready-made Presets (persisted
+    // to SharedPreferences via SettingsManager so it survives restarts).
+    var activeBrushPresetId by remember { mutableStateOf(viewModel.settings.activeBrushPresetId) }
     var showRenameDialog by remember { mutableStateOf(false) }
     var showBacklinks by remember { mutableStateOf(false) }
     var showClearCanvasWarning by remember { mutableStateOf(false) }
@@ -578,6 +588,38 @@ fun EditorScreen(
         viewModel.viewModelScope.launch(Dispatchers.IO) {
             viewModel.repository.saveCanvasItemsForPage(page.id, stickyNotes, newEmbeds)
         }
+    }
+
+    // Phase 13: STICKER tool tap → persist an emoji sticker as a media_embeds row
+    // (type=STICKER, stickerId in contentUrlOrPath, emoji in textContent which is
+    // already covered by the export field-encryption map).
+    fun handlePlaceSticker(canvasOffset: Offset, targetPage: Int) {
+        val sticker = selectedStickerId?.let { com.authorss81.noteflow.services.StickerCatalog.byId(it) }
+        if (sticker == null) {
+            viewModel.showSnackbar("Pick a sticker from the sticker gallery first")
+            return
+        }
+        val placed = com.authorss81.noteflow.services.StickerCatalog.placeTopLeft(
+            tapX = canvasOffset.x,
+            tapY = canvasOffset.y,
+            size = com.authorss81.noteflow.services.StickerCatalog.DEFAULT_SIZE,
+            pageWidth = 1080f,
+            pageHeight = 1528f
+        )
+        val embed = CanvasMediaEmbed(
+            pageId = page.id,
+            type = MediaEmbedType.STICKER,
+            x = placed.first,
+            y = placed.second,
+            width = com.authorss81.noteflow.services.StickerCatalog.DEFAULT_SIZE,
+            height = com.authorss81.noteflow.services.StickerCatalog.DEFAULT_SIZE,
+            contentUrlOrPath = sticker.id,
+            textContent = sticker.emoji,
+            pdfPage = targetPage,
+            rotationDegrees = 0f
+        )
+        handleMediaEmbedsChange(mediaEmbeds + embed)
+        viewModel.showSnackbar("Sticker added — drag to move, use the handle to rotate")
     }
 
     fun handleStickyNotesChange(newNotes: List<CanvasStickyNote>) {
@@ -1233,7 +1275,12 @@ fun EditorScreen(
                     // photo card's "Extract text" button renders disabled instead
                     // of silently doing nothing on tap.
                     null
-                }
+                },
+                selectedStickerId = selectedStickerId,
+                onPlaceSticker = { canvasOffset, targetPage ->
+                    handlePlaceSticker(canvasOffset, targetPage)
+                },
+                activeBrushPresetId = activeBrushPresetId
             )
 
             // Voice note failure banner (real recorder/playback errors — no silent fakes)
@@ -1364,6 +1411,11 @@ fun EditorScreen(
                 onToolSelect = { tool ->
                     currentTool = tool
                     activePresetId = null
+                    // Phase 13: choosing the Sticker tool opens the offline emoji
+                    // gallery so there is always a real sticker to place.
+                    if (tool == StrokeTool.STICKER) {
+                        toolbarState = FloatingToolbarState.STICKER_PICKER
+                    }
                 },
                 onDismiss = { toolbarState = FloatingToolbarState.COLLAPSED },
                 onSnackbar = { text, isLong -> viewModel.showSnackbar(text, isLong) }
@@ -1516,6 +1568,42 @@ fun EditorScreen(
                 },
                 onInsertPageBefore = { insertPage(before = true) },
                 onInsertPageAfter = { insertPage(before = false) },
+                activeBrushPresetName = activeBrushPresetId
+                    ?.let { com.authorss81.noteflow.services.BrushPresetPack.byId(it)?.name },
+                onOpenBrushPresets = { toolbarState = FloatingToolbarState.BRUSH_PRESETS },
+                onDismiss = { toolbarState = FloatingToolbarState.COLLAPSED }
+            )
+        }
+        FloatingToolbarState.STICKER_PICKER -> {
+            StickerPickerBottomSheet(
+                selectedStickerId = selectedStickerId,
+                onStickerSelect = { stickerId ->
+                    selectedStickerId = stickerId
+                    currentTool = StrokeTool.STICKER
+                    activePresetId = null
+                    viewModel.showSnackbar("Sticker selected — tap the canvas to place it")
+                },
+                onDismiss = { toolbarState = FloatingToolbarState.COLLAPSED }
+            )
+        }
+        FloatingToolbarState.BRUSH_PRESETS -> {
+            BrushPresetPickerBottomSheet(
+                activePresetId = activeBrushPresetId,
+                onPresetSelect = { preset ->
+                    activeBrushPresetId = preset.id
+                    viewModel.settings.activeBrushPresetId = preset.id
+                    currentTool = preset.tool
+                    currentColor = Color(android.graphics.Color.parseColor(preset.colorHex))
+                    currentWidth = preset.size
+                    activePresetId = null
+                    activeCustomPresetId = null
+                    viewModel.showSnackbar("Preset applied — start drawing with the brush")
+                },
+                onPresetClear = {
+                    activeBrushPresetId = null
+                    viewModel.settings.activeBrushPresetId = null
+                    viewModel.showSnackbar("Ready-made preset cleared — classic brush settings restored")
+                },
                 onDismiss = { toolbarState = FloatingToolbarState.COLLAPSED }
             )
         }
@@ -2601,6 +2689,8 @@ private fun CanvasSettingsBottomSheet(
     onResetZoomPan: () -> Unit,
     onInsertPageBefore: () -> Unit,
     onInsertPageAfter: () -> Unit,
+    activeBrushPresetName: String? = null,
+    onOpenBrushPresets: () -> Unit = {},
     onDismiss: () -> Unit
 ) {
     ModalBottomSheet(
@@ -2919,6 +3009,33 @@ private fun CanvasSettingsBottomSheet(
                 )
             }
 
+            // Phase 13: Ready-made brush presets (WetBrushEngine params). Only
+            // offered on AGSL-capable devices — matches the GPU wet-brush toggle.
+            if (com.authorss81.noteflow.ui.components.ShaderCapabilityHelper.isAgslSupported) {
+                Spacer(modifier = Modifier.height(16.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Icon(Icons.Outlined.AutoAwesome, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        Column {
+                            Text("Ready-made Presets", style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                activeBrushPresetName
+                                    ?: "Watercolor, oil, chalk & more — one-tap brush setups",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    androidx.compose.material3.OutlinedButton(onClick = onOpenBrushPresets) {
+                        Text(if (activeBrushPresetName != null) "Change" else "Browse")
+                    }
+                }
+            }
+
             // Phase 07: Painting Assist section.
             Text(
                 text = "Painting Assist",
@@ -3076,6 +3193,7 @@ private fun getToolIcon(tool: StrokeTool): ImageVector {
         StrokeTool.OIL_PAINT -> Icons.Outlined.FormatPaint
         StrokeTool.SMUDGE -> Icons.Outlined.TouchApp
         StrokeTool.SPLATTER -> Icons.Outlined.Grain
+        StrokeTool.STICKER -> Icons.Outlined.EmojiEmotions
     }
 }
 
@@ -3435,6 +3553,176 @@ private fun LayersPanelBottomSheet(
                     }
                 }
             }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 13: Offline emoji sticker gallery (STICKER tool)
+// ---------------------------------------------------------------------------
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun StickerPickerBottomSheet(
+    selectedStickerId: String?,
+    onStickerSelect: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 8.dp)
+        ) {
+            Text(
+                text = "Offline Stickers",
+                style = MaterialTheme.typography.titleLarge
+            )
+            Text(
+                text = "Free emoji stickers — no downloads, works offline",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+
+            val stickers = com.authorss81.noteflow.services.StickerCatalog.all()
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(5),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 340.dp)
+            ) {
+                items(stickers) { sticker ->
+                    val selected = sticker.id == selectedStickerId
+                    Surface(
+                        onClick = { onStickerSelect(sticker.id) },
+                        shape = RoundedCornerShape(16.dp),
+                        color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                        border = if (selected) BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary) else null,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(vertical = 10.dp, horizontal = 4.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = sticker.emoji,
+                                fontSize = 30.sp,
+                                maxLines = 1
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = sticker.label,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                text = "Tap a sticker, then tap the canvas to place it. Drag to move, use the round handle to rotate.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 13: Ready-made brush preset gallery (WetBrushEngine params)
+// ---------------------------------------------------------------------------
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun BrushPresetPickerBottomSheet(
+    activePresetId: String?,
+    onPresetSelect: (com.authorss81.noteflow.services.BrushPreset) -> Unit,
+    onPresetClear: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 8.dp)
+        ) {
+            Text(
+                text = "Ready-made Presets",
+                style = MaterialTheme.typography.titleLarge
+            )
+            Text(
+                text = "Pre-filled wet-brush setups for the existing AGSL engine",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+
+            val presets = com.authorss81.noteflow.services.BrushPresetPack.all()
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(2),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 400.dp)
+            ) {
+                items(presets) { preset ->
+                    val selected = preset.id == activePresetId
+                    Surface(
+                        onClick = { onPresetSelect(preset) },
+                        shape = RoundedCornerShape(16.dp),
+                        color = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                        border = if (selected) BorderStroke(1.5.dp, MaterialTheme.colorScheme.secondary) else null,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(vertical = 12.dp, horizontal = 8.dp)
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Icon(
+                                    imageVector = getToolIcon(preset.tool),
+                                    contentDescription = null,
+                                    tint = if (selected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Text(
+                                    text = preset.name,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = if (selected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = preset.tool.label,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+            if (activePresetId != null) {
+                TextButton(onClick = onPresetClear, modifier = Modifier.align(Alignment.Start)) {
+                    Text("Clear preset (restore classic brush)")
+                }
+            }
+            Spacer(modifier = Modifier.height(16.dp))
         }
     }
 }

@@ -21,6 +21,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.graphics.layer.drawLayer
@@ -131,7 +132,11 @@ fun AnnotationCanvas(
     shapeAutoSnapEnabled: Boolean = true,
     stabilizerEnabled: Boolean = false,
     pressureCurve: PressureCurve = PressureCurve.LINEAR,
-    symmetryMode: SymmetryMode = SymmetryMode.OFF
+    symmetryMode: SymmetryMode = SymmetryMode.OFF,
+    // Phase 13: rich canvas content.
+    selectedStickerId: String? = null,
+    onPlaceSticker: (Offset, Int) -> Unit = { _, _ -> },
+    activeBrushPresetId: String? = null
 ) {
     var internalZoomScale by remember { mutableFloatStateOf(zoomScale) }
     var internalPanOffset by remember { mutableStateOf(panOffset) }
@@ -298,17 +303,23 @@ fun AnnotationCanvas(
     }
 
     fun isHittingCard(canvasOffset: Offset): Boolean {
+        // Phase 13: rotated-rect hit test so dragging starts precisely on
+        // rotated sticky notes / stickers / images as well as axis-aligned ones.
         val hitNote = activeStickyNoteList.any { note ->
-            canvasOffset.x >= note.x && canvasOffset.x <= note.x + note.width &&
-            canvasOffset.y >= note.y && canvasOffset.y <= note.y + note.height
+            val w = if (note.isCollapsed) 48f else (if (note.width > 0) note.width else 220f)
+            val h = if (note.isCollapsed) 38f else (if (note.height > 0) note.height else 180f)
+            com.authorss81.noteflow.services.CanvasItemRotationMath.containsInRotatedRect(
+                canvasOffset.x, canvasOffset.y, note.x, note.y, w, h, note.rotationDegrees
+            )
         }
         if (hitNote) return true
 
         val hitEmbed = activeMediaEmbedList.any { embed ->
             val w = if (embed.width > 0) embed.width else 340f
             val h = if (embed.height > 0) embed.height else 240f
-            canvasOffset.x >= embed.x && canvasOffset.x <= embed.x + w &&
-            canvasOffset.y >= embed.y && canvasOffset.y <= embed.y + h
+            com.authorss81.noteflow.services.CanvasItemRotationMath.containsInRotatedRect(
+                canvasOffset.x, canvasOffset.y, embed.x, embed.y, w, h, embed.rotationDegrees
+            )
         }
         return hitEmbed
     }
@@ -391,6 +402,16 @@ fun AnnotationCanvas(
     val wetCanvasEngine = remember { com.authorss81.noteflow.services.WetCanvasEngine() }
     val wetBrushEngine = remember { com.authorss81.noteflow.services.WetBrushEngine() }
     val graphicsLayer = rememberGraphicsLayer()
+
+    // Phase 13: when a ready-made brush preset is active, pre-fill the wet
+    // engine's BrushStudio params. With no preset (null) the engine keeps its
+    // default/manual params, so classic brush rendering is unchanged.
+    LaunchedEffect(activeBrushPresetId) {
+        val preset = activeBrushPresetId?.let { com.authorss81.noteflow.services.BrushPresetPack.byId(it) }
+        if (preset != null) {
+            wetCanvasEngine.brushParams = preset.brushParams
+        }
+    }
 
     val context = androidx.compose.ui.platform.LocalContext.current
     LaunchedEffect(Unit) {
@@ -515,6 +536,12 @@ fun AnnotationCanvas(
                         } else if (currentTool == StrokeTool.EYEDROPPER) {
                             val sampled = sampleColorAt(canvasOffset, targetPage)
                             onColorSampled(sampled)
+                        } else if (currentTool == StrokeTool.STICKER) {
+                            // Phase 13: sticker tool — a tap places the selected
+                            // sticker at the tapped point on the active page.
+                            if (selectedStickerId != null) {
+                                onPlaceSticker(canvasOffset, targetPage)
+                            }
                         }
                     }
                 )
@@ -536,7 +563,9 @@ fun AnnotationCanvas(
                         strokeContainsPoint(stroke, offset) || strokeContainsPoint(stroke, Offset(m.x, m.y))
                     }
                 }
-                if (currentTool != StrokeTool.TEXT) {
+                // Phase 13: the STICKER tool places stickers via tap only; it is
+                // excluded (like TEXT) so a stray drag can never create a stroke.
+                if (currentTool != StrokeTool.TEXT && currentTool != StrokeTool.STICKER) {
                     detectDragGestures(
                         onDragStart = { offset ->
                             if (isLayerLocked && currentTool != StrokeTool.SELECT && currentTool != StrokeTool.PAN && currentTool != StrokeTool.EYEDROPPER) {
@@ -2901,6 +2930,19 @@ private fun DraggableStickyNoteCard(
     var resizeWidth by remember(currentNote.width) { mutableFloatStateOf(if (currentNote.width > 0) currentNote.width else 200f) }
     var resizeHeight by remember(currentNote.height) { mutableFloatStateOf(if (currentNote.height > 0) currentNote.height else 160f) }
 
+    // Phase 13: live rotation while the handle is being dragged; committed to
+    // the model (and DB) only on drag end, like the drag/resize commit pattern.
+    var liveRotation by remember(currentNote.rotationDegrees) { mutableFloatStateOf(currentNote.rotationDegrees) }
+    val commitRotation: (Float) -> Unit = { newRot ->
+        val updated = currentNote.copy(rotationDegrees = newRot)
+        val index = activeStickyNoteList.indexOfFirst { it.id == currentNote.id }
+        if (index != -1) {
+            activeStickyNoteList[index] = updated
+        }
+        val otherNotes = if (isContinuousMode) emptyList() else stickyNotes.filter { it.pdfPage != pdfPageFilter }
+        currentOnStickyNotesChanged(otherNotes + activeStickyNoteList.toList())
+    }
+
     var showEditDialog by remember { mutableStateOf(false) }
     var dialogTextState by remember(currentNote.text) { mutableStateOf(currentNote.text) }
     var dialogColorHexState by remember(currentNote.colorHex) { mutableStateOf(currentNote.colorHex) }
@@ -3000,15 +3042,20 @@ private fun DraggableStickyNoteCard(
             .graphicsLayer {
                 scaleX = scaleAnim.value
                 scaleY = scaleAnim.value
+                // Phase 13: rotation around the item centre (cheap transform,
+                // no full redraw) — also rotates the touch area so hit-testing
+                // and drag deltas arrive in the rotated local frame.
+                rotationZ = liveRotation
             }
             .semantics { contentDescription = "Sticky note" }
     ) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .clip(RoundedCornerShape(8.dp))
+                .shadow(4.dp, RoundedCornerShape(14.dp))
+                .clip(RoundedCornerShape(14.dp))
                 .background(noteColor)
-                .border(1.dp, Color.Black.copy(alpha = 0.15f), RoundedCornerShape(8.dp))
+                .border(1.dp, Color.Black.copy(alpha = 0.12f), RoundedCornerShape(14.dp))
                 .padding(horizontal = 8.dp, vertical = 6.dp)
         ) {
             Column(modifier = Modifier.fillMaxSize()) {
@@ -3023,8 +3070,14 @@ private fun DraggableStickyNoteCard(
                                 },
                                 onDrag = { change, dragAmount ->
                                     change.consume()
-                                    dragOffsetX += dragAmount.x / currentZoom
-                                    dragOffsetY += dragAmount.y / currentZoom
+                                    // Phase 13: dragAmount arrives in the card's
+                                    // rotated local frame; un-rotate it so the
+                                    // note follows the finger in world space.
+                                    val rad = Math.toRadians((-liveRotation).toDouble())
+                                    val cosA = cos(rad).toFloat()
+                                    val sinA = sin(rad).toFloat()
+                                    dragOffsetX += (dragAmount.x * cosA - dragAmount.y * sinA) / currentZoom
+                                    dragOffsetY += (dragAmount.x * sinA + dragAmount.y * cosA) / currentZoom
                                 },
                                 onDragEnd = {
                                     val finalX = currentNote.x + dragOffsetX
@@ -3166,6 +3219,37 @@ private fun DraggableStickyNoteCard(
             }
         }
 
+        // Phase 13: push-pin accent (peeks above the note) + dog-ear fold.
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .offset(y = (-10).dp)
+                .size(16.dp)
+                .shadow(2.dp, CircleShape)
+                .background(Color.Black.copy(alpha = 0.35f), CircleShape)
+        )
+        Canvas(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .size(20.dp)
+        ) {
+            val fold = androidx.compose.ui.graphics.Path().apply {
+                moveTo(size.width, 0f)
+                lineTo(size.width, 0f)
+                lineTo(size.width, size.height)
+                lineTo(size.width * 0.45f, size.height * 0.55f)
+                lineTo(size.width * 0.55f, 0f)
+                close()
+            }
+            drawPath(fold, Color.Black.copy(alpha = 0.10f))
+            drawLine(
+                Color.Black.copy(alpha = 0.20f),
+                start = Offset(size.width * 0.55f, 0f),
+                end = Offset(size.width * 0.45f, size.height * 0.55f),
+                strokeWidth = 1.2f
+            )
+        }
+
         // Resize Handle (Bottom-Right)
         if (!currentNote.isCollapsed) {
             Box(
@@ -3200,6 +3284,19 @@ private fun DraggableStickyNoteCard(
                     modifier = Modifier.size(12.dp)
                 )
             }
+        }
+
+        // Phase 13: rotation handle (top-center, above the note).
+        if (!currentNote.isCollapsed) {
+            RotationHandle(
+                modifier = Modifier.align(Alignment.TopCenter),
+                cardWidthPx = with(LocalDensity.current) { (actualWidth * currentZoom).dp.toPx() },
+                cardHeightPx = with(LocalDensity.current) { cardHeightDp.toPx() },
+                rotationDegrees = liveRotation,
+                zoomScale = currentZoom,
+                onRotationChange = { liveRotation = it },
+                onRotationCommit = commitRotation
+            )
         }
     }
 }
@@ -3251,6 +3348,18 @@ private fun DraggableMediaEmbedCard(
         )
     }
 
+    // Phase 13: live rotation during handle drag; committed on drag end.
+    var liveRotation by remember(currentEmbed.rotationDegrees) { mutableFloatStateOf(currentEmbed.rotationDegrees) }
+    val commitRotation: (Float) -> Unit = { newRot ->
+        val updated = currentEmbed.copy(rotationDegrees = newRot)
+        val index = activeMediaEmbedList.indexOfFirst { it.id == currentEmbed.id }
+        if (index != -1) {
+            activeMediaEmbedList[index] = updated
+        }
+        val other = if (isContinuousMode) emptyList() else mediaEmbeds.filter { it.pdfPage != pdfPageFilter }
+        currentOnMediaEmbedsChanged(other + activeMediaEmbedList.toList())
+    }
+
     val screenX = (currentEmbed.x + dragOffsetX) * currentZoom + currentPan.x
     val screenY = (currentEmbed.y + dragOffsetY) * currentZoom + currentPan.y
     val actualWidth = if (currentEmbed.type == MediaEmbedType.AUDIO_NOTE && currentEmbed.isCollapsed) 48f else resizeWidth
@@ -3261,6 +3370,11 @@ private fun DraggableMediaEmbedCard(
             .offset { IntOffset(screenX.toInt(), screenY.toInt()) }
             .width((actualWidth * currentZoom).dp)
             .height((actualHeight * currentZoom).dp)
+            .graphicsLayer {
+                // Phase 13: rotation around the item centre; also rotates the
+                // touch area, so drag deltas arrive in the rotated local frame.
+                rotationZ = liveRotation
+            }
     ) {
         Box(
             modifier = Modifier
@@ -3273,8 +3387,13 @@ private fun DraggableMediaEmbedCard(
                         },
                         onDrag = { change, dragAmount ->
                             change.consume()
-                            dragOffsetX += dragAmount.x / currentZoom
-                            dragOffsetY += dragAmount.y / currentZoom
+                            // Phase 13: dragAmount is in the card's rotated local
+                            // frame; un-rotate it so the item follows the finger.
+                            val rad = Math.toRadians((-liveRotation).toDouble())
+                            val cosA = cos(rad).toFloat()
+                            val sinA = sin(rad).toFloat()
+                            dragOffsetX += (dragAmount.x * cosA - dragAmount.y * sinA) / currentZoom
+                            dragOffsetY += (dragAmount.x * sinA + dragAmount.y * cosA) / currentZoom
                         },
                         onDragEnd = {
                             val finalX = currentEmbed.x + dragOffsetX
@@ -3373,6 +3492,42 @@ private fun DraggableMediaEmbedCard(
                 }
                 MediaEmbedType.STICKY_NOTE -> {
                     // Handled via DraggableStickyNoteCard
+                }
+                MediaEmbedType.STICKER -> {
+                    // Phase 13: emoji sticker rendered with the platform font
+                    // (offline, zero image assets). Scales with the card size.
+                    val sticker = com.authorss81.noteflow.services.StickerCatalog.byId(currentEmbed.contentUrlOrPath)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color.White.copy(alpha = 0.06f), RoundedCornerShape(18.dp))
+                            .border(1.5.dp, Color.White.copy(alpha = 0.18f), RoundedCornerShape(18.dp)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = sticker?.emoji ?: "\u2728",
+                            fontSize = (min(actualWidth, actualHeight) * currentZoom * 0.62f).coerceAtLeast(8f).sp,
+                            maxLines = 1
+                        )
+                        // Small delete affordance so placements are never stuck.
+                        IconButton(
+                            onClick = {
+                                activeMediaEmbedList.remove(currentEmbed)
+                                val other = if (isContinuousMode) emptyList() else mediaEmbeds.filter { it.pdfPage != pdfPageFilter }
+                                currentOnMediaEmbedsChanged(other + activeMediaEmbedList.toList())
+                            },
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .size(22.dp)
+                        ) {
+                            Icon(
+                                Icons.Outlined.Close,
+                                contentDescription = "Delete Sticker",
+                                tint = Color.Black.copy(alpha = 0.6f),
+                                modifier = Modifier.size(14.dp)
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -3520,5 +3675,90 @@ private fun DraggableMediaEmbedCard(
                 )
             }
         }
+
+        // Phase 13: rotation handle (top-center, above the item).
+        if (!(currentEmbed.type == MediaEmbedType.AUDIO_NOTE && currentEmbed.isCollapsed)) {
+            RotationHandle(
+                modifier = Modifier.align(Alignment.TopCenter),
+                cardWidthPx = with(LocalDensity.current) { (actualWidth * currentZoom).dp.toPx() },
+                cardHeightPx = with(LocalDensity.current) { (actualHeight * currentZoom).dp.toPx() },
+                rotationDegrees = liveRotation,
+                zoomScale = currentZoom,
+                onRotationChange = { liveRotation = it },
+                onRotationCommit = commitRotation
+            )
+        }
+    }
+}
+
+/**
+ * Phase 13: rotation handle rendered above the card's top-centre. Dragging it
+ * computes the item's new absolute rotation from the pointer position (see
+ * [com.authorss81.noteflow.services.CanvasItemRotationMath.rotationFromHandleDrag]).
+ * The card's graphicsLayer rotation also rotates this handle's hit area, which
+ * the math accounts for via [currentDegrees].
+ */
+@Composable
+private fun RotationHandle(
+    cardWidthPx: Float,
+    cardHeightPx: Float,
+    rotationDegrees: Float,
+    zoomScale: Float,
+    modifier: Modifier = Modifier,
+    onRotationChange: (Float) -> Unit,
+    onRotationCommit: (Float) -> Unit,
+    handleSizeDp: androidx.compose.ui.unit.Dp = 26.dp,
+    gapDp: androidx.compose.ui.unit.Dp = 8.dp
+) {
+    val density = LocalDensity.current
+    val handlePx = with(density) { handleSizeDp.toPx() }
+    val gapPx = with(density) { gapDp.toPx() }
+    var dragHasMoved by remember { mutableStateOf(false) }
+
+    // Read through updated-state so a mid-drag rotation change on the parent
+    // recomposes without restarting (cancelling) the active gesture.
+    val currentRotation by rememberUpdatedState(rotationDegrees)
+    val currentCardHeightPx by rememberUpdatedState(cardHeightPx)
+    val currentZoom by rememberUpdatedState(zoomScale)
+    val currentOnRotationChange by rememberUpdatedState(onRotationChange)
+    val currentOnRotationCommit by rememberUpdatedState(onRotationCommit)
+
+    Box(
+        modifier = modifier
+            .offset(y = -(handleSizeDp + gapDp))
+            .size(handleSizeDp)
+            .pointerInput(Unit) {
+                detectDragGestures(
+                    onDragStart = { dragHasMoved = false },
+                    onDrag = { change, _ ->
+                        change.consume()
+                        dragHasMoved = true
+                        val newRotation = com.authorss81.noteflow.services.CanvasItemRotationMath.rotationFromHandleDrag(
+                            handleCenterRelCardCenterX = 0f,
+                            handleCenterRelCardCenterY = -(gapPx + handlePx / 2f + currentCardHeightPx / 2f),
+                            pointerRelHandleCenterX = change.position.x - handlePx / 2f,
+                            pointerRelHandleCenterY = change.position.y - handlePx / 2f,
+                            zoom = currentZoom,
+                            currentDegrees = currentRotation
+                        )
+                        currentOnRotationChange(newRotation)
+                    },
+                    onDragEnd = {
+                        if (dragHasMoved) currentOnRotationCommit(currentRotation)
+                        dragHasMoved = false
+                    },
+                    onDragCancel = { dragHasMoved = false }
+                )
+            }
+            .background(MaterialTheme.colorScheme.primaryContainer, CircleShape)
+            .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f), CircleShape),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            Icons.Outlined.RotateRight,
+            contentDescription = "Rotate Item",
+            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+            modifier = Modifier.size(13.dp)
+        )
     }
 }

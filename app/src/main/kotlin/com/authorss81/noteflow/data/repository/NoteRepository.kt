@@ -611,7 +611,8 @@ class NoteRepository(private var db: NoteflowDatabase) {
                 codeLanguage = entity.codeLanguage,
                 durationMs = entity.durationMs,
                 waveformAmplitudes = waveformList,
-                pdfPage = entity.pdfPage
+                pdfPage = entity.pdfPage,
+                rotationDegrees = entity.rotationDegrees
             )
         }
     }
@@ -643,7 +644,8 @@ class NoteRepository(private var db: NoteflowDatabase) {
                         text = embed.textContent ?: "",
                         colorHex = embed.codeLanguage ?: "#FEF08A",
                         pdfPage = embed.pdfPage,
-                        isCollapsed = embed.contentUrlOrPath == "collapsed"
+                        isCollapsed = embed.contentUrlOrPath == "collapsed",
+                        rotationDegrees = embed.rotationDegrees
                     )
                 )
             } else {
@@ -666,7 +668,8 @@ class NoteRepository(private var db: NoteflowDatabase) {
                 textContent = note.text,
                 codeLanguage = note.colorHex,
                 pdfPage = note.pdfPage,
-                contentUrlOrPath = if (note.isCollapsed) "collapsed" else "expanded"
+                contentUrlOrPath = if (note.isCollapsed) "collapsed" else "expanded",
+                rotationDegrees = note.rotationDegrees
             )
         }
         saveMediaEmbedsForPage(pageId, stickyAsEmbeds + embeds)
@@ -700,7 +703,8 @@ class NoteRepository(private var db: NoteflowDatabase) {
                     codeLanguage = embed.codeLanguage,
                     durationMs = embed.durationMs,
                     waveformJson = waveformJson,
-                    pdfPage = embed.pdfPage
+                    pdfPage = embed.pdfPage,
+                    rotationDegrees = embed.rotationDegrees
                 )
             }
             db.mediaEmbedDao().insertMediaEmbeds(entities)

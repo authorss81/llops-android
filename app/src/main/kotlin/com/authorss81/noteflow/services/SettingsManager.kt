@@ -117,6 +117,16 @@ class SettingsManager(context: Context) {
         return out
     }
 
+    // Phase 13: the last selected ready-made brush preset (BrushPresetPack).
+    // Persisted in SharedPreferences — NO DB schema impact.
+    var activeBrushPresetId: String?
+        get() = prefs.getString("active_brush_preset_id", null)
+        set(value) {
+            prefs.edit().apply {
+                if (value == null) remove("active_brush_preset_id") else putString("active_brush_preset_id", value)
+            }.apply()
+        }
+
     var deviceTierOverride: String?
         get() = prefs.getString("device_tier_override", null)
         set(value) = prefs.edit().putString("device_tier_override", value).apply()
