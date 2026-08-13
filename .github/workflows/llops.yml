@@ -1,0 +1,139 @@
+name: llops
+
+on:
+  workflow_dispatch:
+    inputs:
+      phase:
+        description: "Phase to force (e.g. phase-01). Empty = auto-select."
+        required: false
+        default: ""
+      review:
+        description: "Run subagent review + fix after the phase"
+        required: false
+        type: boolean
+        default: true
+  schedule:
+    # Cron = the retry engine. Every 30 min, a cheap check: only runs work if
+    # a phase is pending or deferred. Near-zero minutes when idle.
+    - cron: "*/30 * * * *"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: llops-pipeline
+  cancel-in-progress: false
+
+env:
+  OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+  OPENCODE_MODEL: opencode/deepseek-v4-flash-free
+
+jobs:
+  select-phase:
+    runs-on: ubuntu-latest
+    outputs:
+      phase: ${{ steps.phase.outputs.phase }}
+      exists: ${{ steps.phase.outputs.exists }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Select phase
+        id: phase
+        run: |
+          if [ -n "${{ inputs.phase }}" ]; then
+            echo "phase=${{ inputs.phase }}" >> "$GITHUB_OUTPUT"
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # 1) resume a deferred phase first (rate-limited earlier)
+          for d in $(ls -d workspace/phase-*/ 2>/dev/null | sort -V); do
+            name="$(basename "$d")"
+            if [ -f "${d}.deferred" ]; then
+              echo "phase=${name}" >> "$GITHUB_OUTPUT"
+              echo "exists=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+          # 2) else pick the lowest phase WITHOUT a .done marker
+          for d in $(ls -d workspace/phase-*/ 2>/dev/null | sort -V); do
+            name="$(basename "$d")"
+            if [ ! -f "${d}.done" ]; then
+              echo "phase=${name}" >> "$GITHUB_OUTPUT"
+              echo "exists=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+          # nothing left to do — exit fast, use ~0 minutes
+          echo "phase=" >> "$GITHUB_OUTPUT"
+          echo "exists=false" >> "$GITHUB_OUTPUT"
+
+  run-phase:
+    needs: select-phase
+    if: needs.select-phase.outputs.exists == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45   # well under the 30-min cron cadence
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: latest
+          sdk: platforms;android-34,build-tools;34.0.0
+
+      - name: Install opencode
+        run: |
+          curl -fsSL https://opencode.ai/install | bash
+          ~/.opencode/bin/opencode --version 2>/dev/null || opencode --version
+
+      - name: Pull latest main
+        run: git pull --ff-only origin main || true
+
+      - name: Run phase (no in-job sleep; deferrals handled by cron)
+        id: run
+        run: |
+          chmod +x scripts/phase_runner.sh
+          bash scripts/phase_runner.sh "${{ needs.select-phase.outputs.phase }}" --review
+        continue-on-error: true
+
+      - name: Commit and push
+        run: |
+          git config user.name "llops-bot"
+          git config user.email "llops-bot@users.noreply.github.com"
+          git add -A
+          if ! git diff --cached --quiet; then
+            git commit -m "llops: ${{ needs.select-phase.outputs.phase }}"
+            git push origin main
+          fi
+
+      - name: Report status
+        if: always()
+        run: |
+          if [ -f "workspace/${{ needs.select-phase.outputs.phase }}/.deferred" ]; then
+            echo "::notice::Rate limit hit — deferred. Next cron tick retries in <=30 min."
+          elif [ -f "workspace/${{ needs.select-phase.outputs.phase }}/.done" ]; then
+            echo "::notice::Phase completed. Pipeline advanced."
+          else
+            echo "::error::Phase failed for a non-rate-limit reason — check logs."
+          fi
+
+  idle:
+    needs: select-phase
+    if: needs.select-phase.outputs.exists == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - name: All phases complete
+        run: echo "::notice::No pending or deferred phases. Pipeline idle."
