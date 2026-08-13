@@ -37,9 +37,19 @@ PROMPT_FILE="${PHASE_DIR}/PROMPT.md"
 DONE_FILE="${PHASE_DIR}/.done"
 DEFERRED_FILE="${PHASE_DIR}/.deferred"
 SESSION_FILE="${PHASE_DIR}/.session"
+BLOCKED_FILE="${PHASE_DIR}/.blocked"
+ATTEMPTS_FILE="${PHASE_DIR}/.attempts"
+MAX_ATTEMPTS="${MAX_ATTEMPTS:-3}"
+STOP_FILE="workspace/.stop"
 
 [ -f "${PROMPT_FILE}" ] || { echo "ERROR: no PROMPT.md for ${PHASE}"; exit 2; }
 mkdir -p "${LOG_DIR}"
+
+# --- Halt marker: manual stop switch. Remove workspace/.stop to resume. ------
+if [ -f "${STOP_FILE}" ]; then
+  echo "== [phase] STOP marker present — pipeline halted. Remove workspace/.stop to resume. =="
+  exit 0
+fi
 
 # --- Strict rate-limit detection ----------------------------------------------
 # Only explicit HTTP/quota markers match. The bare word "retry" is NOT a match
@@ -79,7 +89,7 @@ run_phase() {
 if run_phase; then
   echo "== [phase] SUCCESS: ${PHASE} =="
   touch "${DONE_FILE}"
-  rm -f "${DEFERRED_FILE}" "${SESSION_FILE}"
+  rm -f "${DEFERRED_FILE}" "${SESSION_FILE}" "${BLOCKED_FILE}" "${ATTEMPTS_FILE}"
 
   if [ "${DO_REVIEW}" = "--review" ]; then
     echo "== [review] Running reviewer subagent =="
@@ -121,6 +131,23 @@ if is_rate_limited; then
   exit 42   # signals "deferred" to the workflow
 fi
 
-echo "== [phase] FAILED (non-rate-limit): ${PHASE} =="
+# --- Non-rate-limit failure: attempt cap. After MAX_ATTEMPTS, BLOCK the phase
+#     so select-phase skips it instead of retrying forever (quota drain).
+ATTEMPT=0
+if [ -f "${ATTEMPTS_FILE}" ]; then
+  ATTEMPT="$(cat "${ATTEMPTS_FILE}" 2>/dev/null || echo 0)"
+fi
+ATTEMPT=$((ATTEMPT + 1))
+printf '%s' "${ATTEMPT}" > "${ATTEMPTS_FILE}"
+
+if [ "${ATTEMPT}" -ge "${MAX_ATTEMPTS}" ]; then
+  echo "== [phase] FAILED ${ATTEMPT}/${MAX_ATTEMPTS}: ${PHASE} BLOCKED (manual intervention needed) =="
+  echo "== [phase] Remove ${BLOCKED_FILE} + ${ATTEMPTS_FILE} and push to retry. =="
+  touch "${BLOCKED_FILE}"
+  rm -f "${DEFERRED_FILE}" "${SESSION_FILE}"
+  exit 3   # signals "blocked" to the workflow
+fi
+
+echo "== [phase] FAILED attempt ${ATTEMPT}/${MAX_ATTEMPTS} (non-rate-limit): ${PHASE} =="
 echo "== [phase] See ${LOG_DIR}/${PHASE}.log =="
 exit 1

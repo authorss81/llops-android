@@ -49,6 +49,13 @@ jobs:
             echo "exists=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          # 0) hard stop — create workspace/.stop to halt the pipeline
+          if [ -f "workspace/.stop" ]; then
+            echo "::notice::workspace/.stop present — pipeline halted."
+            echo "phase=" >> "$GITHUB_OUTPUT"
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           # 1) resume a deferred phase first (rate-limited earlier)
           for d in $(ls -d workspace/phase-*/ 2>/dev/null | sort -V); do
             name="$(basename "$d")"
@@ -58,16 +65,20 @@ jobs:
               exit 0
             fi
           done
-          # 2) else pick the lowest phase WITHOUT a .done marker
+          # 2) else pick the lowest phase WITHOUT .done AND WITHOUT .blocked
           for d in $(ls -d workspace/phase-*/ 2>/dev/null | sort -V); do
             name="$(basename "$d")"
-            if [ ! -f "${d}.done" ]; then
+            if [ ! -f "${d}.done" ] && [ ! -f "${d}.blocked" ]; then
               echo "phase=${name}" >> "$GITHUB_OUTPUT"
               echo "exists=true" >> "$GITHUB_OUTPUT"
               exit 0
             fi
           done
-          # nothing left to do — exit fast, use ~0 minutes
+          # nothing runnable: distinguish all-done vs blocked-pending
+          blocked_count=$(ls -d workspace/phase-*/.blocked 2>/dev/null | wc -l)
+          if [ "${blocked_count}" -gt 0 ]; then
+            echo "::notice::${blocked_count} blocked phase(s) need manual intervention — see workspace/phase-*/.blocked"
+          fi
           echo "phase=" >> "$GITHUB_OUTPUT"
           echo "exists=false" >> "$GITHUB_OUTPUT"
 
@@ -75,7 +86,7 @@ jobs:
     needs: select-phase
     if: needs.select-phase.outputs.exists == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 45   # well under the 30-min cron cadence
+    timeout-minutes: 25   # under the 30-min cron cadence so runs never overlap/queue
     steps:
       - name: Checkout
         uses: actions/checkout@v4

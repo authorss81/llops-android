@@ -19,8 +19,13 @@ on:
       - 'gradle/**'
   workflow_dispatch:
 
+# Skip the redundant CI run when the llops-bot commits phase work — those phases
+# already run `gradle testDebugUnitTest` + `gradle assembleDebug` as their DoD.
+# Without this, every phase that touches app/ doubles the Actions minutes.
+# Human pushes and PRs still get full CI.
 jobs:
   build:
+    if: github.actor != 'llops-bot'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
