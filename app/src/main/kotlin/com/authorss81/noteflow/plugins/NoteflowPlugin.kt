@@ -349,3 +349,262 @@ interface WebCapturePlugin {
      */
     suspend fun captureWebPage(context: Context?, url: String): WebCaptureOutcome
 }
+
+// ---------------------------------------------------------------------------
+// Phase 16 — privacy-first on-device AI & media plugin serving interfaces.
+// The CORES are pure JVM (fully CI-testable); only thin platform wrappers
+// (SpeechRecognizer, TextToSpeech, ML Kit models, LiteRT LLM, canvas capture)
+// live behind injected engines so the routing + decision logic is unit-tested
+// with fakes, exactly like the Phase 12/15 pattern.
+// ---------------------------------------------------------------------------
+
+/**
+ * Listener for a live [DictationPlugin] session. The platform recognizer emits
+ * partial hypotheses and final utterances; the plugin's pure-JVM assembler
+ * (or the caller) folds the finals into the editor text.
+ */
+interface DictationListener {
+    /** A live, still-changing hypothesis (shown as non-committed preview text). */
+    fun onPartialUtterance(text: String)
+
+    /** A committed utterance — safe to insert into the note. */
+    fun onFinalUtterance(text: String)
+
+    /** A recognised failure; [message] is user-facing (e.g. offline models missing). */
+    fun onError(message: String)
+
+    /** The recognizer finished / was stopped. */
+    fun onEnd()
+}
+
+/** Handle to a live dictation session; calling [stop] ends it gracefully. */
+interface DictationSession {
+    /** Stop listening and finalize the current utterance, then tear down. */
+    fun stop()
+
+    /** Abort immediately without finalizing. */
+    fun cancel()
+}
+
+/**
+ * Serving interface for the [PluginCapability.Dictation] capability.
+ *
+ * Voice activation is ALWAYS explicit — the UI shows a mic button and nothing
+ * is ever recorded ambiently. The grammar/assembly logic is pure JVM and
+ * unit-tested; only the [startSession] glue touches `SpeechRecognizer`.
+ */
+interface DictationPlugin {
+    /**
+     * Whether the platform has on-device (offline) recognition models. When
+     * false the UI surfaces [onDeviceAvailabilityMessage] instead of silently
+     * streaming network-backed hypotheses.
+     */
+    fun isOnDeviceAvailable(context: Context?): Boolean
+
+    /** User-facing reason when [isOnDeviceAvailable] is false. */
+    fun onDeviceAvailabilityMessage(): String
+
+    /** Start a live session. [listener] receives partials/finals/errors. */
+    fun startSession(context: Context?, listener: DictationListener): DictationSession
+
+    /**
+     * Fold a committed [utterance] into the note's [currentText]. PURE JVM —
+     * spacing, capitalization and whitespace normalization live here so the
+     * whole assembly path is unit-testable without any Android dependency.
+     */
+    fun appendUtterance(currentText: String, utterance: String): String
+}
+
+/** One passage chunk safe to hand to the platform TTS engine. */
+data class TtsChunk(
+    val index: Int,
+    val text: String,
+    /** True when the chunk came from a fenced code block (speak verbatim/flat). */
+    val isCode: Boolean
+)
+
+/** Result of asking the read-aloud engine to start speaking. */
+sealed class ReadAloudOutcome {
+    data class Started(val chunkCount: Int) : ReadAloudOutcome()
+    data class Empty(val message: String) : ReadAloudOutcome()
+    data class Quiet(val message: String) : ReadAloudOutcome()
+    data class Error(val message: String) : ReadAloudOutcome()
+}
+
+/** The pure-JVM plan produced by [ReadAloudPlugin.plan] before any speaking. */
+sealed class TtsSpeechPlan {
+    data class Play(val chunks: List<TtsChunk>) : TtsSpeechPlan()
+    data class RefuseQuiet(val message: String) : TtsSpeechPlan()
+    object NothingToSpeak : TtsSpeechPlan()
+}
+
+/**
+ * Serving interface for the [PluginCapability.ReadAloud] capability.
+ *
+ * Playback is NEVER automatic: [play] only runs in direct response to an
+ * explicit user action, and a user-enabled quiet mode (SilentToggle) makes the
+ * queue refuse with [ReadAloudOutcome.Quiet] — no bytes are ever spoken in
+ * quiet mode. Uses the platform `TextToSpeech` engine (no API key, no new
+ * permission).
+ */
+interface ReadAloudPlugin {
+    /** Split a passage into TTS-safe chunks. PURE JVM (unit-tested). */
+    fun chunkText(passage: String, maxChunkChars: Int = 500): List<TtsChunk>
+
+    /** Decide whether a chunked passage may be spoken right now. PURE JVM. */
+    fun plan(passage: String, quietMode: Boolean, maxChunkChars: Int = 500): TtsSpeechPlan
+
+    /** Begin speaking. Returns a typed outcome; never throws into the caller. */
+    fun play(context: Context?, passage: String, quietMode: Boolean): ReadAloudOutcome
+
+    /** Stop any active playback. */
+    fun stop(context: Context?)
+
+    /** Release the TTS engine (on disable/process teardown). */
+    fun shutdown(context: Context?)
+}
+
+/** A language the on-device translator can translate into (code + label). */
+data class TranslationLanguage(val code: String, val displayName: String)
+
+/** Outcome of an on-device translation request. */
+sealed class TranslationOutcome {
+    data class Success(val translatedText: String) : TranslationOutcome()
+    data class ModelNotReady(val message: String) : TranslationOutcome()
+    data class Error(val message: String) : TranslationOutcome()
+}
+
+/** Progress state of an on-demand translation model download. */
+sealed class TranslationModelStatus {
+    data object Downloaded : TranslationModelStatus()
+    data object NotDownloaded : TranslationModelStatus()
+    data class Downloading(val progress: Float) : TranslationModelStatus()
+    data class Error(val message: String) : TranslationModelStatus()
+}
+
+/**
+ * Serving interface for the [PluginCapability.Translation] capability.
+ *
+ * Models are NOT bundled: they download once on first use after explicit user
+ * consent (with clear progress) and then work fully offline. A failed/offline
+ * download surfaces [TranslationModelStatus.Error]/[TranslationOutcome.Error]
+ * with a clear message — it never crashes. The translator engine is injected
+ * (fake in unit tests; ML Kit behind it in production).
+ */
+interface TranslationPlugin {
+    /** The target languages offered by the UI (a curated ML Kit subset). PURE JVM. */
+    fun supportedTargetLanguages(): List<TranslationLanguage>
+
+    /** True when [targetLanguage]'s model is already stored on-device. */
+    suspend fun isModelDownloaded(targetLanguage: String): Boolean
+
+    /** Download [targetLanguage]'s model on demand. User-initiated, guarded. */
+    suspend fun downloadModel(targetLanguage: String): TranslationModelStatus
+
+    /** Translate [text] into [targetLanguage]. */
+    suspend fun translate(targetLanguage: String, text: String): TranslationOutcome
+}
+
+/** Outcome of an on-device LLM request (summarize / action items / Q&A / tags). */
+sealed class AssistantOutcome {
+    data class Success(val text: String) : AssistantOutcome()
+    data class ModelNotReady(val message: String) : AssistantOutcome()
+    data class Error(val message: String) : AssistantOutcome()
+}
+
+/**
+ * Serving interface for the [PluginCapability.Assistant] capability.
+ *
+ * Runs a small local LLM via the LiteRT-family runtime ([com.google.mediapipe
+ * .tasks-genai], the engine LiteRT-LM continues). The model is NOT bundled:
+ * the user downloads it once (~100-300 MB, consent + progress) into app-private
+ * files, after which everything works with no network. A low-end device gate
+ * makes the plugin [PluginAvailability.Unavailable] with a clear reason. Prompt
+ * assembly and conversation logic are PURE JVM (unit-tested with a fake engine);
+ * only [OnDeviceAssistantPlugin]'s model driver is platform.
+ */
+interface AssistantPlugin {
+    /** True once the user-downloaded model file exists on-device. */
+    fun isModelDownloaded(context: Context?): Boolean
+
+    /** The downloaded model file, or null when not downloaded. */
+    fun modelFile(context: Context?): java.io.File?
+
+    /** Expected on-disk size of the model (used for the free-space guard). */
+    fun expectedModelSizeBytes(): Long
+
+    /** User-facing reason the assistant can't run here, or null when eligible. */
+    fun unavailableReason(context: Context?): String?
+
+    /** Download the model with progress [0f..1f]. User-initiated, guarded. */
+    suspend fun downloadModel(context: Context?, onProgress: (Float) -> Unit): AssistantOutcome
+
+    /** All assistant tasks. PURE JVM prompt assembly, fake-engine testable. */
+    suspend fun summarize(context: Context?, noteText: String): AssistantOutcome
+    suspend fun extractActionItems(context: Context?, noteText: String): AssistantOutcome
+    suspend fun answerQuestion(context: Context?, noteText: String, question: String): AssistantOutcome
+    suspend fun suggestTags(context: Context?, noteText: String): AssistantOutcome
+
+    /** Release the loaded model (on disable/teardown). */
+    fun close()
+}
+
+/** How a captured screenshot should become a note. */
+enum class ScreenshotCaptureMode { IMAGE_ONLY, IMAGE_WITH_OCR }
+
+/** Everything the caller needs to turn a screenshot into a note. PURE JVM. */
+data class ScreenshotCapturePlan(
+    val capturedAtMillis: Long,
+    val mode: ScreenshotCaptureMode,
+    val title: String,
+    val fileName: String,
+    val shouldOcr: Boolean,
+    val ocrReusable: Boolean
+)
+
+/** Outcome of turning a canvas page into a note. */
+sealed class ScreenshotCaptureOutcome {
+    data class Success(
+        val plan: ScreenshotCapturePlan,
+        val imagePath: String,
+        val extractedText: String?
+    ) : ScreenshotCaptureOutcome()
+
+    data class Error(val message: String) : ScreenshotCaptureOutcome()
+}
+
+/**
+ * Serving interface for the [PluginCapability.ScreenshotNote] capability.
+ *
+ * Captures the current canvas/note as an image and stores it as an image note —
+ * optionally OCR'ing it via the EXISTING OCR plugin path so the note is
+ * text-searchable. The decision/metadata logic is PURE JVM (unit-tested); the
+ * capture implementation REUSES the existing annotated-page export path
+ * (ImportExportService) for rendering — nothing is duplicated.
+ */
+interface ScreenshotNotePlugin {
+    /** Decide flow (image-only vs OCR, naming, metadata). PURE JVM. */
+    fun planCapture(
+        capturedAtMillis: Long,
+        shouldOcr: Boolean,
+        ocrPluginAvailable: Boolean
+    ): ScreenshotCapturePlan
+
+    /**
+     * Render + persist the current page. [context] nullable for JVM tests;
+     * production always passes a real `Context`.
+     */
+    suspend fun captureAnnotatedPage(
+        context: Context?,
+        pageTitle: String,
+        strokes: List<com.authorss81.noteflow.data.model.Stroke>,
+        layers: List<com.authorss81.noteflow.data.model.LayerEntity>,
+        stickyNotes: List<com.authorss81.noteflow.data.model.CanvasStickyNote>,
+        mediaEmbeds: List<com.authorss81.noteflow.data.model.CanvasMediaEmbed>,
+        bgBitmap: android.graphics.Bitmap?,
+        template: String,
+        pageIndex: Int,
+        shouldOcr: Boolean,
+        ocrPluginAvailable: Boolean
+    ): ScreenshotCaptureOutcome
+}

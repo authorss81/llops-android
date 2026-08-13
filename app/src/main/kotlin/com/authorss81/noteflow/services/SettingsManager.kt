@@ -159,6 +159,12 @@ class SettingsManager(context: Context) {
         get() = prefs.getBoolean("database_integrity_check_enabled", true)
         set(value) = prefs.edit().putBoolean("database_integrity_check_enabled", value).apply()
 
+    // Phase 16: SilentToggle — user-wide quiet mode. When ON, read-aloud refuses
+    // to speak (a loud, explanatory refusal; never silent degradation).
+    var silentModeEnabled: Boolean
+        get() = prefs.getBoolean("silent_mode_enabled", false)
+        set(value) = prefs.edit().putBoolean("silent_mode_enabled", value).apply()
+
     // Phase 10: per-plugin opt-in persistence (Settings → Plugins). Plugins are
     // DISABLED by default — the user opts in per plugin.
     fun isPluginEnabled(pluginId: String): Boolean =

@@ -146,6 +146,12 @@ dependencies {
     // Runs offline with no API key and no INTERNET. See plugins/ocr/OnDeviceOcrPlugin.
     implementation(libs.mlkit.text.recognition)
 
+    // Phase 16: on-device translation (ML Kit translate — keyless, offline-first,
+    // models download on explicit user action) + the local-LLM assistant runtime
+    // (MediaPipe tasks-genai; GGUF model downloaded by the user once).
+    implementation(libs.mlkit.translate)
+    implementation(libs.mediapipe.tasks.genai)
+
     // Phase 15: productivity & knowledge plugin pack (pure-JVM cores).
     implementation(libs.lingua)
     implementation(libs.jsoup)

@@ -967,6 +967,74 @@ fun EditorScreen(
                             }
                         )
                         DropdownMenuItem(
+                            text = { Text("Screenshot → new note") },
+                            leadingIcon = { Icon(Icons.Outlined.CameraAlt, contentDescription = null) },
+                            onClick = {
+                                showOverflowMenu = false
+                                scope.launch {
+                                    val bgBmp = pdfPageBitmaps[currentPdfPage]?.asAndroidBitmap()
+                                    when (val r = viewModel.captureScreenshotNote(
+                                        strokes = strokes,
+                                        layers = layers,
+                                        stickyNotes = stickyNotes,
+                                        mediaEmbeds = mediaEmbeds,
+                                        bgBitmap = bgBmp,
+                                        template = template,
+                                        pageIndex = currentPdfPage,
+                                        shouldOcr = false,
+                                        onCreated = { note ->
+                                            viewModel.showSnackbar("Screenshot saved as note: ${note.title}", isLong = true)
+                                        }
+                                    )) {
+                                        is com.authorss81.noteflow.plugins.PluginResult.Success -> {
+                                            val o = r.value
+                                            if (o is com.authorss81.noteflow.plugins.ScreenshotCaptureOutcome.Error) {
+                                                viewModel.showSnackbar("Screenshot failed: ${o.message}", isLong = true)
+                                            }
+                                        }
+                                        is com.authorss81.noteflow.plugins.PluginResult.Failure ->
+                                            viewModel.showSnackbar("Screenshot failed: ${r.message}", isLong = true)
+                                        is com.authorss81.noteflow.plugins.PluginResult.Unavailable ->
+                                            viewModel.showSnackbar("Screenshot unavailable: ${r.message}", isLong = true)
+                                    }
+                                }
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Screenshot → new note + OCR") },
+                            leadingIcon = { Icon(Icons.Outlined.TextSnippet, contentDescription = null) },
+                            onClick = {
+                                showOverflowMenu = false
+                                scope.launch {
+                                    val bgBmp = pdfPageBitmaps[currentPdfPage]?.asAndroidBitmap()
+                                    when (val r = viewModel.captureScreenshotNote(
+                                        strokes = strokes,
+                                        layers = layers,
+                                        stickyNotes = stickyNotes,
+                                        mediaEmbeds = mediaEmbeds,
+                                        bgBitmap = bgBmp,
+                                        template = template,
+                                        pageIndex = currentPdfPage,
+                                        shouldOcr = true,
+                                        onCreated = { note ->
+                                            viewModel.showSnackbar("Screenshot + OCR saved as note: ${note.title}", isLong = true)
+                                        }
+                                    )) {
+                                        is com.authorss81.noteflow.plugins.PluginResult.Success -> {
+                                            val o = r.value
+                                            if (o is com.authorss81.noteflow.plugins.ScreenshotCaptureOutcome.Error) {
+                                                viewModel.showSnackbar("Screenshot failed: ${o.message}", isLong = true)
+                                            }
+                                        }
+                                        is com.authorss81.noteflow.plugins.PluginResult.Failure ->
+                                            viewModel.showSnackbar("Screenshot failed: ${r.message}", isLong = true)
+                                        is com.authorss81.noteflow.plugins.PluginResult.Unavailable ->
+                                            viewModel.showSnackbar("Screenshot unavailable: ${r.message}", isLong = true)
+                                    }
+                                }
+                            }
+                        )
+                        DropdownMenuItem(
                             text = { Text("Export Page as PNG") },
                             leadingIcon = { Icon(Icons.Outlined.Image, contentDescription = null) },
                             onClick = {

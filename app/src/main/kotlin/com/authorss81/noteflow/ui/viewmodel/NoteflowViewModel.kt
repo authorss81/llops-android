@@ -9,6 +9,9 @@ import com.authorss81.noteflow.data.model.*
 import com.authorss81.noteflow.data.repository.NoteRepository
 import com.authorss81.noteflow.plugins.ClipParseOutcome
 import com.authorss81.noteflow.plugins.ClipSharePlugin
+import com.authorss81.noteflow.plugins.AssistantOutcome
+import com.authorss81.noteflow.plugins.AssistantPlugin
+import com.authorss81.noteflow.plugins.DictationPlugin
 import com.authorss81.noteflow.plugins.DiffHunk
 import com.authorss81.noteflow.plugins.ExportFormat
 import com.authorss81.noteflow.plugins.ExportOutcome
@@ -26,10 +29,19 @@ import com.authorss81.noteflow.plugins.PluginManager
 import com.authorss81.noteflow.plugins.PluginRegistry
 import com.authorss81.noteflow.plugins.PluginResult
 import com.authorss81.noteflow.plugins.PluginStateInfo
+import com.authorss81.noteflow.plugins.ReadAloudOutcome
+import com.authorss81.noteflow.plugins.ReadAloudPlugin
+import com.authorss81.noteflow.plugins.ScreenshotCaptureOutcome
+import com.authorss81.noteflow.plugins.ScreenshotNotePlugin
 import com.authorss81.noteflow.plugins.SharedInput
 import com.authorss81.noteflow.plugins.TextAnalysis
 import com.authorss81.noteflow.plugins.TextToolsPlugin
 import com.authorss81.noteflow.plugins.TextTransformPlugin
+import com.authorss81.noteflow.plugins.TranslationLanguage
+import com.authorss81.noteflow.plugins.TranslationModelStatus
+import com.authorss81.noteflow.plugins.TranslationOutcome
+import com.authorss81.noteflow.plugins.TranslationPlugin
+import com.authorss81.noteflow.plugins.TtsChunk
 import com.authorss81.noteflow.plugins.WebCaptureOutcome
 import com.authorss81.noteflow.plugins.WebCapturePlugin
 import com.authorss81.noteflow.plugins.WebSearchOutcome
@@ -241,6 +253,169 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
      */
     fun isPluginUsable(pluginId: String): Boolean =
         pluginRegistry.stateOf(pluginId, appContext)?.state == PluginLifecycleState.AVAILABLE
+
+    // -----------------------------------------------------------------------
+    // Phase 16 — privacy-first on-device AI & media plugin routes.
+    // Everything is routed through PluginManager (guarded, typed, never throws)
+    // and every feature is user-initiated: dictation needs an explicit mic tap,
+    // read-aloud needs a Play tap (and refuses in SilentToggle), model downloads
+    // (translation + assistant) need explicit consent with progress.
+    // -----------------------------------------------------------------------
+
+    /** The dictation plugin (enabled + available), or a typed failure. */
+    suspend fun dictationPlugin(): PluginResult<DictationPlugin> =
+        pluginManager.withPluginAsync(PluginCapability.Dictation, appContext) { plugin ->
+            plugin as DictationPlugin
+        }
+
+    /** Read [passage] aloud via the read-aloud plugin. Quiet mode refused loudly. */
+    suspend fun readAloud(passage: String, quietMode: Boolean): PluginResult<ReadAloudOutcome> =
+        pluginManager.withPluginAsync(PluginCapability.ReadAloud, appContext) { plugin ->
+            val reader = plugin as? ReadAloudPlugin
+                ?: throw IllegalStateException("${plugin.name} does not implement ReadAloudPlugin")
+            reader.play(appContext, passage, quietMode)
+        }
+
+    /** Stop read-aloud playback (dismissed dialog / user stop). */
+    fun stopReadAloud() {
+        runCatching {
+            (pluginForCapabilityOrNull(PluginCapability.ReadAloud) as? ReadAloudPlugin)?.stop(appContext)
+        }
+    }
+
+    /** Translate [text] into [targetLanguage] on-device. */
+    suspend fun translateText(targetLanguage: String, text: String): PluginResult<TranslationOutcome> =
+        pluginManager.withPluginAsync(PluginCapability.Translation, appContext) { plugin ->
+            val translator = plugin as? TranslationPlugin
+                ?: throw IllegalStateException("${plugin.name} does not implement TranslationPlugin")
+            translator.translate(targetLanguage, text)
+        }
+
+    /** Download the [targetLanguage] model on explicit user action (consent). */
+    suspend fun downloadTranslationModel(targetLanguage: String): PluginResult<TranslationModelStatus> =
+        pluginManager.withPluginAsync(PluginCapability.Translation, appContext) { plugin ->
+            val translator = plugin as? TranslationPlugin
+                ?: throw IllegalStateException("${plugin.name} does not implement TranslationPlugin")
+            translator.downloadModel(targetLanguage)
+        }
+
+    /** Whether the [targetLanguage] model is already stored on-device. */
+    suspend fun isTranslationModelDownloaded(targetLanguage: String): PluginResult<Boolean> =
+        pluginManager.withPluginAsync(PluginCapability.Translation, appContext) { plugin ->
+            val translator = plugin as? TranslationPlugin
+                ?: throw IllegalStateException("${plugin.name} does not implement TranslationPlugin")
+            translator.isModelDownloaded(targetLanguage)
+        }
+
+    /** The target languages the on-device translator offers. */
+    fun translationTargetLanguages(): List<TranslationLanguage> =
+        (pluginForCapabilityOrNull(PluginCapability.Translation) as? TranslationPlugin)
+            ?.supportedTargetLanguages() ?: emptyList()
+
+    /** The on-device assistant plugin (enabled + available), or a typed failure. */
+    suspend fun assistantPlugin(): PluginResult<AssistantPlugin> =
+        pluginManager.withPluginAsync(PluginCapability.Assistant, appContext) { plugin ->
+            plugin as AssistantPlugin
+        }
+
+    suspend fun assistantSummarize(noteText: String): PluginResult<AssistantOutcome> =
+        pluginManager.withPluginAsync(PluginCapability.Assistant, appContext) { plugin ->
+            val assistant = plugin as? AssistantPlugin
+                ?: throw IllegalStateException("${plugin.name} does not implement AssistantPlugin")
+            assistant.summarize(appContext, noteText)
+        }
+
+    suspend fun assistantExtractActionItems(noteText: String): PluginResult<AssistantOutcome> =
+        pluginManager.withPluginAsync(PluginCapability.Assistant, appContext) { plugin ->
+            val assistant = plugin as? AssistantPlugin
+                ?: throw IllegalStateException("${plugin.name} does not implement AssistantPlugin")
+            assistant.extractActionItems(appContext, noteText)
+        }
+
+    suspend fun assistantAnswerQuestion(noteText: String, question: String): PluginResult<AssistantOutcome> =
+        pluginManager.withPluginAsync(PluginCapability.Assistant, appContext) { plugin ->
+            val assistant = plugin as? AssistantPlugin
+                ?: throw IllegalStateException("${plugin.name} does not implement AssistantPlugin")
+            assistant.answerQuestion(appContext, noteText, question)
+        }
+
+    suspend fun assistantSuggestTags(noteText: String): PluginResult<AssistantOutcome> =
+        pluginManager.withPluginAsync(PluginCapability.Assistant, appContext) { plugin ->
+            val assistant = plugin as? AssistantPlugin
+                ?: throw IllegalStateException("${plugin.name} does not implement AssistantPlugin")
+            assistant.suggestTags(appContext, noteText)
+        }
+
+    /** Download the assistant's small LLM (user consent + progress callback). */
+    suspend fun assistantDownloadModel(onProgress: (Float) -> Unit): PluginResult<AssistantOutcome> =
+        pluginManager.withPluginAsync(PluginCapability.Assistant, appContext) { plugin ->
+            val assistant = plugin as? AssistantPlugin
+                ?: throw IllegalStateException("${plugin.name} does not implement AssistantPlugin")
+            assistant.downloadModel(appContext, onProgress)
+        }
+
+    /**
+     * Capture the current canvas as an image note via the Screenshot plugin
+     * (reuses the existing annotated-page renderer) and, when the user asked
+     * for it, OCR the result through the existing OCR plugin route so the note
+     * is text-searchable. The new image parse is then created in the active
+     * section with the extracted text.
+     */
+    suspend fun captureScreenshotNote(
+        strokes: List<Stroke>,
+        layers: List<LayerEntity>,
+        stickyNotes: List<CanvasStickyNote>,
+        mediaEmbeds: List<CanvasMediaEmbed>,
+        bgBitmap: android.graphics.Bitmap?,
+        template: String,
+        pageIndex: Int,
+        shouldOcr: Boolean,
+        onCreated: (NotePageEntity) -> Unit
+    ): PluginResult<ScreenshotCaptureOutcome> {
+        val ocrPluginAvailable = pluginRegistry
+            .availablePlugins(PluginCapability.OCR, appContext)
+            .isNotEmpty()
+        val result = pluginManager.withPluginAsync(PluginCapability.ScreenshotNote, appContext) { plugin ->
+            val capturer = plugin as? ScreenshotNotePlugin
+                ?: throw IllegalStateException("${plugin.name} does not implement ScreenshotNotePlugin")
+            capturer.captureAnnotatedPage(
+                context = appContext,
+                pageTitle = selectedPage.value?.title ?: "Untitled",
+                strokes = strokes,
+                layers = layers,
+                stickyNotes = stickyNotes,
+                mediaEmbeds = mediaEmbeds,
+                bgBitmap = bgBitmap,
+                template = template,
+                pageIndex = pageIndex,
+                shouldOcr = shouldOcr,
+                ocrPluginAvailable = ocrPluginAvailable
+            )
+        }
+        if (result is PluginResult.Success && result.value is ScreenshotCaptureOutcome.Success) {
+            val success = result.value as ScreenshotCaptureOutcome.Success
+            var ocrText: String? = null
+            if (success.plan.shouldOcr) {
+                when (val ocr = extractTextFromImage(success.imagePath)) {
+                    is PluginResult.Success ->
+                        if (ocr.value is OcrOutcome.Success) ocrText = ocr.value.text
+                    else -> ocrText = null
+                }
+            }
+            addPage(
+                title = success.plan.title,
+                sourceFilePath = success.imagePath,
+                sourceFileType = "image",
+                extractedText = ocrText ?: "",
+                onCreated = onCreated
+            )
+        }
+        return result
+    }
+
+    /** The enabled, device-available plugin serving [capability], or null. */
+    fun pluginForCapabilityOrNull(capability: PluginCapability): com.authorss81.noteflow.plugins.NoteflowPlugin? =
+        pluginRegistry.availablePlugins(capability, appContext).firstOrNull()
 
     private val _databaseTampered = MutableStateFlow(false)
     val databaseTampered: StateFlow<Boolean> = _databaseTampered.asStateFlow()

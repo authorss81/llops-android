@@ -65,4 +65,16 @@ sealed class PluginCapability(
      * ("Clip to InkFlow"). Non-exclusive (Phase 15).
      */
     data object ClipShare : PluginCapability("clip_share", "Clip to InkFlow")
+
+    /** Convert speech into editor text (explicit mic press). Non-exclusive (Phase 16). */
+    data object Dictation : PluginCapability("dictation", "Dictation")
+
+    /** Read a passage aloud via the platform text-to-speech engine. Non-exclusive (Phase 16). */
+    data object ReadAloud : PluginCapability("read_aloud", "Read Aloud")
+
+    /** On-device language translation (ML Kit, keyless). Exclusive — one engine (Phase 16). */
+    data object Translation : PluginCapability("translation", "Translation", exclusive = true)
+
+    /** Capture the current canvas as an image note (optionally OCR). Non-exclusive (Phase 16). */
+    data object ScreenshotNote : PluginCapability("screenshot_note", "Screenshot to Note")
 }

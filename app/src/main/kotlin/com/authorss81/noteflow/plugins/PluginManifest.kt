@@ -42,6 +42,9 @@ data class SemanticVersion(
  */
 sealed class PluginPermission(val key: String, val label: String) {
     data object Internet : PluginPermission("internet", "Internet access")
+
+    /** Microphone access — only used while the user is actively dictating. */
+    data object RecordAudio : PluginPermission("record_audio", "Microphone (while dictating)")
 }
 
 /**

@@ -2,11 +2,16 @@ package com.authorss81.noteflow.plugins
 
 import android.content.Context
 import android.os.Build
+import com.authorss81.noteflow.plugins.assistant.OnDeviceAssistantPlugin
 import com.authorss81.noteflow.plugins.clipshare.ClipToInkFlowPlugin
+import com.authorss81.noteflow.plugins.dictation.OnDeviceDictationPlugin
 import com.authorss81.noteflow.plugins.export.ExportEnginePlugin
 import com.authorss81.noteflow.plugins.langdetect.LanguageDetectionEngine
 import com.authorss81.noteflow.plugins.ocr.OnDeviceOcrPlugin
+import com.authorss81.noteflow.plugins.readaloud.OnDeviceReadAloudPlugin
+import com.authorss81.noteflow.plugins.screenshot.ScreenshotNotePluginImpl
 import com.authorss81.noteflow.plugins.texttools.TextToolsEngine
+import com.authorss81.noteflow.plugins.translation.OnDeviceTranslationPlugin
 import com.authorss81.noteflow.plugins.webcapture.WebCaptureEngine
 import com.authorss81.noteflow.plugins.websearch.DuckDuckGoWebSearchPlugin
 
@@ -571,7 +576,13 @@ class PluginRegistry(
             ClipToInkFlowPlugin(),
             TextToolsEngine(),
             LanguageDetectionEngine(),
-            WebCaptureEngine()
+            WebCaptureEngine(),
+            // Phase 16: privacy-first on-device AI & media plugin pack.
+            OnDeviceDictationPlugin(),
+            OnDeviceReadAloudPlugin(),
+            OnDeviceTranslationPlugin(),
+            OnDeviceAssistantPlugin(),
+            ScreenshotNotePluginImpl()
         )
     }
 }

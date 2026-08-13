@@ -35,7 +35,7 @@ Everything lives in `com.authorss81.noteflow.plugins`:
 
 | File | Purpose |
 |------|---------|
-| `PluginCapability.kt` | The sealed extension points (`TextTransform`, `OCR`, `WebSearch`, `Export`, `TextTools`, `LanguageDetection`, `WebCapture`, `ClipShare`, `FileTransfer`, `Assistant`) — each with an `exclusive` flag. |
+| `PluginCapability.kt` | The sealed extension points (`TextTransform`, `OCR`, `WebSearch`, `Export`, `TextTools`, `LanguageDetection`, `WebCapture`, `ClipShare`, `FileTransfer`, `Assistant`, `Dictation`, `ReadAloud`, `Translation`, `ScreenshotNote`) — each with an `exclusive` flag. |
 | `PluginManifest.kt` | `PluginManifest`, `SemanticVersion` (`Major.Minor.Patch`), `PluginPermission`, and the manifest validator. |
 | `NoteflowPlugin.kt` | The plugin interface (manifest-derived identity, tri-state `availability`, lifecycle hooks) + per-capability *serving interfaces* (`TextTransformPlugin`, …). |
 | `PluginLifecycle.kt` | `PluginLifecycleState` (REGISTERED/ENABLED/AVAILABLE/UNAVAILABLE/DISABLED/REJECTED), derived `PluginStateInfo`, enable result + enable-order resolution types. |
@@ -53,6 +53,11 @@ Everything lives in `com.authorss81.noteflow.plugins`:
 | `texttools/TextToolsEngine.kt` | Text Tools (Phase 15) — word/char/paragraph/sentence counts, reading time, Flesch-Kincaid readability, note diff. PURE JVM. Serves `TextTools`. |
 | `langdetect/LanguageDetectionEngine.kt` | Language Detection (Phase 15) — Lingua-based detection + `lang:<iso>` auto-tagging that honours user overrides. PURE JVM. Serves `LanguageDetection`. |
 | `webcapture/WebCaptureEngine.kt` | Web Capture (Phase 15) — fetches an http(s) page (jsoup) and reduces it to clean Markdown for a new note. Serves `WebCapture`. |
+| `dictation/…` | Dictation (Phase 16) — SpeechRecognizer glue + pure `DictationAssembler` (spacing/capitalization) + `SpeechErrorMapper`. Serves `Dictation`. |
+| `readaloud/…` | Read Aloud (Phase 16) — platform TTS + pure `TtsChunkSplitter` (fenced code verbatim, prose sentence-packed) + `ReadAloudPolicy` (quiet-mode refusal). Serves `ReadAloud`. |
+| `translation/…` | Translation (Phase 16) — ML Kit `translate` (keyless, API 26+) + pure `TranslationCatalog` (28 targets, source auto-detection via Lingua). Serves `Translation` (exclusive). |
+| `assistant/…` | On-Device Assistant (Phase 16) — MediaPipe `tasks-genai` (Qwen2-0.5B GGUF, user-downloaded) + pure `AssistantPrompts`/`AssistantStoragePolicy` + `AssistantModelDownloader`. Serves `Assistant` (exclusive). |
+| `screenshot/…` | Screenshot→Note (Phase 16) — reuses the existing annotated-page renderer + persist + OCR route; pure `ScreenshotFlowPlanner`. Serves `ScreenshotNote`. |
 
 Supporting pieces outside the framework package:
 
@@ -78,9 +83,12 @@ reason.
 
 Today `TextTransform` (ROT13 proof), `OCR` (on-device ML Kit), `WebSearch`
 (keyless DuckDuckGo) and — since Phase 15 — `Export`, `ClipShare`, `TextTools`,
-`LanguageDetection` and `WebCapture` are implemented for real. The remaining
-capabilities (`FileTransfer`, `Assistant`) are *declared extension points* that
-fail loudly until a real plugin ships — see the phase-12 implementations below.
+`LanguageDetection` and `WebCapture` are implemented for real. Phase 16 added
+`Dictation`, `ReadAloud`, `Translation` and `ScreenshotNote`, and turned
+`Assistant` from a declared extension point into a real, user-downloaded local
+LLM. The only remaining capability with no serving plugin is `FileTransfer` —
+requests for it fail loudly with `NO_PLUGIN_INSTALLED`. See the phase-12 and
+phase-16 implementation notes below.
 
 ### `PluginManifest` & `NoteflowPlugin` — what a plugin is
 
@@ -297,6 +305,93 @@ Settings → Plugins.
 - **Tests:** `WebCaptureExtractorTest` (13 tests — fixture extraction, chrome
   stripping, container fallback, URL policy) + `WebPageFetcher` is never
   exercised over a real network in unit tests.
+
+## The five Phase 16 plugins (keyless + on-device, all individually toggleable)
+
+Phase 16 ships five more real plugins, all keyless. Nothing is ambient: every
+feature is strictly user-initiated (`dictation/` needs an explicit mic tap,
+`readaloud/` an explicit Play tap, model downloads an explicit consent tap with
+progress). All five use the same **pure-JVM-core-first** split — the testable
+core has no Android classes and is JVM-unit-tested; only the platform glue
+(SpeechRecognizer, TextToSpeech, ML Kit, MediaPipe, canvas render) touches
+Android. All are registered in `PluginRegistry.defaultPlugins()`, off by
+default, and individually toggleable in Settings → Plugins.
+
+### Dictation (`dictation/`, capability `Dictation`)
+
+- **Core:** pure `DictationAssembler` — whitespace normalization, single-space
+  separation (or a clean newline), sentence-capitalization after `.`/`!`/`?`/
+  blank-note. `SpeechErrorMapper` maps recognizer errors to user-facing text.
+- **Glue:** `AndroidDictationEngine` uses `SpeechRecognizer` with
+  `EXTRA_PREFER_OFFLINE=true` + `EXTRA_PARTIAL_RESULTS=true`; partials stream
+  live, finals fold into the note via the pure assembler.
+- **Honest on-device:** when offline recognition isn't available the dialog
+  shows the plugin's message as a one-time banner rather than silently streaming
+  network-backed hypotheses; the user still chooses explicitly.
+- **UI:** MarkdownPreviewScreen's Plugins menu → "Dictate into this note…".
+- **Tests:** `DictationAssemblerTest` (10 tests).
+
+### Read Aloud (`readaloud/`, capability `ReadAloud`)
+
+- **Core:** pure `TtsChunkSplitter` (fenced code spoken verbatim in line-sized
+  code-tagged chunks; prose packed by paragraph then sentence, hard-wrapped at
+  spaces when a sentence exceeds the cap — nothing is dropped) + pure
+  `ReadAloudPolicy`.
+- **Quiet mode:** a user-enabled SilentToggle makes the queue refuse with a
+  clear `RefuseQuiet` result — **no bytes are ever spoken** in quiet mode
+  (new `silentModeEnabled` setting on `SettingsManager`; the dialog's toggle).
+- **Playback:** platform `TextToSpeech` speaks only in direct response to the
+  explicit Play tap; the policy hands out the chunk plan before any speaking.
+- **UI:** MarkdownPreviewScreen's Plugins menu → "Read this note aloud…".
+- **Tests:** `TtsChunkSplitterTest` (9 tests — chunking + policy).
+
+### Translation (`translation/`, capability `Translation`, exclusive)
+
+- **Core:** pure `TranslationCatalog` — 28 curated target languages, code
+  normalization (`nb→no`, `zh-CN/TW→zh`, `pt-br→pt`) and source auto-detection
+  via the existing Lingua detector (falls back to `en` when inconclusive).
+- **Glue:** `MlKitTranslatorEngine` wraps ML Kit `translate` (keyless, API 26+,
+  `RemoteModelManager` for the downloaded-state check).
+- **Model handling:** the small per-language model downloads only when the user
+  taps Translate or "Download model" (that tap is the one-time consent);
+  `downloadModelIfNeeded()` runs inside `translate()`, and any download
+  failure surfaces a typed `ModelNotReady`/error — never silent.
+- **UI:** MarkdownPreviewScreen's Plugins menu → "Translate this note…"
+  (target dropdown, model status, download-with-progress, "Replace note").
+- **Tests:** `TranslationPluginTest` (7 tests with a fake `TranslatorEngine`).
+
+### On-Device Assistant (`assistant/`, capability `Assistant`, exclusive)
+
+- **Core:** pure `AssistantPrompts` (per-task prompt assembly; long notes are
+  truncated to a 6 000-char word-boundary context cap) and pure
+  `AssistantStoragePolicy` (default model identity — Qwen2-0.5B-Instruct GGUF,
+  398 MB — plus the free-space guard with a 64 MB safety margin).
+- **Glue:** `MediaPipeLlmEngine` runs the GGUF via MediaPipe `tasks-genai`
+  (pure-Java, minSdk 21, LLM Inference API, 4 ABIs); `AssistantModelDownloader`
+  streams the model into `filesDir/noteflow/assistant` via a `.part` temp file
+  (atomic rename, cancellation cleanup, progress callback).
+- **Low-end gate:** on low-RAM / ≤2-core devices the plugin is `Unavailable`
+  with an explicit reason (a real low-token GGUF keeps memory bounded).
+  `model_url` is overridable via the per-plugin `plugins.<id>.model_url` setting.
+- **UI:** the existing `OnDeviceSmartAssistantBottomSheet` now runs the real LLM
+  (Summarize / Auto-Tags / Action Items / Ask) with a model-download consent +
+  progress card; a low-end or disabled device shows the reason.
+- **Tests:** `AssistantPromptTest` (11 tests — prompts, truncation, storage
+  policy space checks).
+
+### Screenshot → Note (`screenshot/`, capability `ScreenshotNote`)
+
+- **Core:** pure `ScreenshotFlowPlanner` — decides IMAGE_ONLY vs IMAGE_WITH_OCR
+  (OCR applies only when both requested AND an OCR plugin is available),
+  "Screenshot · Mon d, yyyy" title and a `screenshot-yyyyMMdd-HHmmss.png`
+  filename.
+- **Reuse, no duplication:** rendering goes through the existing
+  `ImportExportService.exportAnnotatedPage` + `persistFile` path; OCR (when
+  chosen) runs through the existing `OCR` plugin route. The new image note is
+  created via the usual `addPage(sourceFilePath, sourceFileType="image", …)`.
+- **UI:** EditorScreen's overflow menu → "Screenshot → new note" (and "…+
+  OCR"); success opens the new note via the existing page-open path.
+- **Tests:** `ScreenshotFlowTest` (7 tests — mode + OCR-decision logic).
 
 ## Adding a NEW plugin
 

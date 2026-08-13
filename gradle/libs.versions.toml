@@ -17,6 +17,12 @@ sqlcipher = "4.9.0"
 sqliteKtx = "2.4.0"
 commonmark = "0.29.0"
 mlkitTextRecognition = "16.0.1"
+# Phase 16: on-device translation (ML Kit translate, keyless) + local LLM runtime
+# (MediaPipe tasks-genai, the Google AI Edge engine LiteRT-LM extends; chosen over
+# litertlm-android because every litertlm artifact ships Kotlin-2.2 metadata that
+# this project's pinned Kotlin 2.0.21 cannot read).
+mlkitTranslate = "17.0.3"
+mediapipeTasksGenai = "0.10.25"
 # Phase 15: productivity/knowledge plugin pack (pure-JVM, CI-testable).
 lingua = "1.2.2"
 jsoup = "1.17.2"
@@ -56,6 +62,10 @@ commonmark-ext-gfm-tables = { group = "org.commonmark", name = "commonmark-ext-g
 # Phase 12: on-device, offline OCR (bundled model — no Play Services, no API key,
 # no INTERNET). Latin script by default; per-language scripts add their own model.
 mlkit-text-recognition = { group = "com.google.mlkit", name = "text-recognition", version.ref = "mlkitTextRecognition" }
+
+# Phase 16: on-device translation + local LLM assistant (keyless, offline-first).
+mlkit-translate = { group = "com.google.mlkit", name = "translate", version.ref = "mlkitTranslate" }
+mediapipe-tasks-genai = { group = "com.google.mediapipe", name = "tasks-genai", version.ref = "mediapipeTasksGenai" }
 
 # Phase 15: Lingua (natural-language detection) + jsoup (readable-content extraction).
 # Both pure JVM, Apache-2.0, no native code — fully unit-testable in CI.

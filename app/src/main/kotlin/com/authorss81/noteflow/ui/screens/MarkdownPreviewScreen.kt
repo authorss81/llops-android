@@ -26,8 +26,11 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Splitscreen
 import androidx.compose.material.icons.outlined.Extension
+import androidx.compose.material.icons.outlined.GraphicEq
 import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.Functions
+import androidx.compose.material.icons.outlined.Mic
+import androidx.compose.material.icons.outlined.Translate
 import com.authorss81.noteflow.plugins.NoteflowPlugin
 import com.authorss81.noteflow.plugins.PluginCapability
 import com.authorss81.noteflow.plugins.PluginResult
@@ -164,6 +167,10 @@ fun MarkdownPreviewScreen(
     var showWebSearch by remember { mutableStateOf(false) }
     var showTextTools by remember { mutableStateOf(false) }
     var showLanguageDetection by remember { mutableStateOf(false) }
+    // Phase 16 — keyless on-device plugins.
+    var showDictation by remember { mutableStateOf(false) }
+    var showReadAloud by remember { mutableStateOf(false) }
+    var showTranslation by remember { mutableStateOf(false) }
     var pendingTransformPlugin by remember { mutableStateOf<NoteflowPlugin?>(null) }
     val transformScope = rememberCoroutineScope()
 
@@ -335,6 +342,55 @@ fun MarkdownPreviewScreen(
                                         onClick = {
                                             showPluginMenu = false
                                             showLanguageDetection = true
+                                        }
+                                    )
+                                }
+                            }
+                            // Phase 16 (Dictation/Read-Aloud/Translation): keyless
+                            // on-device plugins, all strictly user-initiated.
+                            val dictPlugins = viewModel.pluginRegistry.pluginsForCapability(PluginCapability.Dictation)
+                            if (dictPlugins.isNotEmpty()) {
+                                HorizontalDivider()
+                                dictPlugins.forEach { plugin ->
+                                    val runnable = viewModel.isPluginUsable(plugin.id)
+                                    DropdownMenuItem(
+                                        text = { Text(if (runnable) "Dictate into this note…" else "Dictation (off)") },
+                                        leadingIcon = { Icon(Icons.Outlined.Mic, contentDescription = null) },
+                                        enabled = runnable,
+                                        onClick = {
+                                            showPluginMenu = false
+                                            flushSave()
+                                            showDictation = true
+                                        }
+                                    )
+                                }
+                            }
+                            val readAloudPlugins = viewModel.pluginRegistry.pluginsForCapability(PluginCapability.ReadAloud)
+                            if (readAloudPlugins.isNotEmpty()) {
+                                readAloudPlugins.forEach { plugin ->
+                                    val runnable = viewModel.isPluginUsable(plugin.id)
+                                    DropdownMenuItem(
+                                        text = { Text(if (runnable) "Read this note aloud…" else "Read Aloud (off)") },
+                                        leadingIcon = { Icon(Icons.Outlined.GraphicEq, contentDescription = null) },
+                                        enabled = runnable,
+                                        onClick = {
+                                            showPluginMenu = false
+                                            showReadAloud = true
+                                        }
+                                    )
+                                }
+                            }
+                            val translationPlugins = viewModel.pluginRegistry.pluginsForCapability(PluginCapability.Translation)
+                            if (translationPlugins.isNotEmpty()) {
+                                translationPlugins.forEach { plugin ->
+                                    val runnable = viewModel.isPluginUsable(plugin.id)
+                                    DropdownMenuItem(
+                                        text = { Text(if (runnable) "Translate this note…" else "Translation (off)") },
+                                        leadingIcon = { Icon(Icons.Outlined.Translate, contentDescription = null) },
+                                        enabled = runnable,
+                                        onClick = {
+                                            showPluginMenu = false
+                                            showTranslation = true
                                         }
                                     )
                                 }
@@ -511,6 +567,7 @@ fun MarkdownPreviewScreen(
                     page = page,
                     content = contentText,
                     viewModel = viewModel,
+                    context = LocalContext.current,
                     onApplyTags = { tags ->
                         val existing = page.tags.split(",").map { it.trim() }.filter { it.isNotEmpty() }
                         val updated = (existing + tags).distinct().joinToString(",")
@@ -613,6 +670,51 @@ fun MarkdownPreviewScreen(
                         viewModel.showSnackbar("Language tag updated")
                     },
                     onDismiss = { showLanguageDetection = false }
+                )
+            }
+
+            if (showDictation) {
+                com.authorss81.noteflow.ui.components.DictationDialog(
+                    viewModel = viewModel,
+                    context = LocalContext.current,
+                    initialText = contentText,
+                    onTextChanged = { newText ->
+                        contentText = newText
+                        flushSave()
+                    },
+                    onDismiss = { showDictation = false }
+                )
+            }
+
+            if (showReadAloud) {
+                com.authorss81.noteflow.ui.components.ReadAloudDialog(
+                    viewModel = viewModel,
+                    context = LocalContext.current,
+                    text = contentText,
+                    onDismiss = { showReadAloud = false }
+                )
+            }
+
+            if (showTranslation) {
+                com.authorss81.noteflow.ui.components.TranslationDialog(
+                    viewModel = viewModel,
+                    context = LocalContext.current,
+                    text = contentText,
+                    onReplace = { translated ->
+                        val original = contentText
+                        if (original != translated) {
+                            viewModel.createNoteVersion(
+                                page.id,
+                                page.title,
+                                original,
+                                "Before on-device translation"
+                            )
+                        }
+                        contentText = translated
+                        flushSave()
+                        viewModel.showSnackbar("Note replaced with translation")
+                    },
+                    onDismiss = { showTranslation = false }
                 )
             }
         }
