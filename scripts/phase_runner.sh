@@ -62,12 +62,13 @@ fi
 run_phase() {
   echo "== [phase] Running: ${PHASE} =="
   set +e
+  # opencode CLI >=1.15: the prompt is a POSITIONAL argument, not --prompt.
   opencode run \
     --model "${MODEL}" \
     --agent build \
     "${SESSION_ARGS[@]}" \
-    --prompt "$(cat "${PROMPT_FILE}")" \
     --title "llops-${PHASE}" \
+    "$(cat "${PROMPT_FILE}")" \
     > "${LOG_DIR}/${PHASE}.log" 2>&1
   local code=$?
   set -e
@@ -84,7 +85,7 @@ if run_phase; then
     echo "== [review] Running reviewer subagent =="
     set +e
     opencode run --model "${MODEL}" --agent "${REVIEWER_AGENT}" \
-      --prompt "Review all changes made in phase '${PHASE}'. Output numbered FINDINGS." \
+      "Review all changes made in phase '${PHASE}'. Output numbered FINDINGS." \
       > "${LOG_DIR}/${PHASE}.review.log" 2>&1
     code=$?
     set -e
@@ -95,7 +96,7 @@ if run_phase; then
       set +e
       opencode run --model "${MODEL}" --agent build \
         --continue \
-        --prompt "Apply fixes for the review FINDINGS above. Do not break other code." \
+        "Apply fixes for the review FINDINGS above. Do not break other code." \
         > "${LOG_DIR}/${PHASE}.fix.log" 2>&1
       code=$?
       set -e
@@ -112,7 +113,7 @@ if is_rate_limited; then
   touch "${DEFERRED_FILE}"
   # Persist what session we were on so the next tick resumes the same thread.
   # Uses --title search; opens our own session file with the last session id.
-  LAST_SID="$(opencode session list --json 2>/dev/null \
+  LAST_SID="$(opencode session list --format json 2>/dev/null \
     | grep -o '"id":"[^"]*"' | head -n1 | cut -d'"' -f4 || true)"
   if [ -n "${LAST_SID}" ]; then
     printf '%s' "${LAST_SID}" > "${SESSION_FILE}"

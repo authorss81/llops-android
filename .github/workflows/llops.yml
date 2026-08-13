@@ -99,9 +99,9 @@ jobs:
           cmdline-tools-version: latest
           sdk: platforms;android-36,build-tools;36.0.0,ndk;27.0.12077973,cmake;3.22.1
 
-      - name: Install opencode
+      - name: Install opencode (pinned 1.15.12 — CLI has no --prompt flag; message is positional)
         run: |
-          curl -fsSL https://opencode.ai/install | bash
+          curl -fsSL https://opencode.ai/install | bash -s -- --version 1.15.12
           ~/.opencode/bin/opencode --version 2>/dev/null || opencode --version
 
       - name: Pull latest main
