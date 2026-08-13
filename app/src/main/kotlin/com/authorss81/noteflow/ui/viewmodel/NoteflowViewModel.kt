@@ -99,25 +99,26 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    /** Call after a user changes a `plugins.<id>.<key>` setting. */
-    fun notifyPluginConfigChanged(pluginId: String) {
-        pluginRegistry.notifyConfigChanged(pluginId, appContext)
-    }
-
     /**
-     * Route a text-transform request through the plugin manager. Returns a typed
-     * result; failures carry a user-facing message (never throws).
+     * Route a text-transform request through the plugin manager on a background
+     * dispatcher, so a slow/hung plugin can never block the main thread.
+     * Returns a typed result; failures carry a user-facing message (never throws).
      */
-    fun transformNoteText(text: String): PluginResult<String> =
-        pluginManager.withPlugin(PluginCapability.TextTransform, appContext) { plugin ->
+    suspend fun transformNoteText(text: String): PluginResult<String> =
+        pluginManager.withPluginAsync(PluginCapability.TextTransform, appContext) { plugin ->
             val transformer = plugin as? TextTransformPlugin
                 ?: throw IllegalStateException("${plugin.name} does not implement TextTransformPlugin")
             transformer.transformText(text)
         }
 
-    /** True when a plugin currently sits in a state that can serve requests. */
+    /**
+     * True when a plugin currently sits in a state that can serve requests.
+     * Computed FRESH from the registry (which re-evaluates device availability
+     * under a guard on every call), so a revoked permission or lost dependency
+     * is reflected immediately — never stale.
+     */
     fun isPluginUsable(pluginId: String): Boolean =
-        _pluginStates.value[pluginId]?.state == PluginLifecycleState.AVAILABLE
+        pluginRegistry.stateOf(pluginId, appContext)?.state == PluginLifecycleState.AVAILABLE
 
     private val _databaseTampered = MutableStateFlow(false)
     val databaseTampered: StateFlow<Boolean> = _databaseTampered.asStateFlow()

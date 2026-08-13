@@ -61,6 +61,52 @@ class PluginErrorIsolationTest {
     }
 
     @Test
+    fun errorThrownByPluginIsContainedAsFailure() {
+        // Errors (e.g. an AssertionError from a buggy require/check) must be
+        // contained like Exceptions — never propagate to the caller.
+        val throwingError = TestPlugin(
+            id = "t.error",
+            transformBlock = { throw AssertionError("assertion exploded") }
+        )
+        val registry = PluginRegistry(InMemoryEnableStore(), plugins = listOf(throwingError), currentApiLevel = 26)
+        registry.setEnabled(throwingError.id, true)
+        val manager = PluginManager(registry)
+        var result: PluginResult<String>? = null
+        try {
+            result = manager.withPlugin(PluginCapability.TextTransform, null) {
+                (it as com.authorss81.noteflow.plugins.TextTransformPlugin).transformText("x")
+            }
+        } catch (e: Throwable) {
+            throw AssertionError("Error leaked out of the plugin manager: ${e.message}", e)
+        }
+        assertTrue(result is PluginResult.Failure)
+        assertEquals(PluginFailureReason.PLUGIN_ERROR, (result as PluginResult.Failure).reason)
+    }
+
+    @Test
+    fun errorThrownByAvailabilityIsContained() {
+        val plugin = TestPlugin(
+            id = "t.availerror",
+            availabilityResult = { throw AssertionError("gate assertion failed") }
+        )
+        val registry = PluginRegistry(InMemoryEnableStore(), plugins = listOf(plugin), currentApiLevel = 26)
+        registry.setEnabled(plugin.id, true) // must not throw
+        assertEquals(com.authorss81.noteflow.plugins.PluginLifecycleState.UNAVAILABLE, registry.stateOf(plugin.id)?.state)
+    }
+
+    @Test
+    fun errorThrownByOnEnableIsContainedAndStillEnables() {
+        val plugin = TestPlugin(
+            id = "t.onenableerror",
+            onEnableBlock = { _, _ -> throw AssertionError("onEnable assertion failed") }
+        )
+        val registry = PluginRegistry(InMemoryEnableStore(), plugins = listOf(plugin), currentApiLevel = 26)
+        val result = registry.setEnabled(plugin.id, true) // must not throw
+        assertTrue(result is com.authorss81.noteflow.plugins.PluginEnableResult.Changed)
+        assertEquals(com.authorss81.noteflow.plugins.PluginLifecycleState.AVAILABLE, registry.stateOf(plugin.id)?.state)
+    }
+
+    @Test
     fun nullResultIsContainedAsFailure() {
         val plugin = TestPlugin("t.null")
         val registry = PluginRegistry(InMemoryEnableStore(), plugins = listOf(plugin), currentApiLevel = 26)

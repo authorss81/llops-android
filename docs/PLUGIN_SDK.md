@@ -20,11 +20,11 @@ contained — never propagated):
 | Hook | When | Guarantees |
 |------|------|------------|
 | `availability(context)` | re-evaluated on every registry resolution (Polled) | NEVER stale. A revoked permission or lost dependency flips the derived state immediately. |
-| `onEnable(context, settings)` | once per process on first opt-in, or at cold start if already enabled (`onProcessStart`) | idempotent; runs with deps already enabled; cheap. |
-| `onDisable(context, settings)` | when the user turns the plugin off (or it is torn down) | release resources, cancel background work. |
+| `onEnable(context, settings)` | on first opt-in, on a disable→re-enable cycle in the same process, and at cold start if already enabled (`onProcessStart`, once per process) | idempotent; runs with deps already enabled; cheap. A throwing `Throwable` (incl. `Error`) is contained. |
+| `onDisable(context, settings)` | when the user turns the plugin off, or when conflict arbitration demotes it to a loser (at most once per arbitration round) | release resources, cancel background work. A throwing `Throwable` is contained. |
 | `onConfigChanged(context, settings)` | after a user changes a `plugins.<id>.<key>` setting | re-read settings, react. |
 | `selfCheck(context)` | "Test now" in Settings → Plugins | deep, cheap self-test; defaults to `availability`. |
-| `transformText(...)` etc. | per-capability serving interface call | see § 3; runs inside the manager's guard. |
+| `transformText(...)` etc. | per-capability serving interface call | see § 3; runs inside the manager's guard, off the main thread when routed via `withPluginAsync`. |
 
 ### Derived lifecycle states
 
@@ -168,8 +168,9 @@ override fun onEnable(context: Context?, settings: PluginSettings) {
 
 ## 5. Error handling & isolation
 
-The `PluginManager` routes capability requests **guarded**: an exception
-(`Exception`, including `RuntimeException`), a null return, or an unavailable
+The `PluginManager` routes capability requests **guarded**: a `Throwable`
+(`Exception`, including `RuntimeException`, or an `Error` such as an
+`AssertionError` from a buggy `require/check`), a null return, or an unavailable
 plugin never escapes as a crash — the caller gets a typed `PluginResult`.
 
 ```kotlin

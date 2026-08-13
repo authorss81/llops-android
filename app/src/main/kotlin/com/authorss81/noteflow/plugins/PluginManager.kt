@@ -63,16 +63,17 @@ data class PluginInvocationRecord(
  * Routes capability requests to the right plugin.
  *
  * Routing is **guarded**: a plugin that throws, returns null, or hangs the
- * caller is contained — the manager catches `Exception`, logs only ids/names
- * and exception CLASS names (never content), records a diagnostic, and returns
- * a typed [PluginResult] instead of propagating the exception.
+ * caller is contained — the manager catches `Throwable` (incl. `Error` such as
+ * an `AssertionError` from a buggy `require/check`), logs only ids/names and
+ * exception CLASS names (never content), records a diagnostic, and returns a
+ * typed [PluginResult] instead of propagating the failure.
  *
  * Routing rules (checked in order):
  * 1. NO installed plugin declares the capability → Failure(NO_PLUGIN_INSTALLED).
  * 2. Declared, but none opted-in → Failure(NONE_ENABLED).
  * 3. Opted-in, but derived state is not AVAILABLE (device gate / dependency /
  *    conflict) → Unavailable with the specific reason.
- * 4. Otherwise [action] runs guarded; any `Exception` (incl. RuntimeException)
+ * 4. Otherwise [action] runs guarded; any `Throwable` (incl. RuntimeException)
  *    becomes Failure(PLUGIN_ERROR) naming the plugin and exception class.
  *
  * The framework never hardcodes which concrete plugin serves a capability — it
@@ -128,7 +129,10 @@ class PluginManager(
 
     /**
      * [withPlugin] variant that runs the plugin work on [kotlinx.coroutines.Dispatchers.Default]
-     * so a slow/hung plugin can never block the main thread.
+     * so a slow/hung plugin can never block the main thread. The plugin action is
+     * non-suspend, so a genuinely hung plugin still ties up ONE background worker
+     * until it returns — but the UI stays responsive and the caller's coroutine is
+     * simply suspended. A throwing plugin is contained exactly like [withPlugin].
      */
     suspend fun <T> withPluginAsync(
         capability: PluginCapability,
@@ -164,9 +168,9 @@ class PluginManager(
                     PluginCheckResult.Failure(pluginId, "Self-check inconclusive — try again with a device context.")
                 }
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             val detail = e::class.java.simpleName
-            record(pluginId, ok = false, summary = "Self-check threw $detail")
+            record(plugin.id, ok = false, summary = "Self-check threw $detail")
             logger.error(pluginId, plugin.name, "selfCheck threw $detail")
             PluginCheckResult.Failure(pluginId, "Self-check threw $detail. See plugin diagnostics.")
         }
@@ -187,7 +191,7 @@ class PluginManager(
                 record(plugin.id, ok = true, summary = "Success")
                 PluginResult.Success(value)
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             val detail = e::class.java.simpleName
             record(plugin.id, ok = false, summary = "Threw $detail")
             logger.error(plugin.id, plugin.name, "invocation threw $detail")

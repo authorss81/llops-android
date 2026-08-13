@@ -142,9 +142,10 @@ class PluginFrameworkTest {
     }
 
     @Test
-    fun onEnableHookFiresOncePerProcess() {
+    fun onEnableDoesNotDuplicateWhileEnabledAndRefiresAfterDisable() {
         val store = InMemoryPluginEnableStore()
         var calls = 0
+        var disableCalls = 0
         val counting = object : NoteflowPlugin {
             override val manifest = com.authorss81.noteflow.plugins.PluginManifest(
                 id = "test.counting",
@@ -156,13 +157,17 @@ class PluginFrameworkTest {
             )
             override fun availability(context: Context?): PluginAvailability = PluginAvailability.Ok
             override fun onEnable(context: Context?, settings: PluginSettings) { calls++ }
+            override fun onDisable(context: Context?, settings: PluginSettings) { disableCalls++ }
         }
         val registry = PluginRegistry(store, plugins = listOf(counting), currentApiLevel = 26)
         registry.setEnabled(counting.id, enabled = true)
-        registry.setEnabled(counting.id, enabled = true) // no-op re-enable
-        registry.setEnabled(counting.id, enabled = false)
-        registry.setEnabled(counting.id, enabled = true) // re-enabled, but same process
+        registry.setEnabled(counting.id, enabled = true) // no-op re-enable: no duplicate onEnable
         assertEquals(1, calls)
+        registry.setEnabled(counting.id, enabled = false)
+        assertEquals(1, disableCalls)
+        registry.setEnabled(counting.id, enabled = true) // re-enabled: onEnable fires again
+        assertEquals(2, calls)
+        assertEquals(1, disableCalls)
     }
 
     @Test

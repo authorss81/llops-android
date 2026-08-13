@@ -204,4 +204,69 @@ class PluginDependencyConflictTest {
         val message = (result as PluginResult.Unavailable).message
         assertTrue(message.contains("conflicts") || message.contains("disabled"))
     }
+
+    @Test
+    fun arbitrationLoserReceivesOnDisableExactlyOnce() {
+        var w1Disables = 0
+        val w1 = TestPlugin(
+            "t.w1", version = SemanticVersion(1, 0, 0),
+            capabilities = setOf(PluginCapability.WebSearch),
+            onDisableBlock = { _, _ -> w1Disables++ }
+        )
+        val w2 = TestPlugin(
+            "t.w2", version = SemanticVersion(2, 0, 0),
+            capabilities = setOf(PluginCapability.WebSearch)
+        )
+        val registry = registryOf(InMemoryEnableStore(), w1, w2)
+        registry.setEnabled(w1.id, true)
+        assertEquals(0, w1Disables)
+
+        // Enabling the higher-version rival arbitrates w1 to DISABLED loser.
+        registry.setEnabled(w2.id, true)
+        assertEquals(PluginLifecycleState.DISABLED, registry.stateOf(w1.id)?.state)
+        assertEquals(1, w1Disables)
+
+        // A further setEnabled on the already-enabled loser is refused; it must
+        // NOT fire onDisable again (once per arbitration round).
+        assertTrue(registry.setEnabled(w1.id, true) is PluginEnableResult.Refused)
+        assertEquals(1, w1Disables)
+
+        // Disabling the winner frees the loser; arbitration tracking is released,
+        // so a NEW arbitration round can fire onDisable again.
+        registry.setEnabled(w2.id, false)
+        assertEquals(PluginLifecycleState.AVAILABLE, registry.stateOf(w1.id)?.state)
+        registry.setEnabled(w2.id, true) // re-arbitration -> w1 loses again
+        assertEquals(PluginLifecycleState.DISABLED, registry.stateOf(w1.id)?.state)
+        assertEquals(2, w1Disables)
+    }
+
+    @Test
+    fun onProcessStartDoesNotInitializeArbitrationLoser() {
+        var loserEnables = 0
+        var winnerEnables = 0
+        val store = InMemoryEnableStore()
+        val loser = TestPlugin(
+            "t.loser", version = SemanticVersion(1, 0, 0),
+            capabilities = setOf(PluginCapability.WebSearch),
+            onEnableBlock = { _, _ -> loserEnables++ }
+        )
+        val winner = TestPlugin(
+            "t.winner", version = SemanticVersion(2, 0, 0),
+            capabilities = setOf(PluginCapability.WebSearch),
+            onEnableBlock = { _, _ -> winnerEnables++ }
+        )
+        // Simulate a previous session where BOTH rivals were enabled in the store.
+        store.forceEnabled(loser.id)
+        store.forceEnabled(winner.id)
+
+        val registry = PluginRegistry(store, plugins = listOf(loser, winner), currentApiLevel = 26)
+        registry.onProcessStart(null)
+
+        // The winner is initialized; the arbitration loser is NOT (it would never
+        // serve, and its onEnable would have no matching onDisable).
+        assertEquals(1, winnerEnables)
+        assertEquals(0, loserEnables)
+        assertEquals(PluginLifecycleState.DISABLED, registry.stateOf(loser.id)?.state)
+        assertEquals(PluginLifecycleState.AVAILABLE, registry.stateOf(winner.id)?.state)
+    }
 }

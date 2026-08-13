@@ -29,6 +29,7 @@ import com.authorss81.noteflow.plugins.NoteflowPlugin
 import com.authorss81.noteflow.plugins.PluginCapability
 import com.authorss81.noteflow.plugins.PluginResult
 import com.authorss81.noteflow.ui.components.VersionHistoryBottomSheet
+import kotlinx.coroutines.launch
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
@@ -157,6 +158,7 @@ fun MarkdownPreviewScreen(
     var showVersionHistory by remember { mutableStateOf(false) }
     var showPluginMenu by remember { mutableStateOf(false) }
     var pendingTransformPlugin by remember { mutableStateOf<NoteflowPlugin?>(null) }
+    val transformScope = rememberCoroutineScope()
 
     val primaryColor = MaterialTheme.colorScheme.primary
     val configuration = androidx.compose.ui.platform.LocalConfiguration.current
@@ -255,8 +257,9 @@ fun MarkdownPreviewScreen(
                                 transformPlugins.forEach { plugin ->
                                     // Only runnable plugins are selectable; disabled or
                                     // device-unavailable ones are grayed out with a hint.
-                                    val runnable = viewModel.pluginEnabledIds.value[plugin.id] == true &&
-                                        plugin.isAvailable(LocalContext.current)
+                                    // Uses the ViewModel's freshly-derived lifecycle state
+                                    // (never a raw, unguarded availability() call).
+                                    val runnable = viewModel.isPluginUsable(plugin.id)
                                     DropdownMenuItem(
                                         text = {
                                             Text(if (runnable) "Run ${plugin.name}" else "${plugin.name} (off)")
@@ -475,25 +478,30 @@ fun MarkdownPreviewScreen(
                         TextButton(onClick = {
                             val original = contentText
                             pendingTransformPlugin = null
-                            when (val result = viewModel.transformNoteText(original)) {
-                                is PluginResult.Success -> {
-                                    if (result.value != original) {
-                                        viewModel.createNoteVersion(
-                                            page.id,
-                                            page.title,
-                                            original,
-                                            "Before running ${plugin.name}"
-                                        )
-                                        contentText = result.value
-                                        flushSave()
-                                    } else {
-                                        viewModel.showSnackbar("${plugin.name} produced no change", isLong = false)
+                            // Run the transform off the main thread: the manager
+                            // dispatches the plugin work to a background dispatcher,
+                            // so a slow/hung plugin can never block the UI.
+                            transformScope.launch {
+                                when (val result = viewModel.transformNoteText(original)) {
+                                    is PluginResult.Success -> {
+                                        if (result.value != original) {
+                                            viewModel.createNoteVersion(
+                                                page.id,
+                                                page.title,
+                                                original,
+                                                "Before running ${plugin.name}"
+                                            )
+                                            contentText = result.value
+                                            flushSave()
+                                        } else {
+                                            viewModel.showSnackbar("${plugin.name} produced no change", isLong = false)
+                                        }
                                     }
+                                    is PluginResult.Failure ->
+                                        viewModel.showSnackbar(result.message, isLong = true)
+                                    is PluginResult.Unavailable ->
+                                        viewModel.showSnackbar(result.message, isLong = true)
                                 }
-                                is PluginResult.Failure ->
-                                    viewModel.showSnackbar(result.message, isLong = true)
-                                is PluginResult.Unavailable ->
-                                    viewModel.showSnackbar(result.message, isLong = true)
                             }
                         }) { Text("Apply") }
                     },

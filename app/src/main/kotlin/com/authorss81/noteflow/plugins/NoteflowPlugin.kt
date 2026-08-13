@@ -38,10 +38,12 @@ sealed class PluginAvailability {
  * - [availability] — device/context gate (AGSL support, permission held, API
  *   level…). Re-checked on every registry resolution, so a revoked permission or
  *   lost dependency immediately flips the derived state to UNAVAILABLE.
- * - [onEnable] — invoked at most once per process when the plugin becomes
- *   enabled (first opt-in or cold start via [PluginRegistry.onProcessStart]).
- *   Cheap and idempotent.
- * - [onDisable] — invoked when the user (or conflict arbitration) turns it off.
+ * - [onEnable] — invoked when the plugin becomes enabled: on first opt-in,
+ *   on a disable→re-enable cycle in the same process, and at cold start via
+ *   [PluginRegistry.onProcessStart] (once per process). Cheap and idempotent.
+ * - [onDisable] — invoked when the user turns the plugin off AND when the
+ *   deterministic capability-conflict arbitration demotes it to a loser
+ *   (at most once per arbitration round). Release resources here.
  * - [onConfigChanged] — invoked when the user changes a `plugins.<id>.<key>`
  *   setting and the app calls [PluginRegistry.notifyConfigChanged].
  * - [selfCheck] — deep self-test used by the "Test now" diagnostics action;

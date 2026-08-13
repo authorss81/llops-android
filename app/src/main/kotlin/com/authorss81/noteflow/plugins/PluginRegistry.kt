@@ -71,6 +71,7 @@ class PluginRegistry(
 
     private val enabledNotified = java.util.Collections.synchronizedSet(mutableSetOf<String>())
     private val availabilityCache = java.util.concurrent.ConcurrentHashMap<String, PluginAvailability>()
+    private val arbitrationDisabledNotified = mutableSetOf<String>()
 
     init {
         val occurrences = mutableMapOf<String, MutableList<Int>>()
@@ -100,15 +101,25 @@ class PluginRegistry(
      * Run at process start (from the ViewModel) so plugins that are already
      * enabled in the persisted store still get their [NoteflowPlugin.onEnable]
      * hook — otherwise a plugin enabled in a previous session would never be
-     * initialized in this one. Idempotent per process and order-respecting:
-     * hooks fire in dependency order. Contained: a throwing hook is logged.
+     * initialized in this one. Idempotent per process, order-respecting and
+     * conflict-aware: hooks fire in dependency order, and a plugin that the
+     * deterministic arbitration just disabled (e.g. two rivals stored enabled
+     * from a prior session) is NOT initialized — it would never serve and its
+     * onEnable would have no matching onDisable. Contained: a throwing hook is
+     * logged.
      */
+    @Synchronized
     fun onProcessStart(context: Context?) {
-        refreshAvailability(context)
+        val states = resolve(context)
         when (val resolution = resolveEnableOrder()) {
             is PluginOrderResolution.Success -> resolution.order.forEach { id ->
                 val plugin = byId[id] ?: return@forEach
-                if (enableStore.isEnabled(id) && enabledNotified.add(id)) {
+                if (!enableStore.isEnabled(id)) return@forEach
+                val state = states[id]?.state
+                val canInit = state == PluginLifecycleState.AVAILABLE ||
+                    state == PluginLifecycleState.ENABLED ||
+                    state == PluginLifecycleState.UNAVAILABLE
+                if (canInit && enabledNotified.add(id)) {
                     guardedOnEnable(plugin, context)
                 }
             }
@@ -129,12 +140,7 @@ class PluginRegistry(
     fun refreshAvailability(context: Context?) {
         availabilityCache.clear()
         plugins.forEach { p ->
-            availabilityCache[p.id] = try {
-                p.availability(context)
-            } catch (e: Exception) {
-                logger.error(p.id, p.name, "availability check threw ${e::class.java.simpleName}")
-                PluginAvailability.Unavailable("availability check failed (${e::class.java.simpleName})")
-            }
+            availabilityCache[p.id] = containedAvailability(p, context)
         }
     }
 
@@ -142,9 +148,12 @@ class PluginRegistry(
      * Set a plugin's opt-in state. Enabling is refused with a clear reason when
      * the plugin's requirements are unmet (invalid manifest, missing/not-enabled
      * dependency, unavailable required capability, or it would lose a
-     * deterministic capability conflict). Disabling always succeeds. Returns a
-     * typed [PluginEnableResult] instead of throwing.
+     * deterministic capability conflict). Disabling always succeeds and fires the
+     * plugin's [NoteflowPlugin.onDisable]; a plugin disabled by conflict
+     * arbitration also gets a (once-per-process) onDisable so its resources are
+     * released. Returns a typed [PluginEnableResult] instead of throwing.
      */
+    @Synchronized
     fun setEnabled(pluginId: String, enabled: Boolean, context: Context? = null): PluginEnableResult {
         val plugin = byId[pluginId]
         if (enabled) {
@@ -158,6 +167,7 @@ class PluginRegistry(
             }
             logger.lifecycle("enabled", pluginId, plugin?.name ?: pluginId)
             refreshAvailability(context)
+            disableNewlyArbitratedLosers(context)
             return PluginEnableResult.Changed(pluginId, nowEnabled = true)
         }
         enableStore.setEnabled(pluginId, false)
@@ -165,7 +175,13 @@ class PluginRegistry(
             guardedOnDisable(it, context)
             logger.lifecycle("disabled", pluginId, it.name)
         }
+        // A later re-enable in the same process must fire onEnable again (the
+        // plugin was torn down by the onDisable above).
+        enabledNotified.remove(pluginId)
         refreshAvailability(context)
+        // Arbitration may now pick a different winner — release previously
+        // disabled losers so their derived state can recover to AVAILABLE.
+        releaseArbitratedLosers(context)
         return PluginEnableResult.Changed(pluginId, nowEnabled = false)
     }
 
@@ -175,7 +191,7 @@ class PluginRegistry(
         try {
             plugin.onConfigChanged(context, pluginSettingsFor(plugin))
             logger.lifecycle("config-changed", pluginId, plugin.name)
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             logger.error(pluginId, plugin.name, "onConfigChanged threw ${e::class.java.simpleName}")
         }
     }
@@ -206,7 +222,7 @@ class PluginRegistry(
 
     /** Opted-in plugins that can run on this device/context (valid ones). */
     fun enabledPlugins(context: Context? = null): List<NoteflowPlugin> =
-        plugins.filter { it.id !in rejectedIds && enableStore.isEnabled(it.id) && it.isAvailable(context) }
+        plugins.filter { it.id !in rejectedIds && enableStore.isEnabled(it.id) && containedAvailable(it, context) }
 
     /** Opted-in, device-available plugins that serve [capability]. */
     fun availablePlugins(capability: PluginCapability, context: Context? = null): List<NoteflowPlugin> =
@@ -257,7 +273,7 @@ class PluginRegistry(
         try {
             plugin.onEnable(context, pluginSettingsFor(plugin))
             logger.lifecycle("onEnable", plugin.id, plugin.name)
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             logger.error(plugin.id, plugin.name, "onEnable threw ${e::class.java.simpleName}")
         }
     }
@@ -266,9 +282,46 @@ class PluginRegistry(
         try {
             plugin.onDisable(context, pluginSettingsFor(plugin))
             logger.lifecycle("onDisable", plugin.id, plugin.name)
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             logger.error(plugin.id, plugin.name, "onDisable threw ${e::class.java.simpleName}")
         }
+    }
+
+    /**
+     * [NoteflowPlugin.availability] evaluated under a guard: a throwing gate is
+     * contained (logged, treated as unavailable) instead of propagating to the
+     * callers of [refreshAvailability]/[resolve]/[setEnabled].
+     */
+    private fun containedAvailability(plugin: NoteflowPlugin, context: Context?): PluginAvailability {
+        return try {
+            plugin.availability(context)
+        } catch (e: Throwable) {
+            logger.error(plugin.id, plugin.name, "availability check threw ${e::class.java.simpleName}")
+            PluginAvailability.Unavailable("availability check failed (${e::class.java.simpleName})")
+        }
+    }
+
+    /** Convenience: [containedAvailability] is [PluginAvailability.Ok]. */
+    private fun containedAvailable(plugin: NoteflowPlugin, context: Context?): Boolean =
+        containedAvailability(plugin, context) is PluginAvailability.Ok
+
+    /** Fire [NoteflowPlugin.onDisable] (at most once per process) for plugins the
+     *  deterministic arbitration has just disabled as losers. */
+    private fun disableNewlyArbitratedLosers(context: Context?) {
+        computeConflictLosers(context).forEach { (loserId, _) ->
+            val loser = byId[loserId] ?: return@forEach
+            if (enabledNotified.contains(loserId) && arbitrationDisabledNotified.add(loserId)) {
+                guardedOnDisable(loser, context)
+                logger.lifecycle("disabled-by-arbitration", loserId, loser.name)
+            }
+        }
+    }
+
+    /** Forget arbitration tracking for ids that are no longer losers, so a future
+     *  re-arbitration can fire [NoteflowPlugin.onDisable] again. */
+    private fun releaseArbitratedLosers(context: Context?) {
+        val currentLosers = computeConflictLosers(context).keys
+        arbitrationDisabledNotified.retainAll(currentLosers)
     }
 
     /** (full topo order incl. cycle members appended, set of cycle ids). */
@@ -343,7 +396,7 @@ class PluginRegistry(
     }
 
     private fun effectiveAvailable(plugin: NoteflowPlugin, context: Context?): Boolean {
-        val availability = availabilityCache[plugin.id] ?: if (context != null) plugin.availability(context) else PluginAvailability.Unknown
+        val availability = availabilityCache[plugin.id] ?: containedAvailability(plugin, context)
         return availability !is PluginAvailability.Unavailable
     }
 
@@ -468,7 +521,7 @@ class PluginRegistry(
         for (cap in plugin.manifest.requiresCapabilities) {
             val serving = plugins.any { other ->
                 other.id != pluginId && other.id !in rejectedIds && enableStore.isEnabled(other.id) &&
-                    cap in other.capabilities && other.isAvailable(context)
+                    cap in other.capabilities && containedAvailable(other, context)
             }
             if (!serving) return "Cannot enable: requires an enabled plugin serving '${cap.label}'."
         }
@@ -476,7 +529,7 @@ class PluginRegistry(
             if (!cap.exclusive) continue
             val rivals = plugins.filter { other ->
                 other.id != pluginId && other.id !in rejectedIds && enableStore.isEnabled(other.id) &&
-                    cap in other.capabilities && other.isAvailable(context)
+                    cap in other.capabilities && containedAvailable(other, context)
             }
             for (rival in rivals) {
                 val ranked = listOf(plugin, rival).sortedWith(
