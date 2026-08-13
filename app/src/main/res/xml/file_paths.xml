@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- A4/34.6: narrowed from "." to "apk/" — UpdateService stages APKs here before sharing.
+         The rest of filesDir (encrypted DB, imports/, voice notes) is no longer URI-grantable. -->
+    <files-path name="internal_apk" path="apk/" />
+    <external-path name="download_apk" path="Download" />
+</paths>

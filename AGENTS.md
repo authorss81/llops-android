@@ -1,0 +1,45 @@
+# AGENTS.md — InkFlow (InkFlow)
+
+Guidance for AI agents (opencode, Antigravity, etc.) working on this repo. Read before editing.
+
+## Project
+- Android note-taking app: markdown + ink canvas + knowledge graph (wikilinks/tags/daily notes) + time-synced voice notes + layers + AGSL brushes.
+- Kotlin 2.0.21, Jetpack Compose (BOM 2024.12.01), Room 2.6.1, Material 3, androidx.ink 1.0.0.
+- `applicationId` = `com.aistudio.inkflow.app`; namespace = `com.authorss81.noteflow` (known mismatch, Phase 21.10).
+- Source: `app/src/main/kotlin/com/authorss81/noteflow/` (`data/`, `services/`, `theme/`, `ui/`, `utils/`).
+- Single `NoteflowViewModel` + `MainActivity` with `mutableStateOf` navigation (not Navigation Compose yet).
+
+## Commands
+- **Do NOT build or run Gradle locally on the Windows dev machine** — no Android SDK installed (AMD Athlon 200GE, 7.5 GB RAM). Builds happen in GitHub Actions (`gradle assembleDebug` on main push).
+- Verification commands on Linux/CI (there is NO gradle wrapper jar in this repo — use system `gradle`, not `./gradlew`):
+  - Unit tests: `gradle testDebugUnitTest`
+  - Debug build: `gradle assembleDebug`
+  - Signed Release build: `gradle assembleRelease`
+- Editor formatting: `.editorconfig` configured at project root.
+
+## Git workflow
+- GitHub is the single source of truth. All changes are committed and pushed to `main` (authorss81/Smooth-Notes).
+- Repo was renamed from Noteflow-2; commit history and tags were preserved at rename time.
+- Remote: `https://github.com/authorss81/Smooth-Notes.git`
+
+## Hard rules
+- **MAJOR ARCHITECTURAL CHANGE → ASK THE USER FIRST.** Any change that restructures packages, replaces the navigation model (e.g., migrating away from `mutableStateOf` navigation to Navigation Compose), adds a new DB schema/migration, introduces SQLCipher, adds new dependencies with broad impact, or rewrites a subsystem (canvas renderer, encryption layer) MUST be proposed to the user and get explicit approval BEFORE writing code. Tell the user what's changing, why, and the risk. Do not silently refactor architecture.
+- **Android hardware reality**: this is a native Kotlin app targeting API 26+. Every feature must ship with a fallback for older/lower-end devices (API 33- for AGSL, API 31- for dynamic color, low-RAM behavior for 2-core devices). Never silent degradation — one-time non-alarming message + settings re-enable. See ROADMAP Phase 33 + `docs/COMPATIBILITY.md` (to be created).
+- **Kali Linux pentest findings → write to a FILE immediately, not just the agent reply.** Security/pentest agents (running in opencode on the Kali VM) MUST append findings incrementally to `docs/pentest-findings-<YYYY-MM-DD>.md` as they work (one block per finding: severity, evidence, file/line or command output, reproducer), and commit/push after each agent batch. This prevents detail loss when a report grows long or context is truncated. The pentest plan lives in `docs/pentest-plan.md`; the summary report goes to `docs/pentest-report.md`.
+- `allowBackup="false"` + `data_extraction_rules.xml` — never re-enable backup.
+- PBKDF2WithHmacSHA256 600k iterations, AES-256-GCM (12-byte IV, 128-bit tag), AndroidKeyStore-wrapped DEK, in-memory zeroization on lock (`NoteRepository.kt`, `EncryptionService.kt`, `SecurityService.kt`).
+- Never log keys, passwords, or decrypted note content. Never add `INTERNET` usage without a real feature.
+- Known broken things (do NOT trust ROADMAP [x] claims — see ROADMAP.md "POST-AUDIT TRUTH TABLE" @ commit ac781de):
+  - Checksum hashes `noteflow.db`, real file is `noteflow.sqlite` (dead code).
+  - `pointsJson` (stroke geometry) is stored PLAINTEXT; only title/extractedText are encrypted.
+  - "Sync" = local copy to Downloads (fake); AGSL wet-mix shaders unwired (zero call sites); pressure/tilt/timestamp capture broken (reflection hack); FLAG_SECURE absent; R8 disabled; baseline-prof.txt unwired.
+  - WAL checkpoint never executes (cursor closed unstepped) → backups miss latest edits.
+
+## Roadmap state (August 2026)
+- Phases 1–18 marked done in ROADMAP.md are NOT all true — verified facts in "POST-AUDIT TRUTH TABLE" section.
+- Actual work plan: Phases 19 (security recovery) → 20 (performance) → 21 (false-feature fix/remove) → 22 (UX/platform) → 23 (canvas modes: infinite + page-wise) → 24 (import pipeline: PDF/HTML/images) → 25 (old Phases 8–10 remainder) → 26 (moat features) → 27 (bug-fix queue) → 28 (release engineering).
+- Fix bugs in Phase 27 before building new features; each fix needs `file:line` verification, not vibes.
+
+## Docs
+- `docs/pentest-plan.md` — Kali Linux pentest plan for the built APK (jadx/apktool/frida/objection/MobSF). Run findings into `docs/pentest-report.md`.
+- `README.md` — user-facing overview (may contain stale claims; ROADMAP truth table supersedes).

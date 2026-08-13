@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Highly Compatible Solid-Color Premium Launcher Foreground for InkFlow -->
+
+    <!-- Dynamic Cyan Ink Flow Wave (Behind the Nib) -->
+    <path
+        android:pathData="M18,62 C32,74 42,88 54,86 C66,84 76,58 90,50"
+        android:strokeWidth="7"
+        android:strokeColor="#06B6D4"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+
+    <!-- Secondary Purple Flow Highlight -->
+    <path
+        android:pathData="M22,66 C35,77 44,91 54,89 C64,87 73,61 86,54"
+        android:strokeWidth="3.5"
+        android:strokeColor="#A855F7"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+
+    <!-- Outer Gold Plate of Fountain Pen Nib -->
+    <path
+        android:pathData="M54,84 L34,54 L38,24 L70,24 L74,54 Z"
+        android:fillColor="#F59E0B" />
+
+    <!-- Gold Side Accents / Borders -->
+    <path
+        android:pathData="M54,84 L32,54 L36,22 L72,22 L76,54 Z"
+        android:strokeWidth="1.5"
+        android:strokeColor="#D97706" />
+
+    <!-- Inner Silver Plate Inlay -->
+    <path
+        android:pathData="M54,78 L38,53 L41,28 L67,28 L70,53 Z"
+        android:fillColor="#E2E8F0" />
+
+    <!-- Silver Plate Left/Right Side Shadow/Detail -->
+    <path
+        android:pathData="M38,53 L41,28 M70,53 L67,28"
+        android:strokeWidth="1"
+        android:strokeColor="#94A3B8" />
+
+    <!-- Gold Nib Overlay Accent near Tip -->
+    <path
+        android:pathData="M54,81 L46,69 L62,69 Z"
+        android:fillColor="#FCD34D" />
+
+    <!-- Central Nib Slit Line -->
+    <path
+        android:pathData="M54,84 L54,54"
+        android:strokeWidth="1.5"
+        android:strokeColor="#0F172A"
+        android:strokeLineCap="round" />
+
+    <!-- Breather Hole -->
+    <path
+        android:pathData="M54,54 m-3.5,0 a3.5,3.5 0 1,1 7,0 a3.5,3.5 0 1,1 -7,0"
+        android:fillColor="#0F172A" />
+
+    <!-- Clean White Shine Highlight on Left Plate Edge -->
+    <path
+        android:pathData="M43,30 L40,51"
+        android:strokeWidth="1.2"
+        android:strokeColor="#FFFFFF"
+        android:strokeAlpha="0.6"
+        android:strokeLineCap="round" />
+
+    <!-- Clean White Shine Highlight on Right Plate Edge -->
+    <path
+        android:pathData="M65,30 L68,51"
+        android:strokeWidth="0.8"
+        android:strokeColor="#FFFFFF"
+        android:strokeAlpha="0.3"
+        android:strokeLineCap="round" />
+</vector>

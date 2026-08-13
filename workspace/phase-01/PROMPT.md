@@ -23,7 +23,7 @@ Build the initial Android app skeleton in THIS repository.
   workflow file to install the SDK.
 
 ## Definition of done
-- `./gradlew assembleDebug` succeeds on the Ubuntu runner using the
+- `gradle assembleDebug` succeeds on the Ubuntu runner using the
   pre-installed Android SDK at `$ANDROID_HOME` / `$ANDROID_SDK_ROOT`.
 
 ## Constraints

@@ -1,0 +1,10 @@
+Lcom/authorss81/noteflow/MainActivity;
+Lcom/authorss81/noteflow/data/model/Stroke;
+Lcom/authorss81/noteflow/data/model/PointF;
+Lcom/authorss81/noteflow/ui/components/AnnotationCanvasKt;
+Lcom/authorss81/noteflow/utils/RamerDouglasPeucker;
+Lcom/authorss81/noteflow/utils/BitmapPool;
+Lcom/authorss81/noteflow/services/WetCanvasEngine;
+Lcom/authorss81/noteflow/services/WetBrushEngine;
+Lcom/authorss81/noteflow/services/VoiceNoteManager;
+Lcom/authorss81/noteflow/data/repository/NoteRepository;

@@ -1,0 +1,2334 @@
+package com.authorss81.noteflow.ui.screens
+
+import android.net.Uri
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.Article
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.outlined.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import com.authorss81.noteflow.data.model.NotePageEntity
+import com.authorss81.noteflow.data.model.NotebookEntity
+import com.authorss81.noteflow.data.model.SectionEntity
+import com.authorss81.noteflow.services.DocumentTextExtractor
+import com.authorss81.noteflow.services.ImportExportService
+import com.authorss81.noteflow.theme.AppThemeMode
+import com.authorss81.noteflow.ui.components.*
+import com.authorss81.noteflow.ui.viewmodel.NoteflowViewModel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.File
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun HomeScreen(
+    viewModel: NoteflowViewModel,
+    onOpenPage: (NotePageEntity) -> Unit,
+    onOpenGraph: () -> Unit = {}
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    val notebooks by viewModel.notebooks.collectAsState()
+    val selectedNotebook by viewModel.selectedNotebook.collectAsState()
+    val sections by viewModel.sections.collectAsState()
+    val selectedSection by viewModel.selectedSection.collectAsState()
+    val pages by viewModel.pages.collectAsState()
+    val recentPages by viewModel.recentPages.collectAsState()
+    val trashedPages by viewModel.trashedPages.collectAsState()
+
+    val useSidebarLayout by viewModel.useSidebarLayout.collectAsState()
+    val allSections by viewModel.allSections.collectAsState()
+    val allActivePages by viewModel.allActivePages.collectAsState()
+
+    val isFirstRun by viewModel.isFirstRun.collectAsState()
+    val tutorialCompleted by viewModel.tutorialCompleted.collectAsState()
+    val confettiTrigger by viewModel.confettiTrigger.collectAsState()
+
+    var isInitializingLoading by remember { mutableStateOf(true) }
+    LaunchedEffect(Unit) {
+        kotlinx.coroutines.delay(600)
+        isInitializingLoading = false
+    }
+
+    var showWelcomeDialog by remember { mutableStateOf(isFirstRun && !tutorialCompleted) }
+    var showSecurityDialog by remember { mutableStateOf(false) }
+    var showUpdateDialog by remember { mutableStateOf(false) }
+    var showBackupPasswordDialog by remember { mutableStateOf(false) }
+    var showLegacyRestoreConfirmDialog by remember { mutableStateOf(false) }
+    var pendingRestoreBytes by remember { mutableStateOf<ByteArray?>(null) }
+    var backupPasswordInput by remember { mutableStateOf("") }
+    var backupPasswordError by remember { mutableStateOf<String?>(null) }
+    var showTutorial by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
+    var selectedTab by remember { mutableIntStateOf(0) } // 0 = Pages, 1 = Recent, 2 = Tag Vault, 3 = Trash
+    var pageViewMode by remember { mutableIntStateOf(0) } // 0 = List, 1 = Gallery, 2 = Kanban, 3 = Calendar, 4 = Table
+    var showTemplateLibrary by remember { mutableStateOf(false) }
+    var showWebDavDialog by remember { mutableStateOf(false) }
+    var activeTagFilterPath by remember { mutableStateOf<String?>(null) }
+    var activeTagMatchingIds by remember { mutableStateOf<Set<String>?>(null) }
+
+    val isWide = BoxWithConstraintsScope_isWide()
+    val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+
+    var promptDialogType by remember { mutableStateOf<String?>(null) } // "add_nb", "add_sec", "rename_nb", "rename_sec", "rename_page"
+    var targetEntityId by remember { mutableStateOf<String?>(null) }
+    var initialDialogText by remember { mutableStateOf("") }
+
+    var deleteConfirmType by remember { mutableStateOf<String?>(null) } // "nb", "sec", "page", "empty_trash"
+    var deleteWarningMessage by remember { mutableStateOf("") }
+
+    fun performRestore(context: android.content.Context, bytes: ByteArray, password: String? = null) {
+        scope.launch {
+            try {
+                viewModel.repository.closeDatabase()
+                ImportExportService.importBackup(context, bytes, viewModel.repository.encryptionKey, password)
+                Toast.makeText(context, "Restore successful. Restarting...", Toast.LENGTH_LONG).show()
+                kotlinx.coroutines.delay(1000)
+                kotlin.system.exitProcess(0)
+            } catch (e: Exception) {
+                Toast.makeText(context, "Restore failed: ${e.message}", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    // File picker for import
+    val restorePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            scope.launch {
+                try {
+                    val bytes = ImportExportService.readUriBytes(context, uri) ?: return@launch
+                    if (bytes.size >= 5 && String(bytes.copyOfRange(0, 5)) == "NFLB2") {
+                        pendingRestoreBytes = bytes
+                        backupPasswordInput = ""
+                        backupPasswordError = null
+                        showBackupPasswordDialog = true
+                    } else {
+                        // B4/34.1: legacy (unauthenticated) restores replace the whole vault —
+                        // require explicit user confirmation instead of silently doing it.
+                        pendingRestoreBytes = bytes
+                        showLegacyRestoreConfirmDialog = true
+                    }
+                } catch (e: Exception) {
+                    Toast.makeText(context, "Restore failed: ${e.message}", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
+    // Global Vault Search state
+    var globalSearchResults by remember { mutableStateOf<List<NotePageEntity>?>(null) }
+
+    // Tag Manager and Tag Editor dialog state
+    var showTagManagerDialog by remember { mutableStateOf(false) }
+    var tagEditorTargetNotebook by remember { mutableStateOf<NotebookEntity?>(null) }
+    var tagEditorTargetPage by remember { mutableStateOf<NotePageEntity?>(null) }
+
+    LaunchedEffect(searchQuery) {
+        if (searchQuery.isNotBlank()) {
+            kotlinx.coroutines.delay(300)
+            viewModel.searchVault(searchQuery) { results ->
+                globalSearchResults = results
+            }
+        } else {
+            globalSearchResults = null
+        }
+    }
+    var pendingImportUris by remember { mutableStateOf<List<Uri>>(emptyList()) }
+    var showMultiPageImportDialog by remember { mutableStateOf(false) }
+    var selectedImportOrientation by remember { mutableStateOf("AUTO") } // AUTO, PORTRAIT, LANDSCAPE
+
+    fun processImportedUris(uris: List<Uri>, importAsSeparatePages: Boolean, orientationChoice: String = selectedImportOrientation) {
+        scope.launch {
+            var importedCount = 0
+            val isSingleImport = uris.size == 1
+            for (uri in uris) {
+                val bytes = ImportExportService.readUriBytes(context, uri) ?: continue
+                val fileName = ImportExportService.getUriFileName(context, uri)
+                val ext = ImportExportService.extensionOf(fileName)
+
+                if (ext == "html" || ext == "htm") {
+                    val activeNb = viewModel.selectedNotebook.value?.id ?: "nb_default"
+                    val activeSec = viewModel.selectedSection.value?.id ?: "sec_default"
+                    val page = ImportExportService.importHtmlFile(context, uri, viewModel.repository, activeNb, activeSec)
+                    if (page != null) {
+                        viewModel.selectedSection.value?.let { viewModel.selectSection(it) }
+                        if (isSingleImport) onOpenPage(page)
+                        importedCount++
+                    }
+                } else if (ext == "zip") {
+                    val activeNb = viewModel.selectedNotebook.value?.id ?: "nb_default"
+                    val activeSec = viewModel.selectedSection.value?.id ?: "sec_default"
+                    var count = ImportExportService.importObsidianVaultZip(context, uri, viewModel.repository, activeNb, activeSec)
+                    if (count == 0) {
+                        count = ImportExportService.importHtmlZipOrFolder(context, uri, viewModel.repository, activeNb, activeSec)
+                    }
+                    if (count > 0) {
+                        viewModel.selectedSection.value?.let { viewModel.selectSection(it) }
+                        importedCount += count
+                    }
+                } else if (ext == "docx") {
+                    val markdownText = ImportExportService.convertDocxToMarkdown(bytes)
+                    val mdTitle = fileName.replace(".docx", ".md")
+                    val path = ImportExportService.persistFile(context, mdTitle, markdownText.toByteArray())
+                    viewModel.addPage(
+                        title = mdTitle,
+                        sourceFilePath = path,
+                        sourceFileType = "text",
+                        extractedText = markdownText,
+                        onCreated = if (isSingleImport) onOpenPage else null
+                    )
+                    importedCount++
+                } else if (ext == "md" || ext == "txt") {
+                    val path = ImportExportService.persistFile(context, fileName, bytes)
+                    val textContent = String(bytes, Charsets.UTF_8)
+                    viewModel.addPage(
+                        title = fileName,
+                        sourceFilePath = path,
+                        sourceFileType = "text",
+                        extractedText = textContent,
+                        onCreated = if (isSingleImport) onOpenPage else null
+                    )
+                    importedCount++
+                } else {
+                    val type = if (ImportExportService.isPdf(ext)) "pdf" else if (ImportExportService.isImage(ext)) "image" else "text"
+                    val path = ImportExportService.persistFile(context, fileName, bytes)
+
+                    val (extractedText, pageCount, isLandscapeFormat) = withContext(Dispatchers.IO) {
+                        val extracted = DocumentTextExtractor.extractText(File(path), type)
+                        val count = ImportExportService.getPdfPageCount(path)
+                        var landscapeFormat = false
+                        try {
+                            if (type == "image") {
+                                val options = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                                android.graphics.BitmapFactory.decodeFile(path, options)
+                                landscapeFormat = options.outWidth > options.outHeight
+                            } else if (type == "pdf") {
+                                val pfd = android.os.ParcelFileDescriptor.open(File(path), android.os.ParcelFileDescriptor.MODE_READ_ONLY)
+                                val renderer = android.graphics.pdf.PdfRenderer(pfd)
+                                if (renderer.pageCount > 0) {
+                                    val pdfPage = renderer.openPage(0)
+                                    landscapeFormat = pdfPage.width > pdfPage.height
+                                    pdfPage.close()
+                                }
+                                renderer.close()
+                                pfd.close()
+                            }
+                        } catch (e: Exception) {
+                            landscapeFormat = false
+                        }
+                        Triple(extracted, count, landscapeFormat)
+                    }
+
+                    // Determine format / orientation tag
+                    val orientationTag = when (orientationChoice) {
+                        "LANDSCAPE" -> "orientation_landscape"
+                        "PORTRAIT" -> "orientation_portrait"
+                        else -> if (isLandscapeFormat) "orientation_landscape" else "orientation_portrait"
+                    }
+
+                    if (type == "pdf" && pageCount > 1 && importAsSeparatePages) {
+                        // Option A: Split into Separate Note Pages
+                        val baseTitle = fileName.substringBeforeLast('.')
+                        for (i in 0 until pageCount) {
+                            viewModel.addPage(
+                                title = "$baseTitle - Page ${i + 1}",
+                                sourceFilePath = path,
+                                sourceFileType = "pdf",
+                                extractedText = if (i == 0) extractedText else "",
+                                tags = orientationTag
+                            )
+                            importedCount++
+                        }
+                    } else {
+                        // Option B: Continuous Infinite Canvas (single entry displaying infinite canvas)
+                        viewModel.addPage(
+                            title = fileName,
+                            sourceFilePath = path,
+                            sourceFileType = type,
+                            extractedText = extractedText,
+                            tags = orientationTag,
+                            onCreated = if (isSingleImport) onOpenPage else null
+                        )
+                        importedCount++
+                    }
+                }
+            }
+
+            if (importedCount > 0) {
+                Toast.makeText(context, "Imported $importedCount page(s)", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    val filePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris: List<Uri> ->
+        if (uris.isNotEmpty()) {
+            val hasPdf = uris.any { uri ->
+                val name = ImportExportService.getUriFileName(context, uri)
+                ImportExportService.isPdf(ImportExportService.extensionOf(name))
+            }
+            if (hasPdf || uris.size > 1) {
+                pendingImportUris = uris
+                showMultiPageImportDialog = true
+            } else {
+                processImportedUris(uris, importAsSeparatePages = false)
+            }
+        }
+    }
+
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        gesturesEnabled = useSidebarLayout && !isWide,
+        drawerContent = {
+            if (useSidebarLayout && !isWide) {
+                ModalDrawerSheet(
+                    modifier = Modifier.width(300.dp)
+                ) {
+                    UnifiedSidebar(
+                        notebooks = notebooks,
+                        allSections = allSections,
+                        allActivePages = allActivePages,
+                        selectedNotebook = selectedNotebook,
+                        selectedSection = selectedSection,
+                        onSelectNotebook = { viewModel.selectNotebook(it) },
+                        onSelectSection = { viewModel.selectSection(it) },
+                        onSelectPage = { page ->
+                            scope.launch { drawerState.close() }
+                            onOpenPage(page)
+                        },
+                        onAddNotebook = {
+                            promptDialogType = "add_nb"
+                            initialDialogText = ""
+                        },
+                        onAddSection = { nb ->
+                            viewModel.selectNotebook(nb)
+                            promptDialogType = "add_sec"
+                            initialDialogText = ""
+                        },
+                        onAddPage = { sec ->
+                            viewModel.selectSection(sec)
+                            viewModel.addPage("New Page", onCreated = onOpenPage)
+                        },
+                        onRenameNotebook = { nb ->
+                            promptDialogType = "rename_nb"
+                            targetEntityId = nb.id
+                            initialDialogText = nb.name
+                        },
+                        onDeleteNotebook = { nb ->
+                            targetEntityId = nb.id
+                            scope.launch {
+                                val (secCount, pageCount) = viewModel.repository.getNotebookCounts(nb.id)
+                                deleteWarningMessage = "Are you sure you want to delete '${nb.name}'? Deleting this notebook will permanently delete $secCount section(s) and $pageCount page(s)."
+                                deleteConfirmType = "nb"
+                            }
+                        },
+                        onRenameSection = { sec ->
+                            promptDialogType = "rename_sec"
+                            targetEntityId = sec.id
+                            initialDialogText = sec.name
+                        },
+                        onDeleteSection = { sec ->
+                            targetEntityId = sec.id
+                            scope.launch {
+                                val pageCount = viewModel.repository.getSectionCounts(sec.id)
+                                deleteWarningMessage = "Are you sure you want to delete '${sec.name}'? Deleting this section/quick notes will permanently delete $pageCount page(s)."
+                                deleteConfirmType = "sec"
+                            }
+                        },
+                        onRenamePage = { page ->
+                            initialDialogText = page.title
+                            targetEntityId = page.id
+                            promptDialogType = "rename_page"
+                        },
+                        onDeletePage = { page ->
+                            scope.launch {
+                                viewModel.repository.trashPage(page.id)
+                            }
+                        },
+                        onTogglePinPage = { page ->
+                            scope.launch {
+                                viewModel.repository.togglePin(page.id, !page.pinned)
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        }
+    ) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            Scaffold(
+                topBar = {
+                    TopAppBar(
+                        title = { Text("InkFlow") },
+                        navigationIcon = {
+                            if (useSidebarLayout && !isWide) {
+                                IconButton(onClick = {
+                                    scope.launch {
+                                        drawerState.open()
+                                    }
+                                }) {
+                                    Icon(Icons.Outlined.Menu, contentDescription = "Open Navigation Sidebar")
+                                }
+                            }
+                        },
+                        actions = {
+                        IconButton(onClick = {
+                            viewModel.openOrCreateDailyNote(context) { dailyPage ->
+                                onOpenPage(dailyPage)
+                            }
+                        }) {
+                            Icon(Icons.Outlined.Today, contentDescription = "Today's Journal Note", tint = MaterialTheme.colorScheme.primary)
+                        }
+                        IconButton(onClick = onOpenGraph) {
+                            Icon(Icons.Outlined.Hub, contentDescription = "Knowledge Graph View", tint = MaterialTheme.colorScheme.primary)
+                        }
+                        ThemeMenu(viewModel = viewModel)
+                        val showStrokePreviewsInPicker by viewModel.showStrokePreviewsInPicker.collectAsState()
+                        val databaseIntegrityCheckEnabled by viewModel.databaseIntegrityCheckEnabled.collectAsState()
+                        MaintenanceMenu(
+                            useSidebarLayout = useSidebarLayout,
+                            onToggleSidebarLayout = { viewModel.setUseSidebarLayout(it) },
+                            showStrokePreviews = showStrokePreviewsInPicker,
+                            onToggleStrokePreviews = { viewModel.toggleShowStrokePreviewsInPicker(it) },
+                            databaseIntegrityCheckEnabled = databaseIntegrityCheckEnabled,
+                            onToggleDatabaseIntegrityCheck = { viewModel.setDatabaseIntegrityCheckEnabled(it) },
+                            onOpenTagManager = { showTagManagerDialog = true },
+                            onOpenTutorial = { showTutorial = true },
+                            onOpenSecurity = { showSecurityDialog = true },
+                            onOpenUpdate = { showUpdateDialog = true },
+                            onBackup = {
+                                if (viewModel.hasMasterPassword.value) {
+                                    backupPasswordInput = ""
+                                    backupPasswordError = null
+                                    showBackupPasswordDialog = true
+                                } else {
+                                    scope.launch {
+                                        try {
+                                            viewModel.repository.checkpointWal()
+                                            withContext(Dispatchers.IO) {
+                                                viewModel.repository.stampDatabaseChecksum(context)
+                                            }
+                                            val cacheFile = ImportExportService.exportBackup(context, viewModel.repository.encryptionKey)
+                                            val downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
+                                            val destFile = File(downloadsDir, cacheFile.name)
+                                            withContext(Dispatchers.IO) {
+                                                cacheFile.copyTo(destFile, overwrite = true)
+                                            }
+                                            Toast.makeText(context, "Backup saved to Downloads: ${destFile.name}", Toast.LENGTH_LONG).show()
+                                        } catch (e: Exception) {
+                                            Toast.makeText(context, "Backup failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                }
+                            },
+                            onRestore = {
+                                restorePickerLauncher.launch(arrayOf("*/*"))
+                            },
+                            onExportObsidianVault = {
+                                scope.launch {
+                                    val pages = viewModel.pages.value
+                                    val zipFile = ImportExportService.exportObsidianVaultZip(context, "SmoothNotes_Vault", pages, viewModel.repository)
+                                    if (zipFile != null && zipFile.exists()) {
+                                        Toast.makeText(context, "Obsidian Vault saved to Downloads: ${zipFile.name}", Toast.LENGTH_LONG).show()
+                                    } else {
+                                        Toast.makeText(context, "Failed to export Obsidian vault", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            },
+                            onExportHtmlVault = {
+                                scope.launch {
+                                    val pages = viewModel.pages.value
+                                    val zipFile = ImportExportService.exportVaultToHtmlZip(context, "SmoothNotes_Site", pages, viewModel.repository)
+                                    if (zipFile != null && zipFile.exists()) {
+                                        Toast.makeText(context, "HTML Site saved to Downloads: ${zipFile.name}", Toast.LENGTH_LONG).show()
+                                    } else {
+                                        Toast.makeText(context, "Failed to export HTML site", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            }
+                        )
+                    }
+                )
+            },
+            floatingActionButton = {
+                FloatingActionButton(
+                    onClick = {
+                        viewModel.addPage("New Page", onCreated = onOpenPage)
+                    }
+                ) {
+                    Icon(Icons.Outlined.Add, contentDescription = "New Page")
+                }
+            }
+        ) { padding ->
+            Row(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+            ) {
+                // Wide Screen Notebook & Section Sidebar or Mobile layout
+                val isWide = BoxWithConstraintsScope_isWide()
+
+                if (isWide) {
+                    if (useSidebarLayout) {
+                        UnifiedSidebar(
+                            notebooks = notebooks,
+                            allSections = allSections,
+                            allActivePages = allActivePages,
+                            selectedNotebook = selectedNotebook,
+                            selectedSection = selectedSection,
+                            onSelectNotebook = { viewModel.selectNotebook(it) },
+                            onSelectSection = { viewModel.selectSection(it) },
+                            onSelectPage = onOpenPage,
+                            onAddNotebook = {
+                                promptDialogType = "add_nb"
+                                initialDialogText = ""
+                            },
+                            onAddSection = { nb ->
+                                viewModel.selectNotebook(nb)
+                                promptDialogType = "add_sec"
+                                initialDialogText = ""
+                            },
+                            onAddPage = { sec ->
+                                viewModel.selectSection(sec)
+                                viewModel.addPage("New Page", onCreated = onOpenPage)
+                            },
+                            onRenameNotebook = { nb ->
+                                promptDialogType = "rename_nb"
+                                targetEntityId = nb.id
+                                initialDialogText = nb.name
+                            },
+                            onDeleteNotebook = { nb ->
+                                targetEntityId = nb.id
+                                scope.launch {
+                                    val (secCount, pageCount) = viewModel.repository.getNotebookCounts(nb.id)
+                                    deleteWarningMessage = "Are you sure you want to delete '${nb.name}'? Deleting this notebook will permanently delete $secCount section(s) and $pageCount page(s)."
+                                    deleteConfirmType = "nb"
+                                }
+                            },
+                            onRenameSection = { sec ->
+                                promptDialogType = "rename_sec"
+                                targetEntityId = sec.id
+                                initialDialogText = sec.name
+                            },
+                            onDeleteSection = { sec ->
+                                targetEntityId = sec.id
+                                scope.launch {
+                                    val pageCount = viewModel.repository.getSectionCounts(sec.id)
+                                    deleteWarningMessage = "Are you sure you want to delete '${sec.name}'? Deleting this section/quick notes will permanently delete $pageCount page(s)."
+                                    deleteConfirmType = "sec"
+                                }
+                            },
+                            onRenamePage = { page ->
+                                initialDialogText = page.title
+                                targetEntityId = page.id
+                                promptDialogType = "rename_page"
+                            },
+                            onDeletePage = { page ->
+                                scope.launch {
+                                    viewModel.repository.trashPage(page.id)
+                                }
+                            },
+                            onTogglePinPage = { page ->
+                                scope.launch {
+                                    viewModel.repository.togglePin(page.id, !page.pinned)
+                                }
+                            },
+                            modifier = Modifier
+                                .width(280.dp)
+                                .fillMaxHeight()
+                        )
+                        VerticalDivider()
+                    } else {
+                        NotebookPanel(
+                            notebooks = notebooks,
+                            selectedNotebook = selectedNotebook,
+                            onSelectNotebook = { viewModel.selectNotebook(it) },
+                            onAddNotebook = {
+                                promptDialogType = "add_nb"
+                                initialDialogText = ""
+                            },
+                            onRenameNotebook = { nb ->
+                                promptDialogType = "rename_nb"
+                                targetEntityId = nb.id
+                                initialDialogText = nb.name
+                            },
+                            onDeleteNotebook = { nb ->
+                                targetEntityId = nb.id
+                                scope.launch {
+                                    val (secCount, pageCount) = viewModel.repository.getNotebookCounts(nb.id)
+                                    deleteWarningMessage = "Are you sure you want to delete '${nb.name}'? Deleting this notebook will permanently delete $secCount section(s) and $pageCount page(s)."
+                                    deleteConfirmType = "nb"
+                                }
+                            },
+                            onEditTagsNotebook = { nb ->
+                                tagEditorTargetNotebook = nb
+                            },
+                            onExportVaultNotebook = { nb ->
+                                Toast.makeText(context, "Exporting Notebook Vault ZIP...", Toast.LENGTH_SHORT).show()
+                                viewModel.exportNotebookVaultZip(context, nb.id) { zipFile ->
+                                    if (zipFile != null) {
+                                        Toast.makeText(context, "Exported Vault ZIP to Downloads: ${zipFile.name}", Toast.LENGTH_LONG).show()
+                                    } else {
+                                        Toast.makeText(context, "Vault export failed", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            },
+                            modifier = Modifier
+                                .width(260.dp)
+                                .fillMaxHeight()
+                        )
+
+                        VerticalDivider()
+
+                        SectionPanel(
+                            sections = sections,
+                            selectedSection = selectedSection,
+                            onSelectSection = { viewModel.selectSection(it) },
+                            onAddSection = {
+                                promptDialogType = "add_sec"
+                                initialDialogText = ""
+                            },
+                            onRenameSection = { sec ->
+                                promptDialogType = "rename_sec"
+                                targetEntityId = sec.id
+                                initialDialogText = sec.name
+                            },
+                            onDeleteSection = { sec ->
+                                targetEntityId = sec.id
+                                scope.launch {
+                                    val pageCount = viewModel.repository.getSectionCounts(sec.id)
+                                    deleteWarningMessage = "Are you sure you want to delete '${sec.name}'? Deleting this section/quick notes will permanently delete $pageCount page(s)."
+                                    deleteConfirmType = "sec"
+                                }
+                            },
+                            onExportVaultSection = { sec ->
+                                Toast.makeText(context, "Exporting Section Vault ZIP...", Toast.LENGTH_SHORT).show()
+                                viewModel.exportSectionVaultZip(context, sec.id) { zipFile ->
+                                    if (zipFile != null) {
+                                        Toast.makeText(context, "Exported Vault ZIP to Downloads: ${zipFile.name}", Toast.LENGTH_LONG).show()
+                                    } else {
+                                        Toast.makeText(context, "Vault export failed", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            },
+                            modifier = Modifier
+                                .width(240.dp)
+                                .fillMaxHeight()
+                        )
+
+                        VerticalDivider()
+                    }
+                }
+
+                // Main Content Panel (Pages)
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .padding(16.dp)
+                ) {
+                    if (useSidebarLayout) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Outlined.FolderOpen,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = buildString {
+                                    append(selectedNotebook?.name ?: "No Notebook")
+                                    append("  /  ")
+                                    append(selectedSection?.name ?: "No Section")
+                                },
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    } else if (!isWide) {
+                        NotebookAndSectionSelectorBar(
+                            notebooks = notebooks,
+                            selectedNotebook = selectedNotebook,
+                            sections = sections,
+                            selectedSection = selectedSection,
+                            onSelectNotebook = { viewModel.selectNotebook(it) },
+                            onSelectSection = { viewModel.selectSection(it) },
+                            onAddNotebook = {
+                                promptDialogType = "add_nb"
+                                initialDialogText = ""
+                            },
+                            onAddSection = {
+                                promptDialogType = "add_sec"
+                                initialDialogText = ""
+                            },
+                            onRenameNotebook = { nb ->
+                                promptDialogType = "rename_nb"
+                                targetEntityId = nb.id
+                                initialDialogText = nb.name
+                            },
+                            onDeleteNotebook = { nb ->
+                                targetEntityId = nb.id
+                                scope.launch {
+                                    val (secCount, pageCount) = viewModel.repository.getNotebookCounts(nb.id)
+                                    deleteWarningMessage = "Are you sure you want to delete '${nb.name}'? Deleting this notebook will permanently delete $secCount section(s) and $pageCount page(s)."
+                                    deleteConfirmType = "nb"
+                                }
+                            },
+                            onRenameSection = { sec ->
+                                promptDialogType = "rename_sec"
+                                targetEntityId = sec.id
+                                initialDialogText = sec.name
+                            },
+                            onDeleteSection = { sec ->
+                                targetEntityId = sec.id
+                                scope.launch {
+                                    val pageCount = viewModel.repository.getSectionCounts(sec.id)
+                                    deleteWarningMessage = "Are you sure you want to delete '${sec.name}'? Deleting this section/quick notes will permanently delete $pageCount page(s)."
+                                    deleteConfirmType = "sec"
+                                }
+                            },
+                            onEditTagsNotebook = { nb ->
+                                tagEditorTargetNotebook = nb
+                            }
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                    }
+
+                    // Search & Import Bar
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        TextField(
+                            value = searchQuery,
+                            onValueChange = { searchQuery = it },
+                            placeholder = { Text("Search notes...", maxLines = 1, style = MaterialTheme.typography.bodyMedium) },
+                            leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null, modifier = Modifier.size(20.dp)) },
+                            trailingIcon = if (searchQuery.isNotEmpty()) {
+                                {
+                                    IconButton(onClick = { searchQuery = "" }) {
+                                        Icon(Icons.Outlined.Close, contentDescription = "Clear search", modifier = Modifier.size(20.dp))
+                                    }
+                                }
+                            } else null,
+                            singleLine = true,
+                            shape = androidx.compose.foundation.shape.RoundedCornerShape(24.dp),
+                            colors = TextFieldDefaults.colors(
+                                focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                                focusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
+                                unfocusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
+                                disabledIndicatorColor = androidx.compose.ui.graphics.Color.Transparent
+                            ),
+                            textStyle = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.weight(1f)
+                        )
+
+                        FilledTonalIconButton(
+                            onClick = { showTemplateLibrary = true },
+                            modifier = Modifier.size(48.dp)
+                        ) {
+                            Icon(Icons.Outlined.Dashboard, contentDescription = "Templates")
+                        }
+
+                        FilledTonalIconButton(
+                            onClick = {
+                                filePickerLauncher.launch(
+                                    arrayOf("*/*")
+                                )
+                            },
+                            modifier = Modifier.size(48.dp)
+                        ) {
+                            Icon(Icons.Outlined.FileUpload, contentDescription = "Import files")
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // Navigation Tabs: Current Section, Recent, Tag Vault, Trash
+                    PrimaryTabRow(selectedTabIndex = selectedTab) {
+                        Tab(
+                            selected = selectedTab == 0,
+                            onClick = { selectedTab = 0 },
+                            text = { Text("Pages") }
+                        )
+                        Tab(
+                            selected = selectedTab == 1,
+                            onClick = { selectedTab = 1 },
+                            text = { Text("Recent") }
+                        )
+                        Tab(
+                            selected = selectedTab == 2,
+                            onClick = { selectedTab = 2 },
+                            text = { Text("Tag Vault") }
+                        )
+                        Tab(
+                            selected = selectedTab == 3,
+                            onClick = { selectedTab = 3 },
+                            text = { Text("Trash") }
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    if (selectedTab == 0) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState())
+                                .padding(bottom = 8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            FilterChip(
+                                selected = pageViewMode == 0,
+                                onClick = { pageViewMode = 0 },
+                                label = { Text("List", maxLines = 1) }
+                            )
+                            FilterChip(
+                                selected = pageViewMode == 1,
+                                onClick = { pageViewMode = 1 },
+                                label = { Text("Gallery", maxLines = 1) }
+                            )
+                            FilterChip(
+                                selected = pageViewMode == 2,
+                                onClick = { pageViewMode = 2 },
+                                label = { Text("Kanban", maxLines = 1) }
+                            )
+                            FilterChip(
+                                selected = pageViewMode == 3,
+                                onClick = { pageViewMode = 3 },
+                                label = { Text("Calendar", maxLines = 1) }
+                            )
+                            FilterChip(
+                                selected = pageViewMode == 4,
+                                onClick = { pageViewMode = 4 },
+                                label = { Text("Table", maxLines = 1) }
+                            )
+                        }
+                    }
+
+                    if (selectedTab == 2) {
+                        TagExplorerView(
+                            viewModel = viewModel,
+                            activeTagFilter = activeTagFilterPath,
+                            onSelectTagFilter = { tagPath, pageIds ->
+                                activeTagFilterPath = tagPath
+                                activeTagMatchingIds = pageIds
+                                if (tagPath != null) {
+                                    selectedTab = 0 // Switch to Pages tab to show filtered notes!
+                                }
+                            }
+                        )
+                    } else {
+                        val activePageList = if (searchQuery.isNotBlank()) {
+                            globalSearchResults ?: emptyList()
+                        } else if (activeTagMatchingIds != null) {
+                            val matching = activeTagMatchingIds!!
+                            pages.filter { it.id in matching }
+                        } else {
+                            when (selectedTab) {
+                                1 -> recentPages
+                                3 -> trashedPages
+                                else -> pages
+                            }
+                        }
+
+                        if (activeTagFilterPath != null) {
+                            Surface(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 8.dp),
+                                shape = RoundedCornerShape(8.dp),
+                                color = MaterialTheme.colorScheme.primaryContainer
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text("Filtered by tag: #${activeTagFilterPath}", style = MaterialTheme.typography.bodyMedium)
+                                    IconButton(
+                                        onClick = {
+                                            activeTagFilterPath = null
+                                            activeTagMatchingIds = null
+                                        },
+                                        modifier = Modifier.size(24.dp)
+                                    ) {
+                                        Icon(Icons.Outlined.Close, contentDescription = "Clear Tag Filter")
+                                    }
+                                }
+                            }
+                        }
+
+                        if (selectedTab == 3 && trashedPages.isNotEmpty()) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.End
+                            ) {
+                                TextButton(
+                                    onClick = { deleteConfirmType = "empty_trash" }
+                                ) {
+                                    Icon(Icons.Outlined.DeleteForever, contentDescription = null)
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Empty Trash")
+                                }
+                            }
+                        }
+
+                        if (activePageList.isEmpty()) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(32.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    modifier = Modifier.padding(24.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.AutoMirrored.Outlined.Article,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(64.dp),
+                                        tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+                                    )
+                                    Spacer(modifier = Modifier.height(16.dp))
+                                    if (selectedTab == 3) {
+                                        Text(
+                                            text = "Trash is empty",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    } else {
+                                        Text(
+                                            text = "YOUR VAULT IS QUIET",
+                                            style = MaterialTheme.typography.titleMedium,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text(
+                                            text = "Link notes with [[wikilinks]] to grow your knowledge graph.",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                        )
+                                    }
+                                }
+                            }
+                        } else {
+                            if (selectedTab == 0) {
+                                when (pageViewMode) {
+                                    1 -> GalleryView(pages = activePageList, viewModel = viewModel, onOpenPage = onOpenPage)
+                                    2 -> KanbanBoardView(pages = activePageList, viewModel = viewModel, onOpenPage = onOpenPage)
+                                    3 -> CalendarView(pages = activePageList, viewModel = viewModel, onOpenPage = onOpenPage)
+                                    4 -> SpreadsheetTableView(pages = activePageList, viewModel = viewModel, onOpenPage = onOpenPage)
+                                    else -> {
+                                        LazyColumn(
+                                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                                            modifier = Modifier.fillMaxSize()
+                                        ) {
+                                            items(activePageList, key = { it.id }) { page ->
+                                                NotePageCard(
+                                                    page = page,
+                                                    isTrash = false,
+                                                    onClick = { onOpenPage(page) },
+                                                    onTogglePin = { viewModel.togglePinPage(page.id, page.pinned) },
+                                                    onRename = {
+                                                        targetEntityId = page.id
+                                                        initialDialogText = page.title
+                                                        promptDialogType = "rename_page"
+                                                    },
+                                                    onTrash = { viewModel.trashPage(page.id) },
+                                                    onRestore = { viewModel.restorePage(page.id) },
+                                                    onDeletePermanent = {
+                                                        targetEntityId = page.id
+                                                        deleteConfirmType = "page_perm"
+                                                    },
+                                                    onEditTags = {
+                                                        tagEditorTargetPage = page
+                                                    }
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            } else {
+                                LazyColumn(
+                                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                                    modifier = Modifier.fillMaxSize()
+                                ) {
+                                    items(activePageList, key = { it.id }) { page ->
+                                        NotePageCard(
+                                            page = page,
+                                            isTrash = selectedTab == 3,
+                                            onClick = { onOpenPage(page) },
+                                            onTogglePin = { viewModel.togglePinPage(page.id, page.pinned) },
+                                            onRename = {
+                                                targetEntityId = page.id
+                                                initialDialogText = page.title
+                                                promptDialogType = "rename_page"
+                                            },
+                                            onTrash = { viewModel.trashPage(page.id) },
+                                            onRestore = { viewModel.restorePage(page.id) },
+                                            onDeletePermanent = {
+                                                targetEntityId = page.id
+                                                deleteConfirmType = "page_perm"
+                                            },
+                                            onEditTags = {
+                                                tagEditorTargetPage = page
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (showTemplateLibrary) {
+            TemplateLibraryDialog(
+                viewModel = viewModel,
+                onDismiss = { showTemplateLibrary = false },
+                onTemplateApplied = {
+                    Toast.makeText(context, "Workspace template applied successfully!", Toast.LENGTH_SHORT).show()
+                }
+            )
+        }
+
+        if (showWelcomeDialog) {
+            WelcomeDialog(
+                onDismiss = {
+                    showWelcomeDialog = false
+                    viewModel.markFirstRunComplete()
+                    viewModel.markTutorialCompleted()
+                }
+            )
+        }
+
+        if (showSecurityDialog) {
+            SecuritySettingsDialog(
+                viewModel = viewModel,
+                onDismiss = { showSecurityDialog = false }
+            )
+        }
+
+        if (showLegacyRestoreConfirmDialog) {
+            AlertDialog(
+                onDismissRequest = {
+                    showLegacyRestoreConfirmDialog = false
+                    pendingRestoreBytes = null
+                },
+                title = { Text("Restore legacy backup?") },
+                text = {
+                    Text(
+                        "This backup is NOT protected by a backup password. " +
+                            "Restoring it will REPLACE ALL pages, strokes and settings on this device " +
+                            "with the backup's contents. Continue?"
+                    )
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            showLegacyRestoreConfirmDialog = false
+                            val pending = pendingRestoreBytes
+                            pendingRestoreBytes = null
+                            if (pending != null) performRestore(context, pending)
+                        }
+                    ) { Text("Restore & Replace All") }
+                },
+                dismissButton = {
+                    TextButton(
+                        onClick = {
+                            showLegacyRestoreConfirmDialog = false
+                            pendingRestoreBytes = null
+                        }
+                    ) { Text("Cancel") }
+                }
+            )
+        }
+
+        if (showBackupPasswordDialog) {
+            AlertDialog(
+                onDismissRequest = {
+                    showBackupPasswordDialog = false
+                    pendingRestoreBytes = null
+                },
+                title = { Text(if (pendingRestoreBytes != null) "Restore Backup" else "Backup Password") },
+                text = {
+                    Column {
+                        Text(
+                            if (pendingRestoreBytes != null) {
+                                "Enter the password used to create this backup."
+                            } else {
+                                "Enter your Master Password to encrypt this backup. It can be restored on any device with this password."
+                            }
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = backupPasswordInput,
+                            onValueChange = {
+                                backupPasswordInput = it
+                                backupPasswordError = null
+                            },
+                            label = { Text("Password") },
+                            singleLine = true,
+                            visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                            isError = backupPasswordError != null,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        backupPasswordError?.let {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            val pending = pendingRestoreBytes
+                            if (pending != null) {
+                                if (backupPasswordInput.isBlank()) {
+                                    backupPasswordError = "Password required for this backup"
+                                } else {
+                                    showBackupPasswordDialog = false
+                                    pendingRestoreBytes = null
+                                    performRestore(context, pending, backupPasswordInput)
+                                }
+                            } else {
+                                if (backupPasswordInput.length < 6) {
+                                    backupPasswordError = "Backup password must be at least 6 characters"
+                                } else if (!viewModel.isMasterPasswordValid(backupPasswordInput)) {
+                                    backupPasswordError = "Incorrect master password"
+                                } else {
+                                    scope.launch {
+                                        try {
+                                            viewModel.repository.checkpointWal()
+                                            withContext(Dispatchers.IO) {
+                                                viewModel.repository.stampDatabaseChecksum(context)
+                                            }
+                                            val cacheFile = ImportExportService.exportBackup(
+                                                context,
+                                                viewModel.repository.encryptionKey,
+                                                backupPasswordInput
+                                            )
+                                            val downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
+                                            val destFile = File(downloadsDir, cacheFile.name)
+                                            withContext(Dispatchers.IO) {
+                                                cacheFile.copyTo(destFile, overwrite = true)
+                                            }
+                                            showBackupPasswordDialog = false
+                                            Toast.makeText(context, "Password-protected backup saved to Downloads: ${destFile.name}", Toast.LENGTH_LONG).show()
+                                        } catch (e: Exception) {
+                                            backupPasswordError = "Backup failed: ${e.message}"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    ) {
+                        Text(if (pendingRestoreBytes != null) "Restore" else "Backup")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = {
+                        showBackupPasswordDialog = false
+                        pendingRestoreBytes = null
+                    }) {
+                        Text("Cancel")
+                    }
+                }
+            )
+        }
+
+        if (showUpdateDialog) {
+            AppUpdateDialog(
+                onDismiss = { showUpdateDialog = false }
+            )
+        }
+
+        if (showWebDavDialog) {
+            com.authorss81.noteflow.ui.components.WebDavSyncDialog(
+                viewModel = viewModel,
+                onDismiss = { showWebDavDialog = false }
+            )
+        }
+
+        if (showMultiPageImportDialog && pendingImportUris.isNotEmpty()) {
+            AlertDialog(
+                onDismissRequest = {
+                    showMultiPageImportDialog = false
+                    pendingImportUris = emptyList()
+                },
+                title = {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        IconButton(onClick = {
+                            showMultiPageImportDialog = false
+                            pendingImportUris = emptyList()
+                        }) {
+                            Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
+                        }
+                        Text("Import Multi-Page Document")
+                    }
+                },
+                text = {
+                    Column {
+                        Text(
+                            text = "Page Format & Orientation:",
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            FilterChip(
+                                selected = selectedImportOrientation == "AUTO",
+                                onClick = { selectedImportOrientation = "AUTO" },
+                                label = { Text("Auto (Detect)") },
+                                leadingIcon = { Icon(Icons.Outlined.AutoAwesome, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                            )
+                            FilterChip(
+                                selected = selectedImportOrientation == "PORTRAIT",
+                                onClick = { selectedImportOrientation = "PORTRAIT" },
+                                label = { Text("Portrait") },
+                                leadingIcon = { Icon(Icons.Outlined.CropPortrait, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                            )
+                            FilterChip(
+                                selected = selectedImportOrientation == "LANDSCAPE",
+                                onClick = { selectedImportOrientation = "LANDSCAPE" },
+                                label = { Text("Landscape") },
+                                leadingIcon = { Icon(Icons.Outlined.CropLandscape, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text(
+                            text = "Select document layout structure:",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Card(
+                            onClick = {
+                                showMultiPageImportDialog = false
+                                val uris = pendingImportUris
+                                pendingImportUris = emptyList()
+                                processImportedUris(uris, importAsSeparatePages = false)
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(16.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Outlined.Layers, contentDescription = null)
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Column {
+                                    Text("Infinite Canvas (Continuous)", style = MaterialTheme.typography.titleMedium)
+                                    Text("All pages rendered vertically on a zoomable, scrollable infinite canvas.", style = MaterialTheme.typography.bodySmall)
+                                }
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Card(
+                            onClick = {
+                                showMultiPageImportDialog = false
+                                val uris = pendingImportUris
+                                pendingImportUris = emptyList()
+                                processImportedUris(uris, importAsSeparatePages = true)
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(16.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Outlined.FindInPage, contentDescription = null)
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Column {
+                                    Text("Separate Note Pages", style = MaterialTheme.typography.titleMedium)
+                                    Text("Import each document page as an individual note entry.", style = MaterialTheme.typography.bodySmall)
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton = {},
+                dismissButton = {
+                    TextButton(onClick = {
+                        showMultiPageImportDialog = false
+                        pendingImportUris = emptyList()
+                    }) {
+                        Text("Cancel")
+                    }
+                }
+            )
+        }
+
+        if (showTutorial) {
+            InteractiveTutorial(
+                steps = listOf(
+                    TutorialStep(
+                        title = "Welcome to InkFlow",
+                        description = "InkFlow is a premier, offline-first private canvas. We pair Plus Jakarta Sans headings with Playfair Display body text over warm neutral layouts with generous negative space to minimize mental friction.",
+                        icon = Icons.Outlined.Book,
+                        category = "Welcome"
+                    ),
+                    TutorialStep(
+                        title = "Notebooks & Sections",
+                        description = "Organize notes intuitively. On wide screens, the app adapts into a multi-pane layout with a sidebar navigation rail. On standard phones, it collapses into a compact single-pane layout optimized for accessibility.",
+                        icon = Icons.Outlined.Dashboard,
+                        category = "Layout"
+                    ),
+                    TutorialStep(
+                        title = "Infinite Canvas & Page Layouts",
+                        description = "Switch between Infinite Canvas for dynamic brainstorming, and Page-by-Page layout for printing or linear notes. Gestures scale from 0.5x to 4.0x, utilizing pure GPU transforms to eliminate rendering stutter.",
+                        icon = Icons.Outlined.Gesture,
+                        category = "Canvas"
+                    ),
+                    TutorialStep(
+                        title = "Advanced Brushes & Shaders",
+                        description = "Write with high-performance calligraphy, airbrush, and pens. On compatible devices, experience real-time fluid blending of GPU watercolor and oils. Tap the Sun or droplet icon in the toolbar to dry your digital canvas!",
+                        icon = Icons.Outlined.Brush,
+                        category = "Brushes"
+                    ),
+                    TutorialStep(
+                        title = "Hyper-Realistic Paint Dynamics",
+                        description = "Our engine references leading open-source mobile fluid dynamics modules (Google LiquidFun paint particle physics, Lagrangian fluid simulations, and real-time GPU fragment shaders) to power authentic paint simulation. Experience natural pigment blending, dark watercolor edge fringe buildup, and 3D impasto lighting dynamics!",
+                        icon = Icons.Outlined.Palette,
+                        category = "Paint Dynamics"
+                    ),
+                    TutorialStep(
+                        title = "Multi-Layer Compositing",
+                        description = "Organize annotations on separate planes using our layer manager. Layers are backed by a hardware-accelerated LRU bitmap cache, enabling fast 60fps-120fps panning even on complex, multi-layered documents.",
+                        icon = Icons.Outlined.Layers,
+                        category = "Compositing"
+                    ),
+                    TutorialStep(
+                        title = "Time-Synced Voice Notes",
+                        description = "Record audio lectures or meetings while writing. During playback, strokes fade in or highlight at the exact millisecond they were drawn relative to the audio track. Scrub the timeline to fast-forward both sound and ink.",
+                        icon = Icons.Outlined.Mic,
+                        category = "Voice Sync"
+                    ),
+                    TutorialStep(
+                        title = "Wikilinks & Knowledge Graph",
+                        description = "Type double brackets [[Like This]] in markdown to link notes instantly. A physics-simulated, highly responsive 2D graph visualizes your notebook connections with beautiful, bouncy spring forces.",
+                        icon = Icons.Outlined.Hub,
+                        category = "Knowledge Graph"
+                    ),
+                    TutorialStep(
+                        title = "Document Annotation & PDF",
+                        description = "Import and annotate PDFs, images, text, or Word documents. To prevent Out Of Memory crashes, the engine uses smart sample-sizing and caps PDF textures, keeping document panning ultra-smooth.",
+                        icon = Icons.Outlined.PictureAsPdf,
+                        category = "Imports"
+                    ),
+                    TutorialStep(
+                        title = "Master Vault & Biometrics",
+                        description = "Protect your privacy with AES-256-GCM local encryption. Keys are derived using PBKDF2 with 600,000 iterations. Unlock via face/fingerprint biometric prompts, protected by a resilient 5-fail lockout cooldown system.",
+                        icon = Icons.Outlined.Lock,
+                        category = "Security"
+                    ),
+                    TutorialStep(
+                        title = "Secure Backups & Sharing",
+                        description = "InkFlow is offline-first—your data belongs to you. Export fully encrypted .zip backups containing your SQLite database and recordings directly to your local folders or cloud drives.",
+                        icon = Icons.Outlined.Backup,
+                        category = "Backups"
+                    )
+                ),
+                onComplete = {
+                    showTutorial = false
+                    viewModel.markTutorialCompleted()
+                },
+                onSkip = {
+                    showTutorial = false
+                    viewModel.markTutorialCompleted()
+                }
+            )
+        }
+
+        promptDialogType?.let { type ->
+            val title = when (type) {
+                "add_nb" -> "New Notebook"
+                "add_sec" -> "New Section"
+                "rename_nb" -> "Rename Notebook"
+                "rename_sec" -> "Rename Section"
+                "rename_page" -> "Rename Page"
+                else -> ""
+            }
+            PromptNameDialog(
+                title = title,
+                initialValue = initialDialogText,
+                onDismiss = { promptDialogType = null },
+                onSubmit = { name ->
+                    when (type) {
+                        "add_nb" -> viewModel.addNotebook(name)
+                        "add_sec" -> viewModel.addSection(name)
+                        "rename_nb" -> targetEntityId?.let { viewModel.renameNotebook(it, name) }
+                        "rename_sec" -> targetEntityId?.let { viewModel.renameSection(it, name) }
+                        "rename_page" -> targetEntityId?.let { viewModel.renamePage(it, name) }
+                    }
+                    promptDialogType = null
+                }
+            )
+        }
+
+        deleteConfirmType?.let { type ->
+            val title = when (type) {
+                "nb" -> "Delete Notebook?"
+                "sec" -> "Delete Section?"
+                "empty_trash" -> "Empty Trash?"
+                "page_perm" -> "Permanently Delete Note?"
+                else -> "Delete Item?"
+            }
+            val msg = when (type) {
+                "nb" -> if (deleteWarningMessage.isNotBlank()) deleteWarningMessage else "All sections and pages inside will be permanently deleted."
+                "sec" -> if (deleteWarningMessage.isNotBlank()) deleteWarningMessage else "All pages inside will be permanently deleted."
+                "empty_trash" -> "All trashed notes will be permanently destroyed."
+                "page_perm" -> "This action cannot be undone. This note will be permanently destroyed."
+                else -> ""
+            }
+            ConfirmDeleteDialog(
+                title = title,
+                message = msg,
+                onDismiss = { deleteConfirmType = null },
+                onConfirm = {
+                    when (type) {
+                        "nb" -> targetEntityId?.let { viewModel.deleteNotebook(it) }
+                        "sec" -> targetEntityId?.let { viewModel.deleteSection(it) }
+                        "empty_trash" -> viewModel.emptyTrash()
+                        "page_perm" -> targetEntityId?.let { viewModel.deletePagePermanently(it) }
+                    }
+                    deleteConfirmType = null
+                }
+            )
+        }
+
+        if (showTagManagerDialog) {
+            TagManagerDialog(
+                viewModel = viewModel,
+                onDismiss = { showTagManagerDialog = false }
+            )
+        }
+
+        tagEditorTargetNotebook?.let { notebook ->
+            TagEditorDialog(
+                itemTitle = notebook.name,
+                currentTagsString = notebook.tags,
+                onDismiss = { tagEditorTargetNotebook = null },
+                onSaveTags = { newTags ->
+                    viewModel.updateNotebookTags(notebook.id, newTags)
+                }
+            )
+        }
+
+        tagEditorTargetPage?.let { page ->
+            TagEditorDialog(
+                itemTitle = page.title,
+                currentTagsString = page.tags,
+                onDismiss = { tagEditorTargetPage = null },
+                onSaveTags = { newTags ->
+                    viewModel.updatePageTags(page.id, newTags)
+                }
+            )
+        }
+
+        if (isInitializingLoading) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(MaterialTheme.colorScheme.background),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator()
+            }
+        }
+    }
+}
+
+@Composable
+private fun BoxWithConstraintsScope_isWide(): Boolean {
+    val configuration = androidx.compose.ui.platform.LocalConfiguration.current
+    return configuration.screenWidthDp >= 600
+}
+
+@Composable
+private fun NotebookPanel(
+    notebooks: List<NotebookEntity>,
+    selectedNotebook: NotebookEntity?,
+    onSelectNotebook: (NotebookEntity) -> Unit,
+    onAddNotebook: () -> Unit,
+    onRenameNotebook: (NotebookEntity) -> Unit,
+    onDeleteNotebook: (NotebookEntity) -> Unit,
+    onEditTagsNotebook: (NotebookEntity) -> Unit = {},
+    onExportVaultNotebook: (NotebookEntity) -> Unit = {},
+    modifier: Modifier = Modifier
+) {
+    var searchQuery by remember { mutableStateOf("") }
+    var showSearch by remember { mutableStateOf(false) }
+
+    val filteredNotebooks = remember(notebooks, searchQuery) {
+        if (searchQuery.isBlank()) notebooks
+        else notebooks.filter { it.name.contains(searchQuery, ignoreCase = true) }
+    }
+
+    Column(modifier = modifier.padding(12.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Notebooks", style = MaterialTheme.typography.titleMedium)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = {
+                    showSearch = !showSearch
+                    if (!showSearch) searchQuery = ""
+                }) {
+                    Icon(
+                        imageVector = if (showSearch) Icons.Outlined.Close else Icons.Outlined.Search,
+                        contentDescription = "Search Notebooks"
+                    )
+                }
+                IconButton(onClick = onAddNotebook) {
+                    Icon(Icons.Outlined.Add, contentDescription = "Add Notebook")
+                }
+            }
+        }
+        if (showSearch) {
+            Spacer(modifier = Modifier.height(4.dp))
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = { searchQuery = it },
+                placeholder = { Text("Search notebooks...") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+        LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            items(filteredNotebooks, key = { it.id }) { nb ->
+                val selected = selectedNotebook?.id == nb.id
+                NavigationDrawerItem(
+                    label = {
+                        Column {
+                            Text(nb.name)
+                            if (nb.tags.isNotBlank()) {
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    nb.tags.split(",").map { it.trim() }.filter { it.isNotEmpty() }.forEach { tag ->
+                                        Surface(
+                                            shape = RoundedCornerShape(4.dp),
+                                            color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.7f)
+                                        ) {
+                                            Text(
+                                                text = "#$tag",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    selected = selected,
+                    onClick = { onSelectNotebook(nb) },
+                    icon = { Icon(Icons.Outlined.MenuBook, contentDescription = null) },
+                    badge = {
+                        var expanded by remember { mutableStateOf(false) }
+                        Box {
+                            IconButton(onClick = { expanded = true }) {
+                                Icon(Icons.Outlined.MoreVert, contentDescription = "More Options")
+                            }
+                            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                                DropdownMenuItem(
+                                    text = { Text("Rename") },
+                                    onClick = { expanded = false; onRenameNotebook(nb) }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Edit Tags") },
+                                    onClick = { expanded = false; onEditTagsNotebook(nb) }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Export Vault (ZIP)") },
+                                    onClick = { expanded = false; onExportVaultNotebook(nb) }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Delete") },
+                                    onClick = { expanded = false; onDeleteNotebook(nb) }
+                                )
+                            }
+                        }
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SectionPanel(
+    sections: List<SectionEntity>,
+    selectedSection: SectionEntity?,
+    onSelectSection: (SectionEntity) -> Unit,
+    onAddSection: () -> Unit,
+    onRenameSection: (SectionEntity) -> Unit,
+    onDeleteSection: (SectionEntity) -> Unit,
+    onExportVaultSection: (SectionEntity) -> Unit = {},
+    modifier: Modifier = Modifier
+) {
+    var searchQuery by remember { mutableStateOf("") }
+    var showSearch by remember { mutableStateOf(false) }
+
+    val filteredSections = remember(sections, searchQuery) {
+        if (searchQuery.isBlank()) sections
+        else sections.filter { it.name.contains(searchQuery, ignoreCase = true) }
+    }
+
+    Column(modifier = modifier.padding(12.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Sections", style = MaterialTheme.typography.titleMedium)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = {
+                    showSearch = !showSearch
+                    if (!showSearch) searchQuery = ""
+                }) {
+                    Icon(
+                        imageVector = if (showSearch) Icons.Outlined.Close else Icons.Outlined.Search,
+                        contentDescription = "Search Sections"
+                    )
+                }
+                IconButton(onClick = onAddSection) {
+                    Icon(Icons.Outlined.Add, contentDescription = "Add Section")
+                }
+            }
+        }
+        if (showSearch) {
+            Spacer(modifier = Modifier.height(4.dp))
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = { searchQuery = it },
+                placeholder = { Text("Search sections...") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+        LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            items(filteredSections, key = { it.id }) { sec ->
+                val selected = selectedSection?.id == sec.id
+                NavigationDrawerItem(
+                    label = { Text(sec.name) },
+                    selected = selected,
+                    onClick = { onSelectSection(sec) },
+                    icon = { Icon(Icons.Outlined.Folder, contentDescription = null) },
+                    badge = {
+                        var expanded by remember { mutableStateOf(false) }
+                        Box {
+                            IconButton(onClick = { expanded = true }) {
+                                Icon(Icons.Outlined.MoreVert, contentDescription = "More Options")
+                            }
+                            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                                DropdownMenuItem(
+                                    text = { Text("Rename") },
+                                    onClick = { expanded = false; onRenameSection(sec) }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Export Vault (ZIP)") },
+                                    onClick = { expanded = false; onExportVaultSection(sec) }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Delete") },
+                                    onClick = { expanded = false; onDeleteSection(sec) }
+                                )
+                            }
+                        }
+                    }
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun NotebookAndSectionSelectorBar(
+    notebooks: List<NotebookEntity>,
+    selectedNotebook: NotebookEntity?,
+    sections: List<SectionEntity>,
+    selectedSection: SectionEntity?,
+    onSelectNotebook: (NotebookEntity) -> Unit,
+    onSelectSection: (SectionEntity) -> Unit,
+    onAddNotebook: () -> Unit,
+    onAddSection: () -> Unit,
+    onRenameNotebook: (NotebookEntity) -> Unit = {},
+    onDeleteNotebook: (NotebookEntity) -> Unit = {},
+    onRenameSection: (SectionEntity) -> Unit = {},
+    onDeleteSection: (SectionEntity) -> Unit = {},
+    onEditTagsNotebook: (NotebookEntity) -> Unit = {}
+) {
+    var showNotebookSheet by remember { mutableStateOf(false) }
+    var showSectionSheet by remember { mutableStateOf(false) }
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        // Notebook Selector Chip
+        AssistChip(
+            onClick = { showNotebookSheet = true },
+            label = {
+                Text(
+                    text = selectedNotebook?.name ?: "Select Notebook",
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            },
+            leadingIcon = { Icon(Icons.Outlined.MenuBook, contentDescription = null) },
+            trailingIcon = { Icon(Icons.Outlined.ArrowDropDown, contentDescription = null) },
+            modifier = Modifier.weight(1f)
+        )
+
+        // Section / Quick Notes Selector Chip
+        AssistChip(
+            onClick = { showSectionSheet = true },
+            label = {
+                Text(
+                    text = selectedSection?.name ?: "Quick Notes",
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            },
+            leadingIcon = { Icon(Icons.Outlined.Folder, contentDescription = null) },
+            trailingIcon = { Icon(Icons.Outlined.ArrowDropDown, contentDescription = null) },
+            modifier = Modifier.weight(1f)
+        )
+    }
+
+    if (showNotebookSheet) {
+        var notebookQuery by remember { mutableStateOf("") }
+        val filteredNotebooks = remember(notebooks, notebookQuery) {
+            if (notebookQuery.isBlank()) notebooks
+            else notebooks.filter { it.name.contains(notebookQuery, ignoreCase = true) }
+        }
+
+        ModalBottomSheet(
+            onDismissRequest = { showNotebookSheet = false },
+            shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 8.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Select Notebook",
+                        style = MaterialTheme.typography.titleLarge
+                    )
+                    IconButton(onClick = {
+                        showNotebookSheet = false
+                        onAddNotebook()
+                    }) {
+                        Icon(Icons.Outlined.Add, contentDescription = "Add Notebook")
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                OutlinedTextField(
+                    value = notebookQuery,
+                    onValueChange = { notebookQuery = it },
+                    placeholder = { Text("Search notebooks...") },
+                    leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
+                    trailingIcon = {
+                        if (notebookQuery.isNotEmpty()) {
+                            IconButton(onClick = { notebookQuery = "" }) {
+                                Icon(Icons.Outlined.Close, contentDescription = "Clear")
+                            }
+                        }
+                    },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                if (filteredNotebooks.isEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(24.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = if (notebookQuery.isEmpty()) "No notebooks available" else "No notebooks match \"$notebookQuery\"",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                } else {
+                    LazyColumn(
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 350.dp)
+                    ) {
+                        items(filteredNotebooks, key = { it.id }) { nb ->
+                            val selected = selectedNotebook?.id == nb.id
+                            var menuExpanded by remember { mutableStateOf(false) }
+
+                            Surface(
+                                onClick = {
+                                    onSelectNotebook(nb)
+                                    showNotebookSheet = false
+                                },
+                                shape = RoundedCornerShape(12.dp),
+                                color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(
+                                            Icons.Outlined.MenuBook,
+                                            contentDescription = null,
+                                            tint = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.primary
+                                        )
+                                        Spacer(modifier = Modifier.width(12.dp))
+                                        Text(
+                                            text = nb.name,
+                                            style = MaterialTheme.typography.bodyLarge,
+                                            color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+                                        )
+                                    }
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        if (selected) {
+                                            Icon(
+                                                Icons.Outlined.Check,
+                                                contentDescription = "Selected",
+                                                tint = MaterialTheme.colorScheme.onPrimaryContainer
+                                            )
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                        }
+                                        Box {
+                                            IconButton(onClick = { menuExpanded = true }) {
+                                                Icon(
+                                                    Icons.Outlined.MoreVert,
+                                                    contentDescription = "Options",
+                                                    tint = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                            DropdownMenu(
+                                                expanded = menuExpanded,
+                                                onDismissRequest = { menuExpanded = false }
+                                            ) {
+                                                DropdownMenuItem(
+                                                    text = { Text("Rename") },
+                                                    leadingIcon = { Icon(Icons.Outlined.Edit, contentDescription = null) },
+                                                    onClick = {
+                                                        menuExpanded = false
+                                                        showNotebookSheet = false
+                                                        onRenameNotebook(nb)
+                                                    }
+                                                )
+                                                DropdownMenuItem(
+                                                    text = { Text("Edit Tags") },
+                                                    leadingIcon = { Icon(Icons.Outlined.LocalOffer, contentDescription = null) },
+                                                    onClick = {
+                                                        menuExpanded = false
+                                                        showNotebookSheet = false
+                                                        onEditTagsNotebook(nb)
+                                                    }
+                                                )
+                                                DropdownMenuItem(
+                                                    text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
+                                                    leadingIcon = { Icon(Icons.Outlined.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
+                                                    onClick = {
+                                                        menuExpanded = false
+                                                        showNotebookSheet = false
+                                                        onDeleteNotebook(nb)
+                                                    }
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+            }
+        }
+    }
+
+    if (showSectionSheet) {
+        var sectionQuery by remember { mutableStateOf("") }
+        val filteredSections = remember(sections, sectionQuery) {
+            if (sectionQuery.isBlank()) sections
+            else sections.filter { it.name.contains(sectionQuery, ignoreCase = true) }
+        }
+
+        ModalBottomSheet(
+            onDismissRequest = { showSectionSheet = false },
+            shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 8.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Quick Notes & Sections",
+                        style = MaterialTheme.typography.titleLarge
+                    )
+                    IconButton(onClick = {
+                        showSectionSheet = false
+                        onAddSection()
+                    }) {
+                        Icon(Icons.Outlined.Add, contentDescription = "Add Section")
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                OutlinedTextField(
+                    value = sectionQuery,
+                    onValueChange = { sectionQuery = it },
+                    placeholder = { Text("Search quick notes & sections...") },
+                    leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
+                    trailingIcon = {
+                        if (sectionQuery.isNotEmpty()) {
+                            IconButton(onClick = { sectionQuery = "" }) {
+                                Icon(Icons.Outlined.Close, contentDescription = "Clear")
+                            }
+                        }
+                    },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                if (filteredSections.isEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(24.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = if (sectionQuery.isEmpty()) "No sections available" else "No sections match \"$sectionQuery\"",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                } else {
+                    LazyColumn(
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 350.dp)
+                    ) {
+                        items(filteredSections, key = { it.id }) { sec ->
+                            val selected = selectedSection?.id == sec.id
+                            var menuExpanded by remember { mutableStateOf(false) }
+
+                            Surface(
+                                onClick = {
+                                    onSelectSection(sec)
+                                    showSectionSheet = false
+                                },
+                                shape = RoundedCornerShape(12.dp),
+                                color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(
+                                            Icons.Outlined.Folder,
+                                            contentDescription = null,
+                                            tint = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.primary
+                                        )
+                                        Spacer(modifier = Modifier.width(12.dp))
+                                        Text(
+                                            text = sec.name,
+                                            style = MaterialTheme.typography.bodyLarge,
+                                            color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+                                        )
+                                    }
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        if (selected) {
+                                            Icon(
+                                                Icons.Outlined.Check,
+                                                contentDescription = "Selected",
+                                                tint = MaterialTheme.colorScheme.onPrimaryContainer
+                                            )
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                        }
+                                        Box {
+                                            IconButton(onClick = { menuExpanded = true }) {
+                                                Icon(
+                                                    Icons.Outlined.MoreVert,
+                                                    contentDescription = "Options",
+                                                    tint = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                            DropdownMenu(
+                                                expanded = menuExpanded,
+                                                onDismissRequest = { menuExpanded = false }
+                                            ) {
+                                                DropdownMenuItem(
+                                                    text = { Text("Rename") },
+                                                    leadingIcon = { Icon(Icons.Outlined.Edit, contentDescription = null) },
+                                                    onClick = {
+                                                        menuExpanded = false
+                                                        showSectionSheet = false
+                                                        onRenameSection(sec)
+                                                    }
+                                                )
+                                                DropdownMenuItem(
+                                                    text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
+                                                    leadingIcon = { Icon(Icons.Outlined.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
+                                                    onClick = {
+                                                        menuExpanded = false
+                                                        showSectionSheet = false
+                                                        onDeleteSection(sec)
+                                                    }
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun NotePageCard(
+    page: NotePageEntity,
+    isTrash: Boolean,
+    onClick: () -> Unit,
+    onTogglePin: () -> Unit,
+    onRename: () -> Unit,
+    onTrash: () -> Unit,
+    onRestore: () -> Unit,
+    onDeletePermanent: () -> Unit,
+    onEditTags: () -> Unit = {}
+) {
+    Card(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .padding(16.dp)
+                .fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.weight(1f)
+            ) {
+                Icon(
+                    imageVector = if (page.sourceFileType == "pdf") Icons.Outlined.PictureAsPdf else Icons.AutoMirrored.Outlined.Article,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(modifier = Modifier.width(12.dp))
+                Column {
+                    Text(
+                        text = page.title,
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = if (page.sourceFileType != null) "Type: ${page.sourceFileType}" else "Canvas Note",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (page.tags.isNotBlank()) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            page.tags.split(",").map { it.trim() }.filter { it.isNotEmpty() }.forEach { tag ->
+                                Surface(
+                                    shape = RoundedCornerShape(4.dp),
+                                    color = MaterialTheme.colorScheme.secondaryContainer,
+                                    modifier = Modifier.padding(vertical = 2.dp)
+                                ) {
+                                    Text(
+                                        text = "#$tag",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (!isTrash) {
+                    IconButton(onClick = onTogglePin) {
+                        Icon(
+                            imageVector = if (page.pinned) Icons.Filled.PushPin else Icons.Outlined.PushPin,
+                            contentDescription = if (page.pinned) "Unpin" else "Pin",
+                            tint = if (page.pinned) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                        )
+                    }
+                }
+
+                var menuExpanded by remember { mutableStateOf(false) }
+                Box {
+                    IconButton(onClick = { menuExpanded = true }) {
+                        Icon(Icons.Outlined.MoreVert, contentDescription = "More Options")
+                    }
+                    DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
+                        if (!isTrash) {
+                            DropdownMenuItem(
+                                text = { Text("Rename") },
+                                onClick = { menuExpanded = false; onRename() }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Edit Tags") },
+                                onClick = { menuExpanded = false; onEditTags() }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Move to Trash") },
+                                onClick = { menuExpanded = false; onTrash() }
+                            )
+                        } else {
+                            DropdownMenuItem(
+                                text = { Text("Restore") },
+                                onClick = { menuExpanded = false; onRestore() }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Delete Permanently") },
+                                onClick = { menuExpanded = false; onDeletePermanent() }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ThemeMenu(viewModel: NoteflowViewModel) {
+    var expanded by remember { mutableStateOf(false) }
+    val currentMode by viewModel.themeMode.collectAsState()
+
+    Box {
+        IconButton(onClick = { expanded = true }) {
+            Icon(Icons.Outlined.Palette, contentDescription = "Theme")
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            for (mode in AppThemeMode.values()) {
+                DropdownMenuItem(
+                    text = { Text(mode.name.lowercase().capitalize()) },
+                    trailingIcon = if (currentMode == mode) {
+                        { Icon(Icons.Outlined.Check, contentDescription = null) }
+                    } else null,
+                    onClick = {
+                        viewModel.setThemeMode(mode)
+                        expanded = false
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun MaintenanceMenu(
+    useSidebarLayout: Boolean,
+    onToggleSidebarLayout: (Boolean) -> Unit,
+    showStrokePreviews: Boolean = false,
+    onToggleStrokePreviews: (Boolean) -> Unit = {},
+    databaseIntegrityCheckEnabled: Boolean = true,
+    onToggleDatabaseIntegrityCheck: (Boolean) -> Unit = {},
+    onOpenTagManager: () -> Unit,
+    onOpenTutorial: () -> Unit,
+    onOpenSecurity: () -> Unit,
+    onOpenUpdate: () -> Unit,
+    onBackup: () -> Unit,
+    onRestore: () -> Unit,
+    onExportObsidianVault: () -> Unit = {},
+    onExportHtmlVault: () -> Unit = {},
+    onOpenWebDavSync: () -> Unit = {}
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    Box {
+        IconButton(onClick = { expanded = true }) {
+            Icon(Icons.Outlined.MoreVert, contentDescription = "Settings & More")
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenuItem(
+                text = { Text("Unified Sidebar Layout") },
+                leadingIcon = { Icon(Icons.Outlined.ViewSidebar, contentDescription = null) },
+                trailingIcon = {
+                    Switch(
+                        checked = useSidebarLayout,
+                        onCheckedChange = { onToggleSidebarLayout(it) }
+                    )
+                },
+                onClick = { onToggleSidebarLayout(!useSidebarLayout) }
+            )
+            DropdownMenuItem(
+                text = { Text("Show Pen Stroke Previews") },
+                leadingIcon = { Icon(Icons.Outlined.Brush, contentDescription = null) },
+                trailingIcon = {
+                    Switch(
+                        checked = showStrokePreviews,
+                        onCheckedChange = { onToggleStrokePreviews(it) }
+                    )
+                },
+                onClick = { onToggleStrokePreviews(!showStrokePreviews) }
+            )
+            DropdownMenuItem(
+                text = { Text("Database Integrity Check") },
+                leadingIcon = { Icon(Icons.Outlined.Security, contentDescription = null) },
+                trailingIcon = {
+                    Switch(
+                        checked = databaseIntegrityCheckEnabled,
+                        onCheckedChange = { onToggleDatabaseIntegrityCheck(it) }
+                    )
+                },
+                onClick = { onToggleDatabaseIntegrityCheck(!databaseIntegrityCheckEnabled) }
+            )
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+            DropdownMenuItem(
+                text = { Text("Tag Manager") },
+                leadingIcon = { Icon(Icons.Outlined.LocalOffer, contentDescription = null) },
+                onClick = { expanded = false; onOpenTagManager() }
+            )
+            DropdownMenuItem(
+                text = { Text("Interactive Tutorial") },
+                leadingIcon = { Icon(Icons.Outlined.HelpOutline, contentDescription = null) },
+                onClick = { expanded = false; onOpenTutorial() }
+            )
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+            DropdownMenuItem(
+                text = { Text("Security Settings") },
+                leadingIcon = { Icon(Icons.Outlined.Security, contentDescription = null) },
+                onClick = { expanded = false; onOpenSecurity() }
+            )
+            DropdownMenuItem(
+                text = { Text("App Version & Updates") },
+                leadingIcon = { Icon(Icons.Outlined.SystemUpdate, contentDescription = null) },
+                onClick = { expanded = false; onOpenUpdate() }
+            )
+            DropdownMenuItem(
+                text = { Text("Export Vault (Obsidian ZIP)") },
+                leadingIcon = { Icon(Icons.Outlined.FolderZip, contentDescription = null) },
+                onClick = { expanded = false; onExportObsidianVault() }
+            )
+            DropdownMenuItem(
+                text = { Text("Export Vault (HTML Website)") },
+                leadingIcon = { Icon(Icons.Outlined.Language, contentDescription = null) },
+                onClick = { expanded = false; onExportHtmlVault() }
+            )
+            DropdownMenuItem(
+                text = { Text("WebDAV / Nextcloud E2EE Sync") },
+                leadingIcon = { Icon(Icons.Outlined.CloudSync, contentDescription = null) },
+                onClick = { expanded = false; onOpenWebDavSync() }
+            )
+            DropdownMenuItem(
+                text = { Text("Backup to File") },
+                leadingIcon = { Icon(Icons.Outlined.Backup, contentDescription = null) },
+                onClick = { expanded = false; onBackup() }
+            )
+            DropdownMenuItem(
+                text = { Text("Restore from File") },
+                leadingIcon = { Icon(Icons.Outlined.Restore, contentDescription = null) },
+                onClick = { expanded = false; onRestore() }
+            )
+        }
+    }
+}

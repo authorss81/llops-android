@@ -1,3 +1,33 @@
+# ===== LLOPS orchestration state =====
 logs/*.tmp
 *.log~
+*.zip
+
+# ===== Android / Gradle build outputs =====
+build/
+app/build/
+.gradle/
+.idea/
+*.iml
+local.properties
+*.log
+*.tmp
+.cache/
+.cxx/
+app/.cxx/
+.externalNativeBuild/
+app/.externalNativeBuild/
+
+# ===== Secrets / keys (never commit) =====
+*.jks
+*.keystore
+*.p12
+key.properties
+service_account.json
+debug.keystore
+debug.keystore.base64
+
+# ===== OS =====
 .DS_Store
+Thumbs.db
+Desktop.ini
