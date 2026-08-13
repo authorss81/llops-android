@@ -816,19 +816,22 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         const val MAX_FAILED_ATTEMPTS = 5
     }
 
-    fun setMasterPassword(password: String): Boolean {
+    suspend fun setMasterPassword(password: String): Boolean {
         if (password.trim().isEmpty() || password.length < MIN_PASSWORD_LENGTH) return false
         var kek: ByteArray? = null
         val dek: ByteArray
         return try {
             val salt = EncryptionService.generateSalt()
-            kek = EncryptionService.deriveKey(password, salt)
-
             // Reuse an existing DEK when one is already in play (e.g. previously
             // device-wrapped), so existing ciphertext stays valid; otherwise mint a new one.
-            val existingDek = repository.encryptionKey ?: security.readDek()
-            dek = existingDek ?: EncryptionService.generateDek()
-            val wrappedDek = EncryptionService.encrypt(dek, kek)
+            val existingDek = repository.encryptionKey
+            val (targetDek, wrappedDek) = withContext(Dispatchers.Default) {
+                val existing = existingDek ?: security.readDek()
+                val d = existing ?: EncryptionService.generateDek()
+                kek = EncryptionService.deriveKey(password, salt)
+                d to EncryptionService.encrypt(d, kek)
+            }
+            dek = targetDek
 
             settings.masterPasswordSalt = android.util.Base64.encodeToString(salt, android.util.Base64.NO_WRAP)
             settings.masterPasswordWrappedDek = wrappedDek
@@ -852,7 +855,7 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    fun changeMasterPassword(oldPassword: String, newPassword: String): Boolean {
+    suspend fun changeMasterPassword(oldPassword: String, newPassword: String): Boolean {
         if (newPassword.length < MIN_PASSWORD_LENGTH) return false
         if (!verifyMasterPassword(oldPassword)) return false
         val currentDek = repository.encryptionKey ?: return false
@@ -860,8 +863,10 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
 
         return try {
             val newSalt = EncryptionService.generateSalt()
-            kek = EncryptionService.deriveKey(newPassword, newSalt)
-            val newWrappedDek = EncryptionService.encrypt(currentDek, kek)
+            val newWrappedDek = withContext(Dispatchers.Default) {
+                kek = EncryptionService.deriveKey(newPassword, newSalt)
+                EncryptionService.encrypt(currentDek, kek)
+            }
 
             settings.masterPasswordSalt = android.util.Base64.encodeToString(newSalt, android.util.Base64.NO_WRAP)
             settings.masterPasswordWrappedDek = newWrappedDek
@@ -909,7 +914,7 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
 
     fun lockoutActive(): Boolean = settings.lockoutUntilEpochMs > System.currentTimeMillis()
 
-    fun verifyMasterPassword(password: String): Boolean {
+    suspend fun verifyMasterPassword(password: String): Boolean {
         if (lockoutActive()) return false
         var kek: ByteArray? = null
         val dek: ByteArray
@@ -918,8 +923,10 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
             val wrappedDek = settings.masterPasswordWrappedDek ?: return false
 
             val salt = android.util.Base64.decode(saltStr, android.util.Base64.NO_WRAP)
-            kek = EncryptionService.deriveKey(password, salt)
-            dek = EncryptionService.decrypt(wrappedDek, kek)
+            dek = withContext(Dispatchers.Default) {
+                kek = EncryptionService.deriveKey(password, salt)
+                EncryptionService.decrypt(wrappedDek, kek)
+            }
 
             repository.encryptionKey = dek
             _authenticated.value = true
@@ -952,14 +959,16 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
      * Must not bump failed-attempt counters or trigger lockout — a typo in the
      * backup dialog is not an attack.
      */
-    fun isMasterPasswordValid(password: String): Boolean {
+    suspend fun isMasterPasswordValid(password: String): Boolean {
         var kek: ByteArray? = null
         return try {
             val saltStr = settings.masterPasswordSalt ?: return false
             val wrappedDek = settings.masterPasswordWrappedDek ?: return false
             val salt = android.util.Base64.decode(saltStr, android.util.Base64.NO_WRAP)
-            kek = EncryptionService.deriveKey(password, salt)
-            val dek = EncryptionService.decrypt(wrappedDek, kek)
+            val dek = withContext(Dispatchers.Default) {
+                kek = EncryptionService.deriveKey(password, salt)
+                EncryptionService.decrypt(wrappedDek, kek)
+            }
             dek.fill(0.toByte())
             true
         } catch (e: Exception) {
@@ -969,7 +978,7 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    fun setBiometricEnabled(enabled: Boolean, password: String): Boolean {
+    suspend fun setBiometricEnabled(enabled: Boolean, password: String): Boolean {
         if (!verifyMasterPassword(password)) return false
         val dek = repository.encryptionKey ?: return false
         
@@ -1008,7 +1017,7 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         security.clearDek()
     }
 
-    fun removeMasterPassword(password: String): Boolean {
+    suspend fun removeMasterPassword(password: String): Boolean {
         if (!verifyMasterPassword(password)) return false
         val dek = repository.encryptionKey ?: return false
         // Re-wrap the DEK under a device-only keystore key so the vault remains

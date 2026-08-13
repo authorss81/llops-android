@@ -1989,11 +1989,57 @@ private fun DrawScope.drawCompositedLayersStrokes(
     }
 
     if (layers.isEmpty()) {
-        for (stroke in strokes) {
-            drawStrokeWithSymmetry(stroke, offsetY, symmetryMode)
-        }
-        if (previewStroke != null) {
-            drawStrokeWithSymmetry(previewStroke, offsetY, symmetryMode)
+        // No layers yet (e.g. first frames before the page's layer list loads, or
+        // a page whose layer row was never created). Phase 08: route committed
+        // strokes through the same page-local bitmap cache as the layer path so we
+        // do NOT re-vectorize every committed stroke every frame. The cache is
+        // keyed per page+mode and cleared whenever `strokes` changes (the
+        // LaunchedEffect(strokes, layers) above), so this stays pixel-identical.
+        if (layerBitmapCache != null && canvasDrawScope != null && density != null && layoutDirection != null &&
+            pageWidth > 0f && pageHeight > 0f
+        ) {
+            val defaultLayerId = "layer_default"
+            val cacheKey = "${pageIdx}_${defaultLayerId}_${symmetryMode}"
+            val strokesHash = strokes.hashCode()
+            var cache = layerBitmapCache[cacheKey]
+            val pw = pageWidth.toInt().coerceAtLeast(1)
+            val ph = pageHeight.toInt().coerceAtLeast(1)
+            if (cache == null || cache.bitmap.width != pw || cache.bitmap.height != ph) {
+                cache?.let { com.authorss81.noteflow.utils.BitmapPool.release(it.bitmap.asAndroidBitmap()) }
+                val androidBmp = com.authorss81.noteflow.utils.BitmapPool.acquire(pw, ph, android.graphics.Bitmap.Config.ARGB_8888)
+                val bmp = androidBmp.asImageBitmap()
+                cache = com.authorss81.noteflow.ui.components.LayerBitmapCache(bmp, androidx.compose.ui.graphics.Canvas(bmp))
+                layerBitmapCache[cacheKey] = cache
+            }
+
+            if (cache.hash != strokesHash || cache.hash == 0) {
+                cache.canvas.nativeCanvas.drawColor(android.graphics.Color.TRANSPARENT, android.graphics.PorterDuff.Mode.CLEAR)
+                canvasDrawScope.draw(
+                    density = density,
+                    layoutDirection = layoutDirection,
+                    canvas = cache.canvas,
+                    size = androidx.compose.ui.geometry.Size(pageWidth, pageHeight)
+                ) {
+                    for (stroke in strokes) {
+                        // Cache-local center: the bitmap is page-local, so the mirror
+                        // axis must be shifted by the page offset too.
+                        drawStrokeWithSymmetry(stroke, offsetY - pageTopY, symmetryMode, symmetryCenterX, symmetryCenterY - pageTopY)
+                    }
+                }
+                cache.hash = strokesHash
+            }
+
+            drawContext.canvas.nativeCanvas.drawBitmap(cache.bitmap.asAndroidBitmap(), 0f, pageTopY, null)
+            if (previewStroke != null) {
+                drawStrokeWithSymmetry(previewStroke, offsetY, symmetryMode)
+            }
+        } else {
+            for (stroke in strokes) {
+                drawStrokeWithSymmetry(stroke, offsetY, symmetryMode)
+            }
+            if (previewStroke != null) {
+                drawStrokeWithSymmetry(previewStroke, offsetY, symmetryMode)
+            }
         }
         return
     }

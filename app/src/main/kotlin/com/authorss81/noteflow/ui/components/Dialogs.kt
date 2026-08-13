@@ -341,6 +341,7 @@ fun SecuritySettingsDialog(
     var password by remember { mutableStateOf("") }
     var passwordConfirm by remember { mutableStateOf("") }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -433,10 +434,12 @@ fun SecuritySettingsDialog(
                             confirmButton = {
                                 Button(
                                     onClick = {
-                                        if (viewModel.setBiometricEnabled(tempChecked, verifyPassword)) {
-                                            showPasswordPrompt = false
-                                        } else {
-                                            verifyError = "Incorrect Master Password"
+                                        scope.launch {
+                                            if (viewModel.setBiometricEnabled(tempChecked, verifyPassword)) {
+                                                showPasswordPrompt = false
+                                            } else {
+                                                verifyError = "Incorrect Master Password"
+                                            }
                                         }
                                     }
                                 ) {
@@ -535,10 +538,12 @@ fun SecuritySettingsDialog(
                                         } else if (newPass != newPassConfirm) {
                                             changeError = "New passwords do not match"
                                         } else {
-                                            if (viewModel.changeMasterPassword(currentPass, newPass)) {
-                                                showChangePasswordDialog = false
-                                            } else {
-                                                changeError = "Incorrect current password"
+                                            scope.launch {
+                                                if (viewModel.changeMasterPassword(currentPass, newPass)) {
+                                                    showChangePasswordDialog = false
+                                                } else {
+                                                    changeError = "Incorrect current password"
+                                                }
                                             }
                                         }
                                     }
@@ -577,10 +582,12 @@ fun SecuritySettingsDialog(
                         } else if (password != passwordConfirm) {
                             errorMessage = "Passwords do not match"
                         } else {
-                            if (viewModel.setMasterPassword(password)) {
-                                onDismiss()
-                            } else {
-                                errorMessage = "Failed to set master password"
+                            scope.launch {
+                                if (viewModel.setMasterPassword(password)) {
+                                    onDismiss()
+                                } else {
+                                    errorMessage = "Failed to set master password"
+                                }
                             }
                         }
                     }

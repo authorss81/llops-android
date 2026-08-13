@@ -51,8 +51,12 @@ object BitmapPool {
         }
         val key = getKey(width, height, config)
         val reusable = pool[key]?.poll()
-        if (reusable != null && !reusable.isRecycled) {
+        if (reusable != null && !reusable.isRecycled && reusable.width == width && reusable.height == height) {
             options.inBitmap = reusable
+        } else {
+            // Sizing/state mismatch: hand it back so the pool keeps its budget,
+            // and never risk BitmapFactory's IllegalArgumentException on inBitmap.
+            reusable?.let { release(it) }
         }
         return options
     }

@@ -130,6 +130,28 @@ object ImportExportService {
         }
     }
 
+    /**
+     * Decodes an image with an inSampleSize so the resulting bitmap's long edge
+     * never exceeds maxLongEdge. Prevents OOM when a large-capacity camera image
+     * (e.g. 48MP) is embedded or used as an export source.
+     */
+    private fun decodeImageSampled(sourceFilePath: String, maxLongEdge: Int): android.graphics.Bitmap? {
+        return try {
+            val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            android.graphics.BitmapFactory.decodeFile(sourceFilePath, bounds)
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+            val longEdge = bounds.outWidth.coerceAtLeast(bounds.outHeight)
+            var inSampleSize = 1
+            while (longEdge / inSampleSize > maxLongEdge) {
+                inSampleSize *= 2
+            }
+            val opts = android.graphics.BitmapFactory.Options().apply { this.inSampleSize = inSampleSize }
+            android.graphics.BitmapFactory.decodeFile(sourceFilePath, opts)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     fun renderPageInkToSvg(strokes: List<com.authorss81.noteflow.data.model.Stroke>, width: Int = 1080, height: Int = 1528): String {
         val sb = StringBuilder()
         sb.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
@@ -168,7 +190,7 @@ object ImportExportService {
                 if (sourceFilePath.lowercase().endsWith(".pdf")) {
                     renderPdfPageToBitmap(sourceFilePath, pageIndex)
                 } else {
-                    try { android.graphics.BitmapFactory.decodeFile(sourceFilePath) } catch (e: Exception) { null }
+                    decodeImageSampled(sourceFilePath, maxLongEdge = 4096)
                 }
             } else null
 
@@ -271,7 +293,7 @@ object ImportExportService {
                     if (sourceFilePath.lowercase().endsWith(".pdf")) {
                         renderPdfPageToBitmap(sourceFilePath, pageIdx)
                     } else {
-                        try { android.graphics.BitmapFactory.decodeFile(sourceFilePath) } catch (e: Exception) { null }
+                        decodeImageSampled(sourceFilePath, maxLongEdge = 4096)
                     }
                 } else null
 
@@ -305,6 +327,9 @@ object ImportExportService {
                 pdfPage.canvas.drawBitmap(bitmap, 0f, 0f, null)
                 pdfDoc.finishPage(pdfPage)
                 bitmap.recycle()
+                // The source background is a fresh (possibly sampled) decode per
+                // page; release it so multi-page exports hold only one at a time.
+                bg?.recycle()
             }
 
             FileOutputStream(outFile).use { pdfDoc.writeTo(it) }
@@ -476,7 +501,7 @@ object ImportExportService {
             if (embed.type == MediaEmbedType.PHOTO && embed.contentUrlOrPath != null) {
                 val file = File(embed.contentUrlOrPath)
                 if (file.exists()) {
-                    val bmp = android.graphics.BitmapFactory.decodeFile(file.absolutePath)
+                    val bmp = decodeImageSampled(file.absolutePath, maxLongEdge = 2048)
                     if (bmp != null) {
                         val rect = android.graphics.RectF(
                             embed.x,
@@ -1648,7 +1673,7 @@ object ImportExportService {
                     val (stickyNotes, mediaEmbeds) = repository.getCanvasItemsForPage(page.id)
 
                     val bgBitmap = if (!page.sourceFilePath.isNullOrBlank()) {
-                        try { android.graphics.BitmapFactory.decodeFile(page.sourceFilePath) } catch (e: Exception) { null }
+                        decodeImageSampled(page.sourceFilePath, maxLongEdge = 4096)
                     } else null
 
                     val pngFile = exportAnnotatedPage(

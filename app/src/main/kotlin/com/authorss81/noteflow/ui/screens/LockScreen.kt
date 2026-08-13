@@ -16,6 +16,7 @@ import androidx.compose.ui.unit.dp
 import androidx.fragment.app.FragmentActivity
 import com.authorss81.noteflow.services.BiometricAuthHelper
 import com.authorss81.noteflow.ui.viewmodel.NoteflowViewModel
+import kotlinx.coroutines.launch
 
 @Composable
 fun LockScreen(
@@ -23,10 +24,12 @@ fun LockScreen(
 ) {
     var password by remember { mutableStateOf("") }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var isUnlocking by remember { mutableStateOf(false) }
     val biometricEnabled by viewModel.biometricEnabled.collectAsState()
     val lockoutRemainingMs by viewModel.lockoutRemainingMs.collectAsState()
     val context = LocalContext.current
     val isLockedOut = lockoutRemainingMs > 0L
+    val scope = rememberCoroutineScope()
 
     val triggerBiometric = {
         val activity = context as? FragmentActivity
@@ -148,20 +151,25 @@ fun LockScreen(
 
                 Button(
                     onClick = {
-                        if (viewModel.verifyMasterPassword(password)) {
-                            password = ""
-                        } else {
-                            errorMessage = if (viewModel.lockoutActive()) {
-                                "Too many failed attempts. Lockout in effect."
+                        if (isUnlocking || password.isBlank()) return@Button
+                        isUnlocking = true
+                        scope.launch {
+                            if (viewModel.verifyMasterPassword(password)) {
+                                password = ""
                             } else {
-                                "Incorrect Master Password"
+                                errorMessage = if (viewModel.lockoutActive()) {
+                                    "Too many failed attempts. Lockout in effect."
+                                } else {
+                                    "Incorrect Master Password"
+                                }
                             }
+                            isUnlocking = false
                         }
                     },
-                    enabled = !isLockedOut,
+                    enabled = !isLockedOut && !isUnlocking,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text("Unlock")
+                    Text(if (isUnlocking) "Unlocking…" else "Unlock")
                 }
 
                 if (biometricEnabled) {

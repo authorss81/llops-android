@@ -17,6 +17,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -30,6 +31,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * Bounded decode — mirrors EditorScreen.decodeBoundedBitmap: samples down
@@ -66,7 +69,10 @@ fun decodeBoundedImage(path: String, maxDim: Int = 1600): Bitmap? {
 @Composable
 fun FullscreenImageDialog(path: String?, onDismiss: () -> Unit) {
     if (path == null) return
-    val bitmap = remember(path) { decodeBoundedImage(path, maxDim = 2400) }
+    var bitmap by remember(path) { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(path) {
+        bitmap = withContext(Dispatchers.IO) { decodeBoundedImage(path, maxDim = 2400) }
+    }
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
@@ -78,9 +84,10 @@ fun FullscreenImageDialog(path: String?, onDismiss: () -> Unit) {
                 .clickable(onClick = onDismiss),
             contentAlignment = Alignment.Center
         ) {
-            if (bitmap != null) {
+            val bmp = bitmap
+            if (bmp != null) {
                 Image(
-                    bitmap = bitmap.asImageBitmap(),
+                    bitmap = bmp.asImageBitmap(),
                     contentDescription = "Image preview",
                     contentScale = ContentScale.Fit,
                     modifier = Modifier
@@ -123,11 +130,17 @@ fun MarkdownInlineImage(
             else -> null
         }
     }
-    val bitmap = remember(resolvedPath) { resolvedPath?.let { decodeBoundedImage(it, maxDim = 1600) } }
+    var bitmap by remember(resolvedPath) { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(resolvedPath) {
+        bitmap = resolvedPath?.let { path ->
+            withContext(Dispatchers.IO) { decodeBoundedImage(path, maxDim = 1600) }
+        }
+    }
 
-    if (bitmap != null) {
+    val bmp = bitmap
+    if (bmp != null) {
         Image(
-            bitmap = bitmap.asImageBitmap(),
+            bitmap = bmp.asImageBitmap(),
             contentDescription = alt ?: "Inline image",
             contentScale = ContentScale.Fit,
             modifier = modifier

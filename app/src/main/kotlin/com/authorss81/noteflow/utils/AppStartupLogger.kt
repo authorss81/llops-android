@@ -8,6 +8,8 @@ import java.io.PrintWriter
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 
 object AppStartupLogger {
 
@@ -15,6 +17,16 @@ object AppStartupLogger {
     private const val LOG_FILE_NAME = "app_startup.log"
     private var defaultHandler: Thread.UncaughtExceptionHandler? = null
     private var isInitialized = false
+
+    // Phase 08: startup event logging must not do file I/O on the main thread
+    // (cold-start on a low-end device). Event writes go through a single
+    // daemon executor; crash logs stay synchronous so they survive the dying
+    // process.
+    private val logWriterExecutor: ExecutorService by lazy {
+        Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "AppStartupLogger").apply { isDaemon = true }
+        }
+    }
 
     fun init(context: Context) {
         if (isInitialized) return
@@ -34,7 +46,10 @@ object AppStartupLogger {
         val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US).format(Date())
         val logLine = "[$timestamp] EVENT: $event\n"
         Log.i(TAG, logLine.trim())
-        appendToFile(context, logLine)
+        val appContext = context.applicationContext
+        logWriterExecutor.execute {
+            appendToFile(appContext, logLine)
+        }
     }
 
     private fun logCrash(context: Context, thread: Thread, throwable: Throwable) {

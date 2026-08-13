@@ -77,6 +77,7 @@ fun HomeScreen(
     var pendingRestoreBytes by remember { mutableStateOf<ByteArray?>(null) }
     var backupPasswordInput by remember { mutableStateOf("") }
     var backupPasswordError by remember { mutableStateOf<String?>(null) }
+    var isValidating by remember { mutableStateOf(false) }
     var showTutorial by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     var selectedTab by remember { mutableIntStateOf(0) } // 0 = Pages, 1 = Recent, 2 = Tag Vault, 3 = Trash
@@ -1135,11 +1136,14 @@ fun HomeScreen(
                             } else {
                                 if (backupPasswordInput.length < 6) {
                                     backupPasswordError = "Backup password must be at least 6 characters"
-                                } else if (!viewModel.isMasterPasswordValid(backupPasswordInput)) {
-                                    backupPasswordError = "Incorrect master password"
-                                } else {
+                                } else if (!isValidating) {
+                                    isValidating = true
                                     scope.launch {
                                         try {
+                                            if (!viewModel.isMasterPasswordValid(backupPasswordInput)) {
+                                                backupPasswordError = "Incorrect master password"
+                                                return@launch
+                                            }
                                             viewModel.repository.checkpointWal()
                                             withContext(Dispatchers.IO) {
                                                 viewModel.repository.stampDatabaseChecksum(context)
@@ -1158,6 +1162,8 @@ fun HomeScreen(
                                             viewModel.showSnackbar("Password-protected backup saved to Downloads: ${destFile.name}", isLong = true)
                                         } catch (e: Exception) {
                                             backupPasswordError = "Backup failed: ${e.message}"
+                                        } finally {
+                                            isValidating = false
                                         }
                                     }
                                 }

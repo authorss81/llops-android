@@ -33,6 +33,8 @@ import com.authorss81.noteflow.data.model.CanvasMediaEmbed
 import com.authorss81.noteflow.data.model.MediaEmbedType
 import java.io.File
 import kotlin.math.roundToInt
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 @Composable
 fun PhotoEmbedCard(
@@ -84,12 +86,14 @@ fun PhotoEmbedCard(
 
             // Image Preview
             // 21.6: bounded decode (samples down) instead of raw decodeFile —
-            // huge photos would OOM the heap.
-            val bitmap = remember(embed.contentUrlOrPath) {
-                try {
+            // huge photos would OOM the heap. 22.3: decode off the main thread —
+            // a 12MP+ photo sampled down still takes ~50-200ms.
+            var bitmap by remember(embed.contentUrlOrPath) { mutableStateOf<android.graphics.Bitmap?>(null) }
+            LaunchedEffect(embed.contentUrlOrPath) {
+                bitmap = try {
                     val path = embed.contentUrlOrPath
                     if (!path.isNullOrEmpty() && File(path).exists()) {
-                        decodeBoundedImage(path)
+                        withContext(Dispatchers.IO) { decodeBoundedImage(path) }
                     } else null
                 } catch (e: Exception) {
                     null
@@ -99,7 +103,8 @@ fun PhotoEmbedCard(
             var rotationAngle by remember { mutableFloatStateOf(0f) }
             var imageScale by remember { mutableFloatStateOf(1f) }
 
-            if (bitmap != null) {
+            val loadedBitmap = bitmap
+            if (loadedBitmap != null) {
                 val state = rememberTransformableState { zoomChange, _, rotationChange ->
                     imageScale = (imageScale * zoomChange).coerceIn(0.5f, 4.0f)
                     rotationAngle += rotationChange
@@ -116,7 +121,7 @@ fun PhotoEmbedCard(
                     contentAlignment = Alignment.Center
                 ) {
                     Image(
-                        bitmap = bitmap.asImageBitmap(),
+                        bitmap = loadedBitmap.asImageBitmap(),
                         contentDescription = "Photo Attachment",
                         modifier = Modifier
                             .fillMaxSize()
