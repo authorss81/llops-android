@@ -15,7 +15,8 @@
 #   .session   - session id to resume (for --continue continuity)
 #
 # Usage:
-#   phase_runner.sh PHASE_NAME [--review]
+#   phase_runner.sh PHASE_NAME [--review]       # run phase then review (legacy)
+#   phase_runner.sh PHASE_NAME --review-only    # review an already-done phase
 # =============================================================================
 
 set -euo pipefail
@@ -135,6 +136,31 @@ run_phase() {
   return "${code}"
 }
 
+# Review + fix the phase's changes. Used by --review (after phase success) and
+# by --review-only (on a later tick, after the phase work was already pushed).
+run_review() {
+  echo "== [review] Running reviewer subagent =="
+  set +e
+  opencode run --model "${MODEL}" --agent "${REVIEWER_AGENT}" \
+    "Review all changes made in phase '${PHASE}'. Output numbered FINDINGS." \
+    > "${LOG_DIR}/${PHASE}.review.log" 2>&1
+  code=$?
+  set -e
+  echo "== [review] exit: ${code} =="
+
+  if grep -qiE "FINDINGS:[[:space:]]*[0-9]+|^[[:space:]]*[0-9]+\." "${LOG_DIR}/${PHASE}.review.log"; then
+    echo "== [fix] Applying fixes for review findings =="
+    set +e
+    opencode run --model "${MODEL}" --agent build \
+      --continue \
+      "Apply fixes for the review FINDINGS above. Do not break other code." \
+      > "${LOG_DIR}/${PHASE}.fix.log" 2>&1
+    code=$?
+    set -e
+    echo "== [fix] exit: ${code} =="
+  fi
+}
+
 # --- Run the phase --------------------------------------------------------------
 # Env pre-flight: missing binary = retry (exit 5, not counted); bad key = blocked (exit 3)
 env_check
@@ -148,34 +174,27 @@ if [ "${ENV_CODE}" = "1" ]; then
   exit 5   # signals "env error" to the workflow
 fi
 
+# --- Review-only mode (Fix 9): phase work is committed BEFORE review, so a job
+#     timeout during review can never destroy the phase. Review runs on a later
+#     invocation (same tick after commit, or a future tick) via --review-only.
+if [ "${DO_REVIEW}" = "--review-only" ]; then
+  if [ -f "${DONE_FILE}" ]; then
+    echo "== [phase] ${PHASE} already done — running review only =="
+    run_review
+    exit 0
+  fi
+  echo "== [phase] ${PHASE} not done yet — nothing to review =="
+  exit 0
+fi
+
 if run_phase; then
   echo "== [phase] SUCCESS: ${PHASE} =="
   touch "${DONE_FILE}"
   rm -f "${DEFERRED_FILE}" "${SESSION_FILE}" "${BLOCKED_FILE}" "${ATTEMPTS_FILE}" "${DEFERRED_ATTEMPTS_FILE}"
 
-  if [ "${DO_REVIEW}" = "--review" ]; then
-    echo "== [review] Running reviewer subagent =="
-    set +e
-    opencode run --model "${MODEL}" --agent "${REVIEWER_AGENT}" \
-      "Review all changes made in phase '${PHASE}'. Output numbered FINDINGS." \
-      > "${LOG_DIR}/${PHASE}.review.log" 2>&1
-    code=$?
-    set -e
-    echo "== [review] exit: ${code} =="
-
-    if grep -qiE "FINDINGS:[[:space:]]*[0-9]+|^[[:space:]]*[0-9]+\." "${LOG_DIR}/${PHASE}.review.log"; then
-      echo "== [fix] Applying fixes for review findings =="
-      set +e
-      opencode run --model "${MODEL}" --agent build \
-        --continue \
-        "Apply fixes for the review FINDINGS above. Do not break other code." \
-        > "${LOG_DIR}/${PHASE}.fix.log" 2>&1
-      code=$?
-      set -e
-      echo "== [fix] exit: ${code} =="
-    fi
-  fi
-
+  # Fix 9: do NOT run review inline here — the workflow commits the phase work
+  # first, then invokes this script again with --review-only. That way the phase
+  # is safely pushed even if the review step (or the whole job) times out.
   exit 0
 fi
 

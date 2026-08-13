@@ -59,11 +59,11 @@ jobs:
             grep -qx "workspace/${name}/.attempts" /tmp/tree.txt && touch "/tmp/phases/${name}.attempts"
           done < /tmp/phase_names.txt
 
-          # Read a phase's timeout marker via the API (default 25 min).
+          # Read a phase's timeout marker via the API (default 40 min).
           phase_timeout() {
             local n="$1" t
             t=$(gh api "repos/${GITHUB_REPOSITORY}/contents/workspace/${n}/.timeout" --jq '.content' 2>/dev/null | base64 -d 2>/dev/null | tr -d '[:space:]')
-            if [ -n "$t" ] && [ "$t" -ge 1 ] 2>/dev/null; then printf '%s' "$t"; else printf '25'; fi
+            if [ -n "$t" ] && [ "$t" -ge 1 ] 2>/dev/null; then printf '%s' "$t"; else printf '40'; fi
           }
 
           # Manual dispatch override.
@@ -114,7 +114,7 @@ jobs:
     needs: select-phase
     if: needs.select-phase.outputs.exists == 'true'
     runs-on: ubuntu-latest
-    # Fix 6: per-phase timeout (workspace/<phase>/.timeout), default 25 min.
+    # Fix 6: per-phase timeout (workspace/<phase>/.timeout), default 40 min.
     timeout-minutes: ${{ fromJSON(needs.select-phase.outputs.timeout) }}
     steps:
       - name: Checkout
@@ -147,14 +147,16 @@ jobs:
       - name: Pull latest main
         run: git pull --ff-only origin main || true
 
-      - name: Run phase (no in-job sleep; deferrals handled by cron)
+      # Fix 9: commit the phase work BEFORE review. If the review (or the job)
+      # times out, the phase is already pushed — a timeout can no longer destroy it.
+      - name: Run phase (no review — phase work committed first)
         id: run
         run: |
           chmod +x scripts/phase_runner.sh
-          bash scripts/phase_runner.sh "${{ needs.select-phase.outputs.phase }}" --review
+          bash scripts/phase_runner.sh "${{ needs.select-phase.outputs.phase }}"
         continue-on-error: true
 
-      - name: Commit and push (pull-rebase-retry so concurrent human pushes don't lose the bot's work)
+      - name: Commit and push phase work (pull-rebase-retry so concurrent human pushes don't lose the bot's work)
         id: commit
         run: |
           git config user.name "llops-bot"
@@ -186,6 +188,44 @@ jobs:
           # Report the final state so the status step can judge correctly.
           if [ -f "workspace/${{ needs.select-phase.outputs.phase }}/.done" ]; then
             echo "BOT_DONE=true" >> "$GITHUB_ENV"
+          fi
+
+      # Fix 9: review runs AFTER the phase work is safely committed. Only run if
+      # the phase actually completed (a .done marker exists in the committed tree).
+      - name: Review and fix phase (runs on committed work; timeout-safe)
+        id: review
+        if: env.BOT_DONE == 'true'
+        run: |
+          bash scripts/phase_runner.sh "${{ needs.select-phase.outputs.phase }}" --review-only
+        continue-on-error: true
+
+      - name: Commit and push review fixes
+        id: commit-review
+        run: |
+          git config user.name "llops-bot"
+          git config user.email "llops-bot@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "no review changes to commit"
+          else
+            git commit -m "llops: ${{ needs.select-phase.outputs.phase }} review fixes"
+            PUSHED=0
+            for i in 1 2 3 4 5; do
+              if git push origin main; then
+                echo "push succeeded on attempt $i"
+                PUSHED=1
+                break
+              fi
+              echo "push rejected (attempt $i) — pulling latest and rebasing..."
+              git pull --rebase origin main || true
+              sleep 3
+            done
+            if [ "${PUSHED}" = "0" ]; then
+              echo "::error::Push of review fixes failed after 5 attempts — saving to recovery branch + patch."
+              git branch -f "llops-recovery/${{ needs.select-phase.outputs.phase }}" HEAD
+              git push origin "llops-recovery/${{ needs.select-phase.outputs.phase }}" --force || true
+              git format-patch --stdout -1 > "llops-${{ needs.select-phase.outputs.phase }}-review.patch" || true
+            fi
           fi
 
       - name: Upload recovery patch (if push failed)
