@@ -6,6 +6,7 @@ import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import android.util.Log
 import androidx.core.content.FileProvider
 import com.authorss81.noteflow.BuildConfig
 import java.io.File
@@ -168,7 +169,7 @@ object UpdateService {
             context.startActivity(intent)
             true
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.e("UpdateService", "Failed to launch APK installer: ${e::class.java.simpleName}")
             false
         }
     }

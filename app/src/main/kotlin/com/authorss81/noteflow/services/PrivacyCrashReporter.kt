@@ -72,7 +72,7 @@ object PrivacyCrashReporter {
         if (message.isNullOrBlank()) return "No details"
         // Strip potential note titles, passwords, base64 blobs, or file paths
         return message
-            .replace(Regex("[a-fA-F0-0]{32,}"), "[HASH_REDACTED]")
+            .replace(Regex("[a-fA-F0-9]{32,}"), "[HASH_REDACTED]")
             .replace(Regex("(?i)password[=:]\\s*\\S+"), "password=[REDACTED]")
             .replace(Regex("/data/user/\\d+/com\\.authorss81\\.noteflow/\\S+"), "[PATH_REDACTED]")
     }

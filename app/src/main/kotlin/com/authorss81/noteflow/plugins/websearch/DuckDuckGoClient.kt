@@ -131,7 +131,8 @@ object DuckDuckGoResponseParser {
 class DuckDuckGoClient(
     private val urlBuilder: (String) -> String = DuckDuckGoQueryUrl::build,
     private val connectTimeoutMs: Int = 10_000,
-    private val readTimeoutMs: Int = 10_000
+    private val readTimeoutMs: Int = 10_000,
+    private val maxResponseBytes: Int = 1_000_000
 ) {
 
     fun search(query: String): List<WebSearchResult> {
@@ -146,20 +147,43 @@ class DuckDuckGoClient(
                 // Drain a little of the error body for a useful-but-safe message.
                 val detail = runCatching {
                     (if (code in 400..599) conn.errorStream else conn.inputStream)
-                        ?.bufferedReader()?.use { it.readText() }?.take(160)?.trim()
+                        ?.bufferedReader()?.use { it.readText(limit = 160) }?.trim()
                 }.getOrNull()
                 val suffix = if (detail.isNullOrBlank()) "" else " — $detail"
                 throw DuckDuckGoSearchException(
                     "The search service returned HTTP $code. Try again later.$suffix"
                 )
             }
-            val json = conn.inputStream.bufferedReader().use { it.readText() }
+            val json = conn.inputStream.bufferedReader().use { it.readText(limit = maxResponseBytes) }
             return DuckDuckGoResponseParser.parse(json)
+        } catch (e: ResponseTooLargeException) {
+            throw DuckDuckGoSearchException("The search service returned an oversized response.")
         } catch (e: IOException) {
             if (e is DuckDuckGoSearchException) throw e
             throw DuckDuckGoSearchException("Unable to reach the search service — check your connection.")
         } finally {
             conn.disconnect()
         }
+    }
+
+    /** Thrown by [readText] when a source exceeds its read limit. */
+    private class ResponseTooLargeException : IOException("Response too large")
+
+    /** Reads at most [limit] characters, throwing if the source is larger.
+     *  Guards against an unbounded (runaway) server response. */
+    private fun java.io.Reader.readText(limit: Int): String {
+        val out = StringBuilder(minOf(limit, 4096))
+        val buffer = CharArray(2048)
+        var total = 0
+        while (true) {
+            val read = read(buffer, 0, buffer.size)
+            if (read == -1) break
+            total += read
+            if (total > limit) {
+                throw ResponseTooLargeException()
+            }
+            out.append(buffer, 0, read)
+        }
+        return out.toString()
     }
 }

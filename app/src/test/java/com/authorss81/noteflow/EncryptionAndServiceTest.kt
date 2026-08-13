@@ -3,7 +3,6 @@ package com.authorss81.noteflow
 import com.authorss81.noteflow.data.model.NotePageEntity
 import com.authorss81.noteflow.data.model.Stroke
 import com.authorss81.noteflow.data.model.StrokeTool
-import com.authorss81.noteflow.data.model.BrushEngine
 import com.authorss81.noteflow.data.model.PointF
 import com.authorss81.noteflow.services.EncryptionService
 import com.authorss81.noteflow.services.ImportExportService
@@ -110,13 +109,5 @@ class EncryptionAndServiceTest {
         assertEquals(0.75f, dsPoint.pressure ?: 0f, 0.01f)
         assertEquals(45f, dsPoint.tilt ?: 0f, 0.01f)
         assertEquals(123456L, dsPoint.timestampMs)
-    }
-
-    @Test
-    fun testBrushEngineInterface() {
-        val classic: BrushEngine = BrushEngine.CLASSIC
-        val advanced: BrushEngine = BrushEngine.ADVANCED
-        assertNotNull(classic)
-        assertNotNull(advanced)
     }
 }

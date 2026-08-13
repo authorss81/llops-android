@@ -85,6 +85,7 @@ fun HomeScreen(
     var pageViewMode by remember { mutableIntStateOf(0) } // 0 = List, 1 = Gallery, 2 = Kanban, 3 = Calendar, 4 = Table
     var showTemplateLibrary by remember { mutableStateOf(false) }
     var showWebDavDialog by remember { mutableStateOf(false) }
+    var showLocalSendDialog by remember { mutableStateOf(false) }
     var activeTagFilterPath by remember { mutableStateOf<String?>(null) }
     var activeTagMatchingIds by remember { mutableStateOf<Set<String>?>(null) }
 
@@ -441,6 +442,8 @@ fun HomeScreen(
                             onOpenSecurity = { showSecurityDialog = true },
                             onOpenUpdate = { showUpdateDialog = true },
                             onOpenPlugins = { showPluginsDialog = true },
+                            onOpenLocalSend = { showLocalSendDialog = true },
+                            onOpenWebDavSync = { showWebDavDialog = true },
                             onBackup = {
                                 if (viewModel.hasMasterPassword.value) {
                                     backupPasswordInput = ""
@@ -1240,6 +1243,14 @@ fun HomeScreen(
                     showWebDavDialog = false
                     showRestartConfirmDialog = true
                 }
+            )
+        }
+
+        if (showLocalSendDialog) {
+            com.authorss81.noteflow.ui.components.LocalSendSendDialog(
+                viewModel = viewModel,
+                pages = allActivePages,
+                onDismiss = { showLocalSendDialog = false }
             )
         }
 
@@ -2294,6 +2305,7 @@ private fun MaintenanceMenu(
     onRestore: () -> Unit,
     onExportObsidianVault: () -> Unit = {},
     onExportHtmlVault: () -> Unit = {},
+    onOpenLocalSend: () -> Unit = {},
     onOpenWebDavSync: () -> Unit = {}
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -2372,6 +2384,11 @@ private fun MaintenanceMenu(
                 text = { Text("Export Vault (HTML Website)") },
                 leadingIcon = { Icon(Icons.Outlined.Language, contentDescription = null) },
                 onClick = { expanded = false; onExportHtmlVault() }
+            )
+            DropdownMenuItem(
+                text = { Text("Send to Nearby Device (LocalSend)") },
+                leadingIcon = { Icon(Icons.Outlined.NearMe, contentDescription = null) },
+                onClick = { expanded = false; onOpenLocalSend() }
             )
             DropdownMenuItem(
                 text = { Text("WebDAV / Nextcloud E2EE Sync") },

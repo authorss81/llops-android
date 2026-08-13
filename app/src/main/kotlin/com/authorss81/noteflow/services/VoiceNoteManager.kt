@@ -145,7 +145,9 @@ class VoiceNoteManager(private val context: Context) {
 
         val file = currentOutputFile ?: return null
         if (!file.exists() || file.length() < 44L) {
-            Log.w("VoiceNoteManager", "Recording produced no audio data: ${file.absolutePath}")
+            // Log WITHOUT the absolute path: the path reveals the private vault
+            // file layout in logcat (low risk but unnecessary).
+            Log.w("VoiceNoteManager", "Recording produced no audio data (file too small)")
             _recordingError.value = "No audio was captured — the microphone may be busy or permission was revoked."
             return null
         }

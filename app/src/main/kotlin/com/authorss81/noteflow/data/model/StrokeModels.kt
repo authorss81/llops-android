@@ -89,11 +89,6 @@ data class CanvasTextStyle(
     }
 }
 
-sealed interface BrushEngine {
-    object CLASSIC : BrushEngine
-    object ADVANCED : BrushEngine
-}
-
 data class PointF(
     val x: Float,
     val y: Float,

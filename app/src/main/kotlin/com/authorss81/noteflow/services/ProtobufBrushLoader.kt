@@ -91,7 +91,7 @@ object ProtobufBrushLoader {
             val bytes = file.readBytes()
             loadFromByteArray(bytes, file.name)
         } catch (e: Throwable) {
-            Log.e(TAG, "Failed to load brush file ${file.absolutePath}: ${e.message}")
+            Log.e(TAG, "Failed to load brush file: ${e::class.java.simpleName}")
             null
         }
     }

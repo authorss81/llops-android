@@ -112,6 +112,28 @@ FIVE INDEPENDENT STRICT REVIEWERS (ANDROID POWER USER, 25-YR ARCHITECT, COMPETIT
 | 17 | "OCR" (IMAGE/PDF TEXT) | METADATA-ONLY FOR IMAGES; NAIVE REGEX OVER RAW PDF BYTES (`OcrService.kt:49-98`) | MED |
 | 18 | "GIT INTEGRATION" | **DOES NOT EXIST** — ZERO GIT/COMMIT/PUSH CODE IN THE APP; ONLY CI WORKFLOWS; NO GIT SYNC FEATURE AT ALL | HIGH |
 
+### ✅ SINCE THE AC781DE AUDIT — ROWS FIXED BY PHASES 2–14 (verified 2026-08-13)
+
+The table above is a point-in-time snapshot. Phases 2–14 have since changed several
+rows; the live status is:
+
+| Row | 2026-08-13 status | Evidence |
+|---|---|---|
+| 1 — field encryption | **FIXED** — `title`, `extractedText`, `textContent`, `pointsJson` all field-encrypted; cross-device re-key map covers `pages`, `strokes`, `media_embeds`, `note_versions` | `NoteRepository.kt:356-362, 537-559, 658-712, 764-794`; `ImportExportService.kt:1107-1112` |
+| 2 — DB tamper checksum | **FIXED** — HMAC-SHA256 over the real `noteflow.sqlite` with AndroidKeyStore key, surfaced as `databaseTampered` banner | `DatabaseSecurityHelper.kt:49-65`; `NoteflowViewModel.kt:35-55` |
+| 3 — cloud sync | **FIXED** — real WebDAV/Nextcloud upload/download of encrypted backups, HTTPS enforced; reachable from HomeScreen ⋮ → "WebDAV / Nextcloud E2EE Sync" (Phase 14 re-wired the dead menu trigger) | `WebDavSyncService.kt:61-155, 196-301`; `HomeScreen.kt:2376-2381` |
+| 4 — time-synced voice notes | **PARTIALLY FIXED** — pressure/tilt/timestamp now captured via the official `pointerInteropFilter` MotionEvent bridge (no reflection); the sync-badge / tap-to-jump claim remains unverified this phase | `AnnotationCanvas.kt:469-473, 611-615` |
+| 5 — AGSL wet-mixing | **WIRED** — `WetBrushEngine` + `WetMixingEffect` run in `AnnotationCanvas` while a wet stroke is actively drawn, gated by `isAgslSupported` + `gpuWetBrushesEnabled`; committed strokes bake through the plain path | `AnnotationCanvas.kt:2102-2109, 2242-2349`; `WetBrushEngine.kt:43-47` |
+| 6 — FLAG_SECURE | **FIXED** — applied in non-debug builds (cleared in debug) | `MainActivity.kt:89-93` |
+| 8 — R8 minify | **FIXED** — `isMinifyEnabled = true` in release | `app/build.gradle.kts:71` |
+| 13 — LayerBitmapCache | **FIXED** — committed strokes rasterized to a hash-keyed cached bitmap and blitted per frame | `AnnotationCanvas.kt:392-398, 2033-2063, 2135-2186` |
+| 14 — BitmapPool / ThermalSanityHelper | **FIXED** — both now wired (pool at `AnnotationCanvas.kt:395,2039-2152`; thermal status query at `:429-435`) | Phase 8 `PERF_REPORT.md` |
+| 15 — encrypted backups | **FIXED** — backups encrypted with master password when set; legacy restore requires explicit confirmation | `ImportExportService.kt:1154+,1300-1328`; `HomeScreen.kt:150-158` |
+| 17 — OCR | **FIXED** — real on-device ML Kit OCR plugin wired into `EditorScreen` | `plugins/ocr/OnDeviceOcrPlugin.kt`; `EditorScreen.kt:1272,1378-1399` |
+
+Known still-false claims are tracked in AGENTS.md ("Known broken things") and were
+verified again in `workspace/phase-14/AUDIT_REPORT.md`.
+
 **WHAT IS GENUINELY REAL & GOOD:** PBKDF2-600K + AES-256-GCM + KEYSTORE-WRAPPED DEK + ZEROIZATION ON LOCK, `allowBackup=false` + DATAEXTRACTIONRULES, ZIP-SLIP/ZIP-BOMB GUARDS (50MB/200MB), 21 TOOLS + 12 BLEND MODES + RDP SIMPLIFICATION + QUAD-BEZIER SMOOTHING, REAL ANDROIDX.INK BRUSHES, WIKILINKS + FORCE GRAPH + TAGS + DAILY NOTES, PDF WINDOWED RENDERING, PALM REJECTION, DESTRUCTIVE-ACTION CONFIRMS. THE CRYPTO CORE WHERE IT APPLIES IS PROPER.
 
 ---
