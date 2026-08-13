@@ -50,4 +50,19 @@ sealed class PluginCapability(
 
     /** Export vault content to external formats. Exclusive (future). */
     data object Export : PluginCapability("export", "Export", exclusive = true)
+
+    /** Note text statistics/analysis and diffing. Non-exclusive (Phase 15). */
+    data object TextTools : PluginCapability("text_tools", "Text Tools")
+
+    /** Natural-language detection + auto-tagging. Non-exclusive (Phase 15). */
+    data object LanguageDetection : PluginCapability("language_detection", "Language Detection")
+
+    /** Fetch a web page and store it as a clean Markdown note. Non-exclusive (Phase 15). */
+    data object WebCapture : PluginCapability("web_capture", "Web Capture")
+
+    /**
+     * Ingest content shared into the app via ACTION_SEND / ACTION_SEND_MULTIPLE
+     * ("Clip to InkFlow"). Non-exclusive (Phase 15).
+     */
+    data object ClipShare : PluginCapability("clip_share", "Clip to InkFlow")
 }

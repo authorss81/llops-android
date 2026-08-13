@@ -49,6 +49,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.authorss81.noteflow.data.model.*
 import com.authorss81.noteflow.plugins.PluginCapability
+import com.authorss81.noteflow.plugins.export.mimeType
 import com.authorss81.noteflow.services.ImportExportService
 import com.authorss81.noteflow.services.HarmonyScheme
 import com.authorss81.noteflow.services.PressureCurve
@@ -1085,6 +1086,43 @@ fun EditorScreen(
                                         viewModel.showSnackbar("Exported HTML to Downloads: ${file.name}", isLong = true)
                                     } else {
                                         viewModel.showSnackbar("HTML export failed")
+                                    }
+                                }
+                            }
+                        )
+                        HorizontalDivider()
+                        DropdownMenuItem(
+                            text = { Text("Share via Export Engine…") },
+                            leadingIcon = { Icon(Icons.Outlined.UploadFile, contentDescription = null) },
+                            onClick = {
+                                showOverflowMenu = false
+                                val request = com.authorss81.noteflow.plugins.ExportRequest(
+                                    title = page.title,
+                                    markdown = page.extractedText?.takeIf { it.isNotBlank() },
+                                    plainText = page.extractedText?.takeIf { it.isNotBlank() }
+                                )
+                                scope.launch {
+                                    when (val result = viewModel.exportNote(
+                                        request,
+                                        com.authorss81.noteflow.plugins.ExportFormat.MARKDOWN
+                                    )) {
+                                        is com.authorss81.noteflow.plugins.PluginResult.Success -> {
+                                            when (val outcome = result.value) {
+                                                is com.authorss81.noteflow.plugins.ExportOutcome.Success -> {
+                                                    val shareIntent =
+                                                        com.authorss81.noteflow.plugins.export.ExportShareHelper.shareFile(
+                                                            context, outcome.file, outcome.format.mimeType
+                                                        )
+                                                    context.startActivity(shareIntent)
+                                                }
+                                                is com.authorss81.noteflow.plugins.ExportOutcome.Error ->
+                                                    viewModel.showSnackbar(outcome.message, isLong = true)
+                                            }
+                                        }
+                                        is com.authorss81.noteflow.plugins.PluginResult.Failure ->
+                                            viewModel.showSnackbar(result.message, isLong = true)
+                                        is com.authorss81.noteflow.plugins.PluginResult.Unavailable ->
+                                            viewModel.showSnackbar(result.message, isLong = true)
                                     }
                                 }
                             }

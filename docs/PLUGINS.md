@@ -35,7 +35,7 @@ Everything lives in `com.authorss81.noteflow.plugins`:
 
 | File | Purpose |
 |------|---------|
-| `PluginCapability.kt` | The sealed extension points (`TextTransform`, `OCR`, `WebSearch`, `FileTransfer`, `Assistant`, `Export`) — each with an `exclusive` flag. |
+| `PluginCapability.kt` | The sealed extension points (`TextTransform`, `OCR`, `WebSearch`, `Export`, `TextTools`, `LanguageDetection`, `WebCapture`, `ClipShare`, `FileTransfer`, `Assistant`) — each with an `exclusive` flag. |
 | `PluginManifest.kt` | `PluginManifest`, `SemanticVersion` (`Major.Minor.Patch`), `PluginPermission`, and the manifest validator. |
 | `NoteflowPlugin.kt` | The plugin interface (manifest-derived identity, tri-state `availability`, lifecycle hooks) + per-capability *serving interfaces* (`TextTransformPlugin`, …). |
 | `PluginLifecycle.kt` | `PluginLifecycleState` (REGISTERED/ENABLED/AVAILABLE/UNAVAILABLE/DISABLED/REJECTED), derived `PluginStateInfo`, enable result + enable-order resolution types. |
@@ -48,6 +48,11 @@ Everything lives in `com.authorss81.noteflow.plugins`:
 | `Rot13TransformPlugin.kt` | The first real plugin — a working end-to-end proof of the wiring (TextTransform). |
 | `ocr/OnDeviceOcrPlugin.kt` | The real, on-device OCR plugin (Phase 12) — ML Kit text-recognition, offline, no API key, no INTERNET. Serves `OCR`. |
 | `websearch/DuckDuckGoWebSearchPlugin.kt` | The real web-search plugin (Phase 12) — keyless DuckDuckGo Instant Answer API. Serves `WebSearch`. |
+| `export/ExportEnginePlugin.kt` | The real Export Engine plugin (Phase 15) — Markdown/HTML via the app's CommonMark parser, PDF via the built-in `PdfDocument`; shares via `ACTION_SEND` + FileProvider. Serves `Export`. |
+| `clipshare/ClipToInkFlowPlugin.kt` | The "Clip to InkFlow" share-target plugin (Phase 15) — classifies + size-guards incoming `ACTION_SEND`/`ACTION_SEND_MULTIPLE` content before it is stored encrypted. Serves `ClipShare`. |
+| `texttools/TextToolsEngine.kt` | Text Tools (Phase 15) — word/char/paragraph/sentence counts, reading time, Flesch-Kincaid readability, note diff. PURE JVM. Serves `TextTools`. |
+| `langdetect/LanguageDetectionEngine.kt` | Language Detection (Phase 15) — Lingua-based detection + `lang:<iso>` auto-tagging that honours user overrides. PURE JVM. Serves `LanguageDetection`. |
+| `webcapture/WebCaptureEngine.kt` | Web Capture (Phase 15) — fetches an http(s) page (jsoup) and reduces it to clean Markdown for a new note. Serves `WebCapture`. |
 
 Supporting pieces outside the framework package:
 
@@ -57,7 +62,7 @@ Supporting pieces outside the framework package:
 | `services/SettingsPluginEnableStore.kt` | Production `PluginEnableStore` adapter. |
 | `services/SettingsPluginSettingsStore.kt` | Production `PluginSettingsStore` adapter. |
 | `ui/components/PluginSettingsDialog.kt` | Settings → Plugins (state + reason + version + diagnostics "Test now" + refusal-aware toggles). |
-| `ui/viewmodel/NoteflowViewModel.kt` | Wires registry/manager/diagnostics into the app + `transformNoteText()`. |
+| `ui/viewmodel/NoteflowViewModel.kt` | Wires registry/manager/diagnostics into the app + `transformNoteText()` + Phase 15 routes (`exportNote`, `analyzeNoteText`, `diffNoteTexts`, `detectNoteLanguage`, `autoTagNoteLanguage`, `captureWebPage`, `parseSharedClip`, `autoTagLanguageOnSave`). |
 
 ## Core concepts
 
@@ -71,10 +76,11 @@ exactly one enabled plugin at a time — conflicts are arbitrated deterministica
 (higher version; tie → earlier registration) and the loser is disabled with a
 reason.
 
-Today `TextTransform` (ROT13 proof), `OCR` (on-device ML Kit) and `WebSearch`
-(keyless DuckDuckGo) are implemented for real. The remaining capabilities
-(`FileTransfer`, `Assistant`, `Export`) are *declared extension points* that fail
-loudly until a real plugin ships — see the phase-12 implementations below.
+Today `TextTransform` (ROT13 proof), `OCR` (on-device ML Kit), `WebSearch`
+(keyless DuckDuckGo) and — since Phase 15 — `Export`, `ClipShare`, `TextTools`,
+`LanguageDetection` and `WebCapture` are implemented for real. The remaining
+capabilities (`FileTransfer`, `Assistant`) are *declared extension points* that
+fail loudly until a real plugin ships — see the phase-12 implementations below.
 
 ### `PluginManifest` & `NoteflowPlugin` — what a plugin is
 
@@ -216,6 +222,81 @@ Both plugins live in their own packages under `plugins/` (not the core
 ViewModel/screens), are registered in `PluginRegistry.defaultPlugins()`, are off
 by default (opt-in via Settings → Plugins), and follow the Phase 11
 `docs/PLUGIN_SDK.md` lifecycle/error-isolation contract.
+
+## The five Phase 15 plugins (real, all individually toggleable)
+
+Phase 15 ships five real plugins. Each is **pure-JVM-core-first**: the testable
+core (parsing, validation, assembly, analysis, extraction) has no Android
+classes and is covered by JVM unit tests; only the platform slice (network, PDF
+canvas, FileProvider, intent) touches Android. All five are registered in
+`PluginRegistry.defaultPlugins()`, off by default, and individually toggleable in
+Settings → Plugins.
+
+### Export Engine (`export/`, capability `Export`, exclusive)
+
+- **Markdown/HTML:** assembled by the pure `ExportPayloadAssembler` using the
+  app's existing CommonMark parser + GFM tables (`MarkdownHtmlConverter`); a
+  plain-text-only note is escaped into `<p>` paragraphs; an empty note gets an
+  explicit "Empty note" body.
+- **PDF:** the built-in `PdfDocument` (A4) renders the plain-text body — no
+  heavyweight PDF dependency.
+- **Sharing:** the produced file is written to `cacheDir/exports` (FileProvider
+  `cache-path` entry added in `res/xml/file_paths.xml`) and shared via an
+  `ACTION_SEND` intent (`ExportShareHelper`). No new permissions.
+- **UI:** EditorScreen's overflow menu → "Share via Export Engine…".
+- **Tests:** `ExportPayloadAssemblerTest` (12 tests — sanitization, HTML doc
+  structure, tables, fallbacks, escaping).
+
+### Clip to InkFlow (`clipshare/`, capability `ClipShare`)
+
+- **Parsing/validation:** pure `SharedClipParser` classifies the incoming share
+  into TEXT / IMAGES / FILES / MULTIPART and applies a size guard mirroring the
+  app's backup limits (single item 50 MB, total 200 MB, text 5 MB) BEFORE any
+  bytes are copied or stored.
+- **Storage:** a validated clip is stored through the same encrypted
+  `NoteRepository.createPage` path as any note.
+- **UI:** `MainActivity` routes `ACTION_SEND` / `ACTION_SEND_MULTIPLE` (now also
+  `*/*` for arbitrary files) through `parseSharedClip`; a rejected clip shows the
+  plugin's reason as a Snackbar instead of creating a note.
+- **Tests:** `SharedClipParserTest` (10 tests — classification + size guard).
+
+### Text Tools (`texttools/`, capability `TextTools`)
+
+- **Analysis:** pure `TextToolsAnalyzer` — word/character/paragraph/sentence
+  counts, reading time @200 wpm, Flesch-Kincaid grade + reading-ease label.
+- **Diff:** pure `TextNoteDiff` (LCS line-diff → `DiffHunk`s).
+- **UI:** MarkdownPreviewScreen's Plugins menu → "Text Tools: analyze & diff…"
+  opens `TextToolsDialog`.
+- **Tests:** `TextToolsTest` (12 tests — counts, reading time, readability,
+  diff hunks, excerpt bounds).
+
+### Language Detection (`langdetect/`, capability `LanguageDetection`)
+
+- **Core:** `LanguageDetectionCore` wraps **Lingua** (Apache-2.0, pure JVM) in
+  low-accuracy mode over a bounded 24-language subset to keep memory sane; short
+  (< 20 char) inputs return a clear `NoMatch`.
+- **Auto-tagging:** `autoTagLanguage` merges `lang:<iso>` into the note's tags
+  and **never overwrites a user's existing `lang:*`/`language:*` tag**; the
+  per-plugin `lang_auto_tag` setting (default on) gates auto-tagging on save.
+- **UI:** MarkdownPreviewScreen's Plugins menu → "Detect language / auto-tag…";
+  `MainActivity`'s markdown save hook calls `autoTagLanguageOnSave`.
+- **Tests:** `LanguageDetectionTest` (11 tests — real EN/DE detection,
+  too-short gate, override honouring, no-duplicate merges).
+
+### Web Capture (`webcapture/`, capability `WebCapture`)
+
+- **Policy:** `WebPageFetchPolicy.validateUrl` normalizes bare hostnames to
+  https, allow-lists only http(s), and rejects ftp:/javascript:/hostless input.
+- **Extraction:** pure jsoup `WebToMarkdownExtractor` strips scripts/styles/
+  nav/footer/ads, prefers an article container, and converts to Markdown
+  (headings, lists, blockquotes, links, images, code).
+- **Fetch:** `WebPageFetcher` runs on `Dispatchers.IO` with a 5 MB streamed cap
+  and redirect-loop protection; offline shows a clear error.
+- **UI:** HomeScreen's ⋮ menu → "Capture Web Page as Note"; the captured
+  Markdown becomes a new encrypted note.
+- **Tests:** `WebCaptureExtractorTest` (13 tests — fixture extraction, chrome
+  stripping, container fallback, URL policy) + `WebPageFetcher` is never
+  exercised over a real network in unit tests.
 
 ## Adding a NEW plugin
 

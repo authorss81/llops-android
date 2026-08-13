@@ -4,4 +4,7 @@
          The rest of filesDir (encrypted DB, imports/, voice notes) is no longer URI-grantable. -->
     <files-path name="internal_apk" path="apk/" />
     <external-path name="download_apk" path="Download" />
+    <!-- Phase 15 (Export Engine): transient, user-requested exports live here;
+         only exported documents, never vault data. -->
+    <cache-path name="exports" path="exports/" />
 </paths>

@@ -32,4 +32,7 @@ class SettingsPluginSettingsStore(
     override fun setBoolean(pluginId: String, key: String, value: Boolean) {
         settings.setPluginBooleanSetting(pluginId, key, value)
     }
+
+    override fun containsKey(pluginId: String, key: String): Boolean =
+        settings.hasPluginSetting(pluginId, key)
 }

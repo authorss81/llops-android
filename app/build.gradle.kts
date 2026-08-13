@@ -146,5 +146,9 @@ dependencies {
     // Runs offline with no API key and no INTERNET. See plugins/ocr/OnDeviceOcrPlugin.
     implementation(libs.mlkit.text.recognition)
 
+    // Phase 15: productivity & knowledge plugin pack (pure-JVM cores).
+    implementation(libs.lingua)
+    implementation(libs.jsoup)
+
     testImplementation("junit:junit:4.13.2")
 }

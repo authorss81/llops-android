@@ -26,6 +26,8 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Splitscreen
 import androidx.compose.material.icons.outlined.Extension
+import androidx.compose.material.icons.outlined.Language
+import androidx.compose.material.icons.outlined.Functions
 import com.authorss81.noteflow.plugins.NoteflowPlugin
 import com.authorss81.noteflow.plugins.PluginCapability
 import com.authorss81.noteflow.plugins.PluginResult
@@ -160,6 +162,8 @@ fun MarkdownPreviewScreen(
     var showVersionHistory by remember { mutableStateOf(false) }
     var showPluginMenu by remember { mutableStateOf(false) }
     var showWebSearch by remember { mutableStateOf(false) }
+    var showTextTools by remember { mutableStateOf(false) }
+    var showLanguageDetection by remember { mutableStateOf(false) }
     var pendingTransformPlugin by remember { mutableStateOf<NoteflowPlugin?>(null) }
     val transformScope = rememberCoroutineScope()
 
@@ -293,6 +297,44 @@ fun MarkdownPreviewScreen(
                                         onClick = {
                                             showPluginMenu = false
                                             showWebSearch = true
+                                        }
+                                    )
+                                }
+                            }
+                            // Phase 15 (Text Tools): structural stats + note diff in a dialog.
+                            val textToolsPlugins = viewModel.pluginRegistry.pluginsForCapability(PluginCapability.TextTools)
+                            if (textToolsPlugins.isNotEmpty()) {
+                                HorizontalDivider()
+                                textToolsPlugins.forEach { plugin ->
+                                    val runnable = viewModel.isPluginUsable(plugin.id)
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(if (runnable) "Text Tools: analyze & diff…" else "Text Tools (off)")
+                                        },
+                                        leadingIcon = { Icon(Icons.Outlined.Functions, contentDescription = null) },
+                                        enabled = runnable,
+                                        onClick = {
+                                            showPluginMenu = false
+                                            showTextTools = true
+                                        }
+                                    )
+                                }
+                            }
+                            // Phase 15 (Language Detection): detect + auto-tag `lang:<iso>`.
+                            val langPlugins = viewModel.pluginRegistry.pluginsForCapability(PluginCapability.LanguageDetection)
+                            if (langPlugins.isNotEmpty()) {
+                                HorizontalDivider()
+                                langPlugins.forEach { plugin ->
+                                    val runnable = viewModel.isPluginUsable(plugin.id)
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(if (runnable) "Detect language / auto-tag…" else "Language Detection (off)")
+                                        },
+                                        leadingIcon = { Icon(Icons.Outlined.Language, contentDescription = null) },
+                                        enabled = runnable,
+                                        onClick = {
+                                            showPluginMenu = false
+                                            showLanguageDetection = true
                                         }
                                     )
                                 }
@@ -549,6 +591,28 @@ fun MarkdownPreviewScreen(
                     dismissButton = {
                         TextButton(onClick = { pendingTransformPlugin = null }) { Text("Cancel") }
                     }
+                )
+            }
+
+            if (showTextTools) {
+                TextToolsDialog(
+                    viewModel = viewModel,
+                    text = contentText,
+                    onDismiss = { showTextTools = false }
+                )
+            }
+
+            if (showLanguageDetection) {
+                LanguageDetectionDialog(
+                    viewModel = viewModel,
+                    text = contentText,
+                    existingTags = page.tags,
+                    onTagsChanged = { newTags ->
+                        contentText = contentText
+                        viewModel.updatePageTags(page.id, newTags)
+                        viewModel.showSnackbar("Language tag updated")
+                    },
+                    onDismiss = { showLanguageDetection = false }
                 )
             }
         }
@@ -989,4 +1053,165 @@ private fun renderInline(node: Node, primaryColor: Color, builder: AnnotatedStri
             }
         }
     }
+}
+
+/**
+ * Phase 15 (Text Tools): dialog showing structural statistics of the current
+ * note text. Runs the pure-JVM analyzer through the plugin manager; failures
+ * surface the plugin's message instead of throwing.
+ */
+@Composable
+private fun TextToolsDialog(
+    viewModel: NoteflowViewModel,
+    text: String,
+    onDismiss: () -> Unit
+) {
+    var loading by remember { mutableStateOf(true) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var wordCount by remember { mutableStateOf(0) }
+    var charCount by remember { mutableStateOf(0) }
+    var paraCount by remember { mutableStateOf(0) }
+    var sentCount by remember { mutableStateOf(0) }
+    var readSecs by remember { mutableStateOf(0) }
+    var fkGrade by remember { mutableStateOf(0.0) }
+    var fkLabel by remember { mutableStateOf("") }
+
+    LaunchedEffect(Unit) {
+        when (val result = viewModel.analyzeNoteText(text)) {
+            is PluginResult.Success -> {
+                val a = result.value
+                wordCount = a.wordCount
+                charCount = a.characterCount
+                paraCount = a.paragraphCount
+                sentCount = a.sentenceCount
+                readSecs = a.readingTimeSeconds
+                fkGrade = a.fleschKincaid
+                fkLabel = a.fleschKincaidLabel
+            }
+            is PluginResult.Failure -> error = result.message
+            is PluginResult.Unavailable -> error = result.message
+        }
+        loading = false
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Text Tools") },
+        text = {
+            when {
+                loading -> Text("Analyzing…")
+                error != null -> Text(error ?: "Text Tools unavailable.")
+                else -> Column {
+                    StatRow("Words", wordCount.toString())
+                    StatRow("Characters", charCount.toString())
+                    StatRow("Paragraphs", paraCount.toString())
+                    StatRow("Sentences", sentCount.toString())
+                    StatRow("Reading time", "${readSecs / 60}:${(readSecs % 60).toString().padStart(2, '0')} min")
+                    StatRow("Flesch-Kincaid", "$fkGrade ($fkLabel)")
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Close") }
+        }
+    )
+}
+
+@Composable
+private fun StatRow(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(label, style = MaterialTheme.typography.bodyMedium)
+        Text(value, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+    }
+}
+
+/**
+ * Phase 15 (Language Detection): detect the note's language and, on user
+ * confirmation, merge a `lang:<iso>` tag into the note's tags (respecting an
+ * existing `lang:*`/`language:*` override, which [LanguageDetectionPlugin]
+ * never overwrites).
+ */
+@Composable
+private fun LanguageDetectionDialog(
+    viewModel: NoteflowViewModel,
+    text: String,
+    existingTags: String,
+    onTagsChanged: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val scope = rememberCoroutineScope()
+    var loading by remember { mutableStateOf(true) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var detection by remember {
+        mutableStateOf<com.authorss81.noteflow.plugins.DetectedLanguage?>(null)
+    }
+
+    LaunchedEffect(Unit) {
+        when (val result = viewModel.detectNoteLanguage(text)) {
+            is PluginResult.Success ->
+                when (val d = result.value) {
+                    is com.authorss81.noteflow.plugins.LanguageDetectionOutcome.Success ->
+                        detection = d.language
+                    is com.authorss81.noteflow.plugins.LanguageDetectionOutcome.NoMatch ->
+                        error = d.message
+                    is com.authorss81.noteflow.plugins.LanguageDetectionOutcome.Error ->
+                        error = d.message
+                }
+            is PluginResult.Failure -> error = result.message
+            is PluginResult.Unavailable -> error = result.message
+        }
+        loading = false
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Language Detection") },
+        text = {
+            when {
+                loading -> Text("Detecting…")
+                error != null -> Text(error ?: "Detection unavailable.")
+                detection != null -> {
+                    val lang = detection!!
+                    Column {
+                        Text("Detected language: ${lang.displayName} (${lang.isoCode})")
+                        Text(
+                            "Confidence: ${(lang.confidence * 100).toInt()}%",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        Text(
+                            if (existingTags.split(",").any { it.trim().lowercase().startsWith("lang:") }) {
+                                "A language tag already exists — it will be left untouched."
+                            } else {
+                                "Tags will gain: lang:${lang.isoCode} (only on Apply)."
+                            },
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = detection != null,
+                onClick = {
+                    val lang = detection ?: return@TextButton
+                    scope.launch {
+                        when (val merged = viewModel.autoTagNoteLanguage(text, existingTags)) {
+                            is PluginResult.Success -> onTagsChanged(merged.value)
+                            is PluginResult.Failure -> viewModel.showSnackbar(merged.message, isLong = true)
+                            is PluginResult.Unavailable -> viewModel.showSnackbar(merged.message, isLong = true)
+                        }
+                    }
+                    onDismiss()
+                }
+            ) { Text("Apply tag") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Close") }
+        }
+    )
 }

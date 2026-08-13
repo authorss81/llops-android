@@ -7,6 +7,15 @@ import androidx.lifecycle.viewModelScope
 import com.authorss81.noteflow.data.db.NoteflowDatabase
 import com.authorss81.noteflow.data.model.*
 import com.authorss81.noteflow.data.repository.NoteRepository
+import com.authorss81.noteflow.plugins.ClipParseOutcome
+import com.authorss81.noteflow.plugins.ClipSharePlugin
+import com.authorss81.noteflow.plugins.DiffHunk
+import com.authorss81.noteflow.plugins.ExportFormat
+import com.authorss81.noteflow.plugins.ExportOutcome
+import com.authorss81.noteflow.plugins.ExportPlugin
+import com.authorss81.noteflow.plugins.ExportRequest
+import com.authorss81.noteflow.plugins.LanguageDetectionOutcome
+import com.authorss81.noteflow.plugins.LanguageDetectionPlugin
 import com.authorss81.noteflow.plugins.OcrOutcome
 import com.authorss81.noteflow.plugins.OcrPlugin
 import com.authorss81.noteflow.plugins.PluginCapability
@@ -17,7 +26,12 @@ import com.authorss81.noteflow.plugins.PluginManager
 import com.authorss81.noteflow.plugins.PluginRegistry
 import com.authorss81.noteflow.plugins.PluginResult
 import com.authorss81.noteflow.plugins.PluginStateInfo
+import com.authorss81.noteflow.plugins.SharedInput
+import com.authorss81.noteflow.plugins.TextAnalysis
+import com.authorss81.noteflow.plugins.TextToolsPlugin
 import com.authorss81.noteflow.plugins.TextTransformPlugin
+import com.authorss81.noteflow.plugins.WebCaptureOutcome
+import com.authorss81.noteflow.plugins.WebCapturePlugin
 import com.authorss81.noteflow.plugins.WebSearchOutcome
 import com.authorss81.noteflow.plugins.WebSearchPlugin
 import com.authorss81.noteflow.services.DatabaseSecurityHelper
@@ -140,6 +154,83 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
             val searcher = plugin as? WebSearchPlugin
                 ?: throw IllegalStateException("${plugin.name} does not implement WebSearchPlugin")
             searcher.searchWeb(query.trim())
+        }
+
+    /**
+     * Phase 15 (Export Engine): route a note export through the plugin manager
+     * on `Dispatchers.IO`. Returns a typed [ExportOutcome] — Success carries the
+     * written, shareable file; Error carries a validated, user-facing reason.
+     */
+    suspend fun exportNote(
+        request: ExportRequest,
+        format: ExportFormat
+    ): PluginResult<ExportOutcome> =
+        pluginManager.withPluginAsync(PluginCapability.Export, appContext) { plugin ->
+            val exporter = plugin as? ExportPlugin
+                ?: throw IllegalStateException("${plugin.name} does not implement ExportPlugin")
+            exporter.exportNote(appContext, request, format)
+        }
+
+    /**
+     * Phase 15 (Text Tools): structural statistics of a note's text. PURE JVM.
+     */
+    suspend fun analyzeNoteText(text: String): PluginResult<TextAnalysis> =
+        pluginManager.withPluginAsync(PluginCapability.TextTools, appContext) { plugin ->
+            val tools = plugin as? TextToolsPlugin
+                ?: throw IllegalStateException("${plugin.name} does not implement TextToolsPlugin")
+            tools.analyzeText(text)
+        }
+
+    /** Phase 15 (Text Tools): simple line-diff of two note texts. PURE JVM. */
+    suspend fun diffNoteTexts(oldText: String, newText: String): PluginResult<List<DiffHunk>> =
+        pluginManager.withPluginAsync(PluginCapability.TextTools, appContext) { plugin ->
+            val tools = plugin as? TextToolsPlugin
+                ?: throw IllegalStateException("${plugin.name} does not implement TextToolsPlugin")
+            tools.diffTexts(oldText, newText)
+        }
+
+    /** Phase 15 (Language Detection): detect a note's language. PURE JVM. */
+    suspend fun detectNoteLanguage(text: String): PluginResult<LanguageDetectionOutcome> =
+        pluginManager.withPluginAsync(PluginCapability.LanguageDetection, appContext) { plugin ->
+            val detector = plugin as? LanguageDetectionPlugin
+                ?: throw IllegalStateException("${plugin.name} does not implement LanguageDetectionPlugin")
+            detector.detectLanguage(text)
+        }
+
+    /**
+     * Phase 15 (Language Detection): merge a freshly-detected `lang:<iso>` tag
+     * into [existingTags], honouring any `lang:*`/`language:*` override. PURE JVM.
+     */
+    suspend fun autoTagNoteLanguage(text: String, existingTags: String): PluginResult<String> =
+        pluginManager.withPluginAsync(PluginCapability.LanguageDetection, appContext) { plugin ->
+            val detector = plugin as? LanguageDetectionPlugin
+                ?: throw IllegalStateException("${plugin.name} does not implement LanguageDetectionPlugin")
+            detector.autoTagLanguage(text, existingTags)
+        }
+
+    /**
+     * Phase 15 (Web Capture): fetch [url] and reduce it to Markdown via the
+     * Web Capture plugin. Runs the network call on `Dispatchers.IO` and returns
+     * typed results — connectivity failures surface as `WebCaptureOutcome.Error`.
+     */
+    suspend fun captureWebPage(url: String): PluginResult<WebCaptureOutcome> =
+        pluginManager.withPluginAsync(PluginCapability.WebCapture, appContext) { plugin ->
+            val capturer = plugin as? WebCapturePlugin
+                ?: throw IllegalStateException("${plugin.name} does not implement WebCapturePlugin")
+            capturer.captureWebPage(appContext, url)
+        }
+
+    /**
+     * Phase 15 (Clip to InkFlow): classify + validate incoming share content
+     * BEFORE anything is copied into the vault. PURE JVM; the ViewModel stores a
+     * returned [com.authorss81.noteflow.plugins.SharedClip] through the same
+     * encrypted NoteRepository path as any note.
+     */
+    suspend fun parseSharedClip(input: SharedInput): PluginResult<ClipParseOutcome> =
+        pluginManager.withPluginAsync(PluginCapability.ClipShare, appContext) { plugin ->
+            val clipper = plugin as? ClipSharePlugin
+                ?: throw IllegalStateException("${plugin.name} does not implement ClipSharePlugin")
+            clipper.parse(input)
         }
 
     /**
@@ -681,6 +772,30 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
             repository.updatePageTitleAndTags(id, title, tags)
             if (selectedPage.value?.id == id) {
                 _selectedPage.value = repository.getPageById(id)
+            }
+        }
+    }
+
+    /**
+     * Phase 15 (Language Detection): auto-tag [pageId] with a freshly detected
+     * `lang:<iso>` tag on save. Respects the per-plugin `lang_auto_tag` setting
+     * (default on) and the plugin's own override rule (an existing `lang:*` /
+     * `language:*` tag is never overwritten). Callers fire-and-forget; no
+     * user-visible message is produced for a silent, safe tag merge.
+     */
+    fun autoTagLanguageOnSave(pageId: String, title: String, tags: String, text: String) {
+        val pluginIds = pluginRegistry.pluginsForCapability(PluginCapability.LanguageDetection)
+        val enabled = pluginIds.any { pluginRegistry.isEnabled(it.id) }
+        if (!enabled || text.trim().length < 20) return
+        val settings = pluginRegistry.settingsFor(pluginIds.first { pluginRegistry.isEnabled(it.id) }.id)
+        if (!settings.getBoolean("lang_auto_tag", true)) return
+        viewModelScope.launch {
+            val merged = autoTagNoteLanguage(text, tags)
+            if (merged is PluginResult.Success) {
+                repository.updatePageTitleAndTags(pageId, title, merged.value)
+                if (selectedPage.value?.id == pageId) {
+                    _selectedPage.value = repository.getPageById(pageId)
+                }
             }
         }
     }

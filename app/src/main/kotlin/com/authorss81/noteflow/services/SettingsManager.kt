@@ -204,6 +204,9 @@ class SettingsManager(context: Context) {
         prefs.edit().putBoolean(PluginSettingKey.key(pluginId, key), value).apply()
     }
 
+    fun hasPluginSetting(pluginId: String, key: String): Boolean =
+        prefs.contains(PluginSettingKey.key(pluginId, key))
+
     fun clearSecuritySettings() {
         prefs.edit()
             .remove("master_password_salt")

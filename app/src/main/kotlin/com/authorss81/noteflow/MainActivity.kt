@@ -340,6 +340,11 @@ class MainActivity : FragmentActivity() {
                                                         }
                                                     }
                                                 }
+                                                // Phase 15 (Language Detection): auto-tag
+                                                // lang:<iso> on save, honouring any override.
+                                                viewModel.autoTagLanguageOnSave(
+                                                    page.id, page.title, page.tags, newText
+                                                )
                                             }
                                         )
                                     } else {
@@ -500,6 +505,11 @@ onSaveContent = { newText ->
         readShareIntent(intent)
     }
 
+    // 22.5 + Phase 15 (Clip to InkFlow): classify + validate incoming share
+    // content through the ClipShare plugin BEFORE any bytes are copied into the
+    // vault. A rejected clip (blank/oversized/unusable) shows the plugin's
+    // reason instead of creating a note; an accepted one is copied to app
+    // storage and applied once the vault unlocks.
     private fun readShareIntent(intent: Intent?) {
         if (intent == null) return
         val text = intent.getStringExtra(Intent.EXTRA_TEXT)
@@ -525,9 +535,45 @@ onSaveContent = { newText ->
             else -> emptyList()
         }
         if (text == null && uriStrings.isEmpty()) return
+        val input = com.authorss81.noteflow.plugins.SharedInput(
+            action = intent.action,
+            text = text,
+            streams = uriStrings.map { uriString ->
+                val uri = Uri.parse(uriString)
+                com.authorss81.noteflow.plugins.SharedStream(
+                    uriString = uriString,
+                    mimeType = runCatching { contentResolver.getType(uri) }.getOrNull(),
+                    sizeBytes = null
+                )
+            }
+        )
         lifecycleScope.launch(Dispatchers.IO) {
-            val paths = copySharedUris(uriStrings)
-            pendingShare = SharedContent(text, paths)
+            when (val outcome = viewModel.parseSharedClip(input)) {
+                is com.authorss81.noteflow.plugins.PluginResult.Success ->
+                    when (val parsed = outcome.value) {
+                        is com.authorss81.noteflow.plugins.ClipParseOutcome.Success -> {
+                            val paths = copySharedUris(uriStrings)
+                            if (paths.isEmpty() && parsed.clip.text.isNullOrBlank()) {
+                                withContext(Dispatchers.Main) {
+                                    viewModel.showSnackbar("Nothing readable to clip.", isLong = true)
+                                }
+                            } else {
+                                pendingShare = SharedContent(text, paths)
+                            }
+                        }
+                        is com.authorss81.noteflow.plugins.ClipParseOutcome.Rejected -> {
+                            withContext(Dispatchers.Main) {
+                                viewModel.showSnackbar(parsed.reason, isLong = true)
+                            }
+                        }
+                    }
+                else -> withContext(Dispatchers.Main) {
+                    viewModel.showSnackbar(
+                        "Clip to InkFlow is not enabled — enable it in Settings → Plugins.",
+                        isLong = true
+                    )
+                }
+            }
         }
     }
 

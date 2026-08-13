@@ -186,3 +186,166 @@ interface OcrPlugin {
 interface WebSearchPlugin {
     suspend fun searchWeb(query: String): WebSearchOutcome
 }
+
+// ---------------------------------------------------------------------------
+// Phase 15 — productivity & knowledge plugin serving interfaces.
+// Each capability below has a typed serving interface so the framework routes
+// by capability + interface, never hardcoded plugin classes. The CORES are pure
+// JVM (fully CI-testable); only thin platform wrappers (files, PDFs, intents,
+// network) live in the plugins' platform slices.
+// ---------------------------------------------------------------------------
+
+/** Output formats served by the [PluginCapability.Export] engine plugin. */
+enum class ExportFormat { MARKDOWN, HTML, PDF }
+
+/** Everything the export engine needs to render a note into a document. */
+data class ExportRequest(
+    val title: String,
+    /** Markdown source when the note holds one; null for ink/canvas-only notes. */
+    val markdown: String? = null,
+    /** Fallback plain text (e.g. extractedText) when no markdown is present. */
+    val plainText: String? = null
+)
+
+/**
+ * Outcome of an export request. [Success] carries the written file + format;
+ * [Error] carries a validated, user-facing reason. A plugin must never return
+ * null — the manager treats that as [PluginResult.Failure].
+ */
+sealed class ExportOutcome {
+    data class Success(val file: java.io.File, val format: ExportFormat) : ExportOutcome()
+    data class Error(val message: String) : ExportOutcome()
+}
+
+/** Serving interface for the [PluginCapability.Export] capability. */
+interface ExportPlugin {
+    /**
+     * Render [request] to [format] and write it to a shareable file. Runs on
+     * `Dispatchers.IO` (callers use [com.authorss81.noteflow.plugins.PluginManager.withPluginAsync]).
+     * [context] is nullable for JVM tests; production always passes a real
+     * `Context` (needed for PDF/PNG rendering and cache-dir placement).
+     */
+    suspend fun exportNote(context: Context?, request: ExportRequest, format: ExportFormat): ExportOutcome
+}
+
+/** Kind of clip parsed from an incoming share intent. */
+enum class ClipKind { TEXT, IMAGES, FILES, MULTIPART }
+
+/** One incoming shared stream (images, files, clips). */
+data class SharedStream(
+    val uriString: String,
+    val mimeType: String? = null,
+    /** null = size not yet measured (measured after the platform copies it). */
+    val sizeBytes: Long? = null
+)
+
+/** A validated "clip" ready to be stored into an encrypted note. */
+data class SharedClip(
+    val kind: ClipKind,
+    val text: String? = null,
+    val streams: List<SharedStream> = emptyList()
+)
+
+/** The raw material the platform reads off an ACTION_SEND intent. */
+data class SharedInput(
+    val action: String? = null,
+    val text: String? = null,
+    val streams: List<SharedStream> = emptyList()
+)
+
+/** Result of parsing incoming share content. Never null, never stale. */
+sealed class ClipParseOutcome {
+    data class Success(val clip: SharedClip) : ClipParseOutcome()
+    /** The share can't be clipped as-is; [reason] is user-facing. */
+    data class Rejected(val reason: String) : ClipParseOutcome()
+}
+
+/** Serving interface for the [PluginCapability.ClipShare] capability. */
+interface ClipSharePlugin {
+    /** Classify + validate incoming share content. PURE JVM (unit-tested). */
+    fun parse(input: SharedInput): ClipParseOutcome
+}
+
+/** Structural statistics of a note's text (word/char/paragraph/readability). */
+data class TextAnalysis(
+    val wordCount: Int,
+    val characterCount: Int,
+    val characterCountNoSpaces: Int,
+    val paragraphCount: Int,
+    val sentenceCount: Int,
+    val readingTimeSeconds: Int,
+    val fleschKincaid: Double,
+    val fleschKincaidLabel: String
+)
+
+enum class DiffOp { ADDED, REMOVED, UNCHANGED }
+
+/** One changed region of a note-diff, for a human-readable inline preview. */
+data class DiffHunk(
+    val op: DiffOp,
+    val startLine: Int,
+    val lineCount: Int,
+    val excerpt: String
+)
+
+/** Serving interface for the [PluginCapability.TextTools] capability. */
+interface TextToolsPlugin {
+    /** Analyze [text] (word/character/paragraph/sentence/reading/readability). */
+    fun analyzeText(text: String): TextAnalysis
+
+    /** Simple line-diff of two note texts; empty result when identical. */
+    fun diffTexts(oldText: String, newText: String): List<DiffHunk>
+}
+
+/** A detected language: BCP-47-ish iso code + display name + confidence. */
+data class DetectedLanguage(
+    val isoCode: String,
+    val displayName: String,
+    val confidence: Double
+)
+
+/** Outcome of a language-detection request. */
+sealed class LanguageDetectionOutcome {
+    data class Success(val language: DetectedLanguage) : LanguageDetectionOutcome()
+    data class NoMatch(val message: String) : LanguageDetectionOutcome()
+    data class Error(val message: String) : LanguageDetectionOutcome()
+}
+
+/** Serving interface for the [PluginCapability.LanguageDetection] capability. */
+interface LanguageDetectionPlugin {
+    /** Detect the dominant language of [text]. PURE JVM implementation. */
+    fun detectLanguage(text: String): LanguageDetectionOutcome
+
+    /**
+     * Merge a freshly-detected `lang:<iso>` tag into [existingTags] (a
+     * comma-separated tag string) honouring a user override: any existing
+     * `lang:*` tag is left untouched. PURE JVM (unit-tested).
+     */
+    fun autoTagLanguage(text: String, existingTags: String): String
+
+    /** True when [tag] is a language tag this plugin manages (case-insensitive). */
+    fun isLanguageTag(tag: String): Boolean
+}
+
+/** A fetched web page reduced to its readable content. */
+data class WebCaptureResult(
+    val title: String,
+    val markdown: String
+)
+
+/** Outcome of a web-page capture request. */
+sealed class WebCaptureOutcome {
+    data class Success(val result: WebCaptureResult) : WebCaptureOutcome()
+    data class Error(val message: String) : WebCaptureOutcome()
+}
+
+/** Serving interface for the [PluginCapability.WebCapture] capability. */
+interface WebCapturePlugin {
+    /**
+     * Fetch [url], extract its readable content and return it as clean
+     * Markdown. Network runs on `Dispatchers.IO` and is strictly user-initiated;
+     * failures always return a clear, user-facing [WebCaptureOutcome.Error]
+     * (e.g. "offline — check connection") — never a silent empty result.
+     */
+    suspend fun captureWebPage(context: Context?, url: String): WebCaptureOutcome
+}

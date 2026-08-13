@@ -86,6 +86,7 @@ fun HomeScreen(
     var showTemplateLibrary by remember { mutableStateOf(false) }
     var showWebDavDialog by remember { mutableStateOf(false) }
     var showLocalSendDialog by remember { mutableStateOf(false) }
+    var showWebCaptureDialog by remember { mutableStateOf(false) }
     var activeTagFilterPath by remember { mutableStateOf<String?>(null) }
     var activeTagMatchingIds by remember { mutableStateOf<Set<String>?>(null) }
 
@@ -443,6 +444,7 @@ fun HomeScreen(
                             onOpenUpdate = { showUpdateDialog = true },
                             onOpenPlugins = { showPluginsDialog = true },
                             onOpenLocalSend = { showLocalSendDialog = true },
+                            onOpenWebCapture = { showWebCaptureDialog = true },
                             onOpenWebDavSync = { showWebDavDialog = true },
                             onBackup = {
                                 if (viewModel.hasMasterPassword.value) {
@@ -1251,6 +1253,19 @@ fun HomeScreen(
                 viewModel = viewModel,
                 pages = allActivePages,
                 onDismiss = { showLocalSendDialog = false }
+            )
+        }
+
+        if (showWebCaptureDialog) {
+            WebCaptureDialog(
+                viewModel = viewModel,
+                onCaptured = { capturedMarkdown ->
+                    // A captured page is stored through the SAME encrypted
+                    // createNoteFromSharedContent path as a share-sheet clip.
+                    viewModel.createNoteFromSharedContent(capturedMarkdown, emptyList()) { }
+                    viewModel.showSnackbar("Web page captured as a note", isLong = true)
+                },
+                onDismiss = { showWebCaptureDialog = false }
             )
         }
 
@@ -2306,6 +2321,7 @@ private fun MaintenanceMenu(
     onExportObsidianVault: () -> Unit = {},
     onExportHtmlVault: () -> Unit = {},
     onOpenLocalSend: () -> Unit = {},
+    onOpenWebCapture: () -> Unit = {},
     onOpenWebDavSync: () -> Unit = {}
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -2391,6 +2407,11 @@ private fun MaintenanceMenu(
                 onClick = { expanded = false; onOpenLocalSend() }
             )
             DropdownMenuItem(
+                text = { Text("Capture Web Page as Note") },
+                leadingIcon = { Icon(Icons.Outlined.Language, contentDescription = null) },
+                onClick = { expanded = false; onOpenWebCapture() }
+            )
+            DropdownMenuItem(
                 text = { Text("WebDAV / Nextcloud E2EE Sync") },
                 leadingIcon = { Icon(Icons.Outlined.CloudSync, contentDescription = null) },
                 onClick = { expanded = false; onOpenWebDavSync() }
@@ -2407,4 +2428,112 @@ private fun MaintenanceMenu(
             )
         }
     }
+}
+
+/**
+ * Phase 15 (Web Capture): fetch a user-supplied http(s) URL and store the
+ * readable content as a new encrypted note. Runs the fetch + extraction on a
+ * background dispatcher via the ViewModel; errors surface the plugin's reason.
+ */
+@Composable
+private fun WebCaptureDialog(
+    viewModel: NoteflowViewModel,
+    onCaptured: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val scope = rememberCoroutineScope()
+    var urlInput by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var resultTitle by remember { mutableStateOf<String?>(null) }
+    var resultMarkdown by remember { mutableStateOf("") }
+
+    fun submit() {
+        if (busy) return
+        busy = true
+        error = null
+        resultTitle = null
+        scope.launch {
+            when (val result = viewModel.captureWebPage(urlInput.trim())) {
+                is com.authorss81.noteflow.plugins.PluginResult.Success -> {
+                    when (val outcome = result.value) {
+                        is com.authorss81.noteflow.plugins.WebCaptureOutcome.Success -> {
+                            resultTitle = outcome.result.title
+                            resultMarkdown = outcome.result.markdown
+                        }
+                        is com.authorss81.noteflow.plugins.WebCaptureOutcome.Error ->
+                            error = outcome.message
+                    }
+                }
+                is com.authorss81.noteflow.plugins.PluginResult.Failure ->
+                    error = result.message
+                is com.authorss81.noteflow.plugins.PluginResult.Unavailable ->
+                    error = result.message
+            }
+            busy = false
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Capture Web Page as Note") },
+        text = {
+            Column {
+                if (resultTitle != null) {
+                    Text("Captured: ${resultTitle}", fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "Preview (first 300 chars):\n${resultMarkdown.take(300)}",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Spacer(Modifier.height(12.dp))
+                }
+                OutlinedTextField(
+                    value = urlInput,
+                    onValueChange = { urlInput = it },
+                    label = { Text("https://…") },
+                    singleLine = true,
+                    enabled = !busy && resultTitle == null,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                if (busy) {
+                    Spacer(Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Fetching…", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+                if (error != null) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        error ?: "",
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            if (resultTitle != null) {
+                TextButton(onClick = {
+                    onCaptured(resultMarkdown)
+                    onDismiss()
+                }) { Text("Save as Note") }
+            } else {
+                TextButton(
+                    enabled = !busy && urlInput.isNotBlank(),
+                    onClick = { submit() }
+                ) { Text("Capture") }
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = {
+                    if (busy) return@TextButton
+                    onDismiss()
+                }
+            ) { Text(if (resultTitle != null) "Cancel" else "Close") }
+        }
+    )
 }

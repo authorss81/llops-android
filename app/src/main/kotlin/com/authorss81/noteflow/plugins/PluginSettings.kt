@@ -15,6 +15,7 @@ interface PluginSettingsStore {
     fun setInt(pluginId: String, key: String, value: Int)
     fun getBoolean(pluginId: String, key: String, default: Boolean): Boolean
     fun setBoolean(pluginId: String, key: String, value: Boolean)
+    fun containsKey(pluginId: String, key: String): Boolean
 }
 
 /**
@@ -40,6 +41,8 @@ class InMemoryPluginSettingsStore : PluginSettingsStore {
     override fun setBoolean(pluginId: String, key: String, value: Boolean) {
         values[PluginSettingKey.key(pluginId, key)] = value.toString()
     }
+    override fun containsKey(pluginId: String, key: String): Boolean =
+        values.containsKey(PluginSettingKey.key(pluginId, key))
 }
 
 /**
@@ -68,4 +71,5 @@ class PluginSettings(
     fun setInt(key: String, value: Int) = store.setInt(pluginId, key, value)
     fun getBoolean(key: String, default: Boolean): Boolean = store.getBoolean(pluginId, key, default)
     fun setBoolean(key: String, value: Boolean) = store.setBoolean(pluginId, key, value)
+    fun containsKey(key: String): Boolean = store.containsKey(pluginId, key)
 }

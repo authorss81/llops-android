@@ -17,6 +17,9 @@ sqlcipher = "4.9.0"
 sqliteKtx = "2.4.0"
 commonmark = "0.29.0"
 mlkitTextRecognition = "16.0.1"
+# Phase 15: productivity/knowledge plugin pack (pure-JVM, CI-testable).
+lingua = "1.2.2"
+jsoup = "1.17.2"
 
 [libraries]
 androidx-ink-authoring = { group = "androidx.ink", name = "ink-authoring", version.ref = "ink" }
@@ -53,6 +56,11 @@ commonmark-ext-gfm-tables = { group = "org.commonmark", name = "commonmark-ext-g
 # Phase 12: on-device, offline OCR (bundled model — no Play Services, no API key,
 # no INTERNET). Latin script by default; per-language scripts add their own model.
 mlkit-text-recognition = { group = "com.google.mlkit", name = "text-recognition", version.ref = "mlkitTextRecognition" }
+
+# Phase 15: Lingua (natural-language detection) + jsoup (readable-content extraction).
+# Both pure JVM, Apache-2.0, no native code — fully unit-testable in CI.
+lingua = { group = "com.github.pemistahl", name = "lingua", version.ref = "lingua" }
+jsoup = { group = "org.jsoup", name = "jsoup", version.ref = "jsoup" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

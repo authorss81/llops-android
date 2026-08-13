@@ -2,7 +2,12 @@ package com.authorss81.noteflow.plugins
 
 import android.content.Context
 import android.os.Build
+import com.authorss81.noteflow.plugins.clipshare.ClipToInkFlowPlugin
+import com.authorss81.noteflow.plugins.export.ExportEnginePlugin
+import com.authorss81.noteflow.plugins.langdetect.LanguageDetectionEngine
 import com.authorss81.noteflow.plugins.ocr.OnDeviceOcrPlugin
+import com.authorss81.noteflow.plugins.texttools.TextToolsEngine
+import com.authorss81.noteflow.plugins.webcapture.WebCaptureEngine
 import com.authorss81.noteflow.plugins.websearch.DuckDuckGoWebSearchPlugin
 
 /**
@@ -561,7 +566,12 @@ class PluginRegistry(
         fun defaultPlugins(): List<NoteflowPlugin> = listOf(
             Rot13TransformPlugin(),
             OnDeviceOcrPlugin(),
-            DuckDuckGoWebSearchPlugin()
+            DuckDuckGoWebSearchPlugin(),
+            ExportEnginePlugin(),
+            ClipToInkFlowPlugin(),
+            TextToolsEngine(),
+            LanguageDetectionEngine(),
+            WebCaptureEngine()
         )
     }
 }

@@ -109,13 +109,15 @@ class PluginFrameworkTest {
 
     @Test
     fun unavailableCapabilityFailsClearlyWithoutCrashing() {
-        // Phase 12: OCR + WebSearch now have REAL plugins in the default registry.
-        // Export is still an unserved (declared-only) extension point, so it is
-        // the correct probe for "declared but unserved → loud Failure, never fake".
-        val registry = PluginRegistry(InMemoryPluginEnableStore(), currentApiLevel = 26) // no plugin declares Export
+        // Phase 12/15: OCR, WebSearch, Export, ClipShare, TextTools,
+        // LanguageDetection and WebCapture now have REAL plugins in the default
+        // registry. FileTransfer is still an unserved (declared-only) extension
+        // point, so it is the correct probe for "declared but unserved → loud
+        // Failure, never fake".
+        val registry = PluginRegistry(InMemoryPluginEnableStore(), currentApiLevel = 26) // no plugin declares FileTransfer
         val manager = PluginManager(registry)
 
-        val result = manager.withPlugin(PluginCapability.Export, null) { it.id }
+        val result = manager.withPlugin(PluginCapability.FileTransfer, null) { it.id }
 
         assertTrue(result is PluginResult.Failure)
         assertTrue((result as PluginResult.Failure).message.contains("No plugin is installed"))
