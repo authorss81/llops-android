@@ -1226,8 +1226,13 @@ fun EditorScreen(
                 onCanvasTap = {
                     toolbarState = FloatingToolbarState.COLLAPSED
                 },
-                onExtractOcr = { path ->
-                    if (ocrAvailable) ocrTargetPath = path
+                onExtractOcr = if (ocrAvailable) {
+                    { path -> ocrTargetPath = path }
+                } else {
+                    // No OCR plugin enabled/available right now — pass null so the
+                    // photo card's "Extract text" button renders disabled instead
+                    // of silently doing nothing on tap.
+                    null
                 }
             )
 

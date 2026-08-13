@@ -45,7 +45,9 @@ Everything lives in `com.authorss81.noteflow.plugins`:
 | `PluginEnableStore.kt` | Persistence abstraction for per-plugin opt-in (incl. "ever enabled"). |
 | `PluginSettings.kt` | Namespaced per-plugin settings (`plugins.<id>.<key>`) + `PluginSettingKey`. |
 | `PluginLogger.kt` | Logging abstraction (NoOp for JVM tests; Android logcat impl in the app). |
-| `Rot13TransformPlugin.kt` | The one real plugin — a working end-to-end proof of the wiring. |
+| `Rot13TransformPlugin.kt` | The first real plugin — a working end-to-end proof of the wiring (TextTransform). |
+| `ocr/OnDeviceOcrPlugin.kt` | The real, on-device OCR plugin (Phase 12) — ML Kit text-recognition, offline, no API key, no INTERNET. Serves `OCR`. |
+| `websearch/DuckDuckGoWebSearchPlugin.kt` | The real web-search plugin (Phase 12) — keyless DuckDuckGo Instant Answer API. Serves `WebSearch`. |
 
 Supporting pieces outside the framework package:
 
@@ -69,8 +71,10 @@ exactly one enabled plugin at a time — conflicts are arbitrated deterministica
 (higher version; tie → earlier registration) and the loser is disabled with a
 reason.
 
-Today `TextTransform` is implemented; the others are *declared extension points*
-that fail loudly until a real Phase 12+ plugin ships.
+Today `TextTransform` (ROT13 proof), `OCR` (on-device ML Kit) and `WebSearch`
+(keyless DuckDuckGo) are implemented for real. The remaining capabilities
+(`FileTransfer`, `Assistant`, `Export`) are *declared extension points* that fail
+loudly until a real plugin ships — see the phase-12 implementations below.
 
 ### `PluginManifest` & `NoteflowPlugin` — what a plugin is
 
@@ -167,6 +171,51 @@ A plugin transform is never applied silently. Selecting a runnable plugin opens 
 confirmation dialog, and applying it first writes a snapshot of the current text
 into **Version History** ("Before running `<plugin>`") so the original wording is
 always one restore away before the transformed text is saved.
+
+## The two full implementations (Phase 12)
+
+### On-Device OCR (`OnDeviceOcrPlugin`, capability `OCR`)
+
+- **Real model:** Google ML Kit `text-recognition` (bundled Latin model) — fully
+  offline, no API key, no INTERNET. The only new dependency added for this phase.
+- **Split for testability:** the plugin wraps a `OcrEngine` interface.
+  `MlKitOcrEngine` (the model runner) is **platform-only** — it cannot run inside
+  a JVM unit test, so `OcrPluginWrapperTest` covers the pure wrapper
+  (input validation, whitespace formatting, error mapping, cancellation,
+  plugin-manager routing) with an injected fake engine. Nothing is silently
+  skipped: the model invocation itself is verified on-device/emulator, not in a
+  JVM test.
+- **UI:** the photo card on the canvas gains an "Extract text (OCR)" button
+  (disabled when the plugin is off/unavailable). The result dialog
+  (`OcrResultDialog`) shows real progress/error states, is cancelable, and only
+  copies via `ClipboardGuard.recordCopy()`. "Insert into note" places the text in
+  a sticky note under the source image.
+- **Cancellation:** ML Kit's `Task` has no `cancel()` handle; cancellation is
+  honoured by never resuming a cancelled continuation (`isActive` guards), so a
+  cancel stops the coroutine immediately and cannot double-resume it.
+
+### DuckDuckGo Web Search (`DuckDuckGoWebSearchPlugin`, capability `WebSearch`)
+
+- **Real backend:** the keyless DuckDuckGo Instant Answer API
+  (`https://api.duckduckgo.com/?q=…&format=json&no_html=1`) over plain
+  `java.net.HttpURLConnection` on `Dispatchers.IO` — no new HTTP dependency.
+- **Honest availability:** `availability()` reflects INTERNET permission presence
+  *and* an active network with INTERNET capability, so the derived state flips to
+  UNAVAILABLE the moment the device goes offline and recovers when connectivity
+  returns.
+- **UI:** the Markdown editor's **Plugins** menu → "Search the web…" opens
+  `WebSearchDialog`; tapping a result inserts a `[title](url)` link into the note
+  and dismisses. Offline shows a clear "check your connection" error — never a
+  silent failure.
+- **Tests:** `WebSearchPluginTest` is pure JVM (no network): URL building, JSON
+  parsing over sample payloads (including empty/malformed responses and URL
+  dedupe where the abstract wins over a related topic sharing its URL), the
+  offline availability gate, and manager routing with an injected backend.
+
+Both plugins live in their own packages under `plugins/` (not the core
+ViewModel/screens), are registered in `PluginRegistry.defaultPlugins()`, are off
+by default (opt-in via Settings → Plugins), and follow the Phase 11
+`docs/PLUGIN_SDK.md` lifecycle/error-isolation contract.
 
 ## Adding a NEW plugin
 

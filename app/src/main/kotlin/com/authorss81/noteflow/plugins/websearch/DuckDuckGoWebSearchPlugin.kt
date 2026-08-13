@@ -56,7 +56,10 @@ class DuckDuckGoWebSearchPlugin(
     )
 
     override fun availability(context: Context?): PluginAvailability {
-        val ctx = context ?: return PluginAvailability.Unknown
+        // No context (JVM unit tests): nothing to check — the injected backend
+        // can serve (same convention as Rot13TransformPlugin). On-device the
+        // real INTERNET permission + network checks below decide.
+        val ctx = context ?: return PluginAvailability.Ok
         return WebSearchAvailability.evaluate(
             internetPermissionGranted = hasInternetPermission(ctx),
             networkAvailable = hasActiveNetwork(ctx)
@@ -64,12 +67,8 @@ class DuckDuckGoWebSearchPlugin(
     }
 
     override fun onEnable(context: Context?, settings: PluginSettings) {
-        // Documented settings-schema migration (see docs/PLUGIN_SDK.md § 4).
-        val schema = settings.getInt("settings_schema", default = 0)
-        if (schema < 1) {
-            settings.setInt("result_limit", 8)
-            settings.setInt("settings_schema", 1)
-        }
+        // No settings yet — a future result-limit option would migrate here
+        // (settings_schema pattern, see docs/PLUGIN_SDK.md § 4).
     }
 
     override suspend fun searchWeb(query: String): WebSearchOutcome {

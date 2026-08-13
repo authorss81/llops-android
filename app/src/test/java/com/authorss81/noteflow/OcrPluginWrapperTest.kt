@@ -5,6 +5,7 @@ import com.authorss81.noteflow.plugins.OcrOutcome
 import com.authorss81.noteflow.plugins.OcrPlugin
 import com.authorss81.noteflow.plugins.PluginCapability
 import com.authorss81.noteflow.plugins.PluginManager
+import com.authorss81.noteflow.plugins.PluginRegistry
 import com.authorss81.noteflow.plugins.PluginResult
 import com.authorss81.noteflow.plugins.ocr.OcrEngine
 import com.authorss81.noteflow.plugins.ocr.OcrErrorMapper

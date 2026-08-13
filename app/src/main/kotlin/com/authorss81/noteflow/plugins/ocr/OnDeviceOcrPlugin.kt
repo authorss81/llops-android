@@ -45,17 +45,11 @@ class OnDeviceOcrPlugin(
         capabilities = setOf(PluginCapability.OCR)
     )
 
-    override fun availability(context: Context?): PluginAvailability =
-        if (context == null) PluginAvailability.Unknown else PluginAvailability.Ok
+    override fun availability(context: Context?): PluginAvailability = PluginAvailability.Ok
 
     override fun onEnable(context: Context?, settings: PluginSettings) {
-        // Documented settings-schema migration (see docs/PLUGIN_SDK.md § 4):
-        // schema 0 → 1 records the default language scope choice.
-        val schema = settings.getInt("settings_schema", default = 0)
-        if (schema < 1) {
-            settings.setString("language_scope", "latin")
-            settings.setInt("settings_schema", 1)
-        }
+        // No settings yet — a future language-scope option would migrate here
+        // (settings_schema pattern, see docs/PLUGIN_SDK.md § 4).
     }
 
     override fun onDisable(context: Context?, settings: PluginSettings) {

@@ -4,6 +4,7 @@ import com.authorss81.noteflow.plugins.PluginAvailability
 import com.authorss81.noteflow.plugins.PluginCapability
 import com.authorss81.noteflow.plugins.PluginManager
 import com.authorss81.noteflow.plugins.PluginPermission
+import com.authorss81.noteflow.plugins.PluginRegistry
 import com.authorss81.noteflow.plugins.PluginResult
 import com.authorss81.noteflow.plugins.WebSearchOutcome
 import com.authorss81.noteflow.plugins.WebSearchPlugin
@@ -121,7 +122,9 @@ class WebSearchPluginTest {
     @Test
     fun `query url builder encodes and sets the ddg params`() {
         val url = DuckDuckGoQueryUrl.build("Kotlin coroutines")
-        assertTrue(url.startsWith(DuckDuckGoQueryUrl.DEFAULT_BASE))
+        // build() trims the base's trailing slash (robust to callers passing
+        // with/without one), so compare against the normalized base.
+        assertTrue(url.startsWith(DuckDuckGoQueryUrl.DEFAULT_BASE.trimEnd('/')))
         assertTrue(url.contains("q=Kotlin+coroutines"))
         assertTrue(url.contains("format=json"))
         assertTrue(url.contains("no_html=1"))

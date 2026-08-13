@@ -142,6 +142,10 @@ fun WebSearchDialog(
                     is SearchStage.Results -> SearchResultsList(s.results) { title, url ->
                         val link = "[$title]($url)"
                         onInsertLink(link)
+                        // Dismiss after insert — mirrors OcrResultDialog so a
+                        // single tap both inserts and closes (no orphaned dialog).
+                        job?.cancel()
+                        onDismiss()
                     }
                 }
             }

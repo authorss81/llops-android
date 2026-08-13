@@ -53,14 +53,24 @@ object DuckDuckGoResponseParser {
 
         val dedupe = LinkedHashMap<String, WebSearchResult>()
 
+        // FIRST occurrence of a URL wins: the richer instant answer (Heading +
+        // AbstractText) is inserted before the related topics, so a URL shared by
+        // the abstract and a related topic keeps the abstract's title/snippet.
+        fun addOnce(url: String, result: WebSearchResult) {
+            if (!dedupe.containsKey(url)) dedupe[url] = result
+        }
+
         // The primary "instant answer" (Abstract/AbstractURL), when present.
         val abstractText = answer.AbstractText?.takeIf { it.isNotBlank() }
         val abstractUrl = answer.AbstractURL?.takeIf { it.startsWith("http", ignoreCase = true) }
         if (abstractText != null && abstractUrl != null) {
-            dedupe[abstractUrl] = WebSearchResult(
-                title = displayTitle(answer.Heading?.takeIf { it.isNotBlank() }, abstractUrl),
-                url = abstractUrl,
-                snippet = abstractText
+            addOnce(
+                abstractUrl,
+                WebSearchResult(
+                    title = displayTitle(answer.Heading?.takeIf { it.isNotBlank() }, abstractUrl),
+                    url = abstractUrl,
+                    snippet = abstractText
+                )
             )
         }
 
@@ -70,10 +80,13 @@ object DuckDuckGoResponseParser {
                 val text = topic.Text?.takeIf { it.isNotBlank() }
                 val url = topic.FirstURL?.takeIf { it.startsWith("http", ignoreCase = true) }
                 if (text != null && url != null) {
-                    dedupe[url] = WebSearchResult(
-                        title = displayTitle(titleFromText(text), url),
-                        url = url,
-                        snippet = text
+                    addOnce(
+                        url,
+                        WebSearchResult(
+                            title = displayTitle(titleFromText(text), url),
+                            url = url,
+                            snippet = text
+                        )
                     )
                 }
                 if (!topic.Topics.isNullOrEmpty()) collect(topic.Topics)

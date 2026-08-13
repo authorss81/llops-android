@@ -26,8 +26,13 @@ import kotlin.coroutines.resumeWithException
  * the model invocation itself is verified on-device/emulator (documented in
  * docs/PLUGINS.md).
  *
- * Cancellation: the ML Kit `Task` is cancelled when the calling coroutine is
- * cancelled, so a user tapping "Cancel" really aborts the model run.
+ * Cancellation: ML Kit's Tasks API exposes no `cancel()` handle on the returned
+ * `Task`, so cancellation is honoured by *never resuming a cancelled
+ * continuation* — a user tapping "Cancel" aborts the coroutine immediately (the
+ * model may finish briefly in the background, which is harmless). Each callback
+ * checks `cont.isActive` before resuming, which both makes the suspend call
+ * cancellable and prevents a late task callback from double-resuming an
+ * already-cancelled continuation (which would throw `IllegalStateException`).
  */
 class MlKitOcrEngine private constructor(
     private val recognizer: TextRecognizer
@@ -39,12 +44,18 @@ class MlKitOcrEngine private constructor(
         return suspendCancellableCoroutine { cont ->
             val task = recognizer.process(input)
             task.addOnSuccessListener(
-                OnSuccessListener<Text> { result -> cont.resume(result.text) }
+                OnSuccessListener<Text> { result ->
+                    if (cont.isActive) cont.resume(result.text)
+                }
             )
             task.addOnFailureListener(
-                OnFailureListener { e -> cont.resumeWithException(e) }
+                OnFailureListener { e ->
+                    if (cont.isActive) cont.resumeWithException(e)
+                }
             )
-            cont.invokeOnCancellation { task.cancel() }
+            // No `cancel()` on `Task`; the isActive guards above are the
+            // cancellation boundary. Nothing further to release here — the
+            // recognizer is process-lifetime and closed in onDisable.
         }
     }
 
