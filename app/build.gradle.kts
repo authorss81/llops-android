@@ -47,6 +47,13 @@ android {
                 storePassword = "android"
                 keyAlias = "androiddebugkey"
                 keyPassword = "android"
+            } else {
+                // No checked-in keystore: fall back to AGP's standard debug
+                // keystore, which AGP auto-generates on first build (CI-safe).
+                storeFile = file("${System.getProperty("user.home")}/.android/debug.keystore")
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
             }
         }
         create("releaseConfig") {

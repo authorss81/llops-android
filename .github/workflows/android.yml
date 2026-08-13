@@ -54,24 +54,5 @@ jobs:
       - name: Build Signed Release APK
         run: gradle assembleRelease
 
-      - name: Upload Test Reports
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: unit-test-reports
-          path: app/build/reports/tests/testDebugUnitTest/
-          if-no-files-found: ignore
-
-      - name: Upload Debug APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: noteflow-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
-
-      - name: Upload Release APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: noteflow-release-apk
-          path: app/build/outputs/apk/release/app-release.apk
-          if-no-files-found: warn
+      # No artifact uploads here — that drained the Actions storage quota.
+      # Release APK artifacts are produced by release.yml on v* tags only.
