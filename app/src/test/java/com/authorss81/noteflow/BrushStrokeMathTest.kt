@@ -126,6 +126,31 @@ class BrushStrokeMathTest {
     // ---- style selector ----------------------------------------------------
 
     @Test
+    fun `style ids match the AGSL shader selector table`() {
+        // Enforces the doc-comment in AgslShaders.WET_MIXING_SHADER:
+        //   0 = generic wash  1 = WATERCOLOR   2 = OIL_PAINT   3 = SMUDGE   4 = SPLATTER
+        //   5 = CHARCOAL      6 = OIL_PASTEL   7 = INK_WASH    8 = GOUACHE  9 = DRY_BRUSH
+        //  10 = PALETTE_KNIFE
+        // The shader branches on literal float ids (uBrushStyle == 5.0 etc.), so a
+        // renumber here without a matching shader edit breaks the real render silently.
+        val selectorTable = mapOf(
+            StrokeTool.WATERCOLOR to 1,
+            StrokeTool.OIL_PAINT to 2,
+            StrokeTool.SMUDGE to 3,
+            StrokeTool.SPLATTER to 4,
+            StrokeTool.CHARCOAL to 5,
+            StrokeTool.OIL_PASTEL to 6,
+            StrokeTool.INK_WASH to 7,
+            StrokeTool.GOUACHE to 8,
+            StrokeTool.DRY_BRUSH to 9,
+            StrokeTool.PALETTE_KNIFE to 10
+        )
+        for ((tool, expected) in selectorTable) {
+            assertEquals("$tool switched shader branch id", expected, BrushStrokeMath.brushStyleIdForTool(tool))
+        }
+    }
+
+    @Test
     fun `every new tool maps to its own distinct style id`() {
         val ids = StrokeTool.entries
             .filter { it in listOf(

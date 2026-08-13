@@ -1929,14 +1929,15 @@ private fun convertToInkStroke(stroke: Stroke, context: android.content.Context?
     if (stroke.tool == StrokeTool.CALLIGRAPHIC || stroke.tool == StrokeTool.CHISEL_MARKER) return null
     try {
         val family = ProtobufBrushLoader.getBrushFamilyForTool(context, stroke.tool)
-        val isSolidTool = stroke.tool == StrokeTool.PEN ||
+        val isSolidTool = (stroke.tool == StrokeTool.PEN ||
                           stroke.tool == StrokeTool.FOUNTAIN_PEN ||
                           stroke.tool == StrokeTool.FINELINER ||
                           stroke.tool == StrokeTool.CALLIGRAPHIC ||
                           stroke.tool == StrokeTool.CHISEL_MARKER ||
                           stroke.tool == StrokeTool.DOTTED ||
                           stroke.tool == StrokeTool.LINE ||
-                          stroke.tool.isShapeTool
+                          stroke.tool.isShapeTool) &&
+                          !com.authorss81.noteflow.services.BrushStrokeMath.isWetRenderedTool(stroke.tool)
 
         val brushColorInt = if (isSolidTool) stroke.color.copy(alpha = 1.0f).toArgb() else stroke.colorInt
         val brush = InkBrush.createWithColorIntArgb(
@@ -2445,14 +2446,15 @@ private fun DrawScope.drawSingleStroke(
             rawColor = Color(0xFFF8FAFC)
         }
     }
-    val isSolidTool = stroke.tool == StrokeTool.PEN ||
+    val isSolidTool = (stroke.tool == StrokeTool.PEN ||
                       stroke.tool == StrokeTool.FOUNTAIN_PEN ||
                       stroke.tool == StrokeTool.FINELINER ||
                       stroke.tool == StrokeTool.CALLIGRAPHIC ||
                       stroke.tool == StrokeTool.CHISEL_MARKER ||
                       stroke.tool == StrokeTool.DOTTED ||
                       stroke.tool == StrokeTool.LINE ||
-                      stroke.tool.isShapeTool
+                      stroke.tool.isShapeTool) &&
+                      !com.authorss81.noteflow.services.BrushStrokeMath.isWetRenderedTool(stroke.tool)
 
     val color = when {
         stroke.tool == StrokeTool.HIGHLIGHTER -> stroke.color.copy(alpha = 0.35f)
