@@ -13,9 +13,9 @@ on:
         type: boolean
         default: true
   schedule:
-    # Cron = the retry engine. Every 30 min, a cheap check: only runs work if
+    # Cron = the retry engine. Every 10 min, a cheap check: only runs work if
     # a phase is pending or deferred. Near-zero minutes when idle.
-    - cron: "*/30 * * * *"
+    - cron: "*/10 * * * *"
 
 permissions:
   contents: write
