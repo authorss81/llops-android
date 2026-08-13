@@ -125,14 +125,28 @@ jobs:
           bash scripts/phase_runner.sh "${{ needs.select-phase.outputs.phase }}" --review
         continue-on-error: true
 
-      - name: Commit and push
+      - name: Commit and push (pull-rebase-retry so concurrent human pushes don't lose the bot's work)
         run: |
           git config user.name "llops-bot"
           git config user.email "llops-bot@users.noreply.github.com"
           git add -A
           if ! git diff --cached --quiet; then
             git commit -m "llops: ${{ needs.select-phase.outputs.phase }}"
-            git push origin main
+            for i in 1 2 3 4 5; do
+              if git push origin main; then
+                echo "push succeeded on attempt $i"
+                break
+              fi
+              echo "push rejected (attempt $i) — pulling latest and rebasing..."
+              git pull --rebase origin main || true
+              sleep 3
+            done
+          else
+            echo "no changes to commit"
+          fi
+          # Report the final state so the status step can judge correctly.
+          if [ -f "workspace/${{ needs.select-phase.outputs.phase }}/.done" ]; then
+            echo "BOT_DONE=true" >> "$GITHUB_ENV"
           fi
 
       - name: Report status
