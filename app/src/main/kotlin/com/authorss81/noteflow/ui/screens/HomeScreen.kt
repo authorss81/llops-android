@@ -1,7 +1,6 @@
 package com.authorss81.noteflow.ui.screens
 
 import android.net.Uri
-import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -102,11 +101,11 @@ fun HomeScreen(
             try {
                 viewModel.repository.closeDatabase()
                 ImportExportService.importBackup(context, bytes, viewModel.repository.encryptionKey, password)
-                Toast.makeText(context, "Restore successful. Restarting...", Toast.LENGTH_LONG).show()
+                viewModel.showSnackbar("Restore successful. Restarting...", isLong = true)
                 kotlinx.coroutines.delay(1000)
                 kotlin.system.exitProcess(0)
             } catch (e: Exception) {
-                Toast.makeText(context, "Restore failed: ${e.message}", Toast.LENGTH_LONG).show()
+                viewModel.showSnackbar("Restore failed: ${e.message}", isLong = true)
             }
         }
     }
@@ -131,7 +130,7 @@ fun HomeScreen(
                         showLegacyRestoreConfirmDialog = true
                     }
                 } catch (e: Exception) {
-                    Toast.makeText(context, "Restore failed: ${e.message}", Toast.LENGTH_LONG).show()
+                    viewModel.showSnackbar("Restore failed: ${e.message}", isLong = true)
                 }
             }
         }
@@ -277,7 +276,7 @@ fun HomeScreen(
             }
 
             if (importedCount > 0) {
-                Toast.makeText(context, "Imported $importedCount page(s)", Toast.LENGTH_SHORT).show()
+                viewModel.showSnackbar("Imported $importedCount page(s)")
             }
         }
     }
@@ -438,9 +437,9 @@ fun HomeScreen(
                                             withContext(Dispatchers.IO) {
                                                 cacheFile.copyTo(destFile, overwrite = true)
                                             }
-                                            Toast.makeText(context, "Backup saved to Downloads: ${destFile.name}", Toast.LENGTH_LONG).show()
+                                            viewModel.showSnackbar("Backup saved to Downloads: ${destFile.name}", isLong = true)
                                         } catch (e: Exception) {
-                                            Toast.makeText(context, "Backup failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                                            viewModel.showSnackbar("Backup failed: ${e.message}")
                                         }
                                     }
                                 }
@@ -453,9 +452,9 @@ fun HomeScreen(
                                     val pages = viewModel.pages.value
                                     val zipFile = ImportExportService.exportObsidianVaultZip(context, "SmoothNotes_Vault", pages, viewModel.repository)
                                     if (zipFile != null && zipFile.exists()) {
-                                        Toast.makeText(context, "Obsidian Vault saved to Downloads: ${zipFile.name}", Toast.LENGTH_LONG).show()
+                                        viewModel.showSnackbar("Obsidian Vault saved to Downloads: ${zipFile.name}", isLong = true)
                                     } else {
-                                        Toast.makeText(context, "Failed to export Obsidian vault", Toast.LENGTH_SHORT).show()
+                                        viewModel.showSnackbar("Failed to export Obsidian vault")
                                     }
                                 }
                             },
@@ -464,9 +463,9 @@ fun HomeScreen(
                                     val pages = viewModel.pages.value
                                     val zipFile = ImportExportService.exportVaultToHtmlZip(context, "SmoothNotes_Site", pages, viewModel.repository)
                                     if (zipFile != null && zipFile.exists()) {
-                                        Toast.makeText(context, "HTML Site saved to Downloads: ${zipFile.name}", Toast.LENGTH_LONG).show()
+                                        viewModel.showSnackbar("HTML Site saved to Downloads: ${zipFile.name}", isLong = true)
                                     } else {
-                                        Toast.makeText(context, "Failed to export HTML site", Toast.LENGTH_SHORT).show()
+                                        viewModel.showSnackbar("Failed to export HTML site")
                                     }
                                 }
                             }
@@ -588,12 +587,12 @@ fun HomeScreen(
                                 tagEditorTargetNotebook = nb
                             },
                             onExportVaultNotebook = { nb ->
-                                Toast.makeText(context, "Exporting Notebook Vault ZIP...", Toast.LENGTH_SHORT).show()
+                                viewModel.showSnackbar("Exporting Notebook Vault ZIP...")
                                 viewModel.exportNotebookVaultZip(context, nb.id) { zipFile ->
                                     if (zipFile != null) {
-                                        Toast.makeText(context, "Exported Vault ZIP to Downloads: ${zipFile.name}", Toast.LENGTH_LONG).show()
+                                        viewModel.showSnackbar("Exported Vault ZIP to Downloads: ${zipFile.name}", isLong = true)
                                     } else {
-                                        Toast.makeText(context, "Vault export failed", Toast.LENGTH_SHORT).show()
+                                        viewModel.showSnackbar("Vault export failed")
                                     }
                                 }
                             },
@@ -626,12 +625,12 @@ fun HomeScreen(
                                 }
                             },
                             onExportVaultSection = { sec ->
-                                Toast.makeText(context, "Exporting Section Vault ZIP...", Toast.LENGTH_SHORT).show()
+                                viewModel.showSnackbar("Exporting Section Vault ZIP...")
                                 viewModel.exportSectionVaultZip(context, sec.id) { zipFile ->
                                     if (zipFile != null) {
-                                        Toast.makeText(context, "Exported Vault ZIP to Downloads: ${zipFile.name}", Toast.LENGTH_LONG).show()
+                                        viewModel.showSnackbar("Exported Vault ZIP to Downloads: ${zipFile.name}", isLong = true)
                                     } else {
-                                        Toast.makeText(context, "Vault export failed", Toast.LENGTH_SHORT).show()
+                                        viewModel.showSnackbar("Vault export failed")
                                     }
                                 }
                             },
@@ -1027,7 +1026,7 @@ fun HomeScreen(
                 viewModel = viewModel,
                 onDismiss = { showTemplateLibrary = false },
                 onTemplateApplied = {
-                    Toast.makeText(context, "Workspace template applied successfully!", Toast.LENGTH_SHORT).show()
+                    viewModel.showSnackbar("Workspace template applied successfully!")
                 }
             )
         }
@@ -1154,7 +1153,7 @@ fun HomeScreen(
                                                 cacheFile.copyTo(destFile, overwrite = true)
                                             }
                                             showBackupPasswordDialog = false
-                                            Toast.makeText(context, "Password-protected backup saved to Downloads: ${destFile.name}", Toast.LENGTH_LONG).show()
+                                            viewModel.showSnackbar("Password-protected backup saved to Downloads: ${destFile.name}", isLong = true)
                                         } catch (e: Exception) {
                                             backupPasswordError = "Backup failed: ${e.message}"
                                         }
@@ -1179,7 +1178,8 @@ fun HomeScreen(
 
         if (showUpdateDialog) {
             AppUpdateDialog(
-                onDismiss = { showUpdateDialog = false }
+                onDismiss = { showUpdateDialog = false },
+                onSnackbar = { text, isLong -> viewModel.showSnackbar(text, isLong) }
             )
         }
 

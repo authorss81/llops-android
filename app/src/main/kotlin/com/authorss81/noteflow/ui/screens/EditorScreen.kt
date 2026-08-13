@@ -3,7 +3,6 @@ package com.authorss81.noteflow.ui.screens
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.ParcelFileDescriptor
-import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -103,6 +102,8 @@ fun EditorScreen(
 
     val context = LocalContext.current
     com.authorss81.noteflow.utils.JankStatsHelper.MonitorJank("EditorScreen")
+    // 22.9: tactile feedback for high-value affordances.
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
     val voiceNoteManager = remember { VoiceNoteManager(context) }
 
     // Release recorder/player & cancel timer jobs when leaving the editor
@@ -116,7 +117,7 @@ fun EditorScreen(
         if (isGranted) {
             voiceNoteManager.startRecording(page.id)
         } else {
-            android.widget.Toast.makeText(context, "Microphone permission is required to record voice notes", android.widget.Toast.LENGTH_SHORT).show()
+            viewModel.showSnackbar("Microphone permission is required to record voice notes")
         }
     }
 
@@ -132,11 +133,11 @@ fun EditorScreen(
                     scope.launch {
                         val savedPath = com.authorss81.noteflow.services.ImportExportService.persistFile(context, fileName, bytes)
                         viewModel.updatePageSource(page.id, savedPath, "image")
-                        android.widget.Toast.makeText(context, "Custom paper background loaded!", android.widget.Toast.LENGTH_SHORT).show()
+                        viewModel.showSnackbar("Custom paper background loaded!")
                     }
                 }
             } catch (e: Exception) {
-                android.widget.Toast.makeText(context, "Failed to load custom background image", android.widget.Toast.LENGTH_SHORT).show()
+                viewModel.showSnackbar("Failed to load custom background image")
             }
         }
     }
@@ -220,21 +221,20 @@ fun EditorScreen(
     var gpuWetBrushesEnabled by remember { mutableStateOf(viewModel.settings.gpuWetBrushesEnabled) }
     var shapeAutoSnapEnabled by remember { mutableStateOf(viewModel.settings.shapeAutoSnapEnabled) }
 
-    LaunchedEffect(Unit) {
-        val detectedTier = com.authorss81.noteflow.utils.DeviceCompatibilityManager.getDeviceTier(context, viewModel.settings)
-        if (detectedTier == com.authorss81.noteflow.utils.DeviceTier.LOW_END) {
-            if (!viewModel.settings.lowEndWarningShown) {
-                gpuWetBrushesEnabled = false
-                viewModel.settings.gpuWetBrushesEnabled = false
-                viewModel.settings.lowEndWarningShown = true
-                android.widget.Toast.makeText(
-                    context,
-                    "GPU Wet Brushes disabled for low-end device performance. You can override this in settings.",
-                    android.widget.Toast.LENGTH_LONG
-                ).show()
+        LaunchedEffect(Unit) {
+            val detectedTier = com.authorss81.noteflow.utils.DeviceCompatibilityManager.getDeviceTier(context, viewModel.settings)
+            if (detectedTier == com.authorss81.noteflow.utils.DeviceTier.LOW_END) {
+                if (!viewModel.settings.lowEndWarningShown) {
+                    gpuWetBrushesEnabled = false
+                    viewModel.settings.gpuWetBrushesEnabled = false
+                    viewModel.settings.lowEndWarningShown = true
+                    viewModel.showSnackbar(
+                        "GPU Wet Brushes disabled for low-end device performance. You can override this in settings.",
+                        isLong = true
+                    )
+                }
             }
         }
-    }
 
     // Multi-page PDF & Continuous View State
     var currentPdfPage by remember { mutableIntStateOf(0) }
@@ -379,6 +379,7 @@ fun EditorScreen(
     }
 
     fun onAddLayer() {
+        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
         val nextZ = (layers.maxOfOrNull { it.zOrder } ?: -1) + 1
         val newLayerId = "layer_" + java.util.UUID.randomUUID().toString()
         val newLayer = LayerEntity(
@@ -403,6 +404,7 @@ fun EditorScreen(
 
     fun onDeleteLayer(deletedLayerId: String) {
         if (layers.size <= 1) return
+        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
         val remainingLayers = layers.filter { it.id != deletedLayerId }
         val targetLayerId = remainingLayers.firstOrNull()?.id ?: "layer_default"
 
@@ -595,10 +597,10 @@ fun EditorScreen(
                             pdfPage = activePageIdx
                         )
                         handleMediaEmbedsChange(mediaEmbeds + newPhotoEmbed)
-                        Toast.makeText(context, "Photo attached to canvas", Toast.LENGTH_SHORT).show()
+                        viewModel.showSnackbar("Photo attached to canvas")
                     }
                 } catch (e: Exception) {
-                    Toast.makeText(context, "Failed to attach photo: ${e.message}", Toast.LENGTH_SHORT).show()
+                    viewModel.showSnackbar("Failed to attach photo: ${e.message}")
                 }
             }
         }
@@ -611,6 +613,7 @@ fun EditorScreen(
             redoStack = redoStack + listOf(strokes)
             strokes = previousState
             triggerAutoSave(previousState)
+            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
         }
     }
 
@@ -621,6 +624,7 @@ fun EditorScreen(
             undoStack = undoStack + listOf(strokes)
             strokes = nextState
             triggerAutoSave(nextState)
+            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
         }
     }
 
@@ -667,7 +671,7 @@ fun EditorScreen(
                             }
                             onBack()
                         },
-                        modifier = Modifier.size(40.dp)
+                        modifier = Modifier.size(48.dp)
                     ) {
                         Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
                     }
@@ -703,6 +707,7 @@ fun EditorScreen(
                     FilterChip(
                         selected = isRecordingVoice,
                         onClick = {
+                            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
                             if (isRecordingVoice) {
                                 val result = voiceNoteManager.stopRecording()
                                 if (result != null) {
@@ -755,7 +760,7 @@ fun EditorScreen(
                                 modifier = Modifier.size(16.dp)
                             )
                         },
-                        modifier = Modifier.height(32.dp)
+                        modifier = Modifier.height(48.dp)
                     )
 
                     Spacer(modifier = Modifier.width(4.dp))
@@ -864,9 +869,9 @@ fun EditorScreen(
                                         pageIndex = currentPdfPage
                                     )
                                     if (file != null) {
-                                        Toast.makeText(context, "Exported Page PNG to Downloads: ${file.name}", Toast.LENGTH_LONG).show()
+                                        viewModel.showSnackbar("Exported Page PNG to Downloads: ${file.name}", isLong = true)
                                     } else {
-                                        Toast.makeText(context, "Export failed", Toast.LENGTH_SHORT).show()
+                                        viewModel.showSnackbar("Export failed")
                                     }
                                 }
                             }
@@ -891,9 +896,9 @@ fun EditorScreen(
                                         pageIndex = currentPdfPage
                                     )
                                     if (file != null) {
-                                        Toast.makeText(context, "Exported Page PDF to Downloads: ${file.name}", Toast.LENGTH_LONG).show()
+                                        viewModel.showSnackbar("Exported Page PDF to Downloads: ${file.name}", isLong = true)
                                     } else {
-                                        Toast.makeText(context, "Export failed", Toast.LENGTH_SHORT).show()
+                                        viewModel.showSnackbar("Export failed")
                                     }
                                 }
                             }
@@ -918,9 +923,9 @@ fun EditorScreen(
                                         mediaEmbeds = mediaEmbeds
                                     )
                                     if (file != null) {
-                                        Toast.makeText(context, "Exported Full PDF ($totalPages pgs) to Downloads: ${file.name}", Toast.LENGTH_LONG).show()
+                                        viewModel.showSnackbar("Exported Full PDF ($totalPages pgs) to Downloads: ${file.name}", isLong = true)
                                     } else {
-                                        Toast.makeText(context, "Document PDF export failed", Toast.LENGTH_SHORT).show()
+                                        viewModel.showSnackbar("Document PDF export failed")
                                     }
                                 }
                             }
@@ -933,9 +938,9 @@ fun EditorScreen(
                                 scope.launch {
                                     val file = ImportExportService.exportNoteToHtml(context, page, viewModel.repository)
                                     if (file != null) {
-                                        Toast.makeText(context, "Exported HTML to Downloads: ${file.name}", Toast.LENGTH_LONG).show()
+                                        viewModel.showSnackbar("Exported HTML to Downloads: ${file.name}", isLong = true)
                                     } else {
-                                        Toast.makeText(context, "HTML export failed", Toast.LENGTH_SHORT).show()
+                                        viewModel.showSnackbar("HTML export failed")
                                     }
                                 }
                             }
@@ -948,9 +953,9 @@ fun EditorScreen(
                                 scope.launch {
                                     val file = ImportExportService.exportPageToPsd(context, page, viewModel.repository)
                                     if (file != null) {
-                                        Toast.makeText(context, "Exported Layered PSD to Downloads: ${file.name}", Toast.LENGTH_LONG).show()
+                                        viewModel.showSnackbar("Exported Layered PSD to Downloads: ${file.name}", isLong = true)
                                     } else {
-                                        Toast.makeText(context, "PSD export failed", Toast.LENGTH_SHORT).show()
+                                        viewModel.showSnackbar("PSD export failed")
                                     }
                                 }
                             }
@@ -960,12 +965,12 @@ fun EditorScreen(
                             leadingIcon = { Icon(Icons.Outlined.FolderZip, contentDescription = null) },
                             onClick = {
                                 showOverflowMenu = false
-                                Toast.makeText(context, "Packaging Section Vault ZIP...", Toast.LENGTH_SHORT).show()
+                                viewModel.showSnackbar("Packaging Section Vault ZIP...")
                                 viewModel.exportSectionVaultZip(context, page.sectionId) { zipFile ->
                                     if (zipFile != null) {
-                                        Toast.makeText(context, "Exported Section Vault ZIP to Downloads: ${zipFile.name}", Toast.LENGTH_LONG).show()
+                                        viewModel.showSnackbar("Exported Section Vault ZIP to Downloads: ${zipFile.name}", isLong = true)
                                     } else {
-                                        Toast.makeText(context, "Section Vault export failed", Toast.LENGTH_SHORT).show()
+                                        viewModel.showSnackbar("Section Vault export failed")
                                     }
                                 }
                             }
@@ -1159,16 +1164,20 @@ fun EditorScreen(
 
             AnimatedVisibility(
                 visible = toolbarState != FloatingToolbarState.HIDDEN_DRAWING,
-                enter = if (isLandscape) {
-                    fadeIn() + androidx.compose.animation.slideInHorizontally { it }
-                } else {
-                    fadeIn() + slideInVertically { it }
-                },
-                exit = if (isLandscape) {
-                    fadeOut() + androidx.compose.animation.slideOutHorizontally { it }
-                } else {
-                    fadeOut() + slideOutVertically { it }
-                },
+                enter = com.authorss81.noteflow.theme.MotionSystem.enter(
+                    if (isLandscape) {
+                        fadeIn() + androidx.compose.animation.slideInHorizontally { it }
+                    } else {
+                        fadeIn() + slideInVertically { it }
+                    }
+                ),
+                exit = com.authorss81.noteflow.theme.MotionSystem.exit(
+                    if (isLandscape) {
+                        fadeOut() + androidx.compose.animation.slideOutHorizontally { it }
+                    } else {
+                        fadeOut() + slideOutVertically { it }
+                    }
+                ),
                 modifier = Modifier
                     .align(if (isLandscape) Alignment.CenterEnd else Alignment.BottomCenter)
                     .padding(
@@ -1217,7 +1226,8 @@ fun EditorScreen(
                     currentTool = tool
                     activePresetId = null
                 },
-                onDismiss = { toolbarState = FloatingToolbarState.COLLAPSED }
+                onDismiss = { toolbarState = FloatingToolbarState.COLLAPSED },
+                onSnackbar = { text, isLong -> viewModel.showSnackbar(text, isLong) }
             )
         }
         FloatingToolbarState.COLOR_PICKER -> {
@@ -1726,8 +1736,10 @@ private fun ToolPickerBottomSheet(
     currentTool: StrokeTool,
     showStrokePreviews: Boolean = false,
     onToolSelect: (StrokeTool) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onSnackbar: (String, Boolean) -> Unit = { _, _ -> }
 ) {
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
@@ -1746,7 +1758,6 @@ private fun ToolPickerBottomSheet(
             val wetToolsList = listOf(StrokeTool.WATERCOLOR, StrokeTool.OIL_PAINT, StrokeTool.SMUDGE, StrokeTool.SPLATTER)
             val standardTools = StrokeTool.entries.filter { it !in wetToolsList }
             val gpuTools = wetToolsList
-            val context = androidx.compose.ui.platform.LocalContext.current
             var hasShownShaderWarning by remember { mutableStateOf(false) }
 
             Text(
@@ -1770,6 +1781,7 @@ private fun ToolPickerBottomSheet(
                     
                     Surface(
                         onClick = {
+                            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
                             onToolSelect(tool)
                             onDismiss()
                         },
@@ -1839,13 +1851,13 @@ private fun ToolPickerBottomSheet(
 
                     Surface(
                         onClick = {
+                            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
                             if (isUnsupported && !hasShownShaderWarning) {
                                 hasShownShaderWarning = true
-                                android.widget.Toast.makeText(
-                                    context,
+                                onSnackbar(
                                     "Real-time wet blending requires Android 13+ — using soft-blend watercolor fallback on this device.",
-                                    android.widget.Toast.LENGTH_LONG
-                                ).show()
+                                    true
+                                )
                             }
                             onToolSelect(tool)
                             onDismiss()
@@ -2890,7 +2902,7 @@ private fun LayersPanelBottomSheet(
 
                                     IconButton(
                                         onClick = { onUpdateLayer(layer.copy(visible = !layer.visible)) },
-                                        modifier = Modifier.size(32.dp)
+                                        modifier = Modifier.minimumInteractiveComponentSize()
                                     ) {
                                         Icon(
                                             imageVector = if (layer.visible) Icons.Outlined.Visibility else Icons.Outlined.VisibilityOff,
@@ -2902,7 +2914,7 @@ private fun LayersPanelBottomSheet(
 
                                     IconButton(
                                         onClick = { onUpdateLayer(layer.copy(locked = !layer.locked)) },
-                                        modifier = Modifier.size(32.dp)
+                                        modifier = Modifier.minimumInteractiveComponentSize()
                                     ) {
                                         Icon(
                                             imageVector = if (layer.locked) Icons.Outlined.Lock else Icons.Outlined.LockOpen,
@@ -2965,11 +2977,15 @@ private fun LayersPanelBottomSheet(
                                         }
                                     }
 
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Row(
+                                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                                        horizontalArrangement = Arrangement.spacedBy(2.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
                                         IconButton(
                                             onClick = { onMoveUp(layer) },
                                             enabled = index > 0,
-                                            modifier = Modifier.size(28.dp)
+                                            modifier = Modifier.minimumInteractiveComponentSize()
                                         ) {
                                             Icon(Icons.Outlined.ArrowUpward, contentDescription = "Move Up", modifier = Modifier.size(14.dp))
                                         }
@@ -2977,14 +2993,14 @@ private fun LayersPanelBottomSheet(
                                         IconButton(
                                             onClick = { onMoveDown(layer) },
                                             enabled = index < sortedLayers.size - 1,
-                                            modifier = Modifier.size(28.dp)
+                                            modifier = Modifier.minimumInteractiveComponentSize()
                                         ) {
                                             Icon(Icons.Outlined.ArrowDownward, contentDescription = "Move Down", modifier = Modifier.size(14.dp))
                                         }
 
                                         IconButton(
                                             onClick = { onDuplicateLayer(layer) },
-                                            modifier = Modifier.size(28.dp)
+                                            modifier = Modifier.minimumInteractiveComponentSize()
                                         ) {
                                             Icon(Icons.Outlined.ContentCopy, contentDescription = "Duplicate", modifier = Modifier.size(14.dp))
                                         }
@@ -2993,7 +3009,7 @@ private fun LayersPanelBottomSheet(
                                         IconButton(
                                             onClick = { onMergeDown(layer) },
                                             enabled = !isBottomLayer,
-                                            modifier = Modifier.size(28.dp)
+                                            modifier = Modifier.minimumInteractiveComponentSize()
                                         ) {
                                             Icon(Icons.Outlined.MergeType, contentDescription = "Merge Down", modifier = Modifier.size(14.dp))
                                         }
@@ -3002,7 +3018,7 @@ private fun LayersPanelBottomSheet(
                                         IconButton(
                                             onClick = { onDeleteLayer(layer.id) },
                                             enabled = !isOnlyLayer,
-                                            modifier = Modifier.size(28.dp)
+                                            modifier = Modifier.minimumInteractiveComponentSize()
                                         ) {
                                             Icon(Icons.Outlined.Delete, contentDescription = "Delete", tint = if (isOnlyLayer) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error, modifier = Modifier.size(14.dp))
                                         }

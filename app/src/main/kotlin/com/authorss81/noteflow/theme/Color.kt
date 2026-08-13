@@ -40,3 +40,12 @@ val AmoledOnPrimaryContainer = Color(0xFFE0F2FE)
 enum class AppThemeMode {
     LIGHT, SEPIA, DARK, AMOLED, SYSTEM, DYNAMIC
 }
+
+/** 22.9: does the effective theme render with dark surfaces? (used for bar-icon polarity) */
+fun isAppDarkTheme(mode: AppThemeMode, systemDark: Boolean): Boolean {
+    return when (mode) {
+        AppThemeMode.LIGHT, AppThemeMode.SEPIA -> false
+        AppThemeMode.DARK, AppThemeMode.AMOLED -> true
+        AppThemeMode.SYSTEM, AppThemeMode.DYNAMIC -> systemDark
+    }
+}

@@ -9,6 +9,11 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 
@@ -198,8 +203,24 @@ fun NoteflowTheme(
     val colorScheme = schemeFor(themeMode, systemDark)
     val typography = typographyFor(themeMode, systemDark)
 
+    // 22.9: respect the OS reduce-motion / remove-animations setting instead of
+    // hardcoding motion on. Re-evaluates when the accessibility state changes.
+    val context = LocalContext.current
+    var reduceMotion by remember { mutableStateOf(isSystemReduceMotionEnabled(context)) }
+    DisposableEffect(context) {
+        val accessibilityManager = context.getSystemService(android.content.Context.ACCESSIBILITY_SERVICE)
+                as? android.view.accessibility.AccessibilityManager
+        val listener = android.view.accessibility.AccessibilityManager.AccessibilityStateChangeListener {
+            reduceMotion = isSystemReduceMotionEnabled(context)
+        }
+        accessibilityManager?.addAccessibilityStateChangeListener(listener)
+        onDispose {
+            accessibilityManager?.removeAccessibilityStateChangeListener(listener)
+        }
+    }
+
     androidx.compose.runtime.CompositionLocalProvider(
-        LocalReduceMotion provides false
+        LocalReduceMotion provides reduceMotion
     ) {
         MaterialTheme(
             colorScheme = colorScheme,

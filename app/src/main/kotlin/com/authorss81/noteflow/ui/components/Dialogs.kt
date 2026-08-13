@@ -1,6 +1,5 @@
 package com.authorss81.noteflow.ui.components
 
-import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
@@ -74,7 +73,8 @@ fun WelcomeDialog(
 
 @Composable
 fun AppUpdateDialog(
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onSnackbar: (String, Boolean) -> Unit = { _, _ -> }
 ) {
     val context = LocalContext.current
     val currentVersionName = remember { UpdateService.getCurrentVersionName(context) }
@@ -225,7 +225,7 @@ fun AppUpdateDialog(
                     onClick = {
                         val success = UpdateService.installApk(context, updateInfo!!.apkFile!!)
                         if (!success) {
-                            Toast.makeText(context, "Could not launch package installer.", Toast.LENGTH_SHORT).show()
+                            onSnackbar("Could not launch package installer.", false)
                         }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)

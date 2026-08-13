@@ -126,6 +126,9 @@ fun AnnotationCanvas(
     var internalZoomScale by remember { mutableFloatStateOf(zoomScale) }
     var internalPanOffset by remember { mutableStateOf(panOffset) }
 
+    // 22.9: light tick when a stroke is committed.
+    val hapticFeedback = androidx.compose.ui.platform.LocalHapticFeedback.current
+
     var layoutZoomScale by remember { mutableFloatStateOf(zoomScale) }
     var layoutPanOffset by remember { mutableStateOf(panOffset) }
 
@@ -690,6 +693,7 @@ fun AnnotationCanvas(
                                             activeStrokeList.add(newStroke)
                                             val otherStrokes = if (isContinuousMode) emptyList() else strokes.filter { it.pdfPage != pdfPageFilter }
                                             onStrokesChanged(otherStrokes + activeStrokeList)
+                                            hapticFeedback.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
                                         }
                                     }
                                 }
@@ -824,7 +828,7 @@ fun AnnotationCanvas(
                                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                                     IconButton(
                                         onClick = { textAlign = "LEFT" },
-                                        modifier = Modifier.size(32.dp)
+                                        modifier = Modifier.minimumInteractiveComponentSize()
                                     ) {
                                         Icon(
                                             Icons.Outlined.FormatAlignLeft,
@@ -834,7 +838,7 @@ fun AnnotationCanvas(
                                     }
                                     IconButton(
                                         onClick = { textAlign = "CENTER" },
-                                        modifier = Modifier.size(32.dp)
+                                        modifier = Modifier.minimumInteractiveComponentSize()
                                     ) {
                                         Icon(
                                             Icons.Outlined.FormatAlignCenter,
@@ -844,7 +848,7 @@ fun AnnotationCanvas(
                                     }
                                     IconButton(
                                         onClick = { textAlign = "RIGHT" },
-                                        modifier = Modifier.size(32.dp)
+                                        modifier = Modifier.minimumInteractiveComponentSize()
                                     ) {
                                         Icon(
                                             Icons.Outlined.FormatAlignRight,
@@ -911,7 +915,7 @@ fun AnnotationCanvas(
                                     shape = CircleShape,
                                     color = color,
                                     border = if (isSelected) androidx.compose.foundation.BorderStroke(2.5.dp, MaterialTheme.colorScheme.primary) else androidx.compose.foundation.BorderStroke(1.dp, Color.Gray),
-                                    modifier = Modifier.size(28.dp)
+                                    modifier = Modifier.minimumInteractiveComponentSize()
                                 ) {}
                             }
                         }
@@ -1501,7 +1505,7 @@ fun AnnotationCanvas(
 
                     FilledTonalIconButton(
                         onClick = { showBrushStudio = true },
-                        modifier = Modifier.size(28.dp)
+                        modifier = Modifier.minimumInteractiveComponentSize()
                     ) {
                         Icon(Icons.Outlined.Palette, contentDescription = "Brush Studio", modifier = Modifier.size(16.dp))
                     }
@@ -1509,7 +1513,7 @@ fun AnnotationCanvas(
                     if (wetCanvasEngine.isCanvasWet) {
                         FilledTonalIconButton(
                             onClick = { wetCanvasEngine.dryCanvasSheet() },
-                            modifier = Modifier.size(28.dp)
+                            modifier = Modifier.minimumInteractiveComponentSize()
                         ) {
                             Icon(Icons.Outlined.WbSunny, contentDescription = "Dry Page Sheet", modifier = Modifier.size(16.dp))
                         }
@@ -2765,6 +2769,7 @@ private fun DraggableStickyNoteCard(
                             val c = Color(android.graphics.Color.parseColor(hex))
                             Box(
                                 modifier = Modifier
+                                    .minimumInteractiveComponentSize()
                                     .size(32.dp)
                                     .clip(androidx.compose.foundation.shape.CircleShape)
                                     .background(c)

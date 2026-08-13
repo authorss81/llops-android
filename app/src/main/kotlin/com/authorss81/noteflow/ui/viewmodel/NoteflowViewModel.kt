@@ -130,6 +130,16 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     private val _confettiTrigger = MutableStateFlow(0L)
     val confettiTrigger: StateFlow<Long> = _confettiTrigger.asStateFlow()
 
+    /** 22.9: root snackbar pipeline — replaces transient, TalkBack-invisible Toasts. */
+    data class SnackbarMessage(val text: String, val isLong: Boolean = false)
+
+    private val _snackbarMessages = MutableSharedFlow<SnackbarMessage>(extraBufferCapacity = 16)
+    val snackbarMessages: SharedFlow<SnackbarMessage> = _snackbarMessages.asSharedFlow()
+
+    fun showSnackbar(text: String, isLong: Boolean = false) {
+        _snackbarMessages.tryEmit(SnackbarMessage(text, isLong))
+    }
+
     private val _p2pNotification = MutableStateFlow<String?>(null)
     val p2pNotification: StateFlow<String?> = _p2pNotification.asStateFlow()
 

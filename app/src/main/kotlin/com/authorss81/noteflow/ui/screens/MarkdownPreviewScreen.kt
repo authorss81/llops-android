@@ -120,11 +120,24 @@ fun MarkdownPreviewScreen(
     onOpenPage: (NotePageEntity) -> Unit,
     onSaveContent: (String) -> Unit
 ) {
-    androidx.activity.compose.BackHandler(onBack = onBack)
-
     var viewMode by remember { mutableStateOf(MarkdownViewMode.SPLIT) }
     var splitOrientation by remember { mutableStateOf(SplitOrientation.AUTO) }
     var contentText by remember { mutableStateOf(initialContent) }
+
+    // 22.9: never silently discard edits — flush content before navigating back.
+    val latestContent by rememberUpdatedState(contentText)
+    androidx.activity.compose.BackHandler {
+        onSaveContent(latestContent)
+        onBack()
+    }
+
+    // 22.9: also flush when the editor leaves composition for any other reason
+    // (lock, nav elsewhere, split-pane layout changes).
+    DisposableEffect(Unit) {
+        onDispose {
+            onSaveContent(latestContent)
+        }
+    }
     var splitRatio by remember { mutableFloatStateOf(0.5f) }
     var showBacklinks by remember { mutableStateOf(false) }
     var showSmartAssistant by remember { mutableStateOf(false) }

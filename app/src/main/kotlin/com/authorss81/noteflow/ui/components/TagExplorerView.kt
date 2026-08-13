@@ -1,6 +1,8 @@
 package com.authorss81.noteflow.ui.components
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -164,7 +166,11 @@ private fun TagTreeNodeItem(
         }
 
         if (node.children.isNotEmpty()) {
-            AnimatedVisibility(visible = isExpanded) {
+            AnimatedVisibility(
+                visible = isExpanded,
+                enter = com.authorss81.noteflow.theme.MotionSystem.enter(fadeIn()),
+                exit = com.authorss81.noteflow.theme.MotionSystem.exit(fadeOut())
+            ) {
                 Column(modifier = Modifier.fillMaxWidth()) {
                     for (child in node.children) {
                         TagTreeNodeItem(

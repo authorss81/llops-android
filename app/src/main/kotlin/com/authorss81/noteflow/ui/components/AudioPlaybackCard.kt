@@ -274,7 +274,7 @@ fun AudioPlaybackCard(
                 ) {
                     FilledIconButton(
                         onClick = onTogglePlay,
-                        modifier = Modifier.size(36.dp)
+                        modifier = Modifier.minimumInteractiveComponentSize()
                     ) {
                         Icon(
                             if (isPlaying) Icons.Outlined.Pause else Icons.Outlined.PlayArrow,
@@ -284,14 +284,14 @@ fun AudioPlaybackCard(
 
                     IconButton(
                         onClick = { onSeekTo((currentPositionMs - 5000L).coerceAtLeast(0L)) },
-                        modifier = Modifier.size(32.dp)
+                        modifier = Modifier.minimumInteractiveComponentSize()
                     ) {
                         Icon(Icons.Outlined.Replay5, contentDescription = "Rewind 5s", modifier = Modifier.size(18.dp))
                     }
 
                     IconButton(
                         onClick = { onSeekTo((currentPositionMs + 5000L).coerceAtMost(durationMs)) },
-                        modifier = Modifier.size(32.dp)
+                        modifier = Modifier.minimumInteractiveComponentSize()
                     ) {
                         Icon(Icons.Outlined.Forward5, contentDescription = "Forward 5s", modifier = Modifier.size(18.dp))
                     }
@@ -314,7 +314,7 @@ fun AudioPlaybackCard(
                                 style = MaterialTheme.typography.labelSmall
                             )
                         },
-                        modifier = Modifier.height(28.dp)
+                        modifier = Modifier.height(48.dp)
                     )
 
                     Text(

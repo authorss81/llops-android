@@ -142,6 +142,12 @@ fun InteractiveTutorial(
                         val isSelected = index == currentStepIndex
                         val width by animateDpAsState(
                             targetValue = if (isSelected) 24.dp else 8.dp,
+                            animationSpec = com.authorss81.noteflow.theme.MotionSystem.spec(
+                                androidx.compose.animation.core.tween(
+                                    durationMillis = 250,
+                                    easing = androidx.compose.animation.core.FastOutSlowInEasing
+                                )
+                            ),
                             label = "dotWidth"
                         )
                         Box(

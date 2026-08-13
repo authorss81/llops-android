@@ -18,6 +18,9 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material.icons.Icons
@@ -112,6 +115,39 @@ class MainActivity : FragmentActivity() {
             val restoreBlocked by viewModel.restoreBlocked.collectAsState()
             val autoLockTimeoutSeconds by viewModel.autoLockTimeoutSeconds.collectAsState()
 
+            // 22.9: status/nav-bar icon polarity must track the app's actual theme,
+            // not the system default — dark-system + SEPIA would be light-on-light.
+            val systemDark = androidx.compose.foundation.isSystemInDarkTheme()
+            val isAppDark = remember(themeMode, systemDark) {
+                com.authorss81.noteflow.theme.isAppDarkTheme(themeMode, systemDark)
+            }
+            LaunchedEffect(isAppDark) {
+                enableEdgeToEdge(
+                    statusBarStyle = androidx.activity.SystemBarStyle.auto(
+                        lightScrim = android.graphics.Color.TRANSPARENT,
+                        darkScrim = android.graphics.Color.TRANSPARENT,
+                        detectDarkMode = { isAppDark }
+                    ),
+                    navigationBarStyle = androidx.activity.SystemBarStyle.auto(
+                        lightScrim = android.graphics.Color.WHITE,
+                        darkScrim = android.graphics.Color.BLACK,
+                        detectDarkMode = { isAppDark }
+                    )
+                )
+            }
+
+            // 22.9: root SnackbarHost — visibility-critical feedback is Snackbars,
+            // not transient Toasts (scratchable, and visible to TalkBack).
+            val snackbarHostState = remember { SnackbarHostState() }
+            LaunchedEffect(Unit) {
+                viewModel.snackbarMessages.collect { message ->
+                    snackbarHostState.showSnackbar(
+                        message = message.text,
+                        duration = if (message.isLong) SnackbarDuration.Long else SnackbarDuration.Short
+                    )
+                }
+            }
+
             val pages by viewModel.pages.collectAsState()
             var activePageId by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf<String?>(null) }
             var showGraphView by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
@@ -161,7 +197,10 @@ class MainActivity : FragmentActivity() {
                         },
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    Column(Modifier.fillMaxSize()) {
+                    Box(
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        Column(Modifier.fillMaxSize()) {
                         if (databaseTampered) {
                             Surface(
                                 color = MaterialTheme.colorScheme.errorContainer,
@@ -430,6 +469,11 @@ class MainActivity : FragmentActivity() {
                             }
                         }
                         }
+                        SnackbarHost(
+                            hostState = snackbarHostState,
+                            modifier = Modifier.align(Alignment.BottomCenter)
+                        )
+                    }
                 }
             }
         }
