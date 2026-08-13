@@ -1034,27 +1034,43 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         return repository.getNoteVersions(pageId)
     }
 
+    /**
+     * C2b: builds a genuine encrypted backup archive for WebDAV upload. Runs a
+     * full WAL checkpoint FIRST (otherwise recent committed transactions living
+     * in the -wal file would silently miss the backup) and re-stamps the HMAC
+     * tamper baseline before packaging via ImportExportService.exportBackup
+     * (the same device-keyed encrypted-archive format the local backup uses).
+     */
     fun exportEncryptedBackupToZip(targetZip: java.io.File, onComplete: (Boolean) -> Unit) {
         viewModelScope.launch {
             try {
-                val dbFile = getApplication<android.app.Application>().getDatabasePath("noteflow.sqlite")
-                if (dbFile.exists()) {
-                    dbFile.copyTo(targetZip, overwrite = true)
-                    onComplete(true)
-                } else {
-                    onComplete(false)
+                repository.checkpointWal()
+                withContext(Dispatchers.IO) {
+                    repository.stampDatabaseChecksum(getApplication())
                 }
+                val backupFile = ImportExportService.exportBackup(getApplication(), repository.encryptionKey)
+                backupFile.copyTo(targetZip, overwrite = true)
+                onComplete(true)
             } catch (e: Exception) {
                 onComplete(false)
             }
         }
     }
 
+    /**
+     * C2c: restores a downloaded WebDAV backup through the SAME transactional
+     * path as a local restore (ImportExportService.importBackup →
+     * restoreFromZip): temp extract → PRAGMA integrity_check → re-key to the
+     * current DEK → user_version guard → HMAC re-arm → atomic swap. NEVER a
+     * blind copy over the live vault. The DB is closed first and the caller
+     * must restart the app (like the local restore flow).
+     */
     fun restoreEncryptedBackupFromZip(sourceZip: java.io.File, onComplete: (Boolean) -> Unit) {
         viewModelScope.launch {
             try {
-                val dbFile = getApplication<android.app.Application>().getDatabasePath("noteflow.sqlite")
-                sourceZip.copyTo(dbFile, overwrite = true)
+                val bytes = withContext(Dispatchers.IO) { sourceZip.readBytes() }
+                repository.closeDatabase()
+                ImportExportService.importBackup(getApplication(), bytes, repository.encryptionKey)
                 onComplete(true)
             } catch (e: Exception) {
                 onComplete(false)

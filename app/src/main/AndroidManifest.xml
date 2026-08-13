@@ -4,6 +4,11 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
     <uses-permission android:name="android.permission.USE_FINGERPRINT" />
+    <!-- INTERNET is used ONLY for the real optional WebDAV sync feature
+         (WebDavSyncService.kt): encrypted vault backups uploaded/downloaded
+         to/from the user's own WebDAV/Nextcloud server (HTTPS enforced). No
+         other network use. -->
+    <uses-permission android:name="android.permission.INTERNET" />
 
     <application
         android:extractNativeLibs="false"

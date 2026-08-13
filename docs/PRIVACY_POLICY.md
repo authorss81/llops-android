@@ -10,12 +10,13 @@ NoteFlow ("the App") is a privacy-first, offline-capable note-taking and knowled
 - NoteFlow does NOT operate central servers, track analytics, harvest personal identifiers, or profile users.
 
 ## 2. Optional WebDAV / Sync Integrations
-- If you explicitly choose to configure WebDAV or Nextcloud sync, your encrypted vault backups are transmitted directly between your device and your chosen personal WebDAV endpoint.
+- If you explicitly choose to configure WebDAV or Nextcloud sync, encrypted vault backup archives are transmitted directly between your device and your chosen personal WebDAV endpoint over HTTPS.
+- Backups are encrypted at rest (SQLCipher + AES-256-GCM) and sent with HTTPS required. This is NOT zero-knowledge: the WebDAV server operator can read the backup files, but not your note plaintext.
 - No third-party or developer servers receive your sync credentials or data.
 
 ## 3. Permissions Requested & Justifications
 - **RECORD_AUDIO**: Required only when you record voice notes inside the App. Voice notes are stored locally and transcribed on-device.
-- **INTERNET**: Used solely for optional WebDAV / Nextcloud End-to-End Encrypted sync to your personal server.
+- **INTERNET**: Used solely for optional WebDAV / Nextcloud backup sync to your personal server (HTTPS required).
 - **READ_EXTERNAL_STORAGE / READ_MEDIA_** : Required only when importing existing Markdown notes, images, or PDFs into your local notebook.
 
 ## 4. Children's Privacy

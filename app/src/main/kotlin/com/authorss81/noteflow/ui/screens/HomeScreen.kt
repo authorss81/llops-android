@@ -1201,7 +1201,13 @@ fun HomeScreen(
         if (showWebDavDialog) {
             com.authorss81.noteflow.ui.components.WebDavSyncDialog(
                 viewModel = viewModel,
-                onDismiss = { showWebDavDialog = false }
+                onDismiss = { showWebDavDialog = false },
+                onRestoreSuccess = {
+                    // A WebDAV restore closes and swaps the live DB — the app
+                    // must restart to reopen the vault (same as local restore).
+                    showWebDavDialog = false
+                    showRestartConfirmDialog = true
+                }
             )
         }
 
