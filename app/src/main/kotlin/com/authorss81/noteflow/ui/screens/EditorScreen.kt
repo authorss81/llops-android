@@ -218,6 +218,7 @@ fun EditorScreen(
     }
     var divideIntoPages by remember { mutableStateOf(true) }
     var gpuWetBrushesEnabled by remember { mutableStateOf(viewModel.settings.gpuWetBrushesEnabled) }
+    var shapeAutoSnapEnabled by remember { mutableStateOf(viewModel.settings.shapeAutoSnapEnabled) }
 
     LaunchedEffect(Unit) {
         val detectedTier = com.authorss81.noteflow.utils.DeviceCompatibilityManager.getDeviceTier(context, viewModel.settings)
@@ -1073,6 +1074,7 @@ fun EditorScreen(
                 activeVoicePositionMsProvider = { activeVoicePositionMs },
                 activeVoiceSpeed = activeVoiceSpeed,
                 gpuWetBrushesEnabled = gpuWetBrushesEnabled,
+                shapeAutoSnapEnabled = shapeAutoSnapEnabled,
                 onZoomScaleChanged = { zoomScale = it },
                 onPanOffsetChanged = { panOffset = it },
                 onVisiblePageWindowChanged = { newWindow ->
@@ -1316,6 +1318,11 @@ fun EditorScreen(
                 onGpuWetBrushesToggle = { enabled ->
                     gpuWetBrushesEnabled = enabled
                     viewModel.settings.gpuWetBrushesEnabled = enabled
+                },
+                shapeAutoSnapEnabled = shapeAutoSnapEnabled,
+                onShapeAutoSnapToggle = { enabled ->
+                    shapeAutoSnapEnabled = enabled
+                    viewModel.settings.shapeAutoSnapEnabled = enabled
                 },
                 onContinuousModeToggle = { isContinuousMode = !isContinuousMode },
                 onDividePagesToggle = { divideIntoPages = !divideIntoPages },
@@ -2336,6 +2343,8 @@ private fun CanvasSettingsBottomSheet(
     isPdf: Boolean,
     gpuWetBrushesEnabled: Boolean = true,
     onGpuWetBrushesToggle: (Boolean) -> Unit = {},
+    shapeAutoSnapEnabled: Boolean = true,
+    onShapeAutoSnapToggle: (Boolean) -> Unit = {},
     onContinuousModeToggle: () -> Unit,
     onDividePagesToggle: () -> Unit,
     onTemplateSelect: (String) -> Unit,
@@ -2607,6 +2616,30 @@ private fun CanvasSettingsBottomSheet(
                         onCheckedChange = onGpuWetBrushesToggle
                     )
                 }
+            }
+
+            // Shape Auto-Snap Toggle (Line/Rectangle/Ellipse/Arrow straightening)
+            Spacer(modifier = Modifier.height(16.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Icon(Icons.Outlined.Gesture, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    Column {
+                        Text("Shape Auto-Snap", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "Straighten line/rect/ellipse/arrow gestures",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                Switch(
+                    checked = shapeAutoSnapEnabled,
+                    onCheckedChange = onShapeAutoSnapToggle
+                )
             }
 
             Spacer(modifier = Modifier.height(16.dp))

@@ -53,8 +53,11 @@ object ShapeRecognitionHelper {
         // Direct distance from start to end
         val directDistance = sqrt((end.x - start.x) * (end.x - start.x) + (end.y - start.y) * (end.y - start.y))
 
-        // 1. Check Straight Line (direct distance ~ path length)
-        if (directDistance / max(1f, pathLength) > snapThreshold) {
+        // 1. Check Straight Line (direct distance ~ path length AND the path hugs
+        //    the start→end line, so a wavy mark that merely retraces itself can't sneak in)
+        if (directDistance / max(1f, pathLength) > snapThreshold &&
+            perpendicularDeviation(pts, start, end) / max(1f, directDistance) < 0.10f
+        ) {
             val snappedPoints = listOf(
                 PointF(start.x, start.y),
                 PointF(end.x, end.y)
@@ -110,25 +113,39 @@ object ShapeRecognitionHelper {
         }
 
         // 3. Check Rectangle / Square
+        //    Requires the drawing to actually trace the perimeter (a sloppy loop
+        //    that merely spans the bounding box has interior points and must NOT
+        //    snap to a rectangle).
         if (isClosedLoop && pts.size >= 10) {
-            val rectPts = listOf(
-                PointF(minX, minY),
-                PointF(maxX, minY),
-                PointF(maxX, maxY),
-                PointF(minX, maxY),
-                PointF(minX, minY)
-            )
-            val rectStroke = rawStroke.copy(
-                tool = StrokeTool.RECTANGLE,
-                start = PointF(minX, minY),
-                end = PointF(maxX, maxY),
-                points = rectPts
-            )
-            return SnappedShape(ShapeType.RECTANGLE, rectStroke)
+            val perimeterMargin = max(5f, boundingDiag * 0.06f)
+            val trackedPerimeter = perimeterFitRatio(pts, minX, maxX, minY, maxY, perimeterMargin)
+            if (trackedPerimeter >= 0.72f) {
+                val rectPts = listOf(
+                    PointF(minX, minY),
+                    PointF(maxX, minY),
+                    PointF(maxX, maxY),
+                    PointF(minX, maxY),
+                    PointF(minX, minY)
+                )
+                val rectStroke = rawStroke.copy(
+                    tool = StrokeTool.RECTANGLE,
+                    start = PointF(minX, minY),
+                    end = PointF(maxX, maxY),
+                    points = rectPts
+                )
+                return SnappedShape(ShapeType.RECTANGLE, rectStroke)
+            }
         }
 
-        // 4. Check Arrow (Straight shaft + arrowhead at end)
-        if (pts.size >= 10 && directDistance / max(1f, pathLength) > 0.68f) {
+        // 4. Check Arrow (Straight shaft + arrowhead at end).
+        //    A real arrow has a fairly straight shaft while its two-segment head
+        //    adds enough path length to fall BELOW the LINE snap threshold, and the
+        //    whole stroke hugs the shaft line. Tight band + low deviation means a
+        //    plain straight-freehand mark (dash, underline) is NOT turned into an arrow.
+        if (pts.size >= 10 &&
+            (directDistance / max(1f, pathLength)) in 0.55f..0.82f &&
+            perpendicularDeviation(pts, start, end) / max(1f, directDistance) < 0.12f
+        ) {
             val angle = atan2(end.y - start.y, end.x - start.x)
             val headLength = min(35f, max(15f, directDistance * 0.2f))
             val headAngle = PI.toFloat() / 6f // 30 degrees
@@ -155,5 +172,51 @@ object ShapeRecognitionHelper {
         }
 
         return null
+    }
+
+    /**
+     * Average perpendicular distance of every point from the start→end line,
+     * normalized by callers against the direct distance. Measures how much the
+     * stroke wavers around a straight path.
+     */
+    private fun perpendicularDeviation(pts: List<PointF>, start: PointF, end: PointF): Float {
+        val dx = end.x - start.x
+        val dy = end.y - start.y
+        val len = sqrt(dx * dx + dy * dy)
+        if (len < 1e-4f) return 0f
+        val nx = -dy / len
+        val ny = dx / len
+        var acc = 0f
+        for (p in pts) {
+            acc += abs((p.x - start.x) * nx + (p.y - start.y) * ny)
+        }
+        return acc / pts.size
+    }
+
+    /**
+     * Fraction of points that lie at or within [margin] of the bounding-box
+     * perimeter. High values mean the drawing genuinely traces the outline of
+     * the rectangle rather than merely spanning it. Points outside the bounds
+     * count as off-perimeter.
+     */
+    private fun perimeterFitRatio(
+        pts: List<PointF>,
+        minX: Float,
+        maxX: Float,
+        minY: Float,
+        maxY: Float,
+        margin: Float
+    ): Float {
+        if (pts.isEmpty()) return 0f
+        var onPerimeter = 0
+        for (p in pts) {
+            if (p.x < minX || p.x > maxX || p.y < minY || p.y > maxY) continue
+            val dLeft = p.x - minX
+            val dRight = maxX - p.x
+            val dTop = p.y - minY
+            val dBottom = maxY - p.y
+            if (minOf(minOf(dLeft, dRight), minOf(dTop, dBottom)) <= margin) onPerimeter++
+        }
+        return onPerimeter.toFloat() / pts.size
     }
 }

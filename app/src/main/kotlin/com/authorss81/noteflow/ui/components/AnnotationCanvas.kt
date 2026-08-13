@@ -120,7 +120,8 @@ fun AnnotationCanvas(
     onDrawingStart: () -> Unit = {},
     onDrawingEnd: () -> Unit = {},
     onCanvasTap: () -> Unit = {},
-    gpuWetBrushesEnabled: Boolean = true
+    gpuWetBrushesEnabled: Boolean = true,
+    shapeAutoSnapEnabled: Boolean = true
 ) {
     var internalZoomScale by remember { mutableFloatStateOf(zoomScale) }
     var internalPanOffset by remember { mutableStateOf(panOffset) }
@@ -679,7 +680,8 @@ fun AnnotationCanvas(
                                         )
                                         val isWetOrFleeting = tool == StrokeTool.WATERCOLOR || tool == StrokeTool.OIL_PAINT ||
                                             tool == StrokeTool.SMUDGE || tool == StrokeTool.SPLATTER || tool == StrokeTool.LASER
-                                        val snappedShape = if (tool.isFreehandTool && !isWetOrFleeting) {
+                                        val stylePreservingTool = tool == StrokeTool.DOTTED || tool == StrokeTool.NEON
+                                        val snappedShape = if (shapeAutoSnapEnabled && tool.isFreehandTool && !isWetOrFleeting && !stylePreservingTool) {
                                             com.authorss81.noteflow.services.ShapeRecognitionHelper.trySnapShape(candidateStroke)
                                         } else {
                                             null

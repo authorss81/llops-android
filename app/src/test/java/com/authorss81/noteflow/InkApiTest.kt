@@ -18,7 +18,8 @@ class InkApiTest {
      * Uses a non-initializing lookup so the check verifies class presence only —
      * some of these classes have static initializers that need the androidx.ink
      * native JNI libs, which are NOT available in the pure-JVM unit-test suite.
-     * This is fully verifiable in the pure-JVM unit test suite.
+     * Class PRESENCE is fully verifiable in the pure-JVM suite; runtime behavior
+     * is not (see testStrokeConversion).
      */
     @Test
     fun testInkModelClassesOnClasspath() {

@@ -36,15 +36,43 @@ class NoteRepository(private val db: NoteflowDatabase) {
     @Volatile
     private var cachedSearchCorpus: List<NotePageEntity>? = null
 
+    private val searchCorpusLock = Any()
+
+    @Volatile
+    private var searchCorpusGeneration = 0L
+
+    /**
+     * Loading the full decrypted corpus is only cached below this size. Above it,
+     * search decrypts per query so a huge vault can't pin an unbounded plaintext
+     * snapshot in memory for the whole unlocked session.
+     */
+    private val searchCorpusMaxPages = 1500
+
     private fun invalidateSearchCorpus() {
-        cachedSearchCorpus = null
+        synchronized(searchCorpusLock) {
+            searchCorpusGeneration++
+            cachedSearchCorpus = null
+        }
     }
 
     private suspend fun loadSearchCorpus(): List<NotePageEntity> {
-        cachedSearchCorpus?.let { return it }
-        val corpus = db.pageDao().getAllActivePages().map { decryptPageIfNeeded(it) }
-        cachedSearchCorpus = corpus
-        return corpus
+        while (true) {
+            synchronized(searchCorpusLock) {
+                cachedSearchCorpus?.let { return it }
+            }
+            val generationAtStart = synchronized(searchCorpusLock) { searchCorpusGeneration }
+            val corpus = db.pageDao().getAllActivePages().map { decryptPageIfNeeded(it) }
+            synchronized(searchCorpusLock) {
+                if (generationAtStart == searchCorpusGeneration) {
+                    if (corpus.size <= searchCorpusMaxPages) {
+                        cachedSearchCorpus = corpus
+                    }
+                    return corpus
+                }
+                // else: invalidated (e.g. re-key) while decrypting — loop retries
+                // with the current key instead of serving a stale snapshot.
+            }
+        }
     }
 
     val notebooks: Flow<List<NotebookEntity>> = db.notebookDao().getAllNotebooks()

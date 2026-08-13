@@ -18,6 +18,14 @@ import com.authorss81.noteflow.data.model.NoteVersionEntity
 import com.authorss81.noteflow.services.VaultKeyHolder
 import java.io.File
 
+/**
+ * Single source of truth for the Room schema version. Referenced by the
+ * [Database] annotation (which needs a compile-time constant) and by
+ * [NoteflowDatabase.SCHEMA_VERSION] for the import/restore guard — so the two
+ * can never drift apart.
+ */
+const val NOTEFLOW_DATABASE_SCHEMA_VERSION = 8
+
 @Database(
     entities = [
         NotebookEntity::class,
@@ -29,7 +37,7 @@ import java.io.File
         LayerEntity::class,
         NoteVersionEntity::class
     ],
-    version = 8,
+    version = NOTEFLOW_DATABASE_SCHEMA_VERSION,
     exportSchema = true
 )
 abstract class NoteflowDatabase : RoomDatabase() {
@@ -43,7 +51,7 @@ abstract class NoteflowDatabase : RoomDatabase() {
     abstract fun noteVersionDao(): NoteVersionDao
 
     companion object {
-        const val SCHEMA_VERSION = 8
+        const val SCHEMA_VERSION = NOTEFLOW_DATABASE_SCHEMA_VERSION
 
         @Volatile
         private var INSTANCE: NoteflowDatabase? = null

@@ -69,6 +69,11 @@ class SettingsManager(context: Context) {
         get() = prefs.getBoolean("gpu_wet_brushes_enabled", true)
         set(value) = prefs.edit().putBoolean("gpu_wet_brushes_enabled", value).apply()
 
+    // 26.6: automatic shape snapping/straightening of freehand strokes.
+    var shapeAutoSnapEnabled: Boolean
+        get() = prefs.getBoolean("shape_auto_snap_enabled", true)
+        set(value) = prefs.edit().putBoolean("shape_auto_snap_enabled", value).apply()
+
     var deviceTierOverride: String?
         get() = prefs.getString("device_tier_override", null)
         set(value) = prefs.edit().putString("device_tier_override", value).apply()

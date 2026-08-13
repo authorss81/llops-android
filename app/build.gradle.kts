@@ -84,11 +84,6 @@ android {
         compose = true
         buildConfig = true
     }
-    packaging {
-        jniLibs {
-            useLegacyPackaging = false
-        }
-    }
 }
 
 // Stopgap: AGP 8.7.3's profile compiler crashes with "String index out of range: 62"
