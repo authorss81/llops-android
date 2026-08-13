@@ -20,6 +20,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  issues: write
 
 concurrency:
   group: llops-pipeline
@@ -31,53 +32,80 @@ env:
 
 jobs:
   select-phase:
+    # Fix 4: no checkout — read marker files via the GitHub API (one trees call,
+    # ~1-2s). Idle ticks cost only VM boot + this tiny step.
     runs-on: ubuntu-latest
     outputs:
       phase: ${{ steps.phase.outputs.phase }}
       exists: ${{ steps.phase.outputs.exists }}
+      timeout: ${{ steps.phase.outputs.timeout }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Select phase
+      - name: Select phase via API
         id: phase
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
+          # Fix 4: no checkout — read marker files via the GitHub API (one trees
+          # call, ~1-2s). Idle ticks cost only VM boot + this tiny step.
+          gh api "repos/${GITHUB_REPOSITORY}/git/trees/HEAD?recursive=1" --jq '.tree[].path' > /tmp/tree.txt
+          mkdir -p /tmp/phases
+          # Collect distinct phase names: workspace/phase-NN
+          grep -E '^workspace/phase-[0-9]+/' /tmp/tree.txt | cut -d/ -f2 | sort -u > /tmp/phase_names.txt
+          while read -r name; do
+            [ -n "$name" ] || continue
+            grep -qx "workspace/${name}/.done"     /tmp/tree.txt && touch "/tmp/phases/${name}.done"
+            grep -qx "workspace/${name}/.deferred" /tmp/tree.txt && touch "/tmp/phases/${name}.deferred"
+            grep -qx "workspace/${name}/.blocked"  /tmp/tree.txt && touch "/tmp/phases/${name}.blocked"
+            grep -qx "workspace/${name}/.attempts" /tmp/tree.txt && touch "/tmp/phases/${name}.attempts"
+          done < /tmp/phase_names.txt
+
+          # Read a phase's timeout marker via the API (default 25 min).
+          phase_timeout() {
+            local n="$1" t
+            t=$(gh api "repos/${GITHUB_REPOSITORY}/contents/workspace/${n}/.timeout" --jq '.content' 2>/dev/null | base64 -d 2>/dev/null | tr -d '[:space:]')
+            if [ -n "$t" ] && [ "$t" -ge 1 ] 2>/dev/null; then printf '%s' "$t"; else printf '25'; fi
+          }
+
+          # Manual dispatch override.
           if [ -n "${{ inputs.phase }}" ]; then
             echo "phase=${{ inputs.phase }}" >> "$GITHUB_OUTPUT"
             echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "timeout=$(phase_timeout ${{ inputs.phase }})" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+
           # 0) hard stop — create workspace/.stop to halt the pipeline
-          if [ -f "workspace/.stop" ]; then
+          if grep -qx "workspace/.stop" /tmp/tree.txt; then
             echo "::notice::workspace/.stop present — pipeline halted."
             echo "phase=" >> "$GITHUB_OUTPUT"
             echo "exists=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+
           # 1) resume a deferred phase first (rate-limited earlier)
-          for d in $(ls -d workspace/phase-*/ 2>/dev/null | sort -V); do
-            name="$(basename "$d")"
-            if [ -f "${d}.deferred" ]; then
-              echo "phase=${name}" >> "$GITHUB_OUTPUT"
-              echo "exists=true" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
+          for d in $(ls /tmp/phases/*.deferred 2>/dev/null | sort -V); do
+            name="$(basename "$d" .deferred)"
+            echo "phase=${name}" >> "$GITHUB_OUTPUT"
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "timeout=$(phase_timeout "${name}")" >> "$GITHUB_OUTPUT"
+            exit 0
           done
+
           # 2) else pick the lowest phase WITHOUT .done AND WITHOUT .blocked
-          for d in $(ls -d workspace/phase-*/ 2>/dev/null | sort -V); do
-            name="$(basename "$d")"
-            if [ ! -f "${d}.done" ] && [ ! -f "${d}.blocked" ]; then
+          while read -r name; do
+            [ -n "$name" ] || continue
+            if [ ! -f "/tmp/phases/${name}.done" ] && [ ! -f "/tmp/phases/${name}.blocked" ]; then
               echo "phase=${name}" >> "$GITHUB_OUTPUT"
               echo "exists=true" >> "$GITHUB_OUTPUT"
+              echo "timeout=$(phase_timeout "${name}")" >> "$GITHUB_OUTPUT"
               exit 0
             fi
-          done
-          # nothing runnable: distinguish all-done vs blocked-pending
-          blocked_count=$(ls -d workspace/phase-*/.blocked 2>/dev/null | wc -l)
-          if [ "${blocked_count}" -gt 0 ]; then
-            echo "::notice::${blocked_count} blocked phase(s) need manual intervention — see workspace/phase-*/.blocked"
+          done < /tmp/phase_names.txt
+
+          # Fix 8: surface blocked phases on EVERY tick (not only when idle)
+          BLOCKED=$(ls /tmp/phases/*.blocked 2>/dev/null | wc -l)
+          if [ "${BLOCKED}" -gt 0 ]; then
+            echo "::warning::${BLOCKED} blocked phase(s) need manual intervention: $(ls /tmp/phases/*.blocked 2>/dev/null | xargs -n1 basename | sed 's/.blocked//' | tr '\n' ' ')"
           fi
           echo "phase=" >> "$GITHUB_OUTPUT"
           echo "exists=false" >> "$GITHUB_OUTPUT"
@@ -86,7 +114,8 @@ jobs:
     needs: select-phase
     if: needs.select-phase.outputs.exists == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 25   # under the 30-min cron cadence so runs never overlap/queue
+    # Fix 6: per-phase timeout (workspace/<phase>/.timeout), default 25 min.
+    timeout-minutes: ${{ fromJSON(needs.select-phase.outputs.timeout) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -126,44 +155,74 @@ jobs:
         continue-on-error: true
 
       - name: Commit and push (pull-rebase-retry so concurrent human pushes don't lose the bot's work)
+        id: commit
         run: |
           git config user.name "llops-bot"
           git config user.email "llops-bot@users.noreply.github.com"
           git add -A
-          if ! git diff --cached --quiet; then
+          if git diff --cached --quiet; then
+            echo "no changes to commit"
+          else
             git commit -m "llops: ${{ needs.select-phase.outputs.phase }}"
+            PUSHED=0
             for i in 1 2 3 4 5; do
               if git push origin main; then
                 echo "push succeeded on attempt $i"
+                PUSHED=1
                 break
               fi
               echo "push rejected (attempt $i) — pulling latest and rebasing..."
               git pull --rebase origin main || true
               sleep 3
             done
-          else
-            echo "no changes to commit"
+            # Fix 2: never lose the bot's commit — recovery branch + patch artifact
+            if [ "${PUSHED}" = "0" ]; then
+              echo "::error::Push to main failed after 5 attempts — saving work to a recovery branch + patch artifact."
+              git branch -f "llops-recovery/${{ needs.select-phase.outputs.phase }}" HEAD
+              git push origin "llops-recovery/${{ needs.select-phase.outputs.phase }}" --force || true
+              git format-patch --stdout -1 > "llops-${{ needs.select-phase.outputs.phase }}.patch" || true
+            fi
           fi
           # Report the final state so the status step can judge correctly.
           if [ -f "workspace/${{ needs.select-phase.outputs.phase }}/.done" ]; then
             echo "BOT_DONE=true" >> "$GITHUB_ENV"
           fi
 
+      - name: Upload recovery patch (if push failed)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: llops-recovery-${{ needs.select-phase.outputs.phase }}
+          path: |
+            llops-${{ needs.select-phase.outputs.phase }}.patch
+            logs/${{ needs.select-phase.outputs.phase }}.log
+          if-no-files-found: ignore
+
       - name: Report status
         if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          if [ -f "workspace/${{ needs.select-phase.outputs.phase }}/.deferred" ]; then
+          PHASE="${{ needs.select-phase.outputs.phase }}"
+          if [ -f "workspace/${PHASE}/.deferred" ]; then
             echo "::notice::Rate limit hit — deferred. Next cron tick retries in <=30 min."
-          elif [ -f "workspace/${{ needs.select-phase.outputs.phase }}/.done" ]; then
+          elif [ -f "workspace/${PHASE}/.done" ]; then
             echo "::notice::Phase completed. Pipeline advanced."
+          elif [ -f "workspace/${PHASE}/.blocked" ]; then
+            echo "::error::Phase blocked after max attempts — manual intervention needed."
+            # Fix 3: notify via a GitHub issue (deduped so cron doesn't spam)
+            EXISTS=$(gh issue list --state open --search "LLOPS blocked ${PHASE}" --json number --jq 'length' 2>/dev/null || echo 0)
+            if [ "$EXISTS" = "0" ]; then
+              { echo "Phase **${PHASE}** is blocked — the pipeline will skip it until fixed.";
+                echo "";
+                echo "## Log tail";
+                echo '```';
+                tail -60 "logs/${PHASE}.log" 2>/dev/null || echo "(no log)";
+                echo '```';
+                echo "";
+                echo "Fix the cause, then remove \`workspace/${PHASE}/.blocked\` and \`workspace/${PHASE}/.attempts\` and push."; } > /tmp/issue-body.md
+              gh issue create --title "LLOPS blocked: ${PHASE}" --body-file /tmp/issue-body.md || true
+            fi
           else
             echo "::error::Phase failed for a non-rate-limit reason — check logs."
           fi
-
-  idle:
-    needs: select-phase
-    if: needs.select-phase.outputs.exists == 'false'
-    runs-on: ubuntu-latest
-    steps:
-      - name: All phases complete
-        run: echo "::notice::No pending or deferred phases. Pipeline idle."
