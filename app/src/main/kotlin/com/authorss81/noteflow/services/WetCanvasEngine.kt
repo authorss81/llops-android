@@ -35,13 +35,8 @@ class WetCanvasEngine {
      * deposited. No grid, no background loop: the shader does the mixing.
      */
     fun markPaintDeposited(tool: StrokeTool) {
-        val peak = when (tool) {
-            StrokeTool.WATERCOLOR -> 0.9f
-            StrokeTool.SPLATTER -> 0.8f
-            StrokeTool.SMUDGE -> 0.5f
-            StrokeTool.OIL_PAINT -> 0.4f
-            else -> return
-        }
+        val peak = BrushStrokeMath.wetnessPeakForTool(tool)
+        if (peak <= 0f) return
         activeWetnessLevel = peak
         isCanvasWet = true
     }

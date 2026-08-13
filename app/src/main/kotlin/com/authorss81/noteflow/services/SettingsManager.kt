@@ -127,6 +127,25 @@ class SettingsManager(context: Context) {
             }.apply()
         }
 
+    // Phase 18: brush-physics render settings (SharedPreferences only, no schema change).
+    // Velocity width modulation defaults OFF so existing brushes keep their classic look.
+    var velocityModulationEnabled: Boolean
+        get() = prefs.getBoolean("brush_velocity_modulation_enabled", false)
+        set(value) = prefs.edit().putBoolean("brush_velocity_modulation_enabled", value).apply()
+
+    var velocityModulationIntensity: Float
+        get() = prefs.getFloat("brush_velocity_modulation_intensity", 1.0f)
+        set(value) = prefs.edit().putFloat("brush_velocity_modulation_intensity", value).apply()
+
+    // Calligraphic & chisel nib angles — defaults match the classic fixed angles (45/30).
+    var calligraphicNibAngleDeg: Float
+        get() = prefs.getFloat("brush_calligraphic_nib_angle_deg", 45f)
+        set(value) = prefs.edit().putFloat("brush_calligraphic_nib_angle_deg", value).apply()
+
+    var chiselNibAngleDeg: Float
+        get() = prefs.getFloat("brush_chisel_nib_angle_deg", 30f)
+        set(value) = prefs.edit().putFloat("brush_chisel_nib_angle_deg", value).apply()
+
     var deviceTierOverride: String?
         get() = prefs.getString("device_tier_override", null)
         set(value) = prefs.edit().putString("device_tier_override", value).apply()

@@ -19,9 +19,11 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -2115,7 +2117,7 @@ private fun ToolPickerBottomSheet(
             )
             Spacer(modifier = Modifier.height(16.dp))
 
-            val wetToolsList = listOf(StrokeTool.WATERCOLOR, StrokeTool.OIL_PAINT, StrokeTool.SMUDGE, StrokeTool.SPLATTER)
+            val wetToolsList = StrokeTool.entries.filter { com.authorss81.noteflow.services.BrushStrokeMath.isWetRenderedTool(it) }
             val standardTools = StrokeTool.entries.filter { it !in wetToolsList }
             val gpuTools = wetToolsList
             var hasShownShaderWarning by remember { mutableStateOf(false) }
@@ -2201,11 +2203,11 @@ private fun ToolPickerBottomSheet(
             )
             Spacer(modifier = Modifier.height(8.dp))
 
-            Row(
+            LazyRow(
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                gpuTools.forEach { tool ->
+                items(gpuTools) { tool ->
                     val selected = tool == currentTool
                     val isUnsupported = !com.authorss81.noteflow.ui.components.ShaderCapabilityHelper.isAgslSupported
 
@@ -2225,7 +2227,7 @@ private fun ToolPickerBottomSheet(
                         shape = RoundedCornerShape(16.dp),
                         color = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
                         border = if (selected) BorderStroke(1.5.dp, MaterialTheme.colorScheme.secondary) else null,
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier.width(112.dp)
                     ) {
                         Column(
                             modifier = Modifier
@@ -3300,6 +3302,12 @@ private fun getToolIcon(tool: StrokeTool): ImageVector {
         StrokeTool.SMUDGE -> Icons.Outlined.TouchApp
         StrokeTool.SPLATTER -> Icons.Outlined.Grain
         StrokeTool.STICKER -> Icons.Outlined.EmojiEmotions
+        StrokeTool.CHARCOAL -> Icons.Outlined.Brush
+        StrokeTool.OIL_PASTEL -> Icons.Outlined.Palette
+        StrokeTool.INK_WASH -> Icons.Outlined.InvertColors
+        StrokeTool.GOUACHE -> Icons.Outlined.FormatColorFill
+        StrokeTool.DRY_BRUSH -> Icons.Outlined.Grass
+        StrokeTool.PALETTE_KNIFE -> Icons.Outlined.ContentCut
     }
 }
 

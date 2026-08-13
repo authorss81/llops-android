@@ -25,6 +25,14 @@ object AgslShaders {
     """.trimIndent()
 
     // AGSL Shader for Wet Color Mixing, Impasto Texturing, Cold-Press Grain & Diffuse Pigment Bleed
+    // Phase 18: uBrushStyle selects a distinct painting style (see BrushStyle constants below)
+    // and uStrokeSeed gives every stroke a fresh grain/bristle phase so texture orientation
+    // varies per stroke instead of being fixed per page.
+    //
+    // Style selector values (MUST match AgslShaders.StyleIds / ToolPreset.brushStyle):
+    //   0 = generic wash     1 = WATERCOLOR   2 = OIL_PAINT   3 = SMUDGE   4 = SPLATTER
+    //   5 = CHARCOAL         6 = OIL_PASTEL   7 = INK_WASH    8 = GOUACHE  9 = DRY_BRUSH
+    //  10 = PALETTE_KNIFE
     val WET_MIXING_SHADER = """
         uniform shader contents;
         uniform float2 uPrevPos;
@@ -37,7 +45,9 @@ object AgslShaders {
         uniform float uImpasto;      // 0.0 = flat, 1.0 = thick ridges
         uniform float uPaperGrain;   // 0.0 = smooth, 1.0 = heavy cold press granulation
         uniform float uHardness;     // 0.0 = soft, 1.0 = hard edge
-        uniform float uSeed;         // per-page seed so paper grain stays spatially coherent but dithers per sheet
+        uniform float uSeed;         // per-stroke seed: spatial dither so grain differs per stroke
+        uniform float uStrokeSeed;   // secondary per-stroke seed: rotates grain/bristle phase
+        uniform float uBrushStyle;   // style selector (see style constants above)
 
         float hash21(float2 p) {
             float2 q = p * 127.1 + float2(311.7, 74.7) + float2(uSeed, uSeed * 1.7);
@@ -76,15 +86,72 @@ object AgslShaders {
             // Hardness uniform applied to falloff transition
             float falloff = smoothstep(1.0, uHardness, normDist);
             
-            // Cold press paper grain granulation modifier (stable value noise, seeded per page)
-            float grainNoise = valueNoise(coord * 0.15) * 0.6 + valueNoise(coord * 0.35) * 0.4;
+            // Cold press paper grain granulation modifier (stable value noise, seeded per stroke
+            // via uSeed in hash21 plus a per-stroke field offset from uStrokeSeed so the grain
+            // orientation/phase rotates for every new stroke instead of staying page-fixed).
+            float2 grainO = coord * 0.15 + float2(uStrokeSeed * 37.0, uStrokeSeed * 71.0);
+            float grainNoise = valueNoise(grainO) * 0.6 + valueNoise(coord * 0.35 + float2(uStrokeSeed * 19.0, uStrokeSeed * 43.0)) * 0.4;
             float granulation = mix(1.0, 0.4 + 1.2 * grainNoise, uPaperGrain);
+
+            // Stroke direction + perpendicular bands (used by dry-brush gaps, charcoal streaks,
+            // pastel wax, palette-knife smear and the impasto relief).
+            float2 ba = uBrushPos - uPrevPos;
+            float2 strokeDir = length(ba) > 0.0 ? normalize(ba) : float2(1.0, 0.0);
+            float2 perpDir = float2(-strokeDir.y, strokeDir.x);
+            float perpDist = dot(coord - uPrevPos, perpDir);
+
+            // --- Style-specific coverage & alpha modifiers -------------------------------
+            float styleCoverage = 1.0;
+            float styleAlpha = 1.0;
+
+            if (uBrushStyle >= 5.0) {
+                float2 spos = coord * 0.24;
+                float along = dot(spos, strokeDir);
+                float perp = dot(spos, perpDir);
+                // Phase-rotated hail/shower streaks so each stroke deposits differently.
+                float alongPhase = along + uStrokeSeed * 3.0;
+                if (uBrushStyle == 5.0) {
+                    // CHARCOAL: soft-edged powdery streaks, pigment only on grain peaks.
+                    float streak = valueNoise(float2(alongPhase * 0.42, perp * 1.7)) * 0.6 + valueNoise(float2(alongPhase * 1.1, perp * 3.2)) * 0.4;
+                    float peakGrain = smoothstep(0.50, 1.0, grainNoise);
+                    float notches = smoothstep(0.42, 1.0, valueNoise(float2(alongPhase * 2.2, perp * 6.0)));
+                    styleCoverage = clamp(0.26 + 0.95 * peakGrain * streak * notches, 0.0, 1.0);
+                    styleAlpha = 0.92;
+                } else if (uBrushStyle == 6.0) {
+                    // OIL_PASTEL: waxy, opaque body with visible wax-streak noise.
+                    float wax = valueNoise(float2(perp * 4.0, alongPhase * 1.3)) * 0.40 + 0.60;
+                    styleCoverage = clamp(0.82 + wax * 0.18, 0.0, 1.0);
+                    styleAlpha = 1.0;
+                } else if (uBrushStyle == 7.0) {
+                    // INK_WASH: concentrated wet ink — full body, strong dark wet edge handled below.
+                    styleCoverage = 1.0;
+                    styleAlpha = 0.98;
+                } else if (uBrushStyle == 9.0) {
+                    // DRY_BRUSH: only bristle tips touch — narrow perpendicular gaps.
+                    float bristle = fract(perpDist / max(uBrushRadius * 0.62, 0.5) + uStrokeSeed * 4.0);
+                    float gap = abs(bristle - 0.5);
+                    float bristleCoverage = 1.0 - smoothstep(0.045, 0.24, gap);
+                    styleCoverage = clamp(0.10 + bristleCoverage * 0.9, 0.0, 1.0);
+                    styleAlpha = 0.85;
+                } else if (uBrushStyle == 10.0) {
+                    // PALETTE_KNIFE: directional smear streaks that drag existing paint.
+                    float smear = valueNoise(float2(perp * 3.2, alongPhase * 0.7)) * 0.55 + 0.45;
+                    styleCoverage = clamp(0.55 + smear * 0.45, 0.0, 1.0);
+                    styleAlpha = 0.96;
+                }
+            }
 
             // Pigment-space (subtractive) mixing: absorbances multiply
             // (1-(1-base)(1-brush)) per channel instead of a linear-RGB lerp,
             // which keeps overlapping complementary colors clean instead of muddy.
             // Mirrors WetMixingMath.pigmentMix / pigmentMixRgb.
-            float pigmentFactor = clamp(uPigmentLoad * falloff * uMixStrength * granulation, 0.0, 1.0);
+            float pigmentFactor;
+            if (uBrushStyle == 8.0) {
+                // GOUACHE: near-100% pigment coverage, matte flat coat.
+                pigmentFactor = clamp(falloff * (0.9 + 0.1 * uPigmentLoad) * granulation, 0.0, 1.0);
+            } else {
+                pigmentFactor = clamp(uPigmentLoad * falloff * uMixStrength * granulation * styleCoverage, 0.0, 1.0);
+            }
             half3 mixedRgb;
             if (base.a > 0.0) {
                 mixedRgb = base.rgb + (1.0 - (1.0 - base.rgb) * (1.0 - uBrushColor.rgb) - base.rgb) * pigmentFactor;
@@ -96,22 +163,21 @@ object AgslShaders {
             if (uImpasto > 0.0) {
                 // Direction vector from segment center to current coord
                 float2 pa = coord - uPrevPos;
-                float2 ba = uBrushPos - uPrevPos;
                 float h = clamp(dot(pa, ba) / (dot(ba, ba) + 0.0001), 0.0, 1.0);
                 float2 closestPoint = uPrevPos + ba * h;
                 float2 toCoord = coord - closestPoint;
                 float2 dir = length(toCoord) > 0.0 ? normalize(toCoord) : float2(0.0);
 
-                // Perpendicular direction for parallel bristle lines
-                float2 strokeDir = length(ba) > 0.0 ? normalize(ba) : float2(1.0, 0.0);
-                float2 perpDir = float2(-strokeDir.y, strokeDir.x);
-                float perpDist = dot(coord - uPrevPos, perpDir);
-
-                // Bristle lines modulated by brush size and falloff
+                // Bristle lines modulated by brush size and falloff (phase-rotated per stroke)
                 float bristleFreq = 2.0 / (uBrushRadius * 0.05 + 1.0);
-                float bristleRidge = sin(perpDist * bristleFreq) * 0.25 * falloff;
+                float bristleRidge = sin(perpDist * bristleFreq + uStrokeSeed * 6.0) * 0.25 * falloff;
                 
                 float impastoHeight = clamp(((1.0 - normDist) * falloff) + bristleRidge, 0.0, 1.0);
+
+                // Palette knife rides flat: cap impasto relief tight to its low preset.
+                if (uBrushStyle == 10.0) {
+                    impastoHeight *= 0.35 + 0.65 * smoothstep(0.6, 1.0, normDist);
+                }
 
                 // Lighting calculation (light travels from top-left to bottom-right)
                 float2 lightDir = normalize(float2(1.0, 1.0));
@@ -122,17 +188,34 @@ object AgslShaders {
                 mixedRgb = clamp(mixedRgb + half3(highlight) - half3(shadow), 0.0, 1.0);
             }
 
-            // Watercolor wet-edge fringe: dark pigment accumulation at the border
+            // Watercolor wet-edge fringe: dark pigment accumulation at the border, plus a
+            // secondary bloom ring for a tighter, more realistic damp crust (Phase 18).
             if (uWetness > 0.5) {
-                float fringe = smoothstep(0.75, 0.98, normDist) * smoothstep(1.0, 0.98, normDist) * 0.35 * uWetness;
-                mixedRgb = mix(mixedRgb, mixedRgb * 0.65, fringe);
+                float wetEdge;
+                if (uBrushStyle == 7.0) {
+                    // INK_WASH: concentrated, high-contrast wet edge — strong dark rim + pooling.
+                    wetEdge = smoothstep(0.70, 0.97, normDist) * smoothstep(1.0, 0.90, normDist) * 0.55 * uWetness;
+                } else {
+                    wetEdge = smoothstep(0.75, 0.98, normDist) * smoothstep(1.0, 0.98, normDist) * 0.35 * uWetness;
+                }
+                // Secondary bloom ring: a fainter, slightly wider band feeding the wet crust.
+                float bloom = smoothstep(0.50, 0.72, normDist) * smoothstep(1.0, 0.82, normDist) * 0.20 * uWetness;
+                wetEdge = wetEdge + bloom;
+                mixedRgb = mix(mixedRgb, mixedRgb * 0.60, wetEdge);
             }
 
             // Realistic alpha blending: source-over accumulation for wet AND dry.
             // Overlapping washes darken monotonically (wet-on-wet watercolor)
             // instead of the old max() shortcut which blocked overlap buildup.
             // Mirrors WetMixingMath.sourceOverAlpha.
-            float brushAlpha = uBrushColor.a * falloff * granulation;
+            float brushAlpha;
+            if (uBrushStyle == 8.0) {
+                // GOUACHE: matte, near-opaque flat coat.
+                brushAlpha = falloff * (0.88 + 0.12 * uPigmentLoad);
+            } else {
+                brushAlpha = uBrushColor.a * falloff * granulation * styleAlpha * styleCoverage;
+            }
+            brushAlpha = clamp(brushAlpha, 0.0, 1.0);
             float newAlpha = base.a + brushAlpha * (1.0 - base.a);
             newAlpha = clamp(newAlpha, 0.0, 1.0);
 
@@ -146,8 +229,28 @@ object AgslShaders {
         val pigmentLoad: Float,
         val mixStrength: Float,
         val impasto: Float,
-        val hardness: Float
+        val hardness: Float,
+        val brushStyle: Int = 0
     )
+
+    /**
+     * Style selector values used by the shader's uBrushStyle uniform — MUST stay
+     * in sync with the constants documented in [WET_MIXING_SHADER] and with
+     * [com.authorss81.noteflow.services.BrushStrokeMath.brushStyleIdForTool].
+     */
+    object StyleIds {
+        const val DEFAULT = com.authorss81.noteflow.services.BrushStrokeMath.STYLE_DEFAULT
+        const val WATERCOLOR = com.authorss81.noteflow.services.BrushStrokeMath.STYLE_WATERCOLOR
+        const val OIL_PAINT = com.authorss81.noteflow.services.BrushStrokeMath.STYLE_OIL_PAINT
+        const val SMUDGE = com.authorss81.noteflow.services.BrushStrokeMath.STYLE_SMUDGE
+        const val SPLATTER = com.authorss81.noteflow.services.BrushStrokeMath.STYLE_SPLATTER
+        const val CHARCOAL = com.authorss81.noteflow.services.BrushStrokeMath.STYLE_CHARCOAL
+        const val OIL_PASTEL = com.authorss81.noteflow.services.BrushStrokeMath.STYLE_OIL_PASTEL
+        const val INK_WASH = com.authorss81.noteflow.services.BrushStrokeMath.STYLE_INK_WASH
+        const val GOUACHE = com.authorss81.noteflow.services.BrushStrokeMath.STYLE_GOUACHE
+        const val DRY_BRUSH = com.authorss81.noteflow.services.BrushStrokeMath.STYLE_DRY_BRUSH
+        const val PALETTE_KNIFE = com.authorss81.noteflow.services.BrushStrokeMath.STYLE_PALETTE_KNIFE
+    }
 
     val PRESETS = mapOf(
         com.authorss81.noteflow.data.model.StrokeTool.OIL_PAINT to ToolPreset(
@@ -155,28 +258,81 @@ object AgslShaders {
             pigmentLoad = 0.95f,
             mixStrength = 0.85f,
             impasto = 0.9f,
-            hardness = 0.8f
+            hardness = 0.8f,
+            brushStyle = StyleIds.OIL_PAINT
         ),
         com.authorss81.noteflow.data.model.StrokeTool.WATERCOLOR to ToolPreset(
             wetness = 0.9f,
             pigmentLoad = 0.35f,
             mixStrength = 0.6f,
             impasto = 0.0f,
-            hardness = 0.25f
+            hardness = 0.25f,
+            brushStyle = StyleIds.WATERCOLOR
         ),
         com.authorss81.noteflow.data.model.StrokeTool.SMUDGE to ToolPreset(
             wetness = 0.4f,
             pigmentLoad = 0.0f,
             mixStrength = 0.85f,
             impasto = 0.1f,
-            hardness = 0.5f
+            hardness = 0.5f,
+            brushStyle = StyleIds.SMUDGE
         ),
         com.authorss81.noteflow.data.model.StrokeTool.SPLATTER to ToolPreset(
             wetness = 0.7f,
             pigmentLoad = 0.9f,
             mixStrength = 0.3f,
             impasto = 0.2f,
-            hardness = 0.7f
+            hardness = 0.7f,
+            brushStyle = StyleIds.SPLATTER
+        ),
+        // Phase 18: NEW brush styles — each is a genuinely distinct render.
+        com.authorss81.noteflow.data.model.StrokeTool.CHARCOAL to ToolPreset(
+            wetness = 0.0f,
+            pigmentLoad = 0.55f,
+            mixStrength = 0.7f,
+            impasto = 0.0f,
+            hardness = 0.3f,
+            brushStyle = StyleIds.CHARCOAL
+        ),
+        com.authorss81.noteflow.data.model.StrokeTool.OIL_PASTEL to ToolPreset(
+            wetness = 0.05f,
+            pigmentLoad = 0.95f,
+            mixStrength = 0.5f,
+            impasto = 0.3f,
+            hardness = 0.85f,
+            brushStyle = StyleIds.OIL_PASTEL
+        ),
+        com.authorss81.noteflow.data.model.StrokeTool.INK_WASH to ToolPreset(
+            wetness = 0.85f,
+            pigmentLoad = 0.9f,
+            mixStrength = 0.45f,
+            impasto = 0.0f,
+            hardness = 0.3f,
+            brushStyle = StyleIds.INK_WASH
+        ),
+        com.authorss81.noteflow.data.model.StrokeTool.GOUACHE to ToolPreset(
+            wetness = 0.1f,
+            pigmentLoad = 0.98f,
+            mixStrength = 0.6f,
+            impasto = 0.05f,
+            hardness = 0.9f,
+            brushStyle = StyleIds.GOUACHE
+        ),
+        com.authorss81.noteflow.data.model.StrokeTool.DRY_BRUSH to ToolPreset(
+            wetness = 0.0f,
+            pigmentLoad = 0.5f,
+            mixStrength = 0.6f,
+            impasto = 0.0f,
+            hardness = 0.4f,
+            brushStyle = StyleIds.DRY_BRUSH
+        ),
+        com.authorss81.noteflow.data.model.StrokeTool.PALETTE_KNIFE to ToolPreset(
+            wetness = 0.2f,
+            pigmentLoad = 0.7f,
+            mixStrength = 0.95f,
+            impasto = 0.15f,
+            hardness = 0.65f,
+            brushStyle = StyleIds.PALETTE_KNIFE
         )
     )
 
@@ -215,7 +371,9 @@ object AgslShaders {
             impasto: Float,
             hardness: Float,
             paperGrain: Float = 0.5f,
-            seed: Float = 0f
+            seed: Float = 0f,
+            strokeSeed: Float = 0f,
+            brushStyle: Int = StyleIds.DEFAULT
         ) {
             runtimeShader.setFloatUniform("uPrevPos", prevX, prevY)
             runtimeShader.setFloatUniform("uBrushPos", brushX, brushY)
@@ -228,6 +386,8 @@ object AgslShaders {
             runtimeShader.setFloatUniform("uPaperGrain", paperGrain)
             runtimeShader.setFloatUniform("uHardness", hardness)
             runtimeShader.setFloatUniform("uSeed", seed)
+            runtimeShader.setFloatUniform("uStrokeSeed", strokeSeed)
+            runtimeShader.setFloatUniform("uBrushStyle", brushStyle.toFloat())
         }
     }
 }

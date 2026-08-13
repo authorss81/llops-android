@@ -139,6 +139,68 @@ fun PenNibVisualPreview(
                     style = DrawStrokeStyle(width = width.coerceIn(8f, 24f), cap = StrokeCap.Square)
                 )
             }
+            StrokeTool.CHARCOAL -> {
+                val effW = width.coerceIn(4f, 18f)
+                drawPath(
+                    path = path,
+                    color = color.copy(alpha = 0.4f),
+                    style = DrawStrokeStyle(width = effW * 1.2f, cap = StrokeCap.Round)
+                )
+                drawPath(
+                    path = path,
+                    color = color.copy(alpha = 0.75f),
+                    style = DrawStrokeStyle(width = effW * 0.5f, cap = StrokeCap.Round)
+                )
+                drawCircle(color.copy(alpha = 0.35f), radius = effW * 0.9f, center = Offset(16f, h * 0.5f))
+                drawCircle(color.copy(alpha = 0.35f), radius = effW * 0.9f, center = Offset(w - 16f, h * 0.5f))
+            }
+            StrokeTool.OIL_PASTEL, StrokeTool.GOUACHE -> {
+                val effW = width.coerceIn(6f, 22f)
+                drawPath(
+                    path = path,
+                    color = color.copy(alpha = 0.9f),
+                    style = DrawStrokeStyle(width = effW, cap = StrokeCap.Square)
+                )
+                drawPath(
+                    path = path,
+                    color = Color.White.copy(alpha = 0.35f),
+                    style = DrawStrokeStyle(width = effW * 0.2f, cap = StrokeCap.Square)
+                )
+            }
+            StrokeTool.INK_WASH -> {
+                val effW = width.coerceIn(8f, 28f)
+                drawPath(
+                    path = path,
+                    color = color.copy(alpha = 0.2f),
+                    style = DrawStrokeStyle(width = effW * 1.6f, cap = StrokeCap.Round)
+                )
+                drawPath(
+                    path = path,
+                    color = color.copy(alpha = 0.85f),
+                    style = DrawStrokeStyle(width = effW * 0.4f, cap = StrokeCap.Round)
+                )
+            }
+            StrokeTool.PALETTE_KNIFE -> {
+                val effW = width.coerceIn(6f, 24f)
+                drawPath(
+                    path = path,
+                    color = color.copy(alpha = 0.95f),
+                    style = DrawStrokeStyle(width = effW, cap = StrokeCap.Square)
+                )
+            }
+            StrokeTool.DRY_BRUSH -> {
+                val effW = width.coerceIn(4f, 18f)
+                val dashIntervals = floatArrayOf(effW * 0.6f, effW * 0.5f)
+                drawPath(
+                    path = path,
+                    color = color.copy(alpha = 0.65f),
+                    style = DrawStrokeStyle(
+                        width = effW * 0.7f,
+                        cap = StrokeCap.Round,
+                        pathEffect = PathEffect.dashPathEffect(dashIntervals, 0f)
+                    )
+                )
+            }
             else -> {
                 drawPath(
                     path = path,

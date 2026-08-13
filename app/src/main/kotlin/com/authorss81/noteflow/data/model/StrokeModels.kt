@@ -5,7 +5,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 
 enum class StrokeTool {
-    PEN, FOUNTAIN_PEN, PENCIL, AIRBRUSH, MARKER, HIGHLIGHTER, CALLIGRAPHIC, DOTTED, NEON, FINELINER, CHISEL_MARKER, LASER, ERASER, TEXT, RECTANGLE, LINE, ARROW, ELLIPSE, TRIANGLE, STAR, PENTAGON, HEXAGON, SELECT, PAN, EYEDROPPER, WATERCOLOR, OIL_PAINT, SMUDGE, SPLATTER, STICKER;
+    PEN, FOUNTAIN_PEN, PENCIL, AIRBRUSH, MARKER, HIGHLIGHTER, CALLIGRAPHIC, DOTTED, NEON, FINELINER, CHISEL_MARKER, LASER, ERASER, TEXT, RECTANGLE, LINE, ARROW, ELLIPSE, TRIANGLE, STAR, PENTAGON, HEXAGON, SELECT, PAN, EYEDROPPER, WATERCOLOR, OIL_PAINT, SMUDGE, SPLATTER, STICKER, CHARCOAL, OIL_PASTEL, INK_WASH, GOUACHE, DRY_BRUSH, PALETTE_KNIFE;
 
     val isShapeTool: Boolean
         get() = when (this) {
@@ -15,7 +15,7 @@ enum class StrokeTool {
 
     val isFreehandTool: Boolean
         get() = when (this) {
-            PEN, FOUNTAIN_PEN, PENCIL, AIRBRUSH, MARKER, HIGHLIGHTER, CALLIGRAPHIC, DOTTED, NEON, FINELINER, CHISEL_MARKER, LASER, WATERCOLOR, OIL_PAINT, SMUDGE, SPLATTER -> true
+            PEN, FOUNTAIN_PEN, PENCIL, AIRBRUSH, MARKER, HIGHLIGHTER, CALLIGRAPHIC, DOTTED, NEON, FINELINER, CHISEL_MARKER, LASER, WATERCOLOR, OIL_PAINT, SMUDGE, SPLATTER, CHARCOAL, OIL_PASTEL, INK_WASH, GOUACHE, DRY_BRUSH, PALETTE_KNIFE -> true
             else -> false
         }
 
@@ -51,6 +51,12 @@ enum class StrokeTool {
             SMUDGE -> "Smudge / Finger Blend"
             SPLATTER -> "Paint Splatter & Drops"
             STICKER -> "Sticker"
+            CHARCOAL -> "Charcoal (Grainy)"
+            OIL_PASTEL -> "Oil Pastel (Waxy)"
+            INK_WASH -> "Ink Wash / Sumi-e"
+            GOUACHE -> "Gouache (Matte)"
+            DRY_BRUSH -> "Dry Brush (Bristle)"
+            PALETTE_KNIFE -> "Palette Knife"
         }
 }
 

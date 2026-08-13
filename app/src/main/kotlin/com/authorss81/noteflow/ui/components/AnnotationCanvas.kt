@@ -414,6 +414,22 @@ fun AnnotationCanvas(
     }
 
     val context = androidx.compose.ui.platform.LocalContext.current
+    // Phase 18: brush-physics render settings — velocity width modulation, nib angle.
+    // Persisted via the existing SettingsManager (SharedPreferences) path; NO DB schema change.
+    val brushRenderSettings = remember(context) { com.authorss81.noteflow.services.SettingsManager(context) }
+    var velocityModulated by remember { mutableStateOf(brushRenderSettings.velocityModulationEnabled) }
+    var velocityIntensity by remember { mutableFloatStateOf(brushRenderSettings.velocityModulationIntensity) }
+    var nibAngleDeg by remember { mutableFloatStateOf(brushRenderSettings.calligraphicNibAngleDeg) }
+    var chiselNibAngleDeg by remember { mutableFloatStateOf(brushRenderSettings.chiselNibAngleDeg) }
+    val strokeRenderOpts = com.authorss81.noteflow.ui.components.StrokeRenderOpts(
+        velocityModulated = velocityModulated,
+        velocityIntensity = velocityIntensity,
+        nibAngleDeg = nibAngleDeg,
+        chiselNibAngleDeg = chiselNibAngleDeg
+    )
+    // Per-stroke texture seed — refreshed on drag start so each live stroke owns a
+    // fresh grain/bristle phase (the committed copy gets one from its stroke id).
+    var currentStrokeSeed by remember { mutableFloatStateOf(0f) }
     LaunchedEffect(Unit) {
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
             val choreographer = android.view.Choreographer.getInstance()
@@ -572,6 +588,8 @@ fun AnnotationCanvas(
                                 return@detectDragGestures
                             }
                             onDrawingStart()
+                            // Phase 18: fresh per-stroke texture seed (replaces the old page-fixed seed).
+                            currentStrokeSeed = ((Math.random() * 1000f).toFloat())
                             val canvasOffset = Offset(
                                 x = (offset.x - internalPanOffset.x) / internalZoomScale,
                                 y = (offset.y - internalPanOffset.y) / internalZoomScale
@@ -699,7 +717,7 @@ fun AnnotationCanvas(
                                 val curTime = System.currentTimeMillis()
 
                                 if (wetBrushEngine.shouldProcessPoint(last?.let { Offset(it.x, it.y) }, Offset(drawPoint.x, drawPoint.y), lastTime, curTime)) {
-                                    if (last != null && (currentTool == StrokeTool.WATERCOLOR || currentTool == StrokeTool.OIL_PAINT || currentTool == StrokeTool.SMUDGE || currentTool == StrokeTool.SPLATTER)) {
+                                    if (last != null && com.authorss81.noteflow.services.BrushStrokeMath.isWetRenderedTool(currentTool)) {
                                         val interpolated = wetBrushEngine.interpolateSegment(
                                             prev = Offset(last.x, last.y),
                                             cur = Offset(drawPoint.x, drawPoint.y),
@@ -764,9 +782,10 @@ fun AnnotationCanvas(
                                             isAdvanced = advBrushes,
                                             layerId = actLayerId ?: "layer_default"
                                         )
-                                        val isWetOrFleeting = tool == StrokeTool.WATERCOLOR || tool == StrokeTool.OIL_PAINT ||
-                                            tool == StrokeTool.SMUDGE || tool == StrokeTool.SPLATTER || tool == StrokeTool.LASER
-                                        val stylePreservingTool = tool == StrokeTool.DOTTED || tool == StrokeTool.NEON
+                                        val isWetOrFleeting = tool == StrokeTool.LASER || com.authorss81.noteflow.services.BrushStrokeMath.isWetRenderedTool(tool)
+                                        val stylePreservingTool = tool == StrokeTool.DOTTED || tool == StrokeTool.NEON ||
+                                            tool == StrokeTool.CHARCOAL || tool == StrokeTool.OIL_PASTEL ||
+                                            tool == StrokeTool.DRY_BRUSH || tool == StrokeTool.PALETTE_KNIFE
                                         val snappedShape = if (shapeAutoSnapEnabled && tool.isFreehandTool && !isWetOrFleeting && !stylePreservingTool) {
                                             com.authorss81.noteflow.services.ShapeRecognitionHelper.trySnapShape(candidateStroke)
                                         } else {
@@ -1201,7 +1220,9 @@ fun AnnotationCanvas(
                         gpuWetBrushesEnabled = gpuWetBrushesEnabled,
                         symmetryMode = symmetryMode,
                         symmetryCenterX = symmetryCenterFor(size.width, 0f).x,
-                        symmetryCenterY = symmetryCenterFor(size.width, 0f).y
+                        symmetryCenterY = symmetryCenterFor(size.width, 0f).y,
+                        strokeRenderOpts = strokeRenderOpts,
+                        liveStrokeSeed = currentStrokeSeed
                     )
                 } else if (!divideIntoPages) {
                     // Continuous Infinite Canvas (Seamless, without page division gaps)
@@ -1251,7 +1272,9 @@ fun AnnotationCanvas(
                         gpuWetBrushesEnabled = gpuWetBrushesEnabled,
                         symmetryMode = symmetryMode,
                         symmetryCenterX = symmetryCenterFor(size.width, 0f).x,
-                        symmetryCenterY = symmetryCenterFor(size.width, 0f).y
+                        symmetryCenterY = symmetryCenterFor(size.width, 0f).y,
+                        strokeRenderOpts = strokeRenderOpts,
+                        liveStrokeSeed = currentStrokeSeed
                     )
                 } else {
                     // Continuous Infinite Canvas with Page Divisions & Page Break Badges
@@ -1346,7 +1369,9 @@ fun AnnotationCanvas(
                             gpuWetBrushesEnabled = gpuWetBrushesEnabled,
                             symmetryMode = symmetryMode,
                             symmetryCenterX = symmetryCenterFor(size.width, pageTopY).x,
-                            symmetryCenterY = symmetryCenterFor(size.width, pageTopY).y
+                            symmetryCenterY = symmetryCenterFor(size.width, pageTopY).y,
+                            strokeRenderOpts = strokeRenderOpts,
+                            liveStrokeSeed = currentStrokeSeed
                         )
                     }
                 }
@@ -1584,7 +1609,7 @@ fun AnnotationCanvas(
             }
         }
 
-        if (currentTool == StrokeTool.WATERCOLOR || currentTool == StrokeTool.OIL_PAINT || currentTool == StrokeTool.SMUDGE || currentTool == StrokeTool.SPLATTER || wetCanvasEngine.isCanvasWet) {
+        if (com.authorss81.noteflow.services.BrushStrokeMath.isWetRenderedTool(currentTool) || currentTool == StrokeTool.CALLIGRAPHIC || currentTool == StrokeTool.CHISEL_MARKER || wetCanvasEngine.isCanvasWet) {
             Surface(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
@@ -1627,6 +1652,26 @@ fun AnnotationCanvas(
         if (showBrushStudio) {
             BrushStudioDialog(
                 engine = wetCanvasEngine,
+                velocityModulated = velocityModulated,
+                velocityIntensity = velocityIntensity,
+                onVelocityModulatedChange = { value ->
+                    velocityModulated = value
+                    brushRenderSettings.velocityModulationEnabled = value
+                },
+                onVelocityIntensityChange = { value ->
+                    velocityIntensity = value
+                    brushRenderSettings.velocityModulationIntensity = value
+                },
+                nibAngleDeg = nibAngleDeg,
+                onNibAngleChange = { value ->
+                    nibAngleDeg = value
+                    brushRenderSettings.calligraphicNibAngleDeg = value
+                },
+                chiselNibAngleDeg = chiselNibAngleDeg,
+                onChiselNibAngleChange = { value ->
+                    chiselNibAngleDeg = value
+                    brushRenderSettings.chiselNibAngleDeg = value
+                },
                 onDismiss = { showBrushStudio = false }
             )
         }
@@ -1988,14 +2033,16 @@ private fun DrawScope.drawCompositedLayersStrokes(
     gpuWetBrushesEnabled: Boolean = true,
     symmetryMode: SymmetryMode = SymmetryMode.OFF,
     symmetryCenterX: Float = 0f,
-    symmetryCenterY: Float = 0f
+    symmetryCenterY: Float = 0f,
+    strokeRenderOpts: StrokeRenderOpts = StrokeRenderOpts(),
+    liveStrokeSeed: Float = 0f
 ) {
     // Phase 07: view-time mirror. Symmetry never touches stored point data —
     // committed strokes keep the real points so saved notes stay portable and
     // export correctly. TEXT strokes are never mirrored (text cannot sensibly
     // reflect).
     fun DrawScope.drawStrokeWithSymmetry(stroke: Stroke, offsetY: Float, sMode: SymmetryMode, centerX: Float = symmetryCenterX, centerY: Float = symmetryCenterY) {
-        drawSingleStroke(stroke, offsetY, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer)
+        drawSingleStroke(stroke, offsetY, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer, renderOpts = strokeRenderOpts)
         if (sMode != SymmetryMode.OFF && stroke.tool != StrokeTool.TEXT) {
             drawSingleStroke(
                 stroke.copy(
@@ -2014,7 +2061,8 @@ private fun DrawScope.drawCompositedLayersStrokes(
                 ),
                 offsetY,
                 isDarkPaper = isDarkPaper,
-                inkRenderer = inkRenderer
+                inkRenderer = inkRenderer,
+                renderOpts = strokeRenderOpts
             )
         }
     }
@@ -2091,8 +2139,8 @@ private fun DrawScope.drawCompositedLayersStrokes(
 
         if (layerStrokes.isEmpty() && !isPreviewOnThisLayer) continue
 
-        val isWetTool = currentTool == StrokeTool.WATERCOLOR || currentTool == StrokeTool.OIL_PAINT || currentTool == StrokeTool.SMUDGE || currentTool == StrokeTool.SPLATTER
-        val isWetLayer = (isWetTool && isPreviewOnThisLayer) || layerStrokes.any { it.tool == StrokeTool.WATERCOLOR || it.tool == StrokeTool.OIL_PAINT || it.tool == StrokeTool.SMUDGE || it.tool == StrokeTool.SPLATTER }
+        val isWetTool = currentTool != null && com.authorss81.noteflow.services.BrushStrokeMath.isWetRenderedTool(currentTool!!)
+        val isWetLayer = (isWetTool && isPreviewOnThisLayer) || layerStrokes.any { com.authorss81.noteflow.services.BrushStrokeMath.isWetRenderedTool(it.tool) }
         // Gate the wet pass on an ACTIVE stroke on this layer: the shader's
         // renderEffect is only meaningful while a brush is moving, and the dirty
         // scoping below only covers that region. When idle (no preview on this
@@ -2127,7 +2175,9 @@ private fun DrawScope.drawCompositedLayersStrokes(
                 activePoints = activePoints,
                 activeStart = activeStart,
                 wetCanvasEngine = wetCanvasEngine ?: com.authorss81.noteflow.services.WetCanvasEngine(),
-                wetBrushEngine = wetBrushEngine
+                wetBrushEngine = wetBrushEngine,
+                strokeRenderOpts = strokeRenderOpts,
+                liveStrokeSeed = liveStrokeSeed
             )
             continue
         }
@@ -2237,7 +2287,9 @@ private fun DrawScope.drawWetLayerPass(
     activePoints: List<PointF>,
     activeStart: PointF?,
     wetCanvasEngine: com.authorss81.noteflow.services.WetCanvasEngine,
-    wetBrushEngine: com.authorss81.noteflow.services.WetBrushEngine
+    wetBrushEngine: com.authorss81.noteflow.services.WetBrushEngine,
+    strokeRenderOpts: StrokeRenderOpts = StrokeRenderOpts(),
+    liveStrokeSeed: Float = 0f
 ) {
     if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU && wetMixingEffect != null) {
         val brushPos = activePoints.lastOrNull() ?: activeStart
@@ -2260,7 +2312,11 @@ private fun DrawScope.drawWetLayerPass(
                 impasto = preset.impasto,
                 hardness = preset.hardness,
                 paperGrain = wetCanvasEngine.brushParams.paperGrain,
-                seed = ((pageWidth * 131f) + (pageHeight * 71f) + (offsetY * 29f)) % 1000f
+                seed = com.authorss81.noteflow.services.BrushStrokeMath.strokeSeedFromId(
+                    previewStroke?.id ?: "preview"
+                ),
+                strokeSeed = liveStrokeSeed,
+                brushStyle = preset.brushStyle
             )
             hasEffect = true
         }
@@ -2306,10 +2362,10 @@ private fun DrawScope.drawWetLayerPass(
 
         fun drawStrokes() {
             for (stroke in layerStrokes) {
-                drawSingleStroke(stroke, 0f, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer)
+                drawSingleStroke(stroke, 0f, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer, renderOpts = strokeRenderOpts)
             }
             if (previewStroke != null) {
-                drawSingleStroke(previewStroke, 0f, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer)
+                drawSingleStroke(previewStroke, 0f, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer, renderOpts = strokeRenderOpts)
             }
         }
 
@@ -2350,10 +2406,10 @@ private fun DrawScope.drawWetLayerPass(
         }
     } else {
         for (stroke in layerStrokes) {
-            drawSingleStroke(stroke, 0f, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer)
+            drawSingleStroke(stroke, 0f, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer, renderOpts = strokeRenderOpts)
         }
         if (previewStroke != null) {
-            drawSingleStroke(previewStroke, 0f, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer)
+            drawSingleStroke(previewStroke, 0f, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer, renderOpts = strokeRenderOpts)
         }
     }
 }
@@ -2362,7 +2418,8 @@ private fun DrawScope.drawSingleStroke(
     stroke: Stroke,
     offsetY: Float,
     isDarkPaper: Boolean = false,
-    inkRenderer: CanvasStrokeRenderer? = null
+    inkRenderer: CanvasStrokeRenderer? = null,
+    renderOpts: StrokeRenderOpts = StrokeRenderOpts()
 ) {
     if (stroke.isAdvanced && inkRenderer != null) {
         try {
@@ -2406,7 +2463,24 @@ private fun DrawScope.drawSingleStroke(
 
     when (stroke.tool) {
         StrokeTool.PEN, StrokeTool.HIGHLIGHTER -> {
-            if (stroke.points.size > 1) {
+            if (renderOpts.velocityModulated && stroke.tool == StrokeTool.PEN && stroke.points.size > 1) {
+                // Phase 18: velocity-based width modulation — fast -> thin, slow -> thick.
+                // Segment-level so the modulation is visible along a single stroke.
+                val pts = stroke.points
+                for (i in 0 until pts.size - 1) {
+                    val p1 = pts[i]
+                    val p2 = pts[i + 1]
+                    val vel = com.authorss81.noteflow.services.BrushStrokeMath.segmentVelocity(p1, p2)
+                    val dynamicWidth = (strokeWidth * com.authorss81.noteflow.services.BrushStrokeMath.velocityWidthFactor(vel, renderOpts.velocityIntensity)).coerceAtLeast(0.75f)
+                    drawLine(
+                        color = color,
+                        start = Offset(p1.x, p1.y + offsetY),
+                        end = Offset(p2.x, p2.y + offsetY),
+                        strokeWidth = dynamicWidth,
+                        cap = StrokeCap.Round
+                    )
+                }
+            } else if (stroke.points.size > 1) {
                 // Quadratic Bezier Curve Path Smoothing for silky smooth pen ink
                 val path = Path().apply {
                     val pts = stroke.points
@@ -2445,8 +2519,17 @@ private fun DrawScope.drawSingleStroke(
                     val dx = p2.x - p1.x
                     val dy = p2.y - p1.y
                     val dist = sqrt(dx * dx + dy * dy)
-                    // Velocity modulation: fast -> thin, slow -> thick flourishes
-                    val dynamicWidth = (strokeWidth * (1.7f - (dist / 14f).coerceIn(0f, 1.1f))).coerceAtLeast(1f)
+                    // Velocity modulation: fast -> thin, slow -> thick flourishes.
+                    // Phase 18: the new velocity helper (units px/ms from timestamps, or
+                    // px/16ms spacing when timestamps are absent) drives it when enabled.
+                    val dynamicWidth = if (renderOpts.velocityModulated) {
+                        (strokeWidth * com.authorss81.noteflow.services.BrushStrokeMath.velocityWidthFactor(
+                            com.authorss81.noteflow.services.BrushStrokeMath.segmentVelocity(p1, p2),
+                            renderOpts.velocityIntensity
+                        )).coerceAtLeast(1f)
+                    } else {
+                        (strokeWidth * (1.7f - (dist / 14f).coerceIn(0f, 1.1f))).coerceAtLeast(1f)
+                    }
                     drawLine(
                         color = color,
                         start = Offset(p1.x, p1.y + offsetY),
@@ -2473,37 +2556,61 @@ private fun DrawScope.drawSingleStroke(
         }
         StrokeTool.AIRBRUSH -> {
             val nativeCanvas = drawContext.canvas.nativeCanvas
+            // Phase 18: dwell density — holding the brush still deposits a denser
+            // cloud. Points carry timestamps; when a long dwell gap exists, extra
+            // stamps are forced around the held point (existing stamp engine only).
+            var stampPoints = stroke.points
+            var forceDense = false
+            if (stroke.points.size >= 2 && stroke.points.any { it.timestampMs != null }) {
+                val dense = buildAirbrushDensePoints(stroke.points)
+                if (dense.size > stroke.points.size) {
+                    stampPoints = dense
+                    forceDense = true
+                }
+            }
             BrushTextureEngine.drawBitmapStampSequence(
                 nativeCanvas = nativeCanvas,
-                points = stroke.points,
+                points = stampPoints,
                 offsetY = offsetY,
                 baseSize = strokeWidth * 2.5f,
                 color = color.copy(alpha = 0.35f),
                 textureType = BrushTextureEngine.TextureType.AIRBRUSH_SPRAY,
                 spacingFactor = 0.2f,
-                scatterFactor = 0.35f
+                scatterFactor = 0.35f,
+                forceStampEvery = forceDense
             )
         }
         StrokeTool.OIL_PAINT -> {
             val nativeCanvas = drawContext.canvas.nativeCanvas
+            // Phase 18: pressure-driven bristle spread — higher pressure -> wider
+            // contact patch + more pigment. Identity at full pressure (touch devices).
+            val oPressure = meanPointPressure(stroke.points)
+            val oSpread = com.authorss81.noteflow.services.BrushStrokeMath.bristleSpreadFactor(oPressure, 1f)
+            val oPigment = com.authorss81.noteflow.services.BrushStrokeMath.pigmentFromPressure(oPressure)
             BrushTextureEngine.drawTexturedStrokePath(
                 nativeCanvas = nativeCanvas,
                 points = stroke.points,
                 offsetY = offsetY,
-                strokeWidth = strokeWidth * 1.3f,
-                color = color.copy(alpha = (color.alpha * 0.9f).coerceIn(0.6f, 1.0f)),
-                textureType = BrushTextureEngine.TextureType.CANVAS_WEAVE
+                strokeWidth = strokeWidth * 1.3f * oSpread,
+                color = color.copy(alpha = (color.alpha * 0.9f * oPigment).coerceIn(0.6f, 1.0f)),
+                textureType = BrushTextureEngine.TextureType.CANVAS_WEAVE,
+                seed = com.authorss81.noteflow.services.BrushStrokeMath.strokeSeedFromId(stroke.id)
             )
         }
         StrokeTool.WATERCOLOR -> {
             val nativeCanvas = drawContext.canvas.nativeCanvas
+            // Phase 18: pressure-driven bristle spread + per-stroke grain seed.
+            val wPressure = meanPointPressure(stroke.points)
+            val wSpread = com.authorss81.noteflow.services.BrushStrokeMath.bristleSpreadFactor(wPressure, 1f)
+            val wPigment = com.authorss81.noteflow.services.BrushStrokeMath.pigmentFromPressure(wPressure)
             BrushTextureEngine.drawTexturedStrokePath(
                 nativeCanvas = nativeCanvas,
                 points = stroke.points,
                 offsetY = offsetY,
-                strokeWidth = strokeWidth * 1.5f,
-                color = color.copy(alpha = (color.alpha * 0.60f).coerceIn(0.2f, 0.85f)),
-                textureType = BrushTextureEngine.TextureType.WATERCOLOR_PAPER
+                strokeWidth = strokeWidth * 1.5f * wSpread,
+                color = color.copy(alpha = (color.alpha * 0.60f * (0.75f + 0.25f * wPigment)).coerceIn(0.2f, 0.85f)),
+                textureType = BrushTextureEngine.TextureType.WATERCOLOR_PAPER,
+                seed = com.authorss81.noteflow.services.BrushStrokeMath.strokeSeedFromId(stroke.id)
             )
         }
         StrokeTool.SPLATTER, StrokeTool.SMUDGE -> {
@@ -2517,6 +2624,82 @@ private fun DrawScope.drawSingleStroke(
                 textureType = BrushTextureEngine.TextureType.SPLATTER_DROPS,
                 spacingFactor = 0.45f,
                 scatterFactor = 0.55f
+            )
+        }
+        // Phase 18: six NEW brush families — each renders visibly distinct. These are
+        // honest vector approximations of their AGSL shader styles (see docs/brush-styles.md).
+        StrokeTool.CHARCOAL -> {
+            val nativeCanvas = drawContext.canvas.nativeCanvas
+            BrushTextureEngine.drawCharcoalStroke(
+                nativeCanvas = nativeCanvas,
+                points = stroke.points,
+                offsetY = offsetY,
+                strokeWidth = strokeWidth,
+                color = color,
+                seed = com.authorss81.noteflow.services.BrushStrokeMath.strokeSeedFromId(stroke.id)
+            )
+        }
+        StrokeTool.OIL_PASTEL -> {
+            val nativeCanvas = drawContext.canvas.nativeCanvas
+            BrushTextureEngine.drawTexturedStrokePath(
+                nativeCanvas = nativeCanvas,
+                points = stroke.points,
+                offsetY = offsetY,
+                strokeWidth = strokeWidth * 1.1f,
+                color = color.copy(alpha = (color.alpha * 0.92f).coerceIn(0f, 1f)),
+                textureType = BrushTextureEngine.TextureType.OIL_PASTEL_STREAK,
+                seed = com.authorss81.noteflow.services.BrushStrokeMath.strokeSeedFromId(stroke.id)
+            )
+            if (stroke.points.size == 1) {
+                drawCircle(color, radius = strokeWidth / 2f, center = Offset(stroke.points.first().x, stroke.points.first().y + offsetY))
+            }
+        }
+        StrokeTool.INK_WASH -> {
+            val nativeCanvas = drawContext.canvas.nativeCanvas
+            BrushTextureEngine.drawInkWashStroke(
+                nativeCanvas = nativeCanvas,
+                points = stroke.points,
+                offsetY = offsetY,
+                strokeWidth = strokeWidth,
+                color = color,
+                seed = com.authorss81.noteflow.services.BrushStrokeMath.strokeSeedFromId(stroke.id)
+            )
+        }
+        StrokeTool.GOUACHE -> {
+            val nativeCanvas = drawContext.canvas.nativeCanvas
+            BrushTextureEngine.drawTexturedStrokePath(
+                nativeCanvas = nativeCanvas,
+                points = stroke.points,
+                offsetY = offsetY,
+                strokeWidth = strokeWidth,
+                color = color.copy(alpha = (color.alpha * 0.98f).coerceIn(0f, 1f)),
+                textureType = BrushTextureEngine.TextureType.GOUACHE_MATTE,
+                seed = com.authorss81.noteflow.services.BrushStrokeMath.strokeSeedFromId(stroke.id)
+            )
+            if (stroke.points.size == 1) {
+                drawCircle(color, radius = strokeWidth / 2f, center = Offset(stroke.points.first().x, stroke.points.first().y + offsetY))
+            }
+        }
+        StrokeTool.DRY_BRUSH -> {
+            val nativeCanvas = drawContext.canvas.nativeCanvas
+            BrushTextureEngine.drawDryBrushStroke(
+                nativeCanvas = nativeCanvas,
+                points = stroke.points,
+                offsetY = offsetY,
+                strokeWidth = strokeWidth,
+                color = color,
+                seed = com.authorss81.noteflow.services.BrushStrokeMath.strokeSeedFromId(stroke.id)
+            )
+        }
+        StrokeTool.PALETTE_KNIFE -> {
+            val nativeCanvas = drawContext.canvas.nativeCanvas
+            BrushTextureEngine.drawPaletteKnifeStroke(
+                nativeCanvas = nativeCanvas,
+                points = stroke.points,
+                offsetY = offsetY,
+                strokeWidth = strokeWidth,
+                color = color,
+                seed = com.authorss81.noteflow.services.BrushStrokeMath.strokeSeedFromId(stroke.id)
             )
         }
         StrokeTool.MARKER -> {
@@ -2541,9 +2724,20 @@ private fun DrawScope.drawSingleStroke(
         StrokeTool.CALLIGRAPHIC -> {
             if (stroke.points.size > 1) {
                 val pts = stroke.points
-                val angle = Math.toRadians(45.0)
-                val dx = (cos(angle) * strokeWidth / 1.5f).toFloat()
-                val dy = (sin(angle) * strokeWidth / 1.5f).toFloat()
+                // Phase 18: nib angle is user-adjustable (Brush Studio). Default 45° keeps
+                // the classic look; velocity modulation optionally thins the nib per stroke.
+                val angle = Math.toRadians(renderOpts.nibAngleDeg.toDouble())
+                val nibScale = if (renderOpts.velocityModulated) {
+                    var velSum = 0f
+                    var count = 0
+                    for (i in 1 until pts.size) {
+                        velSum += com.authorss81.noteflow.services.BrushStrokeMath.segmentVelocity(pts[i - 1], pts[i])
+                        count++
+                    }
+                    com.authorss81.noteflow.services.BrushStrokeMath.velocityWidthFactor(if (count > 0) velSum / count else 1f, renderOpts.velocityIntensity)
+                } else 1f
+                val dx = (cos(angle) * strokeWidth / 1.5f * nibScale).toFloat()
+                val dy = (sin(angle) * strokeWidth / 1.5f * nibScale).toFloat()
                 val path = Path().apply {
                     fillType = PathFillType.NonZero
                 }
@@ -2623,7 +2817,23 @@ private fun DrawScope.drawSingleStroke(
             }
         }
         StrokeTool.FINELINER -> {
-            if (stroke.points.size > 1) {
+            if (renderOpts.velocityModulated && stroke.points.size > 1) {
+                // Phase 18: velocity-based width modulation (fineliner).
+                val pts = stroke.points
+                for (i in 0 until pts.size - 1) {
+                    val p1 = pts[i]
+                    val p2 = pts[i + 1]
+                    val vel = com.authorss81.noteflow.services.BrushStrokeMath.segmentVelocity(p1, p2)
+                    val dynamicWidth = (strokeWidth.coerceAtLeast(1.2f) * com.authorss81.noteflow.services.BrushStrokeMath.velocityWidthFactor(vel, renderOpts.velocityIntensity)).coerceAtLeast(0.8f)
+                    drawLine(
+                        color = color.copy(alpha = 0.95f),
+                        start = Offset(p1.x, p1.y + offsetY),
+                        end = Offset(p2.x, p2.y + offsetY),
+                        strokeWidth = dynamicWidth,
+                        cap = StrokeCap.Round
+                    )
+                }
+            } else if (stroke.points.size > 1) {
                 val pts = stroke.points
                 val path = Path().apply {
                     moveTo(pts[0].x, pts[0].y + offsetY)
@@ -2647,7 +2857,8 @@ private fun DrawScope.drawSingleStroke(
         StrokeTool.CHISEL_MARKER -> {
             if (stroke.points.size > 1) {
                 val pts = stroke.points
-                val angle = Math.toRadians(30.0)
+                // Phase 18: chisel nib angle is user-adjustable (Brush Studio). Default 30°.
+                val angle = Math.toRadians(renderOpts.chiselNibAngleDeg.toDouble())
                 val dx = (cos(angle) * strokeWidth * 0.9f).toFloat()
                 val dy = (sin(angle) * strokeWidth * 0.9f).toFloat()
                 val path = Path().apply {
@@ -3762,3 +3973,54 @@ private fun RotationHandle(
         )
     }
 }
+
+/**
+ * AIRBRUSH dwell density (Phase 18): points with long timestamp gaps mean the
+ * brush was held still — return a point list with a few extra deposited stamps
+ * around the held point. Uses the existing stamp engine (no new engine).
+ */
+private fun buildAirbrushDensePoints(points: List<com.authorss81.noteflow.data.model.PointF>): List<com.authorss81.noteflow.data.model.PointF> {
+    val out = mutableListOf<com.authorss81.noteflow.data.model.PointF>()
+    out.add(points.first())
+    var i = 0
+    while (i < points.size - 1) {
+        val cur = points[i]
+        val nxt = points[i + 1]
+        val dt = (nxt.timestampMs ?: 0L) - (cur.timestampMs ?: 0L)
+        if (dt > 120L) {
+            val extra = ((dt - 120L) / 60L).toInt().coerceIn(1, 6)
+            for (k in 0 until extra) {
+                val jx = ((k % 3) - 1) * 2.5f
+                val jy = ((k % 2) * 2 - 1) * 2.5f
+                out.add(
+                    com.authorss81.noteflow.data.model.PointF(
+                        cur.x + jx, cur.y + jy, cur.pressure, cur.tilt, cur.timestampMs
+                    )
+                )
+            }
+        }
+        out.add(nxt)
+        i++
+    }
+    return out
+}
+
+/** Average captured pressure of a stroke (defaults to full pressure for legacy strokes). */
+private fun meanPointPressure(points: List<com.authorss81.noteflow.data.model.PointF>): Float {
+    if (points.isEmpty()) return 1f
+    val pressures = points.mapNotNull { it.pressure }
+    return if (pressures.isEmpty()) 1f else pressures.average().toFloat()
+}
+
+/**
+ * Phase 18 render options for [drawSingleStroke]: velocity width modulation and
+ * nib angles for the chiselled/calligraphic tools. Defaults reproduce the classic
+ * look exactly (velocity off, 45deg/30deg nibs).
+ */
+private data class StrokeRenderOpts(
+    val velocityModulated: Boolean = false,
+    val velocityIntensity: Float = 1f,
+    val nibAngleDeg: Float = 45f,
+    val chiselNibAngleDeg: Float = 30f
+)
+

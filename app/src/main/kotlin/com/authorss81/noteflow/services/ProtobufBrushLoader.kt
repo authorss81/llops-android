@@ -117,14 +117,22 @@ object ProtobufBrushLoader {
 
     /**
      * Default StockBrushes fallback implementation.
+     *
+     * Phase 18: the six new tools map to the nearest real family so the Ink-API
+     * advanced path (isAdvanced strokes) degrades honestly. CHARCOAL and
+     * DRY_BRUSH get the unstable/rough graphite family (grainy, split tips),
+     * INK_WASH and GOUACHE get the solid marker family (heavier deposits than
+     * the classic pressurePen), the rest keep the stable pressure-sensitive pen.
      */
     fun getStockFallback(tool: StrokeTool): BrushFamily {
         return when (tool) {
             StrokeTool.FOUNTAIN_PEN -> StockBrushes.pressurePen()
-            StrokeTool.PENCIL -> StockBrushes.pencilUnstable
+            StrokeTool.PENCIL, StrokeTool.CHARCOAL, StrokeTool.DRY_BRUSH -> StockBrushes.pencilUnstable
             StrokeTool.MARKER, StrokeTool.WATERCOLOR -> StockBrushes.marker()
             StrokeTool.HIGHLIGHTER -> StockBrushes.highlighter()
             StrokeTool.OIL_PAINT -> StockBrushes.pressurePen()
+            StrokeTool.INK_WASH, StrokeTool.GOUACHE -> StockBrushes.marker()
+            StrokeTool.OIL_PASTEL, StrokeTool.SMUDGE, StrokeTool.SPLATTER, StrokeTool.PALETTE_KNIFE -> StockBrushes.pressurePen()
             else -> StockBrushes.pressurePen()
         }
     }
