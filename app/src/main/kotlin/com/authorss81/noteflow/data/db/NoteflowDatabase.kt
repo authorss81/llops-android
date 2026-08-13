@@ -43,6 +43,8 @@ abstract class NoteflowDatabase : RoomDatabase() {
     abstract fun noteVersionDao(): NoteVersionDao
 
     companion object {
+        const val SCHEMA_VERSION = 8
+
         @Volatile
         private var INSTANCE: NoteflowDatabase? = null
 

@@ -664,17 +664,12 @@ fun AnnotationCanvas(
                                     val width = currentWidth
 
                                     coroutineScope.launch(kotlinx.coroutines.Dispatchers.Default) {
-                                        val simplifiedPoints = if (pointsToSimplify.size > 2) {
-                                            com.authorss81.noteflow.utils.RamerDouglasPeucker.simplify(pointsToSimplify, epsilon = 1.3f)
-                                        } else {
-                                            pointsToSimplify
-                                        }
-                                        val newStroke = Stroke(
+                                        val candidateStroke = Stroke(
                                             id = java.util.UUID.randomUUID().toString(),
                                             tool = tool,
                                             colorInt = colorInt,
                                             width = width,
-                                            points = simplifiedPoints,
+                                            points = pointsToSimplify,
                                             start = startPoint,
                                             end = endPoint,
                                             pdfPage = targetPage,
@@ -682,6 +677,22 @@ fun AnnotationCanvas(
                                             isAdvanced = advBrushes,
                                             layerId = actLayerId ?: "layer_default"
                                         )
+                                        val isWetOrFleeting = tool == StrokeTool.WATERCOLOR || tool == StrokeTool.OIL_PAINT ||
+                                            tool == StrokeTool.SMUDGE || tool == StrokeTool.SPLATTER || tool == StrokeTool.LASER
+                                        val snappedShape = if (tool.isFreehandTool && !isWetOrFleeting) {
+                                            com.authorss81.noteflow.services.ShapeRecognitionHelper.trySnapShape(candidateStroke)
+                                        } else {
+                                            null
+                                        }
+                                        val newStroke = if (snappedShape != null) {
+                                            snappedShape.snappedStroke
+                                        } else if (pointsToSimplify.size > 2) {
+                                            candidateStroke.copy(
+                                                points = com.authorss81.noteflow.utils.RamerDouglasPeucker.simplify(pointsToSimplify, epsilon = 1.3f)
+                                            )
+                                        } else {
+                                            candidateStroke
+                                        }
                                         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
                                             activeStrokeList.add(newStroke)
                                             val otherStrokes = if (isContinuousMode) emptyList() else strokes.filter { it.pdfPage != pdfPageFilter }

@@ -31,9 +31,10 @@ Guidance for AI agents (opencode, Antigravity, etc.) working on this repo. Read 
 - Never log keys, passwords, or decrypted note content. Never add `INTERNET` usage without a real feature.
 - Known broken things (do NOT trust ROADMAP [x] claims — see ROADMAP.md "POST-AUDIT TRUTH TABLE" @ commit ac781de):
   - Checksum hashes `noteflow.db`, real file is `noteflow.sqlite` (dead code).
-  - `pointsJson` (stroke geometry) is stored PLAINTEXT; only title/extractedText are encrypted.
-  - "Sync" = local copy to Downloads (fake); AGSL wet-mix shaders unwired (zero call sites); pressure/tilt/timestamp capture broken (reflection hack); FLAG_SECURE absent; R8 disabled; baseline-prof.txt unwired.
-  - WAL checkpoint never executes (cursor closed unstepped) → backups miss latest edits.
+  - `pointsJson` (stroke geometry) is FIELD-ENCRYPTED at rest now — title/extractedText/textContent/pointsJson are all encrypted fields (`saveStrokesForPage`, NoteRepository.kt); the Phase 02 restore re-key gap is closed.
+  - "Sync" = local copy to Downloads (fake; real WebDAV E2EE sync is a later phase); AGSL wet-mixing is WIRED through `WetBrushEngine` in `AnnotationCanvas` (gated by `ShaderCapabilityHelper.isAgslSupported` + the `gpuWetBrushesEnabled` setting — full verification is a later phase); pressure/tilt/timestamp are captured via the official raw-MotionEvent bridge (`pointerInteropFilter`, no reflection); FLAG_SECURE is applied in non-debug builds; R8 minify is ON in release; baseline profiles are NOT wired (deferred — the dead `baseline-prof.txt` was deleted in the Phase 03 honesty audit).
+  - WAL checkpoint DOES execute — `checkpointWal()` fully steps the cursor (`NoteRepository.kt:108-116`).
+  - **Phase 03 (2026-08-13) removed these dead/fake features**: the LibMyPaint C++ stub + whole engine-selector stack (`mypaint_jni.cpp`/`CMakeLists.txt`, `LibMyPaintJni`, `BrushEngine`/`BrushEngineFactory`, `HardwareProfiler`/`RenderingEngineTier`, `BrushEngineSettingsDialog`, `SettingsManager.renderingEngineOverride` — all deleted; the canvas renders via `WetBrushEngine`); `HandwritingRecognitionService` + `HandwritingToTextDialog` (dictionary-hash stub, unreachable — deleted); `FtsSearchEngine` (misnamed in-memory loop — deleted; vault search now uses a cached decrypted corpus in `NoteRepository`). Shape auto-snap is now WIRED (`ShapeRecognitionHelper.trySnapShape` runs on freehand draw-end in `AnnotationCanvas`).
 
 ## Roadmap state (August 2026)
 - Phases 1–18 marked done in ROADMAP.md are NOT all true — verified facts in "POST-AUDIT TRUTH TABLE" section.

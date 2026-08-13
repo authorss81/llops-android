@@ -19,10 +19,32 @@ class NoteRepository(private val db: NoteflowDatabase) {
         get() = VaultKeyHolder.dek
         set(value) {
             VaultKeyHolder.dek = value
+            invalidateSearchCorpus()
         }
 
     fun zeroizeKey() {
         VaultKeyHolder.zeroize()
+        invalidateSearchCorpus()
+    }
+
+    /**
+     * In-memory cache of decrypted active pages (title + extractedText) used by
+     * vault search. Loaded once and reused across keystrokes so per-keystroke
+     * search does not decrypt the entire vault; invalidated on any page mutation
+     * or when the vault is locked/re-keyed.
+     */
+    @Volatile
+    private var cachedSearchCorpus: List<NotePageEntity>? = null
+
+    private fun invalidateSearchCorpus() {
+        cachedSearchCorpus = null
+    }
+
+    private suspend fun loadSearchCorpus(): List<NotePageEntity> {
+        cachedSearchCorpus?.let { return it }
+        val corpus = db.pageDao().getAllActivePages().map { decryptPageIfNeeded(it) }
+        cachedSearchCorpus = corpus
+        return corpus
     }
 
     val notebooks: Flow<List<NotebookEntity>> = db.notebookDao().getAllNotebooks()
@@ -173,9 +195,9 @@ class NoteRepository(private val db: NoteflowDatabase) {
         db.sectionDao().getSectionById(id)
     }
 
-    suspend fun searchPages(query: String): List<NotePageEntity> = withContext(Dispatchers.Default) {
+    suspend fun searchPages(query: String): List<NotePageEntity> = withContext(Dispatchers.IO) {
         if (query.isBlank()) return@withContext emptyList()
-        val allPages = db.pageDao().getAllActivePages().map { decryptPageIfNeeded(it) }
+        val allPages = loadSearchCorpus()
         val q = query.trim()
         allPages.filter { page ->
             page.title.contains(q, ignoreCase = true) ||
@@ -289,6 +311,7 @@ class NoteRepository(private val db: NoteflowDatabase) {
             tags = tags.trim()
         )
         db.pageDao().insertPage(page)
+        invalidateSearchCorpus()
         page.copy(title = rawTitle, extractedText = rawExtracted)
     }
 
@@ -296,16 +319,19 @@ class NoteRepository(private val db: NoteflowDatabase) {
         val rawTitle = title.trim()
         val storedTitle = encryptionKey?.let { EncryptionService.encrypt(rawTitle.toByteArray(), it) } ?: rawTitle
         db.pageDao().renamePage(id, storedTitle)
+        invalidateSearchCorpus()
     }
 
     suspend fun updatePageTags(id: String, tags: String) = withContext(Dispatchers.Default) {
         db.pageDao().updatePageTags(id, tags.trim())
+        invalidateSearchCorpus()
     }
 
     suspend fun updatePageTitleAndTags(id: String, title: String, tags: String) = withContext(Dispatchers.Default) {
         val rawTitle = title.trim()
         val storedTitle = encryptionKey?.let { EncryptionService.encrypt(rawTitle.toByteArray(), it) } ?: rawTitle
         db.pageDao().updatePageTitleAndTags(id, storedTitle, tags.trim())
+        invalidateSearchCorpus()
     }
 
     suspend fun togglePin(id: String, pinned: Boolean) {
@@ -314,14 +340,17 @@ class NoteRepository(private val db: NoteflowDatabase) {
 
     suspend fun trashPage(id: String) {
         db.pageDao().trashPage(id)
+        invalidateSearchCorpus()
     }
 
     suspend fun restorePage(id: String) {
         db.pageDao().restorePage(id)
+        invalidateSearchCorpus()
     }
 
     suspend fun movePage(id: String, targetSectionId: String) {
         db.pageDao().movePage(id, targetSectionId)
+        invalidateSearchCorpus()
     }
 
     suspend fun updatePageIndex(id: String, pageIndex: Int) {
@@ -339,6 +368,7 @@ class NoteRepository(private val db: NoteflowDatabase) {
         db.layerDao().deleteLayersForPage(id)
         db.mediaEmbedDao().deleteMediaEmbedsForPage(id)
         db.pageDao().deletePagePermanently(id)
+        invalidateSearchCorpus()
     }
 
     suspend fun emptyTrash() {

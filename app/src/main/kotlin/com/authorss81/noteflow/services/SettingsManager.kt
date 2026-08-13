@@ -73,10 +73,6 @@ class SettingsManager(context: Context) {
         get() = prefs.getString("device_tier_override", null)
         set(value) = prefs.edit().putString("device_tier_override", value).apply()
 
-    var renderingEngineOverride: String?
-        get() = prefs.getString("rendering_engine_override", null)
-        set(value) = prefs.edit().putString("rendering_engine_override", value).apply()
-
     // 22.1: auto-lock after this many seconds of inactivity while foregrounded (0 = off).
     var autoLockTimeoutSeconds: Int
         get() = prefs.getInt("auto_lock_timeout_seconds", 0)

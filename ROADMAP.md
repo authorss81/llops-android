@@ -441,7 +441,7 @@ EACH PHASE IS DESIGNED AS A STANDALONE, SELF-CONTAINED DEVELOPMENT MODULE THAT C
 
 - [x] **21.1 AGSL WET-MIXING**: NEW REUSABLE `WetMixingEffect` CLASS (OWNS RuntimeShader + RenderEffect, PER-FRAME `update()` UNIFORMS, ZERO PER-FRAME ALLOCATION); WIRED VIA `graphicsLayer { renderEffect = ... }` ON THE CANVAS WHILE WATERCOLOR/OIL-PAINT ACTIVELY DRAWING; GATED BY `ShaderCapabilityHelper.isAgslSupported` (API ≥ 33). **Canvas-layer granularity only — per-layer baking still deferred (see Phase 34/35 notes).** (`AgslShaders.kt`, `AnnotationCanvas.kt`)
 - [x] **21.2 VOICE NOTES**: TIMESTAMP CAPTURE FIXED (VIA 20.7); REAL RECORDER/PLAYBACK FAILURE UX — ERROR `StateFlows` + DISMISSABLE TOP BANNER (NO SILENT SIMULATED RECORDING, NO EMPTY `.M4A` HACK); FAKE WAVEFORM PATTERN REMOVED (FLAT BASELINE WHEN NO AMPLITUDE DATA); MANAGER RELEASED ON SCREEN EXIT (`DisposableEffect`). (`VoiceNoteManager.kt`, `EditorScreen.kt`, `AudioPlaybackCard.kt`)
-- [ ] **21.3 BASELINE PROFILES**: ADD `profileinstaller` + `baselineProfile` DSL + MACROBENCHMARK MODULE; REGENERATE `baseline-prof.txt` (OLD FILE WAS DEAD — REFERENCED DELETED `BitmapPool` + CRASHED AGP `expandReleaseArtProfileWildcards`; DELETED IN COMMIT 8ab42a2). **DEFERRED — needs user approval + a physical device.** (`build.gradle.kts:47-79`)
+- [ ] **21.3 BASELINE PROFILES**: ADD `profileinstaller` + `baselineProfile` DSL + MACROBENCHMARK MODULE; REGENERATE `baseline-prof.txt` (OLD FILE WAS DEAD — REFERENCED DELETED `BitmapPool` + CRASHED AGP `expandReleaseArtProfileWildcards`; **DELETED FOR REAL IN THE PHASE-03 HONESTY AUDIT, 2026-08-13** — the earlier "DELETED IN COMMIT 8ab42a2" claim was false, the file was still present until now). **DEFERRED — needs user approval + a physical device.** (`app/build.gradle.kts` profile tasks remain disabled)
 - [x] **21.4 ENABLE R8**: `isMinifyEnabled = true` + KEEP RULES. (`build.gradle.kts:24`, `proguard-rules.pro`)
 - [x] **21.5 REAL MARKDOWN RENDERING**: COMMONMARK (0.29 API) HEADINGS/BOLD/LISTS/TABLES/CODE IN `MarkdownPreviewScreen`. LIVE PREVIEW TOGGLE REMAINS PHASE 26.2.
 - [x] **21.6 REAL IMAGE SUPPORT IN CANVAS & EDITOR**: NEW `ImageViewer.kt` (BOUNDED `decodeBoundedImage` SAMPLING + `FullscreenImageDialog` + `MarkdownInlineImage`); MARKDOWN PREVIEW NOW RENDERS INLINE `![alt](path)` IMAGES (RELATIVE PATHS RESOLVED AGAINST THE PAGE FILE DIR, TAP → FULLSCREEN, MISSING-FILE PLACEHOLDER SHOWS THE PATH); CANVAS `PhotoEmbedCard` DECODES BOUNDED (NO MORE RAW `decodeFile` OOM) AND TAPS THROUGH TO THE FULLSCREEN VIEWER. (`ImageViewer.kt`, `MarkdownPreviewScreen.kt`, `MediaEmbedComponents.kt`)
@@ -503,13 +503,13 @@ EACH PHASE IS DESIGNED AS A STANDALONE, SELF-CONTAINED DEVELOPMENT MODULE THAT C
 
 ## 🏆 PHASE 26: COMPETITIVE MOAT FEATURES (FROM COMPETITOR + MARKET RESEARCH)
 
-- [x] **26.1 HANDWRITING-TO-TEXT** (SAMSUNG NOTES/NEBO MODEL): INK STROKES → TYPED TEXT IN-EDITOR → MARKDOWN; THE #1 MISSING LEVER. Implemented via `HandwritingRecognitionService` & `HandwritingToTextDialog`.
+- [ ] **26.1 HANDWRITING-TO-TEXT** (SAMSUNG NOTES/NEBO MODEL): INK STROKES → TYPED TEXT IN-EDITOR → MARKDOWN; THE #1 MISSING LEVER. **REMOVED IN PHASE-03 honesty audit (2026-08-13)**: `HandwritingRecognitionService` was a dictionary-hash stub that never recognized text, and `HandwritingToTextDialog` was unreachable (zero callers) AND bypassed `ClipboardGuard`. Both deleted. A real ML-Kit implementation requires a new dependency — DEFERRED pending user approval.
 - [x] **26.2 LIVE MARKDOWN EDITOR** (OBSIDIAN LIVE PREVIEW MODEL): REAL RENDERING (21.5) + SPLIT EDIT/PREVIEW + TABLET SPLIT-RESIZE. Implemented via `MarkdownPreviewScreen` split view mode.
 - [x] **26.3 AUDIO TRANSCRIPTION** (SAMSUNG TRANSCRIPT ASSIST MODEL): TIME-SYNCED VOICE NOTES (21.2) + ON-DEVICE TRANSCRIPT. Implemented via `AudioTranscriptionEngine` & `AudioPlaybackCard`.
 - [x] **26.4 REAL WEBDAV/NEXTCLOUD E2EE SYNC** (JOPLIN MODEL): ENCRYPTED BACKUP SYNC TO PERSONAL SERVER — TURNS THE FAKE SYNC UI (19.10) INTO THE MOAT. "YOUR VAULT ON YOUR SERVER." Implemented via `WebDavSyncService` & `WebDavSyncDialog`.
 - [x] **26.5 PER-NOTE VERSION HISTORY** (OBSIDIAN SYNC MODEL): ROOM ALREADY HAS `UPDATEDAT` — CHEAP TO ADD. Implemented via `NoteVersionEntity`, `NoteVersionDao`, `getNoteVersions`, & `VersionHistoryBottomSheet`.
-- [x] **26.6 SHAPE AUTO-SNAP/STRAIGHTENING** (SAMSUNG/INFINITE PAINTER): ROUGH LINE/RECT/ELLIPSE/ARROW GESTURES → CLEAN SHAPES (SHAPE TOOLS EXIST). Implemented via `ShapeRecognitionHelper` integrated into `AnnotationCanvas`.
-- [x] **26.7 FTS + ON-DEVICE OCR SEARCH** (ML-KIT): SEARCH INSIDE HANDWRITING, IMAGES, PDFS (REPLACES FAKE OCR, 21.7). Implemented via `FtsSearchEngine`.
+- [x] **26.6 SHAPE AUTO-SNAP/STRAIGHTENING** (SAMSUNG/INFINITE PAINTER): ROUGH FREEHAND LINE/RECT/ELLIPSE/ARROW GESTURES → CLEAN SHAPES. **WIRED INTO `AnnotationCanvas` in the Phase-03 honesty audit (2026-08-13)**: `ShapeRecognitionHelper.trySnapShape()` now runs on freehand stroke draw-end and replaces the raw stroke with the snapped LINE/RECTANGLE/ELLIPSE/ARROW geometry (wet tools and LASER excluded; strokes that don't match a shape are left untouched).
+- [ ] **26.7 FTS + ON-DEVICE OCR SEARCH** (ML-KIT): SEARCH INSIDE HANDWRITING, IMAGES, PDFS (REPLACES FAKE OCR, 21.7). **NOT FTS, NOT OCR — RELABELED IN THE PHASE-03 HONESTY AUDIT (2026-08-13)**: `FtsSearchEngine` was dead code doing an in-memory `contains()` loop and was deleted. The real vault search (title + decrypted extractedText of active pages) now runs over an in-memory decrypted corpus cached in `NoteRepository` (invalidated on every page mutation and on vault lock/re-key) on `Dispatchers.IO`, so per-keystroke search no longer decrypts the entire vault. FTS5 schema and on-device OCR remain DEFERRED pending user approval.
 
 ---
 
@@ -603,7 +603,7 @@ EACH PHASE IS DESIGNED AS A STANDALONE, SELF-CONTAINED DEVELOPMENT MODULE THAT C
 - [x] **32.6 SCOPED VOICE RECOMPOSITION**: `recordingElapsedMs` (10HZ) + `playbackPositionMs` (20HZ) COLLECTED AT EDITOR TOP → WHOLE SCREEN + CANVAS REDRAWS AT 10-20HZ (`EditorScreen.kt:135-140`) → SCOPE TO PILL/CARD ONLY; WAVEFORM ≤120 DOWNSAMPLED BARS (`AudioPlaybackCard.kt:141-156`); `VoiceNoteManager` WAVEFORM LIST-CONCAT O(N²) (`:95`) → PREALLOCATED ARRAYLIST, CAP 2000.
 - [x] **32.7 DB: UPSERT NOT DELETE+REINSERT**: `@Upsert` STROKES (KILLS O(N²) SAVE + WAL BLOAT, `NoteRepository.kt:293-329`); DEBOUNCE 1S→2S (`EditorScreen.kt:292`); **FIX `PRAGMA wal_checkpoint` CURSOR-NEVER-STEPPED** (`NoteRepository.kt:72-74`) + `wal_autocheckpoint=1000`; COMPOSITE INDEX `(sectionId,pinned,updatedAt)` (`Daos.kt:75`); FTS5 SEARCH REPLACING PER-KEYSTROKE FULL-VAULT DECRYPT (`NoteRepository.kt:93-101`).
 - [x] **32.8 MEMORY: BOUNDED + POOLED**: PHOTO DECODE `inSampleSize` + OFF-THREAD + RECYCLE (`MediaEmbedComponents.kt:86-95`); PDF WINDOW DELTA-RENDER + `BitmapPool` (`EditorScreen.kt:252-287,2293-2317`); GSON → STREAMING/KOTLINX SERIALIZATION WITH `FloatArray` (~40% SMALLER `pointsJson`); `@Immutable` ON `Stroke`/`CanvasStickyNote`/`CanvasMediaEmbed` (`StrokeModels.kt:92-109,131-141`) FOR SKIPPABILITY.
-- [x] **32.9 STARTUP**: BASELINE PROFILES — ADD `profileinstaller` + `baselineProfile` DSL + MACROBENCHMARK MODULE, PROFILE: COLD START→HOME→EDITOR→DRAW/PAN LOOP (15-30% FASTER, `build.gradle.kts:47-79`); R8 MINIFY + KEEP RULES (`build.gradle.kts:24`); SUBSCRIBE SECTION/PAGE FLOWS VIA `WhileSubscribed` NOT VM-INIT (`NoteflowViewModel.kt:90-98`); EDITOR LOAD `async/awaitAll` (`EditorScreen.kt:220-239`).
+- [ ] **32.9 STARTUP**: BASELINE PROFILES — ADD `profileinstaller` + `baselineProfile` DSL + MACROBENCHMARK MODULE, PROFILE: COLD START→HOME→EDITOR→DRAW/PAN LOOP (15-30% FASTER, `build.gradle.kts:47-79`); R8 MINIFY + KEEP RULES (`build.gradle.kts:24`); SUBSCRIBE SECTION/PAGE FLOWS VIA `WhileSubscribed` NOT VM-INIT (`NoteflowViewModel.kt:90-98`); EDITOR LOAD `async/awaitAll` (`EditorScreen.kt:220-239`). **PARTIAL — BASELINE PROFILES NOT WIRED (DEFERRED; old dead `baseline-prof.txt` deleted in the Phase-03 honesty audit, 2026-08-13); R8 minify is on in release builds.**
 - [x] **32.10 MEASUREMENT PROTOCOL (BEFORE ANY CHANGE)**: JANKSTATS/FRAMEMETRICS P50/P90/P95 + `testTag`s; PERFETTO 10S DRAW/10S PAN/5S ERASE/10S PLAYBACK; ALLOCATION/GC PROFILER; COMPOSE RECOMPOSITION METRICS; MACROBENCHMARK STARTUP+FRAMETIMING; `PRAGMA query_plan`; SCRIPTED SCENARIO (100-STROKE PAGE, 20-PAGE PDF, 30S RECORDING, PHOTO EMBED). EXECUTION ORDER: 32.1→32.2→32.3→32.7→32.5→32.6→32.4→32.8→32.9 (R8+PROFILES LAST, AFTER RELEASE SMOKE TEST). ~2-3 WEEKS, MEASURED AT EVERY STEP.
 
 ---
@@ -632,27 +632,12 @@ EACH PHASE IS DESIGNED AS A STANDALONE, SELF-CONTAINED DEVELOPMENT MODULE THAT C
 
 ---
 
-## 🎨 PHASE 35: ADAPTIVE MULTI-ENGINE RENDERING & HARDWARE AUTO-RECOMMENDATION ARCHITECTURE
+## 🎨 PHASE 35: ~~ADAPTIVE MULTI-ENGINE RENDERING & HARDWARE AUTO-RECOMMENDATION ARCHITECTURE~~ (SHELVED — SEE BELOW)
 
-- [x] **35.1 HARDWARE & CAPABILITY AUTO-PROFILER (`HardwareProfiler.kt`)**:
-  - Dynamically benchmark device hardware upon first run:
-    - **API Level**: Detect API < 33 vs API 33+ (AGSL support).
-    - **RAM / Memory Class**: Read `ActivityManager.memoryClass` and `Runtime.maxMemory` (e.g. <=3GB Low Tier, 4-6GB Mid Tier, 8GB+ High Tier).
-    - **CPU / GPU Cores**: Check `Runtime.getRuntime().availableProcessors()` and OpenGL ES / Vulkan capability flags.
-  - Compute a **Recommended Engine Metric**:
-    - *Low-End / Legacy (API < 33, <=3GB RAM)*: Recommend **Standard Vector Engine** (low battery impact, zero GPU shader overhead, 120fps smooth).
-    - *Mid-Tier (API 33+, 4-6GB RAM)*: Recommend **AGSL Shaded Wet-Mixing Engine** (real-time procedural shaders, edge fringe, cold-press paper grain, impasto lighting).
-    - *High-End / Flagship (API 33+, 8GB+ RAM, NDK support)*: Recommend **LibMyPaint Native Studio Engine** (true C++ pigment physics & fluid dynamics).
-
-- [x] **35.2 USER ENGINE SELECTOR & PERFORMANCE WARNING DIALOG (`BrushEngineSettings.kt`)**:
-  - Provide an explicit UI override in Brush/Canvas Settings allowing users to manually switch engines between **Standard Vector**, **AGSL Wet Shader**, and **LibMyPaint C++ Native**.
-  - **Hardware & Battery Warning**: If a user selects an engine higher than the recommended tier (e.g., forcing LibMyPaint on a 3GB or low-end device):
-    - Display a clear confirmation dialog: *"Warning: The selected rendering engine exceeds your recommended hardware profile. Switching from the recommended tier may cause frame drops, thermal throttling, and significantly increased battery consumption."*
-  - Persist user choice in `SharedPreferences` / DataStore with an easy *"Reset to Recommended"* option.
-
-- [x] **35.3 MULTI-ENGINE ARCHITECTURE & PLUGIN-LIKE INTEGRATION**:
-  - Abstract canvas stroke rendering behind a unified `BrushEngine` interface (`renderStroke()`, `onDrawPass()`, `dispose()`).
-  - Allow runtime switching without data migration: raw stroke vectors/touch points remain identical, while the rendering engine determines how stroke geometry, wetness, grain, and lighting are drawn to screen.
+- [ ] **35.1 HARDWARE & CAPABILITY AUTO-PROFILER / 35.2 ENGINE SELECTOR DIALOG / 35.3 MULTI-ENGINE `BrushEngine` FACADE**:
+  - **REMOVED IN THE PHASE-03 HONESTY AUDIT (2026-08-13)**: `HardwareProfiler`/`RenderingEngineTier`/`HardwareProfile`, the `BrushEngine` multi-engine facade + `BrushEngineFactory`, the `BrushEngineSettingsDialog`, the `renderingEngineOverride` setting, and the `JNI` stub were all ornamental/dead — the tier selector never affected rendering (the canvas renders via `WetBrushEngine` directly, with the real GPU-wet-brush toggle `gpuWetBrushesEnabled`). All deleted. The fake "LibMyPaint C++ Native Studio Engine" option and the stub C++ (`mypaint_jni.cpp`/`CMakeLists.txt`) are gone; no dead engine is presented as working in the UI.
+  - Hardware awareness today lives in `DeviceCompatibilityManager` (device-tier gating for the GPU-wet-brush low-end warning) and `ShaderCapabilityHelper.isAgslSupported`.
+  - Elevating AGSL wet-mixing to a user-selectable multi-engine architecture is a real future phase (Phase 04).
 
 
 > NOTE: 34.1/34.2 are the critical items — restore path is the weakest surface found. 34.4a/34.4b needs user decision (file format change vs honesty relabel).

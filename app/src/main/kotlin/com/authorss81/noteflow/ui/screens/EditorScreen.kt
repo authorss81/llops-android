@@ -218,7 +218,6 @@ fun EditorScreen(
     }
     var divideIntoPages by remember { mutableStateOf(true) }
     var gpuWetBrushesEnabled by remember { mutableStateOf(viewModel.settings.gpuWetBrushesEnabled) }
-    var showEngineSettingsDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         val detectedTier = com.authorss81.noteflow.utils.DeviceCompatibilityManager.getDeviceTier(context, viewModel.settings)
@@ -1329,7 +1328,6 @@ fun EditorScreen(
                 },
                 onUploadCustomBg = { bgImagePicker.launch("image/*") },
                 onMinimapToggle = { showMinimap = !showMinimap },
-                onOpenEngineSettings = { showEngineSettingsDialog = true },
                 onResetZoomPan = {
                     zoomScale = 1f
                     panOffset = Offset.Zero
@@ -1340,16 +1338,6 @@ fun EditorScreen(
             )
         }
         else -> {}
-    }
-
-    if (showEngineSettingsDialog) {
-        com.authorss81.noteflow.ui.components.BrushEngineSettingsDialog(
-            settings = viewModel.settings,
-            onDismiss = { showEngineSettingsDialog = false },
-            onEngineChanged = { activeTier ->
-                showEngineSettingsDialog = false
-            }
-        )
     }
 
     if (showRenameDialog) {
@@ -2354,7 +2342,6 @@ private fun CanvasSettingsBottomSheet(
     onPaperColorSelect: (String) -> Unit,
     onUploadCustomBg: () -> Unit = {},
     onMinimapToggle: () -> Unit,
-    onOpenEngineSettings: () -> Unit = {},
     onResetZoomPan: () -> Unit,
     onInsertPageBefore: () -> Unit,
     onInsertPageAfter: () -> Unit,
@@ -2623,47 +2610,6 @@ private fun CanvasSettingsBottomSheet(
             }
 
             Spacer(modifier = Modifier.height(16.dp))
-            OutlinedCard(
-                onClick = onOpenEngineSettings,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(14.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Outlined.Palette,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-                        Column {
-                            Text(
-                                "Rendering Engine & Hardware Tier",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
-                            )
-                            Text(
-                                "Vector, AGSL Wet Shader, or LibMyPaint C++ Native",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                    Icon(
-                        imageVector = androidx.compose.material.icons.Icons.Outlined.Tune,
-                        contentDescription = "Configure Engine",
-                        tint = MaterialTheme.colorScheme.primary
-                    )
-                }
-            }
-
             if (zoomScale != 1f || panOffset != Offset.Zero) {
                 Spacer(modifier = Modifier.height(12.dp))
                 OutlinedButton(

@@ -12,13 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Room Database Schema Export**: Enabled `exportSchema = true` in `NoteflowDatabase` with version 7 schema tracking.
 - **Privacy-First Crash Reporting**: Added `PrivacyCrashReporter` on-device logger with strict message sanitization and zero note content leakage.
 - **Competitive Moat Features (Phase 26)**:
-  - Handwriting-to-Text conversion via `HandwritingRecognitionService`
+  - Handwriting-to-Text conversion removed pre-release (2026-08-13 Phase-03 honesty audit): the `HandwritingRecognitionService` was a dictionary-hash stub and `HandwritingToTextDialog` was unreachable. A real ML-Kit implementation is deferred pending approval.
   - Live Markdown Editor with Live Preview & Split View modes in `MarkdownPreviewScreen`
   - On-device Audio Transcription Engine for time-synced voice notes
   - WebDAV / Nextcloud End-to-End Encrypted Sync
   - Per-Note Version History with restore bottom sheet
   - Automatic Shape Straightening (Line, Rectangle, Ellipse, Arrow) in Ink Canvas
-  - On-device Full-Text & OCR Search engine
+  - On-device Full-Text & OCR Search relabeled (2026-08-13): no FTS5/OCR; vault search runs over a cached, in-memory decrypted corpus in `NoteRepository`.
 - **Play Store Readiness**: Published Privacy Policy (`docs/PRIVACY_POLICY.md`) and Data Safety declaration (`docs/DATA_SAFETY.md`).
 
 ### Fixed

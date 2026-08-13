@@ -10,7 +10,6 @@ plugins {
 android {
     namespace = "com.authorss81.noteflow"
     compileSdk = 36
-    ndkVersion = "27.0.12077973"
 
     defaultConfig {
         applicationId = "com.aistudio.inkflow.app.bkxjrz"
@@ -23,12 +22,6 @@ android {
 
         ksp {
             arg("room.schemaLocation", "$projectDir/schemas")
-        }
-
-        externalNativeBuild {
-            cmake {
-                arguments("-DCMAKE_SHARED_LINKER_FLAGS=-Wl,-z,max-page-size=16384")
-            }
         }
     }
 
@@ -96,19 +89,12 @@ android {
             useLegacyPackaging = false
         }
     }
-
-    externalNativeBuild {
-        cmake {
-            path = file("src/main/cpp/CMakeLists.txt")
-            version = "3.22.1"
-        }
-    }
 }
 
 // Stopgap: AGP 8.7.3's profile compiler crashes with "String index out of range: 62"
-// on the GitHub Actions runner (Gradle 9.6.1). Baseline profiles are not wired yet
-// (ROADMAP Phase 21.3) and baseline-prof.txt was a dead file — skip profile compilation
-// until release engineering wires them properly.
+// on the GitHub Actions runner (Gradle 9.6.1). Baseline profiles are NOT wired
+// (ROADMAP Phase 21.3 / 32.9) and the old baseline-prof.txt was a dead file that has
+// now been deleted — skip profile compilation until release engineering wires them.
 tasks.configureEach {
     if (name.startsWith("compile") && name.endsWith("ArtProfile")) {
         enabled = false
