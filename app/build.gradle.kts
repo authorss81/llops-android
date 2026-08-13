@@ -33,29 +33,6 @@ android {
     }
 
     signingConfigs {
-        create("debugConfig") {
-            val debugKs = file("${rootDir}/debug.keystore")
-            val base64Ks = file("${rootDir}/debug.keystore.base64")
-            if (!debugKs.exists() && base64Ks.exists()) {
-                try {
-                    val decodedBytes = Base64.getDecoder().decode(base64Ks.readText().trim())
-                    debugKs.writeBytes(decodedBytes)
-                } catch (_: Exception) {}
-            }
-            if (debugKs.exists()) {
-                storeFile = debugKs
-                storePassword = "android"
-                keyAlias = "androiddebugkey"
-                keyPassword = "android"
-            } else {
-                // No checked-in keystore: fall back to AGP's standard debug
-                // keystore, which AGP auto-generates on first build (CI-safe).
-                storeFile = file("${System.getProperty("user.home")}/.android/debug.keystore")
-                storePassword = "android"
-                keyAlias = "androiddebugkey"
-                keyPassword = "android"
-            }
-        }
         create("releaseConfig") {
             val ksFilePath = System.getenv("KEYSTORE_FILE")
             val debugKs = file("${rootDir}/debug.keystore")
@@ -85,7 +62,10 @@ android {
 
     buildTypes {
         debug {
-            signingConfig = signingConfigs.getByName("debugConfig")
+            // No custom signingConfig: AGP's built-in "debug" config is used,
+            // which AUTO-GENERATES ~/.android/debug.keystore on first build.
+            // (A custom signingConfig pointing at a missing keystore fails
+            // :app:validateSigningDebug, so we must NOT override it here.)
         }
         release {
             isMinifyEnabled = true
@@ -93,7 +73,9 @@ android {
             if (relConfig.storeFile != null && relConfig.storeFile?.exists() == true) {
                 signingConfig = relConfig
             } else {
-                signingConfig = signingConfigs.getByName("debugConfig")
+                // No release keystore: fall back to AGP's built-in debug config
+                // (auto-generated keystore) so CI can still assemble a release APK.
+                signingConfig = signingConfigs.getByName("debug")
             }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
