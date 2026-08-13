@@ -20,6 +20,28 @@ class PluginRegistry(
     private val plugins: List<NoteflowPlugin> = defaultPlugins()
 ) {
 
+    /**
+     * Plugin ids whose [NoteflowPlugin.onEnable] hook has already run in this
+     * process. Tracks the hook independently of the persisted enable state so it
+     * fires at most ONCE per process — including across disable/re-enable cycles
+     * and across process restarts (where the store may already say "enabled").
+     */
+    private val enabledNotified = mutableSetOf<String>()
+
+    /**
+     * Run at process start (from the ViewModel) so plugins that are already
+     * enabled in the persisted store still get their [NoteflowPlugin.onEnable]
+     * hook — otherwise a plugin enabled in a previous session would never be
+     * initialized in this one. Idempotent per process.
+     */
+    fun onProcessStart(context: Context?) {
+        plugins.forEach { plugin ->
+            if (enableStore.isEnabled(plugin.id) && enabledNotified.add(plugin.id)) {
+                plugin.onEnable(context)
+            }
+        }
+    }
+
     /** Every installed plugin, in registration order. */
     val allPlugins: List<NoteflowPlugin> get() = plugins
 
@@ -39,14 +61,18 @@ class PluginRegistry(
         plugins.filter { capability in it.capabilities }
 
     /**
-     * Set a plugin's opt-in state. When a plugin is first enabled in this
-     * process, its [NoteflowPlugin.onEnable] hook is invoked exactly once.
+     * Set a plugin's opt-in state. When a plugin transitions from off to on, its
+     * [NoteflowPlugin.onEnable] hook is invoked — at most once per process.
      */
     fun setEnabled(pluginId: String, enabled: Boolean, context: Context? = null) {
         val wasEnabled = enableStore.isEnabled(pluginId)
         enableStore.setEnabled(pluginId, enabled)
         if (enabled && !wasEnabled) {
-            plugins.firstOrNull { it.id == pluginId }?.onEnable(context)
+            plugins.firstOrNull { it.id == pluginId }?.let { plugin ->
+                if (enabledNotified.add(plugin.id)) {
+                    plugin.onEnable(context)
+                }
+            }
         }
     }
 

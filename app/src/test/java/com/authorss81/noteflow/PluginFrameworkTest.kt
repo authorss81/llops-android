@@ -133,7 +133,7 @@ class PluginFrameworkTest {
     }
 
     @Test
-    fun onEnableHookCalledExactlyOnce() {
+    fun onEnableHookFiresOncePerProcess() {
         val store = InMemoryPluginEnableStore()
         var calls = 0
         val counting = object : NoteflowPlugin {
@@ -149,8 +149,33 @@ class PluginFrameworkTest {
         registry.setEnabled(counting.id, enabled = true)
         registry.setEnabled(counting.id, enabled = true) // no-op re-enable
         registry.setEnabled(counting.id, enabled = false)
-        registry.setEnabled(counting.id, enabled = true) // new transition → hook again
-        assertEquals(2, calls)
+        registry.setEnabled(counting.id, enabled = true) // re-enabled, but same process
+        assertEquals(1, calls)
+    }
+
+    @Test
+    fun onEnableHookReconcilesPluginsEnabledInPreviousProcess() {
+        val store = InMemoryPluginEnableStore()
+        var calls = 0
+        val counting = object : NoteflowPlugin {
+            override val id = "test.coldstart"
+            override val name = "Counting"
+            override val description = ""
+            override val version = "1.0.0"
+            override val capabilities: Set<PluginCapability> = emptySet()
+            override fun isAvailable(context: Context?): Boolean = true
+            override fun onEnable(context: Context?) { calls++ }
+        }
+        // Simulate a previous process that enabled the plugin in the store.
+        store.setEnabled(counting.id, enabled = true)
+
+        val registry = PluginRegistry(store, listOf(counting))
+        assertEquals(0, calls) // not yet reconciled
+        registry.onProcessStart(context = null)
+        assertEquals(1, calls) // fired exactly once at cold start
+        registry.onProcessStart(context = null) // idempotent
+        registry.setEnabled(counting.id, enabled = true) // already on in store
+        assertEquals(1, calls)
     }
 
     @Test

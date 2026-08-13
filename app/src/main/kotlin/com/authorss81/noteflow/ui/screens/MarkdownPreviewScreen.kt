@@ -25,6 +25,7 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Splitscreen
 import androidx.compose.material.icons.outlined.Extension
+import com.authorss81.noteflow.plugins.NoteflowPlugin
 import com.authorss81.noteflow.plugins.PluginCapability
 import com.authorss81.noteflow.plugins.PluginResult
 import com.authorss81.noteflow.ui.components.VersionHistoryBottomSheet
@@ -155,6 +156,7 @@ fun MarkdownPreviewScreen(
     var showSlashCommands by remember { mutableStateOf(false) }
     var showVersionHistory by remember { mutableStateOf(false) }
     var showPluginMenu by remember { mutableStateOf(false) }
+    var pendingTransformPlugin by remember { mutableStateOf<NoteflowPlugin?>(null) }
 
     val primaryColor = MaterialTheme.colorScheme.primary
     val configuration = androidx.compose.ui.platform.LocalConfiguration.current
@@ -251,19 +253,19 @@ fun MarkdownPreviewScreen(
                                 )
                             } else {
                                 transformPlugins.forEach { plugin ->
+                                    // Only runnable plugins are selectable; disabled or
+                                    // device-unavailable ones are grayed out with a hint.
+                                    val runnable = viewModel.pluginEnabledIds.value[plugin.id] == true &&
+                                        plugin.isAvailable(LocalContext.current)
                                     DropdownMenuItem(
-                                        text = { Text("Run ${plugin.name}") },
+                                        text = {
+                                            Text(if (runnable) "Run ${plugin.name}" else "${plugin.name} (off)")
+                                        },
                                         leadingIcon = { Icon(Icons.Outlined.Extension, contentDescription = null) },
+                                        enabled = runnable,
                                         onClick = {
                                             showPluginMenu = false
-                                            when (val result = viewModel.transformNoteText(contentText)) {
-                                                is PluginResult.Success -> {
-                                                    contentText = result.value
-                                                    flushSave()
-                                                }
-                                                is PluginResult.Failure ->
-                                                    viewModel.showSnackbar(result.message, isLong = true)
-                                            }
+                                            pendingTransformPlugin = plugin
                                         }
                                     )
                                 }
@@ -455,6 +457,47 @@ fun MarkdownPreviewScreen(
                     viewModel = viewModel,
                     onOpenPage = onOpenPage,
                     onDismiss = { showBacklinks = false }
+                )
+            }
+
+            pendingTransformPlugin?.let { plugin ->
+                AlertDialog(
+                    onDismissRequest = { pendingTransformPlugin = null },
+                    title = { Text("Run ${plugin.name}?") },
+                    text = {
+                        Text(
+                            "This replaces the current note text. A snapshot of the " +
+                                "current text is saved to Version History so you can " +
+                                "restore it afterwards."
+                        )
+                    },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            val original = contentText
+                            pendingTransformPlugin = null
+                            when (val result = viewModel.transformNoteText(original)) {
+                                is PluginResult.Success -> {
+                                    if (result.value != original) {
+                                        viewModel.createNoteVersion(
+                                            page.id,
+                                            page.title,
+                                            original,
+                                            "Before running ${plugin.name}"
+                                        )
+                                        contentText = result.value
+                                        flushSave()
+                                    } else {
+                                        viewModel.showSnackbar("${plugin.name} produced no change", isLong = false)
+                                    }
+                                }
+                                is PluginResult.Failure ->
+                                    viewModel.showSnackbar(result.message, isLong = true)
+                            }
+                        }) { Text("Apply") }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { pendingTransformPlugin = null }) { Text("Cancel") }
+                    }
                 )
             }
         }

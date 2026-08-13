@@ -44,6 +44,12 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     val pluginRegistry = PluginRegistry(pluginEnableStore)
     val pluginManager = PluginManager(pluginRegistry)
 
+    init {
+        // Fire onEnable once per process for plugins already enabled in a
+        // previous session (see PluginRegistry.onProcessStart).
+        pluginRegistry.onProcessStart(appContext)
+    }
+
     private val _pluginEnabledIds = MutableStateFlow(pluginRegistry.allPlugins.associate { it.id to pluginRegistry.isEnabled(it.id) })
     val pluginEnabledIds: StateFlow<Map<String, Boolean>> = _pluginEnabledIds.asStateFlow()
 

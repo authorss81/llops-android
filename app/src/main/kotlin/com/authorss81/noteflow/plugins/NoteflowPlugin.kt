@@ -14,10 +14,11 @@ import android.content.Context
  * - [isAvailable] gates the plugin on the current device/context (e.g. a future
  *   GPU-dependent plugin checks AGSL support here). Checked at route time and
  *   surfaced as "Unavailable" in the plugin settings screen.
- * - [onEnable] is invoked once per process the first time the user flips the
- *   plugin on. It must be cheap and idempotent (warm caches, acquire handles).
- *   Plugins are opt-in: a freshly installed plugin is DISABLED until the user
- *   enables it in Settings → Plugins.
+ * - [onEnable] is invoked at most once per process when the plugin is enabled —
+ *   on the first opt-in flip, or at process start via [PluginRegistry.onProcessStart]
+ *   when it was already enabled in a previous session. It must be cheap and
+ *   idempotent (warm caches, acquire handles). Plugins are opt-in: a freshly
+ *   installed plugin is DISABLED until the user enables it in Settings → Plugins.
  *
  * To actually serve a capability, a plugin must ALSO implement the capability's
  * serving interface (e.g. [TextTransformPlugin]) so the framework can invoke it

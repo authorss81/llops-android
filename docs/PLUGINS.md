@@ -73,6 +73,12 @@ support here and is surfaced as **Unavailable** in Settings → Plugins. The
 `Context?` parameter is nullable **only** so the framework stays JVM-unit-testable
 without Robolectric; production callers always pass a real context.
 
+`onEnable` is invoked **at most once per process** for a plugin that ends up in
+the enabled state — whether the user flips it on this session or it was already
+enabled in a previous one. The ViewModel calls `PluginRegistry.onProcessStart()`
+at startup, so cold-start plugins get their hook too; a disable/re-enable cycle
+within the same process does not re-fire it.
+
 ### Serving interfaces — how work actually happens
 
 A plugin must also implement the serving interface for the capabilities it
@@ -115,22 +121,27 @@ Routing rules, checked in order:
 ## How a feature uses a plugin (the shipped example)
 
 The Markdown editor (`MarkdownPreviewScreen`) shows a **Plugins** menu in the top
-bar. It does **not** reference `Rot13TransformPlugin`:
+bar. It does **not** reference `Rot13TransformPlugin`. Menu items are grayed out
+when the plugin is not yet opted-in (or not device-available), so a disabled
+plugin never fails on click; enabling happens in Settings → Plugins.
 
 ```kotlin
 val transformPlugins = viewModel.pluginRegistry.pluginsForCapability(PluginCapability.TextTransform)
 transformPlugins.forEach { plugin ->
-    DropdownMenuItem(text = { Text("Run ${plugin.name}") }, onClick = {
-        when (val result = viewModel.transformNoteText(contentText)) {
-            is PluginResult.Success -> { contentText = result.value; flushSave() }
-            is PluginResult.Failure -> viewModel.showSnackbar(result.message, isLong = true)
-        }
-    })
+    val runnable = viewModel.pluginEnabledIds.value[plugin.id] == true &&
+        plugin.isAvailable(LocalContext.current)
+    DropdownMenuItem(
+        text = { Text(if (runnable) "Run ${plugin.name}" else "${plugin.name} (off)") },
+        enabled = runnable,
+        onClick = { pendingTransformPlugin = plugin }  // confirm dialog next
+    )
 }
 ```
 
-If the plugin is installed but disabled, the same menu item produces the loud
-"enable in Settings → Plugins" failure — real, honest, user-facing.
+A plugin transform is never applied silently. Selecting a runnable plugin opens a
+confirmation dialog, and applying it first writes a snapshot of the current text
+into **Version History** ("Before running `<plugin>`") so the original wording is
+always one restore away before the transformed text is saved.
 
 ## Adding a NEW plugin (same capability)
 
@@ -160,8 +171,11 @@ If the plugin is installed but disabled, the same menu item produces the loud
 - **Opt-in by default.** `SettingsManager.isPluginEnabled` defaults to `false`.
 - **Loud failure, never silent.** Every unservable request returns a
   `PluginResult.Failure` with a message the UI can show.
+- **No surprising content mutation.** Plugin-driven text transforms are confirmed
+  by the user and snapshot into Version History before they overwrite a note.
 - **No hardcoded single-plugin logic** in the framework — features address
   capabilities and serving interfaces, not concrete plugin classes.
 - **Tests are mandatory.** `PluginFrameworkTest` must stay green: discovery,
   persistence, routing, disabled-skip, unavailable-capability failure, `onEnable`
-  once-per-transition, and the plugin's actual output.
+  once-per-process (incl. cold-start reconciliation), and the plugin's actual
+  output.

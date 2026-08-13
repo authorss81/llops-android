@@ -67,7 +67,10 @@ fun PluginSettingsDialog(
                             }
                             Switch(
                                 checked = enabledIds[plugin.id] == true,
-                                enabled = status != PluginStatus.UNAVAILABLE,
+                                // An unavailable-but-enabled plugin can still be
+                                // toggled OFF so the user isn't stuck with it.
+                                enabled = status != PluginStatus.UNAVAILABLE ||
+                                    enabledIds[plugin.id] == true,
                                 onCheckedChange = { viewModel.setPluginEnabled(plugin.id, it) }
                             )
                         }
