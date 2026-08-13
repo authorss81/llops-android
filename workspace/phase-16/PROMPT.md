@@ -1,53 +1,70 @@
-# Phase 16: Premium brush engine — real libmypaint (NDK + JNI), tiered fallback
+# Phase 16: Plugin pack — privacy-first on-device AI & media (keyless)
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
-app. Its paint engine today is **AGSL GPU shaders** (Phase 4) with a
-**vector-based fallback** for API < 33, plus wet-mixing math, stabilizer,
-pressure, symmetry. This phase enables a REAL, OPT-IN **libmypaint** brush engine
-as a premium tier for high-end devices — with AGSL as default and vector as
-fallback. This is NOT a stub: you will vendor the actual C library and build it
-with NDK/CMake + JNI.
+app with a hardened plugin framework (Phases 10–11), OCR + Web Search plugins
+(Phase 12), and pure-JVM productivity plugins (Phase 15). This phase adds
+on-device AI and media plugins. ALL keyless — no API keys. Privacy-first:
+everything runs on-device or on free keyless endpoints.
 
-## Research context (verified)
-- libmypaint is the real engine behind MyPaint, GIMP, OpenToonz. Android ports
-  exist (`mypaint_ffi` Flutter plugin; the `PaintingWorld` NDK sample).
-- Maintainers' known limitation (mypaint issue #103): some brushes (e.g.
-  `basic_digital_knife`) are too slow for phone CPUs. HENCE the tiered design:
-  libmypaint only on high-end devices; AGSL/vector everywhere else.
+Add ALL of the following. Each must WORK — no stubs.
 
-## Requirements
-1. Vendor libmypaint: fetch the upstream source (tag v1.6.1) into
-   `app/src/main/cpp/`, add `CMakeLists.txt`, build the static library via the
-   NDK. Add a thin **JNI layer** exposing: `brush_new/load`, `stroke_begin`,
-   `stroke_to(x,y,pressure)`, `stroke_end`, `render_tile`, `brush_list`.
-2. Expose as a Kotlin service `LibMyPaintEngine` implementing the SAME interface
-   as the AGSL engine so `AnnotationCanvas` can swap engines at runtime.
-3. Tiering: consult `DeviceCompatibilityManager`. libmypaint tier = high-end
-   devices (see existing heuristics). Middle tier = AGSL (API 33+). Low =
-   vector fallback (API<33). Default selection = AGSL unless user opts in via
-   settings → "Pro brush engine (libmypaint)".
-4. Provide 5+ real brushes via bundled `.myb` brush defs (translated to
-   libmypaint's JSON format) that run acceptably fast (basic brushes, not the
-   heavy knife).
-5. Unit tests: pure-JVM tests for tier-selection logic and brush-catalog
-   validation. JNI correctness is verified by building (CI can't run GPU), so
-   the build must succeed via `gradle assembleDebug` with NDK/CMake.
-6. Remove any residual "mypaint was removed" TODOs; docs must describe the real
-   integration. Update `docs/BLACKBOARD`/README engine docs.
-7. If libmypaint C code cannot build on a given API level, compile with `-DLIBMYPAINT` guards so AGSL tier still ships — but the DEFAULT build MUST compile the NDK library.
+## Plugin 1: Dictation plugin (speech-to-text)
+- Use Android's built-in **SpeechRecognizer** (offline models when available) to
+  insert text into the editor. No API key.
+- Voice activation must be explicit (a mic button) — never ambient.
+- Parsing/UI-assembly logic pure-JVM and unit-tested; the SpeechRecognizer glue
+  is platform-only.
+- Handle "offline not available" by surfacing a clear message.
+
+## Plugin 2: Read-aloud plugin (text-to-speech)
+- Use Android's built-in **TextToSpeech** engine to read a selected passage.
+- Respect a quiet mode (SilentToggle) and never auto-play.
+- Pure-JVM testable: passage splitting into TTS-chunk boundaries, queueing logic.
+- No API key, no new permission (uses existing app capabilities).
+
+## Plugin 3: On-device translation plugin
+- Use **ML Kit Translation** (on-device, free, keyless) to translate a selected
+  passage. Models download once, offline after.
+- Bundled model strategy: lazy-download on first use with explicit user consent
+  and clear progress. Do NOT bundle large models in the APK.
+- Pure-JVM testable: build a small translator interface with a fake impl for
+  unit tests; ML Kit impl behind it.
+- Fallback: if model download fails/offline, surface clear error, do not crash.
+
+## Plugin 4: Offline AI assistant plugin (local LLM)
+- Integrate an on-device small LLM via **llama.cpp** GGUF (or LiteRT-LM if
+  simpler). Model is NOT bundled: user downloads a small model (~100–300 MB) on
+  first use with consent + progress; store under app-private files (not cache).
+- Capabilities: summarize a note, extract action items, answer questions about
+  note content. Pure-JVM testable: conversation/summary prompt assembly logic
+  unit-tested with a fake inference engine.
+- Must respect offline-first: works with no network after model download.
+- Low-end guard: only enable on devices meeting `DeviceCompatibilityManager`
+  high-tier; otherwise show "assistant unavailable on this device".
+
+## Plugin 5: Screenshot → note plugin
+- Capture a screenshot of the current canvas/note (via `PixelCopy` or view
+  draw) and save as an image note, or OCR it with the existing Phase-11 OCR
+  plugin to make it text-searchable.
+- Reuse existing OCR + export paths — do not duplicate.
+- Pure-JVM testable: the "screenshot metadata + OCR flow" decision logic.
 
 ## Definition of done
-- `gradle assembleDebug` succeeds (NDK + CMake + JNI compile must pass in CI).
-- `gradle testDebugUnitTest` passes: tier selection, brush catalog, engine
-  swap logic.
-- Settings toggle "Pro brush engine (libmypaint)" persists and takes effect.
-- No stub JNI; real library linked. `docs/PLUGINS.md` or engine docs updated.
+- `gradle assembleDebug` succeeds. ML Kit translate + llama.cpp (or LiteRT-LM)
+  deps allowed for this phase; SpeechRecognizer/TTS are platform APIs.
+- `gradle testDebugUnitTest` passes with pure-JVM tests per plugin (TTs chunking,
+  prompt assembly, translator-interface fake, screenshot-flow logic).
+- All five are registered, individually toggleable in settings, reachable in UI.
+- No model weights committed to git; no hardcoded API keys; no new permissions
+  beyond what ML Kit translate may require (it needs none) — verify.
+- `docs/PLUGINS.md` updated with the five plugins as examples.
 
 ## Constraints
-- Do NOT change the DB schema. Do NOT edit `.github/workflows/`.
-- No new permissions. APK size growth from libmypaint is acceptable.
-- Do NOT commit the brush-mixing C source of mypaint's heavier features beyond
-  what's needed; keep the port minimal and auditable.
-- Respect `ClipboardGuard` if any clipboard interaction is added (unlikely).
-- No fake behavior. If a brush is too slow on a device, it must be gated by the
-  tiering, not silently shipped.
+- Only ML Kit Translation and the chosen LLM runtime (llama.cpp/LiteRT-LM) may be
+  added. No other new deps. No new permissions.
+- No network except explicit user-initiated model downloads.
+- Do NOT change the DB schema.
+- Do NOT edit `.github/workflows/`.
+- No fake/stub behavior — every plugin actually works.
+- Model downloads go to app-private storage with size checks and free-space
+  guards; abort cleanly if insufficient space.

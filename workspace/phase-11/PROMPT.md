@@ -1,75 +1,90 @@
-# Phase 11: Real high-level plugins — OCR + Web Search (NOT FAKE)
+# Phase 11: Robust plugin infrastructure (hardening the Phase-10 foundation)
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
-app with a working plugin framework (Phase 10). This phase implements TWO real,
-high-value plugins on top of it. They must WORK — no stubs, no fake recognition,
-no placeholder results. Both must be verifiable by unit test and reachable in the
-UI through the Phase 10 plugin registry + settings toggles.
+app. Phase 10 built the initial plugin framework (registry, capabilities,
+settings, one sample plugin). This phase HARDENS that foundation BEFORE the real
+plugin packs (Phases 12+ OCR/web search, productivity, on-device AI, brush
+engine) are layered on. The goal: a plugin system that is safe, observable,
+isolated, and upgradeable — not a veneer that breaks as soon as many plugins
+exist.
 
-The app already has `INTERNET` permission (added for WebDAV) — Web Search may use
-it. OCR should work ON-DEVICE (offline). This is the phase that makes the
-"plugin system" real.
+Do NOT add any real OCR/web-search/AI/brush plugins here. This phase makes the
+infrastructure itself production-grade. Add regression tests and a documented,
+testable contract. Do NOT edit `.github/workflows/`.
 
-## Plugin 1: OCR (on-device, offline)
+## 1. Plugin lifecycle (robust states)
+- Extend `NoteflowPlugin` with a real lifecycle beyond enable/disable:
+  `onEnable()`, `onDisable()`, `onConfigChanged()`, plus explicit
+  `isAvailable(context)` that can return a reason. Model states:
+  `REGISTERED → ENABLED → AVAILABLE → UNAVAILABLE` and `DISABLED`.
+- `PluginRegistry` must compute, on every change, a derived state per plugin and
+  expose it (for the settings UI and for capability routing). No stale state:
+  if a plugin's dependency/permission disappears, its state must update.
+- Unit test the full state transition matrix (enable/disable/permission-loss/
+  dependency-loss → correct derived state).
 
-Extract text from images so users can search/export it from notes.
+## 2. Error isolation (a failing plugin must NOT crash the app)
+- `PluginManager` routes a capability request to the enabled plugin inside a
+  guarded invocation: catch plugin exceptions, log them (never raw content),
+  surface a clear user-facing error, and return a typed `PluginResult` (Success /
+  Failure(reason) / Unavailable) instead of throwing out of the manager.
+- A malicious/buggy plugin (throwing `RuntimeException`, returning null, hanging
+  on the main thread) must be contained. Add a unit test proving an exception in
+  one plugin does not propagate to the caller.
+- Enforce that plugin work can run off the main thread safely.
 
-- **Real implementation required.** Choose the honest path that fits the app's
-  constraints:
-  - Preferred: **ML Kit Text Recognition (on-device)** — `com.google.mlkit:text-recognition` +
-    `text-recognition-chinese` if multilingual support is wanted. Runs offline,
-    no API key, no INTERNET. Add as a plugin dependency (the app currently has
-    no ML deps — adding one here is expected and approved for this phase).
-  - Alternative if ML Kit is rejected: a real bundled OCR library. Do NOT ship
-    a dictionary-hash "recognizer" like the old `HandwritingRecognitionService`
-    (that was removed in Phase 3 for being fake).
-- Wire into the existing image/attachment flow: when an image is attached to a
-  note, offer "Extract text (OCR)" which runs the model off the main thread
-  (`Dispatchers.IO`), shows the recognized text, and lets the user insert it into
-  the note or copy it (via `ClipboardGuard.recordCopy` — NEVER bypass it).
-- Show real progress/error states. Cancelable.
-- Unit test: ML Kit can't run in JVM unit tests — so test the WRAPPING logic
-  (input validation, result formatting, error mapping) in pure JVM, and mark the
-  model invocation as platform-only. Be explicit about this in tests; do not
-  silently skip.
+## 3. Dependencies & conflict detection
+- Plugins may declare dependencies on OTHER plugins or on capabilities
+  (`requiresCapabilities: Set<PluginCapability>`). The registry must:
+  - resolve a valid enable-order (topological sort),
+  - refuse to enable a plugin whose requirements are unmet (clear reason),
+  - detect capability CONFLICTS (two enabled plugins claiming the same exclusive
+    capability) and pick a deterministic winner, reporting the loser as disabled
+    with a reason.
+- Unit test: dependency resolution, unmet-dependency refusal, and conflict
+  arbitration all behave correctly and deterministically.
 
-## Plugin 2: Web Search (from a note)
+## 4. Versioning, manifest & migration contract
+- Give each plugin a machine-readable `PluginManifest` (id, name, version
+  `Major.Minor.Patch`, minSupportedApi, capabilities, permissions, deps, and a
+  human description). The registry validates a manifest (duplicate ids, missing
+  required fields, incompatible api) and rejects invalid plugins with a reason —
+  NOT a crash.
+- Define the future upgrade path: plugin `version` bump + a documented
+  "how a plugin migrates its own stored settings" convention. Persisted plugin
+  settings must be namespaced per-plugin (`plugins.<id>.<key>`) so two plugins
+  never collide.
 
-Let users run a web search and insert/cite results into a note.
+## 5. Observability & diagnostics
+- Add a `PluginDiagnostics` surface: for each plugin, expose current state,
+  version, last invocation result, and a "test now" action that runs a
+  self-check and reports Success/Failure. Surface this in the existing plugin
+  settings screen (NOT dead UI).
+- Log plugin lifecycle events (enable/disable/failure) without content.
 
-- **Real implementation required:** call a real, keyless, documented search API
-  and display real results. Recommended: **DuckDuckGo Instant Answer API**
-  (`https://api.duckduckgo.com/?q=...&format=json&no_html=1`) — free, no key,
-  HTTP GET, JSON. (If DuckDuckGo is unreachable in CI, use Wikipedia's search API
-  as an alternative — both are keyless.)
-- Runs on `Dispatchers.IO`, uses the existing HTTP capability (add a minimal HTTP
-  client dependency if needed — e.g. `okhttp`, approved for this phase). Never on
-  the main thread.
-- UI: from a note or command menu, "Search the web" → shows results list → tap to
-  insert a `[title](url)` link into the note. Respect the app's offline-first
-  ethos: show a clear "offline — check connection" error, never silently fail.
-- Unit test: parse a sample JSON response into result objects (pure JVM, no
-  network). Assert empty/error responses are handled.
-- Both plugins must be registered in the Phase 10 registry, individually
-  toggleable in settings, and `isAvailable()` must reflect INTERNET presence for
-  Web Search.
+## 6. Plugin SDK + documentation
+- Produce a real, small Plugin SDK contract header (a README-style doc in the
+  `plugins` package, or `docs/PLUGIN_SDK.md`) that a Phase-12+ developer follows:
+  lifecycle contract, manifest schema, error handling, namespacing, testing
+  pattern. Update `docs/PLUGINS.md` to point to it.
 
 ## Definition of done
-- `gradle assembleDebug` succeeds (with the new plugin deps).
-- `gradle testDebugUnitTest` passes — OCR wrapper tests + Web Search parse tests.
-- OCR extracts text from a test image on-device (documented; a JVM test asserts
-  the wrapper, a manual/CI-emulator note confirms the model runs).
-- Web Search returns real results and inserts a link into the note.
-- Both are reachable via the plugin settings and work — NOT dead UI.
-- `docs/PLUGINS.md` updated with the two plugins as examples of full
-  implementations.
+- `gradle assembleDebug` succeeds.
+- `gradle testDebugUnitTest` passes, including new tests for:
+  - lifecycle state transition matrix,
+  - error isolation (throwing plugin contained),
+  - dependency resolution + conflict arbitration,
+  - manifest validation (invalid plugin rejected with reason),
+  - plugin settings namespacing (no collision between two plugins).
+- The settings screen shows per-plugin state, reason, version, diagnostics
+  "test now" — all reachable.
+- `docs/PLUGIN_SDK.md` written; `docs/PLUGINS.md` updated.
+- No new third-party dependencies. Do NOT change the DB schema. Do NOT edit
+  `.github/workflows/`. Do NOT ship real OCR/web-search/AI/brush plugins here.
 
 ## Constraints
-- NO fake/stub behavior. If a feature cannot be made real, do not ship it as
-  "done" — mark it clearly and defer.
-- Network calls ONLY from `Dispatchers.IO`/worker. No blocking the main thread.
-- No copying text to clipboard without `ClipboardGuard`.
-- Do NOT change the DB schema.
-- Do NOT edit `.github/workflows/`.
-- Keep the plugin boundary clean: OCR and Web Search logic live in their plugin
-  packages, not in the core ViewModel/screens.
+- NO dynamic (runtime-loaded) APK plugins — compile-time registration only
+  (Phase 10 rule stands).
+- Be honest: this must be a genuinely robust, tested foundation. If a piece
+  cannot be made real and tested this phase, omit it rather than fake it.
+- Never log plugin content, keys, or decrypted note data.

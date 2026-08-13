@@ -1,82 +1,70 @@
-# Phase 13: Production readiness — full audit, security, LocalSend file transfer
+# Phase 13: Rich canvas content — brush presets, stickers, styled & rotatable sticky notes
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
-app. This is the FINAL phase of the pipeline. It has two jobs: (1) a full
-production-readiness + security audit that verifies EVERYTHING from Phases 2–12
-is real and shipping-safe, and (2) adding REAL file transfer via LocalSend-style
-local networking. It must end with a signed release APK that is genuinely usable.
+app with a real AGSL paint engine (Phase 4), working painting features (Phase 7:
+stabilizer, pressure curves, symmetry, color harmony), and a plugin system
+(Phases 10–12). This phase makes the canvas feel like a real creative tool:
+ready-made brushes, ready-made stickers, prettier sticky notes, and rotation for
+canvas items. NO fake features — everything must actually render, persist, and
+respect the existing data model.
 
-## Part A — Full audit & production readiness
+## What to build
 
-### A1. Feature-claim audit (honesty gate)
-Verify every previous phase's claims against the code with `file:line` evidence.
-For each: is it REAL (wired, called, works) or still a claim?
-- Phase 2 security paths, Phase 3 dead-code removal, Phase 4 AGSL wet-mixing,
-  Phase 5 UX, Phase 6 WebDAV (E2EE sync), Phase 7 painting features (stabilizer,
-  pressure curves, symmetry, harmony), Phase 8 perf fixes, Phase 10 plugin
-  framework, Phase 11 OCR + Web Search plugins, Phase 12 brushes/stickers/
-  rotation.
-- Fix anything false. Never leave a known false claim in `ROADMAP.md`/`AGENTS.md`
-  — update them honestly.
+### 1. Ready-made brush preset pack
+- Add a curated set of named brush presets (e.g. Pencil, Fountain Pen, Marker,
+  Soft Watercolor, Dry Oil, Chalk, Eraser, Highlighter) built on the EXISTING
+  `WetBrushEngine` + AGSL shader + `BrushStudioDialog` parameters (size,
+  pressure curve, wetness, pigment load, texture, hardness, granulation). Presets
+  are just pre-filled parameter sets — do NOT create a new engine.
+- A preset picker in the brush UI (reachable, not dead). Presets persist per
+  selection in `SettingsManager`/SharedPreferences — NO DB schema change.
+- Unit test: each preset maps to valid parameter ranges (pure Kotlin).
 
-### A2. Security audit (defense-in-depth check)
-- Confirm: `allowBackup="false"`, `data_extraction_rules.xml` intact, no exported
-  components, no secrets/keys/decrypted content logged, `ClipboardGuard` used on
-  all copy paths, encryption (PBKDF2 600k, AES-256-GCM, AndroidKeyStore DEK,
-  zeroization on lock) intact.
-- Confirm the new plugins (Phase 11) added no unsafe surface: Web Search URL
-  construction is safe (no injection), OCR handles errors without leaking paths.
-- Confirm no INTERNET permission creep beyond WebDAV + Web Search plugin.
-- Confirm no debug-only code (`BuildConfig.DEBUG` leaks) in the release build.
+### 2. Ready-made sticker pack
+- Ship a small, free, offline pack of stickers (emoji-style or simple vector
+  stickers) that can be placed on the canvas at the tapped position. Use
+  built-in vector/emoji rendering — NO new image assets required unless trivial;
+  do NOT add an image-import permission (already none needed). Emoji rendering
+  via the platform is free and offline.
+- Sticker placement: on tap, a sticker appears at the tap point on the active
+  page; it is draggable, resizable, and (per item 4) rotatable.
+- Sticker instances persist in the note (reuse/extend the existing sticky-note /
+  canvas-item persistence path so it survives save/load — inspect
+  `CanvasStickyNote`/`CanvasItem` model first and extend honestly; a small DB
+  field addition is acceptable ONLY if migration-safe, otherwise persist via the
+  existing stroke/note JSON payload).
 
-### A3. Release readiness
-- `gradle assembleDebug`, `gradle testDebugUnitTest`, `gradle assembleRelease`
-  ALL succeed.
-- Produce the signed release APK. Note: the project currently falls back to the
-  auto-generated debug keystore. Document clearly in `docs/RELEASE.md` how to add
-  a real release keystore (keytool + GitHub secrets) so a future maintainer can
-  publish. Do NOT fake a production keystore.
-- `CHANGELOG.md` updated with an honest summary of Phases 2–13.
+### 3. Stylish sticky notes
+- Improve the existing `CanvasStickyNote` visuals: nicer styling (rounded
+  corners, subtle shadow, optional pin/doodle accents), multiple color themes,
+  and keep them fully functional (editable, draggable, resizable). Pure Compose
+  drawing — no new deps.
 
-## Part B — Real file transfer (LocalSend-style)
-
-Add the ability to **send a note/export as a file to a nearby device** over the
-local network, using the **LocalSend protocol** (or a compatible, real, working
-implementation). "Nearby" = same Wi-Fi; NO internet/cloud required.
-
-- **Real implementation required.** Options (choose the honest path):
-  - Preferred: implement a minimal **LocalSend-protocol** sender (UDP discovery
-    + HTTP POST to the receiver's `/api/v2/package/request` endpoint) using the
-    app's HTTP client. This is real and interoperable with the LocalSend app.
-  - Alternative if full protocol support is not tractable: a real, tested local
-    HTTP server + receiver UI on the SAME device pair you control, clearly
-    labeled as "LocalSend-compatible experimental." Do NOT fake it.
-- Runs off the main thread. Shows progress, cancel, and completion/failure
-  states. Security: send only what the user explicitly shares; require the
-  receiving device to accept (LocalSend's confirm flow); never auto-accept.
-- Requires `NEARBY_WIFI_DEVICES`/`ACCESS_WIFI_STATE` or the LocalSend discovery
-  port — check what the platform allows; add ONLY the minimum permission needed
-  and explain it.
-- Unit test the protocol logic in pure JVM (URL building, JSON request body,
-  response parsing) — no network in tests.
+### 4. Rotation for ALL canvas items
+- Make sticky notes, stickers, and image attachments **rotatable** on the canvas
+  (a rotation handle on drag). Store the rotation angle with the item so it
+  survives save/load.
+- Rotation math must be pure and unit-tested (rotate a point around an anchor,
+  clamp/rounding, hit-testing on a rotated rect).
+- Respect existing API 26+ and low-end device constraints (rotation is cheap
+  math + a `graphicsLayer` rotation — no full redraw).
 
 ## Definition of done
-- All three gradle gates pass.
-- `workspace/phase-13/AUDIT_REPORT.md` written: per-phase verdict table
-  (PASS/FIXED/REMOVED) with `file:line`, security checklist results, and the
-  release artifact path.
-- LocalSend transfer works between two devices on the same network (documented),
-  or — if the full protocol was not tractable — the honest, labeled fallback is
-  shipped with the exact limitation stated in `AUDIT_REPORT.md`.
-- `docs/RELEASE.md` written.
-- Release APK artifact produced.
+- `gradle assembleDebug` succeeds.
+- `gradle testDebugUnitTest` passes, including new tests for: preset parameter
+  validity, sticker placement math, rotation math (point rotation, rotated
+  hit-test), and sticky-note model round-trip (persist → load → render).
+- Brushes, stickers, stylish sticky notes, and rotation are ALL reachable in the
+  UI and functional (not dead).
+- Items survive app restart (persistence verified by round-trip test).
 
 ## Constraints
-- NO new third-party dependencies unless strictly required for the transfer
-  implementation (then say so explicitly and justify).
-- Do NOT add INTERNET just for transfer — LocalSend is local-network only.
-- Do NOT change the DB schema.
+- NO new third-party dependencies. NO new permissions. NO `INTERNET`.
+- Do NOT add heavy image assets (keep APK small; prefer vector/emoji).
+- Do NOT change the DB schema unless strictly required and migration-safe (then
+  say so explicitly; prefer the existing JSON payload path).
 - Do NOT edit `.github/workflows/`.
-- No weakening tests to make them pass.
-- Be honest above all: `AUDIT_REPORT.md` must distinguish verified truth from
-  "not verified this phase." Never overstate.
+- Keep the classic brush rendering identical when a preset is not in use.
+- Be honest: if a sticker pack or rotation cannot be made fully persistent this
+  phase, ship the render+rotate part and say exactly what is deferred — never
+  claim persistence that doesn't exist.

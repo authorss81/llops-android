@@ -1,70 +1,66 @@
-# Phase 15: Plugin pack — privacy-first on-device AI & media (keyless)
+# Phase 15: Plugin pack — productivity & knowledge (pure-JVM, high ROI)
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
-app with a working plugin framework (Phase 10), OCR + Web Search plugins
-(Phase 11), and pure-JVM productivity plugins (Phase 14). This phase adds
-on-device AI and media plugins. ALL keyless — no API keys. Privacy-first:
-everything runs on-device or on free keyless endpoints.
+app with a hardened plugin framework (Phases 10–11) and real OCR + Web Search
+plugins (Phase 12). This phase adds a batch of HIGH-VALUE plugins whose cores are
+pure JVM — meaning they are fully unit-testable in CI with no device or native
+code. Add them to the Phase 10 registry (following the Phase 11 SDK contract) as
+real, working plugins with settings toggles.
 
 Add ALL of the following. Each must WORK — no stubs.
 
-## Plugin 1: Dictation plugin (speech-to-text)
-- Use Android's built-in **SpeechRecognizer** (offline models when available) to
-  insert text into the editor. No API key.
-- Voice activation must be explicit (a mic button) — never ambient.
-- Parsing/UI-assembly logic pure-JVM and unit-tested; the SpeechRecognizer glue
-  is platform-only.
-- Handle "offline not available" by surfacing a clear message.
+## Plugin 1: Export Engine (highest ROI)
+- Export any note to: Markdown (already supported), **HTML**, **PDF**, and share
+  out via `ACTION_SEND`. Render canvas pages to **PNG/PDF** using the Android
+  built-in `PdfDocument` (zero deps) and `ImportExportService` extensions.
+- Use the app's existing CommonMark parser for Markdown→HTML. For HTML→PDF use
+  Android's `PdfDocument` (draw simple text layout) — do NOT add a heavyweight
+  PDF dependency unless trivial.
+- Pure-JVM testable: markdown→HTML conversion and export-payload assembly.
+- Reachable from the note/editor menu. Respect existing export paths.
 
-## Plugin 2: Read-aloud plugin (text-to-speech)
-- Use Android's built-in **TextToSpeech** engine to read a selected passage.
-- Respect a quiet mode (SilentToggle) and never auto-play.
-- Pure-JVM testable: passage splitting into TTS-chunk boundaries, queueing logic.
-- No API key, no new permission (uses existing app capabilities).
+## Plugin 2: Share target ("Clip to InkFlow")
+- Register `ACTION_SEND` / `ACTION_SEND_MULTIPLE` intents so text, images, and
+  files can be "clipped" into a new or existing encrypted note.
+- Parsing/validation logic (extract text vs URI vs multipart, size guard) must be
+  pure JVM and unit-tested. The manifest/Activity glue is platform-only.
+- Must not bypass encryption: received content is stored encrypted like any note.
 
-## Plugin 3: On-device translation plugin
-- Use **ML Kit Translation** (on-device, free, keyless) to translate a selected
-  passage. Models download once, offline after.
-- Bundled model strategy: lazy-download on first use with explicit user consent
-  and clear progress. Do NOT bundle large models in the APK.
-- Pure-JVM testable: build a small translator interface with a fake impl for
-  unit tests; ML Kit impl behind it.
-- Fallback: if model download fails/offline, surface clear error, do not crash.
+## Plugin 3: Text tools
+- Word/character count, paragraph stats, reading-time, Flesch-Kincaid
+  readability, and a simple note-diff. Pure Kotlin, zero deps, fully unit-tested.
+- Reachable as a "text tools" action in the editor.
 
-## Plugin 4: Offline AI assistant plugin (local LLM)
-- Integrate an on-device small LLM via **llama.cpp** GGUF (or LiteRT-LM if
-  simpler). Model is NOT bundled: user downloads a small model (~100–300 MB) on
-  first use with consent + progress; store under app-private files (not cache).
-- Capabilities: summarize a note, extract action items, answer questions about
-  note content. Pure-JVM testable: conversation/summary prompt assembly logic
-  unit-tested with a fake inference engine.
-- Must respect offline-first: works with no network after model download.
-- Low-end guard: only enable on devices meeting `DeviceCompatibilityManager`
-  high-tier; otherwise show "assistant unavailable on this device".
+## Plugin 4: Language detection & auto-tagging
+- Detect the language of note text using a REAL detector. Recommended: **Lingua**
+  (pure JVM, Apache-2.0, 75+ languages, no native code, CI-testable). Use a
+  bounded language subset + low-accuracy mode to keep memory sane on low-end.
+- Auto-assign a `language` tag on save (respect user override), and expose
+  detection as a menu action.
+- Unit test: known sample sentences return the correct language.
 
-## Plugin 5: Screenshot → note plugin
-- Capture a screenshot of the current canvas/note (via `PixelCopy` or view
-  draw) and save as an image note, or OCR it with the existing Phase-11 OCR
-  plugin to make it text-searchable.
-- Reuse existing OCR + export paths — do not duplicate.
-- Pure-JVM testable: the "screenshot metadata + OCR flow" decision logic.
+## Plugin 5: Web page → clean markdown note
+- Paste a URL → fetch HTML → extract readable content with **jsoup** (pure JVM)
+  → save as a clean Markdown note (companion to the Phase-11 Web Search plugin).
+- Network on `Dispatchers.IO`, user-initiated, with clear offline/error handling.
+- Pure-JVM testable with MockWebServer or a captured fixture (no real network in
+  tests). `INTERNET` permission already exists.
 
 ## Definition of done
-- `gradle assembleDebug` succeeds. ML Kit translate + llama.cpp (or LiteRT-LM)
-  deps allowed for this phase; SpeechRecognizer/TTS are platform APIs.
-- `gradle testDebugUnitTest` passes with pure-JVM tests per plugin (TTs chunking,
-  prompt assembly, translator-interface fake, screenshot-flow logic).
-- All five are registered, individually toggleable in settings, reachable in UI.
-- No model weights committed to git; no hardcoded API keys; no new permissions
-  beyond what ML Kit translate may require (it needs none) — verify.
+- `gradle assembleDebug` succeeds (with new pure-JVM deps: Lingua, jsoup —
+  these are approved for this phase).
+- `gradle testDebugUnitTest` passes, with new tests for each plugin's pure-JVM
+  core (export assembly, share parsing, text tools math, language detection,
+  HTML→markdown extraction).
+- All five are registered, individually toggleable in settings, and reachable in
+  the UI — NOT dead.
 - `docs/PLUGINS.md` updated with the five plugins as examples.
 
 ## Constraints
-- Only ML Kit Translation and the chosen LLM runtime (llama.cpp/LiteRT-LM) may be
-  added. No other new deps. No new permissions.
-- No network except explicit user-initiated model downloads.
+- Only the listed pure-JVM dependencies (Lingua, jsoup) may be added. No others.
+- No network except user-initiated actions in Plugin 5. No new permissions.
 - Do NOT change the DB schema.
 - Do NOT edit `.github/workflows/`.
-- No fake/stub behavior — every plugin actually works.
-- Model downloads go to app-private storage with size checks and free-space
-  guards; abort cleanly if insufficient space.
+- No fake/stub behavior. Every plugin must actually work.
+- Respect `ClipboardGuard` on any clipboard copy (none required here unless you
+  add copy actions — then use it).

@@ -8,7 +8,7 @@ plugins instead of being bolted into the core.
 
 IMPORTANT: this phase builds the FRAMEWORK only. It must include ONE tiny real
 plugin that works end-to-end to prove the wiring. Do NOT implement OCR or web
-search here — they are Phase 11. Do NOT ship a fake plugin that looks functional
+search here — they are Phase 12 (after Phase 11 hardens the infrastructure). Do NOT ship a fake plugin that looks functional
 but does nothing.
 
 ## What to build
@@ -45,7 +45,7 @@ Implement `Rot13TransformPlugin` or similar trivial-but-REAL utility:
 
 ### 4. Public API + documentation
 - A clean, small plugin surface (`plugins` package) with a short README-style
-  header comment explaining how a future plugin (Phase 11+) integrates.
+  header comment explaining how a future plugin (Phase 12+) integrates.
 - Make sure the framework is genuinely usable by future plugins: no dead code,
   no hardcoded single-plugin logic.
 
@@ -64,6 +64,6 @@ Implement `Rot13TransformPlugin` or similar trivial-but-REAL utility:
 - NO new third-party dependencies for the framework itself.
 - Do NOT change the DB schema.
 - Do NOT edit `.github/workflows/`.
-- Do NOT add INTERNET usage beyond what exists (web search is Phase 11).
+- Do NOT add INTERNET usage beyond what exists (web search is Phase 12).
 - Be honest: the framework must be genuinely extensible and tested, not a
   facade. If a part cannot be made real this phase, omit it rather than fake it.

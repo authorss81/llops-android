@@ -1,65 +1,84 @@
-# Phase 14: Plugin pack — productivity & knowledge (pure-JVM, high ROI)
+# Phase 14: Production readiness — full audit, security, LocalSend file transfer
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
-app with a working plugin framework (Phase 10) and real OCR + Web Search plugins
-(Phase 11). This phase adds a batch of HIGH-VALUE plugins whose cores are pure
-JVM — meaning they are fully unit-testable in CI with no device or native code.
-Add them to the Phase 10 registry as real, working plugins with settings toggles.
+app. This is the FINAL phase of the pipeline. It has two jobs: (1) a full
+production-readiness + security audit that verifies EVERYTHING from Phases 2–13
+is real and shipping-safe, and (2) adding REAL file transfer via LocalSend-style
+local networking. It must end with a signed release APK that is genuinely usable.
 
-Add ALL of the following. Each must WORK — no stubs.
+## Part A — Full audit & production readiness
 
-## Plugin 1: Export Engine (highest ROI)
-- Export any note to: Markdown (already supported), **HTML**, **PDF**, and share
-  out via `ACTION_SEND`. Render canvas pages to **PNG/PDF** using the Android
-  built-in `PdfDocument` (zero deps) and `ImportExportService` extensions.
-- Use the app's existing CommonMark parser for Markdown→HTML. For HTML→PDF use
-  Android's `PdfDocument` (draw simple text layout) — do NOT add a heavyweight
-  PDF dependency unless trivial.
-- Pure-JVM testable: markdown→HTML conversion and export-payload assembly.
-- Reachable from the note/editor menu. Respect existing export paths.
+### A1. Feature-claim audit (honesty gate)
+Verify every previous phase's claims against the code with `file:line` evidence.
+For each: is it REAL (wired, called, works) or still a claim?
+- Phase 2 security paths, Phase 3 dead-code removal, Phase 4 AGSL wet-mixing,
+  Phase 5 UX, Phase 6 WebDAV (E2EE sync), Phase 7 painting features (stabilizer,
+  pressure curves, symmetry, harmony), Phase 8 perf fixes, Phase 10 plugin
+  framework, Phase 11 plugin infrastructure (lifecycle, isolation, deps),
+  Phase 12 OCR + Web Search plugins, Phase 13 brushes/stickers/
+  rotation.
+- Fix anything false. Never leave a known false claim in `ROADMAP.md`/`AGENTS.md`
+  — update them honestly.
 
-## Plugin 2: Share target ("Clip to InkFlow")
-- Register `ACTION_SEND` / `ACTION_SEND_MULTIPLE` intents so text, images, and
-  files can be "clipped" into a new or existing encrypted note.
-- Parsing/validation logic (extract text vs URI vs multipart, size guard) must be
-  pure JVM and unit-tested. The manifest/Activity glue is platform-only.
-- Must not bypass encryption: received content is stored encrypted like any note.
+### A2. Security audit (defense-in-depth check)
+- Confirm: `allowBackup="false"`, `data_extraction_rules.xml` intact, no exported
+  components, no secrets/keys/decrypted content logged, `ClipboardGuard` used on
+  all copy paths, encryption (PBKDF2 600k, AES-256-GCM, AndroidKeyStore DEK,
+  zeroization on lock) intact.
+- Confirm the new plugins (Phases 11–12) added no unsafe surface: Web Search URL
+  construction is safe (no injection), plugin error isolation is real (Phase 11),
+  OCR handles errors without leaking paths.
+- Confirm no INTERNET permission creep beyond WebDAV + Web Search plugin.
+- Confirm no debug-only code (`BuildConfig.DEBUG` leaks) in the release build.
 
-## Plugin 3: Text tools
-- Word/character count, paragraph stats, reading-time, Flesch-Kincaid
-  readability, and a simple note-diff. Pure Kotlin, zero deps, fully unit-tested.
-- Reachable as a "text tools" action in the editor.
+### A3. Release readiness
+- `gradle assembleDebug`, `gradle testDebugUnitTest`, `gradle assembleRelease`
+  ALL succeed.
+- Produce the signed release APK. Note: the project currently falls back to the
+  auto-generated debug keystore. Document clearly in `docs/RELEASE.md` how to add
+  a real release keystore (keytool + GitHub secrets) so a future maintainer can
+  publish. Do NOT fake a production keystore.
+- `CHANGELOG.md` updated with an honest summary of Phases 2–14.
 
-## Plugin 4: Language detection & auto-tagging
-- Detect the language of note text using a REAL detector. Recommended: **Lingua**
-  (pure JVM, Apache-2.0, 75+ languages, no native code, CI-testable). Use a
-  bounded language subset + low-accuracy mode to keep memory sane on low-end.
-- Auto-assign a `language` tag on save (respect user override), and expose
-  detection as a menu action.
-- Unit test: known sample sentences return the correct language.
+## Part B — Real file transfer (LocalSend-style)
 
-## Plugin 5: Web page → clean markdown note
-- Paste a URL → fetch HTML → extract readable content with **jsoup** (pure JVM)
-  → save as a clean Markdown note (companion to the Phase-11 Web Search plugin).
-- Network on `Dispatchers.IO`, user-initiated, with clear offline/error handling.
-- Pure-JVM testable with MockWebServer or a captured fixture (no real network in
-  tests). `INTERNET` permission already exists.
+Add the ability to **send a note/export as a file to a nearby device** over the
+local network, using the **LocalSend protocol** (or a compatible, real, working
+implementation). "Nearby" = same Wi-Fi; NO internet/cloud required.
+
+- **Real implementation required.** Options (choose the honest path):
+  - Preferred: implement a minimal **LocalSend-protocol** sender (UDP discovery
+    + HTTP POST to the receiver's `/api/v2/package/request` endpoint) using the
+    app's HTTP client. This is real and interoperable with the LocalSend app.
+  - Alternative if full protocol support is not tractable: a real, tested local
+    HTTP server + receiver UI on the SAME device pair you control, clearly
+    labeled as "LocalSend-compatible experimental." Do NOT fake it.
+- Runs off the main thread. Shows progress, cancel, and completion/failure
+  states. Security: send only what the user explicitly shares; require the
+  receiving device to accept (LocalSend's confirm flow); never auto-accept.
+- Requires `NEARBY_WIFI_DEVICES`/`ACCESS_WIFI_STATE` or the LocalSend discovery
+  port — check what the platform allows; add ONLY the minimum permission needed
+  and explain it.
+- Unit test the protocol logic in pure JVM (URL building, JSON request body,
+  response parsing) — no network in tests.
 
 ## Definition of done
-- `gradle assembleDebug` succeeds (with new pure-JVM deps: Lingua, jsoup —
-  these are approved for this phase).
-- `gradle testDebugUnitTest` passes, with new tests for each plugin's pure-JVM
-  core (export assembly, share parsing, text tools math, language detection,
-  HTML→markdown extraction).
-- All five are registered, individually toggleable in settings, and reachable in
-  the UI — NOT dead.
-- `docs/PLUGINS.md` updated with the five plugins as examples.
+- All three gradle gates pass.
+- `workspace/phase-14/AUDIT_REPORT.md` written: per-phase verdict table
+  (PASS/FIXED/REMOVED) with `file:line`, security checklist results, and the
+  release artifact path.
+- LocalSend transfer works between two devices on the same network (documented),
+  or — if the full protocol was not tractable — the honest, labeled fallback is
+  shipped with the exact limitation stated in `AUDIT_REPORT.md`.
+- `docs/RELEASE.md` written.
+- Release APK artifact produced.
 
 ## Constraints
-- Only the listed pure-JVM dependencies (Lingua, jsoup) may be added. No others.
-- No network except user-initiated actions in Plugin 5. No new permissions.
+- NO new third-party dependencies unless strictly required for the transfer
+  implementation (then say so explicitly and justify).
+- Do NOT add INTERNET just for transfer — LocalSend is local-network only.
 - Do NOT change the DB schema.
 - Do NOT edit `.github/workflows/`.
-- No fake/stub behavior. Every plugin must actually work.
-- Respect `ClipboardGuard` on any clipboard copy (none required here unless you
-  add copy actions — then use it).
+- No weakening tests to make them pass.
+- Be honest above all: `AUDIT_REPORT.md` must distinguish verified truth from
+  "not verified this phase." Never overstate.
