@@ -243,6 +243,12 @@ interface NoteVersionDao {
     @Query("SELECT * FROM note_versions WHERE pageId = :pageId ORDER BY timestampMs DESC")
     suspend fun getVersionsForPage(pageId: String): List<NoteVersionEntity>
 
+    @Query("SELECT * FROM note_versions")
+    suspend fun getAllVersionsForReencrypt(): List<NoteVersionEntity>
+
+    @Query("UPDATE note_versions SET title = :title, extractedText = :extractedText WHERE id = :id")
+    suspend fun updateVersionFields(id: String, title: String, extractedText: String?)
+
     @Upsert
     suspend fun insertVersion(version: NoteVersionEntity)
 

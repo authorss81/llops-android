@@ -240,7 +240,13 @@ abstract class NoteflowDatabase : RoomDatabase() {
                         delegate.writableDatabase
                     } catch (e: Exception) {
                         if (isDatabaseCorruptException(e)) {
-                            cleanDatabaseFiles(context, configuration.name ?: "noteflow.sqlite")
+                            // H2 (phase-09): NEVER delete the user's vault on an open
+                            // failure. The corrupt files are quarantined (renamed to
+                            // *.corrupt-<timestamp> so bytes survive for recovery),
+                            // a persistent flag routes the user to a recovery screen,
+                            // and only the user's explicit "start fresh" choice lets a
+                            // brand-new empty vault take over.
+                            quarantineCorruptDatabase(context, configuration.name ?: "noteflow.sqlite")
                             delegate = net.zetetic.database.sqlcipher.SupportOpenHelperFactory(passphrase.toByteArray(Charsets.UTF_8)).create(configuration)
                             delegate.writableDatabase
                         } else {
@@ -255,7 +261,7 @@ abstract class NoteflowDatabase : RoomDatabase() {
                         delegate.readableDatabase
                     } catch (e: Exception) {
                         if (isDatabaseCorruptException(e)) {
-                            cleanDatabaseFiles(context, configuration.name ?: "noteflow.sqlite")
+                            quarantineCorruptDatabase(context, configuration.name ?: "noteflow.sqlite")
                             delegate = net.zetetic.database.sqlcipher.SupportOpenHelperFactory(passphrase.toByteArray(Charsets.UTF_8)).create(configuration)
                             delegate.readableDatabase
                         } else {
@@ -279,17 +285,37 @@ abstract class NoteflowDatabase : RoomDatabase() {
                        msg.contains("malformed", ignoreCase = true)
             }
 
-            private fun cleanDatabaseFiles(context: Context, dbName: String) {
-                try {
-                    val dbFile = context.getDatabasePath(dbName)
-                    if (dbFile.exists()) dbFile.delete()
-                    val walFile = File(dbFile.path + "-wal")
-                    if (walFile.exists()) walFile.delete()
-                    val shmFile = File(dbFile.path + "-shm")
-                    if (shmFile.exists()) shmFile.delete()
-                    val journalFile = File(dbFile.path + "-journal")
-                    if (journalFile.exists()) journalFile.delete()
-                } catch (_: Exception) {}
+            /**
+             * H2 (phase-09): the old implementation DELETED db + wal + shm +
+             * journal and instantly re-created an empty vault — a wrong key,
+             * torn write or transient I/O error became irreversible total data
+             * loss with no banner and no recovery path. This implementation
+             * RENAMES the files to *.corrupt-<timestamp> (bytes preserved for
+             * offline recovery) and records the event so the UI can offer a
+             * restore-from-backup or an explicit start-fresh decision.
+             */
+            private fun quarantineCorruptDatabase(context: Context, dbName: String) {
+                val timestamp = System.currentTimeMillis()
+                val suffix = ".corrupt-$timestamp"
+                val baseFile = context.getDatabasePath(dbName)
+                val dir = baseFile.parentFile
+                if (dir == null) return
+                val names = listOf(dbName, "$dbName-wal", "$dbName-shm", "$dbName-journal")
+                for (name in names) {
+                    val source = File(dir, name)
+                    if (source.exists()) {
+                        val target = File(dir, name + suffix)
+                        try {
+                            // Rename preserves the bytes; NEVER delete the source on a
+                            // corrupt open — the whole point is that nothing is destroyed.
+                            // (Timestamp collisions are impossible in practice; a failed
+                            // rename just leaves the file for the next quarantine attempt.)
+                            source.renameTo(target)
+                        } catch (_: Exception) {
+                        }
+                    }
+                }
+                com.authorss81.noteflow.services.DatabaseSecurityHelper.setCorruptionDetected(context, timestamp)
             }
         }
 
@@ -326,6 +352,19 @@ abstract class NoteflowDatabase : RoomDatabase() {
                 .build()
                 INSTANCE = instance
                 instance
+            }
+        }
+
+        /**
+         * H1 (phase-09): closes and forgets the current Room instance so a later
+         * [getDatabase] builds a fresh one. Used by the restore paths so a failed
+         * (or successful) restore never leaves the app with a closed live DB — the
+         * old code closed the database and then bricked every DB call on failure.
+         */
+        fun dispose() {
+            synchronized(this) {
+                INSTANCE?.close()
+                INSTANCE = null
             }
         }
     }

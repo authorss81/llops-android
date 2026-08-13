@@ -14,9 +14,11 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.input.pointer.pointerInput
+import kotlinx.coroutines.NonCancellable
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
@@ -113,6 +115,7 @@ class MainActivity : FragmentActivity() {
             val hasMasterPassword by viewModel.hasMasterPassword.collectAsState()
             val databaseTampered by viewModel.databaseTampered.collectAsState()
             val restoreBlocked by viewModel.restoreBlocked.collectAsState()
+            val corruptionBlocked by viewModel.corruptionBlocked.collectAsState()
             val autoLockTimeoutSeconds by viewModel.autoLockTimeoutSeconds.collectAsState()
 
             // 22.9: status/nav-bar icon polarity must track the app's actual theme,
@@ -270,6 +273,12 @@ class MainActivity : FragmentActivity() {
                         }
                         if (hasMasterPassword && !authenticated) {
                             LockScreen(viewModel = viewModel)
+                        } else if (corruptionBlocked) {
+                            // H2 (phase-09): corrupt-DB recovery takes priority over the
+                            // normal vault UI. The corrupted files were quarantined, not
+                            // deleted; the user must restore from backup or explicitly
+                            // start fresh before normal note access is shown.
+                            CorruptionRecoveryScreen(viewModel = viewModel)
                         } else if (restoreBlocked) {
                             RestoreBlockedScreen(viewModel = viewModel)
                         } else {
@@ -322,8 +331,11 @@ class MainActivity : FragmentActivity() {
                                             onOpenPage = { targetPage -> setActivePage(targetPage) },
                                             onSaveContent = { newText ->
                                                 page.sourceFilePath?.let { path ->
+                                                    // Phase-05 fix: the composable scope is torn down on
+                                                    // back-navigation — use NonCancellable so the final
+                                                    // flush is never cancelled mid-write (data-loss race).
                                                     contentSaveScope.launch {
-                                                        withContext(Dispatchers.IO) {
+                                                        withContext(NonCancellable + Dispatchers.IO) {
                                                             File(path).writeText(newText)
                                                         }
                                                     }
@@ -410,16 +422,18 @@ class MainActivity : FragmentActivity() {
                                                                     }
                                                                 },
                                                                 onOpenPage = { targetPage -> setActivePage(targetPage) },
-                                                                onSaveContent = { newText ->
-                                                                    page.sourceFilePath?.let { path ->
-                                                                        contentSaveScope.launch {
-                                                                            withContext(Dispatchers.IO) {
-                                                                                File(path).writeText(newText)
-                                                                            }
-                                                                        }
-                                                                    }
-                                                                }
-                                                            )
+onSaveContent = { newText ->
+                                                                     page.sourceFilePath?.let { path ->
+                                                                         // Phase-05 fix: NonCancellable so the back-flush
+                                                                         // write is never cancelled on composition teardown.
+                                                                         contentSaveScope.launch {
+                                                                             withContext(NonCancellable + Dispatchers.IO) {
+                                                                                 File(path).writeText(newText)
+                                                                             }
+                                                                         }
+                                                                     }
+                                                                 }
+                                                             )
                                                         } else {
                                                             EditorScreen(
                                                                 page = page,
@@ -601,6 +615,83 @@ private fun RestoreBlockedScreen(viewModel: NoteflowViewModel) {
             Icon(Icons.Outlined.Restore, contentDescription = null)
             Spacer(Modifier.width(8.dp))
             Text("Choose Backup & Restore")
+        }
+        errorMessage?.let {
+            Spacer(Modifier.height(12.dp))
+            Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+        }
+    }
+}
+
+/**
+ * H2 (phase-09): shown when the SQLCipher vault failed to open (corrupt /
+ * wrong-key). The original files were RENAMED to *.corrupt-<timestamp> — never
+ * deleted — so nothing is destroyed. The user must either restore from a backup
+ * (recovery path, like RestoreBlockedScreen) or explicitly start a fresh vault.
+ */
+@Composable
+private fun CorruptionRecoveryScreen(viewModel: NoteflowViewModel) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var backupPassword by remember { mutableStateOf("") }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+
+    val pickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: android.net.Uri? ->
+        if (uri != null) {
+            errorMessage = null
+            viewModel.attemptRecoveryFromBackup(uri, backupPassword.ifBlank { null }) { msg ->
+                errorMessage = msg
+            }
+        }
+    }
+
+    val quarantineStamp = viewModel.corruptionTimestamp.takeIf { it > 0L }?.let {
+        java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US).format(java.util.Date(it))
+    } ?: "unknown time"
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Spacer(Modifier.height(48.dp))
+        Text("Vault Database Corrupted", style = MaterialTheme.typography.headlineMedium)
+        Spacer(Modifier.height(12.dp))
+        Text(
+            "Your vault database could not be opened ($quarantineStamp). " +
+                "IMPORTANT: your data was NOT erased — the affected files were moved aside " +
+                "as *.corrupt-$quarantineStamp so nothing is destroyed.",
+            style = MaterialTheme.typography.bodyMedium
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "Restore from a backup to get your notes back. Only choose \u201cStart fresh\u201d " +
+                "if you have no backup or know the old data is irrecoverable — it starts an empty vault.",
+            style = MaterialTheme.typography.bodyMedium
+        )
+        Spacer(Modifier.height(24.dp))
+        OutlinedTextField(
+            value = backupPassword,
+            onValueChange = { backupPassword = it },
+            label = { Text("Backup Password (if any)") },
+            visualTransformation = PasswordVisualTransformation(),
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(Modifier.height(16.dp))
+        Button(onClick = { pickerLauncher.launch(arrayOf("application/octet-stream", "*/*")) }) {
+            Icon(Icons.Outlined.Restore, contentDescription = null)
+            Spacer(Modifier.width(8.dp))
+            Text("Choose Backup & Restore")
+        }
+        Spacer(Modifier.height(12.dp))
+        OutlinedButton(
+            onClick = { viewModel.startFreshAfterCorruption() }
+        ) {
+            Text("Start fresh with an empty vault")
         }
         errorMessage?.let {
             Spacer(Modifier.height(12.dp))

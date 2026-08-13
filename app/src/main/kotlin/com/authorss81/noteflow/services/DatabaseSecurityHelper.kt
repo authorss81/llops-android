@@ -21,6 +21,8 @@ object DatabaseSecurityHelper {
     private const val PREF_NAME = "noteflow_sec_prefs"
     private const val PREF_DB_CHECKSUM = "db_hmac_checksum"
     private const val PREF_RESTORE_BLOCKED = "restore_hmac_blocked"
+    private const val PREF_CORRUPTION_DETECTED = "corruption_detected"
+    private const val PREF_CORRUPTION_TIMESTAMP = "corruption_timestamp"
     private const val KEY_ALIAS = "noteflow_db_hmac_key"
     private const val ANDROID_KEYSTORE = "AndroidKeyStore"
     private const val DB_NAME = "noteflow.sqlite"
@@ -107,6 +109,37 @@ object DatabaseSecurityHelper {
         context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
             .edit()
             .remove(PREF_DB_CHECKSUM)
+            .apply()
+    }
+
+    /**
+     * H2 (phase-09): records that the SQLCipher vault failed to open with a
+     * corrupt/wrong-key exception. The offending files are ALWAYS quarantined
+     * (renamed to *.corrupt-<timestamp>, never deleted) and this flag drives a
+     * dedicated recovery screen so the vault is only re-created when the user
+     * explicitly chooses to start fresh.
+     */
+    fun setCorruptionDetected(context: Context, timestampMs: Long = System.currentTimeMillis()) {
+        context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(PREF_CORRUPTION_DETECTED, true)
+            .putLong(PREF_CORRUPTION_TIMESTAMP, timestampMs)
+            .apply()
+    }
+
+    fun hasCorruptionDetected(context: Context): Boolean =
+        context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+            .getBoolean(PREF_CORRUPTION_DETECTED, false)
+
+    fun getCorruptionTimestamp(context: Context): Long =
+        context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+            .getLong(PREF_CORRUPTION_TIMESTAMP, 0L)
+
+    fun clearCorruptionDetected(context: Context) {
+        context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(PREF_CORRUPTION_DETECTED, false)
+            .remove(PREF_CORRUPTION_TIMESTAMP)
             .apply()
     }
 

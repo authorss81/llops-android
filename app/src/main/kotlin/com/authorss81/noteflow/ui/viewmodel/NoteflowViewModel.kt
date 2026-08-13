@@ -42,6 +42,30 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     private val _restoreBlocked = MutableStateFlow(DatabaseSecurityHelper.hasRestoreBlock(appContext))
     val restoreBlocked: StateFlow<Boolean> = _restoreBlocked.asStateFlow()
 
+    /** H2 (phase-09): the vault DB failed to open (corrupt/wrong-key) and its
+     *  files were quarantined, NOT deleted. Show a dedicated recovery screen
+     *  until the user restores from backup or explicitly starts fresh. */
+    private val _corruptionBlocked = MutableStateFlow(DatabaseSecurityHelper.hasCorruptionDetected(appContext))
+    val corruptionBlocked: StateFlow<Boolean> = _corruptionBlocked.asStateFlow()
+    val corruptionTimestamp: Long = DatabaseSecurityHelper.getCorruptionTimestamp(appContext)
+
+    /**
+     * H2 (phase-09): the user explicitly chose to discard the quarantined vault
+     * and continue with the (already created) empty database. Clears the flag
+     * and re-arms the tamper baseline so the fresh vault is the new baseline.
+     */
+    fun startFreshAfterCorruption() {
+        DatabaseSecurityHelper.clearCorruptionDetected(appContext)
+        DatabaseSecurityHelper.clearStoredChecksum(appContext)
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                repository.stampDatabaseChecksum(appContext)
+            }
+        }
+        _corruptionBlocked.value = false
+        _databaseTampered.value = false
+    }
+
     init {
         viewModelScope.launch {
             if (settings.databaseIntegrityCheckEnabled) {
@@ -673,6 +697,11 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
             try {
                 val bytes = ImportExportService.readUriBytes(getApplication(), uri)
                     ?: throw IllegalStateException("Could not read the selected backup file.")
+                // H1 (phase-09): reject a wrong password BEFORE closing the live DB
+                // so the common failure case leaves the vault fully intact.
+                if (backupPassword != null) {
+                    ImportExportService.validateBackupPassword(bytes, backupPassword)
+                }
                 repository.closeDatabase()
                 ImportExportService.importBackup(getApplication(), bytes, repository.encryptionKey, backupPassword)
                 DatabaseSecurityHelper.clearRestoreBlock(getApplication())
@@ -681,6 +710,10 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
                 delay(500)
                 kotlin.system.exitProcess(0)
             } catch (e: Exception) {
+                // H1 (phase-09): a failed recovery (wrong password, corrupt backup)
+                // must never leave a dead Room instance behind — reopen it so any
+                // subsequent operation hits a live connection, then surface the error.
+                runCatching { repository.reopenDatabase(getApplication()) }
                 onError(e.message ?: "Recovery failed.")
             }
         }
@@ -1085,6 +1118,10 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
                 ImportExportService.importBackup(getApplication(), bytes, repository.encryptionKey)
                 onComplete(true)
             } catch (e: Exception) {
+                // H1 (phase-09): a failed WebDAV restore leaves the live DB closed —
+                // reopen it so the vault behind the dialog is not bricked. The caller
+                // (WebDavSyncDialog) tells the user to restart to fully re-initialize.
+                runCatching { repository.reopenDatabase(getApplication()) }
                 onComplete(false)
             }
         }

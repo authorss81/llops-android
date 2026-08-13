@@ -100,15 +100,32 @@ fun HomeScreen(
     // 22.9: restore needs a restart — confirm visibly instead of a snackbar that
     // is killed by exitProcess before it can ever be shown.
     var showRestartConfirmDialog by remember { mutableStateOf(false) }
+    var restartDialogTitle by remember { mutableStateOf("Restore successful") }
+    var restartDialogMessage by remember { mutableStateOf("Your vault has been restored. The app will restart to load the restored data.") }
 
     fun performRestore(context: android.content.Context, bytes: ByteArray, password: String? = null) {
         scope.launch {
             try {
+                // H1 (phase-09): reject a wrong backup password BEFORE the live
+                // vault is closed — the common failure case never touches the DB
+                // and the user can simply correct the password.
+                if (password != null) {
+                    ImportExportService.validateBackupPassword(bytes, password)
+                }
                 viewModel.repository.closeDatabase()
                 ImportExportService.importBackup(context, bytes, viewModel.repository.encryptionKey, password)
+                restartDialogTitle = "Restore successful"
+                restartDialogMessage = "Your vault has been restored. The app will restart to load the restored data."
                 showRestartConfirmDialog = true
             } catch (e: Exception) {
-                viewModel.showSnackbar("Restore failed: ${e.message}", isLong = true)
+                // H1 (phase-09): the DB was already closed for the swap. A failure
+                // here must never leave a dead Room instance behind — reopen it and
+                // restart the process so the vault flows re-initialize cleanly
+                // (same pattern the success path uses).
+                runCatching { viewModel.repository.reopenDatabase(context) }
+                restartDialogTitle = "Restore failed"
+                restartDialogMessage = "Restore failed: ${e.message}. The app will restart with your current vault unchanged."
+                showRestartConfirmDialog = true
             }
         }
     }
@@ -1187,8 +1204,8 @@ fun HomeScreen(
         if (showRestartConfirmDialog) {
             AlertDialog(
                 onDismissRequest = { },
-                title = { Text("Restore successful") },
-                text = { Text("Your vault has been restored. The app will restart to load the restored data.") },
+                title = { Text(restartDialogTitle) },
+                text = { Text(restartDialogMessage) },
                 confirmButton = {
                     TextButton(onClick = { kotlin.system.exitProcess(0) }) {
                         Text("Restart now")

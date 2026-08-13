@@ -14,7 +14,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.UUID
 
-class NoteRepository(private val db: NoteflowDatabase) {
+class NoteRepository(private var db: NoteflowDatabase) {
     var encryptionKey: ByteArray?
         get() = VaultKeyHolder.dek
         set(value) {
@@ -203,11 +203,45 @@ class NoteRepository(private val db: NoteflowDatabase) {
                     db.mediaEmbedDao().updateTextContent(embed.id, encrypted)
                 }
             }
+            // C1 (phase-09): note_versions.title/extractedText are field-encrypted
+            // at write (createNoteVersion) and re-keyed on cross-device restore
+            // (fieldEncryptedColumns), but the local plaintext sweep was missing
+            // them — any legacy plaintext version snapshot written before a master
+            // password existed stayed in the clear at rest.
+            db.noteVersionDao().getAllVersionsForReencrypt().forEach { version ->
+                val title = version.title
+                val extracted = version.extractedText
+                var dirty = false
+                var newTitle = title
+                var newExtracted = extracted
+                if (title.isNotBlank() && !isFieldEncrypted(title, dek)) {
+                    newTitle = EncryptionService.encrypt(title.toByteArray(), dek)
+                    dirty = true
+                }
+                if (!extracted.isNullOrBlank() && !isFieldEncrypted(extracted, dek)) {
+                    newExtracted = EncryptionService.encrypt(extracted.toByteArray(), dek)
+                    dirty = true
+                }
+                if (dirty) {
+                    db.noteVersionDao().updateVersionFields(version.id, newTitle, newExtracted)
+                }
+            }
         }
     }
 
     fun closeDatabase() {
-        db.close()
+        NoteflowDatabase.dispose()
+    }
+
+    /**
+     * H1 (phase-09): after a restore closes the live DB, a failure must never
+     * leave the app with a dead Room instance. dispose() closes + forgets the
+     * instance and this rebuilds it so the next repository call opens a fresh
+     * connection to the (still intact, pre-swap) vault file.
+     */
+    fun reopenDatabase(context: android.content.Context) {
+        NoteflowDatabase.dispose()
+        db = NoteflowDatabase.getDatabase(context)
     }
 
     suspend fun getPageById(id: String): NotePageEntity? = withContext(Dispatchers.Default) {
