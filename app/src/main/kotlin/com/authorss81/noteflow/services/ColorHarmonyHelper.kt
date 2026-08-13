@@ -83,8 +83,11 @@ object ColorHarmonyHelper {
 
     /**
      * Generates harmony swatches from an RGB color. [scheme] selects the hue
-     * rotation set. Returns the input color first, followed by the scheme hues
-     * (deduplicated, so the results are safe to render as a palette row).
+     * rotation set; the *scheme's* hues are returned in scheme order (0° step
+     * first for COMPLEMENTARY/TRIADIC/TETRADIC; for ANALOGOUS the 0° step is the
+     * middle swatch: -30°, source, +30°). The exact input color is always present
+     * wherever the scheme contains a 0° rotation. Results are deduplicated, so a
+     * fully desaturated (gray) input collapses to a single swatch per scheme.
      */
     fun generate(rgb: Rgb, scheme: HarmonyScheme): List<Rgb> {
         val hsl = rgbToHsl(rgb.r, rgb.g, rgb.b)

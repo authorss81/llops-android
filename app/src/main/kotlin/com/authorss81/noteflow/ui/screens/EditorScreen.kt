@@ -138,6 +138,21 @@ fun EditorScreen(
         }
     }
 
+    // Phase 07 housekeeping: delete paper-texture files that no page references
+    // anymore (page deleted, texture replaced or cleared while another page's
+    // picker ran, etc.) so internal storage cannot accumulate stray files.
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.IO) {
+            val referenced = viewModel.settings.allPaperTexturePaths().toSet()
+            val dir = com.authorss81.noteflow.services.ImportExportService.getImportsDir(context)
+            dir.listFiles()?.forEach { file ->
+                if (file.name.startsWith("paper_texture_") && file.absolutePath !in referenced) {
+                    runCatching { file.delete() }
+                }
+            }
+        }
+    }
+
     val bgImagePicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: android.net.Uri? ->
@@ -167,9 +182,12 @@ fun EditorScreen(
             try {
                 val inputStream = context.contentResolver.openInputStream(it)
                 val bytes = inputStream?.readBytes()
+                inputStream?.close()
                 if (bytes != null) {
-                    val fileName = "paper_texture_${System.currentTimeMillis()}.png"
+                    val ext = paperTextureExtensionFromUri(context, uri)
+                    val fileName = "paper_texture_${System.currentTimeMillis()}.$ext"
                     scope.launch {
+                        deletePaperTextureFile(paperTexturePath)
                         val savedPath = com.authorss81.noteflow.services.ImportExportService.persistFile(context, fileName, bytes)
                         paperTexturePath = savedPath
                         viewModel.settings.setPaperTexturePathForPage(page.id, savedPath)
@@ -1425,6 +1443,9 @@ fun EditorScreen(
                 onSymmetryModeSelect = { mode ->
                     symmetryMode = mode
                     viewModel.settings.symmetryModeKey = mode.settingKey
+                    if (mode != SymmetryMode.OFF && gpuWetBrushesEnabled) {
+                        viewModel.showSnackbar("Symmetry on: GPU wet-mix falls back to classic rendering while active")
+                    }
                 },
                 onContinuousModeToggle = { isContinuousMode = !isContinuousMode },
                 onDividePagesToggle = { divideIntoPages = !divideIntoPages },
@@ -1435,6 +1456,7 @@ fun EditorScreen(
                 paperTexturePath = paperTexturePath,
                 onUploadPaperTexture = { paperTexturePicker.launch("image/*") },
                 onClearPaperTexture = {
+                    deletePaperTextureFile(paperTexturePath)
                     paperTexturePath = null
                     paperTexture = null
                     viewModel.settings.setPaperTexturePathForPage(page.id, null)
@@ -3070,6 +3092,39 @@ private fun decodeBoundedBitmap(filePath: String, targetWidth: Int = 1080): andr
         BitmapFactory.decodeFile(filePath, decodeOptions)
     } catch (e: Exception) {
         null
+    }
+}
+
+/**
+ * Resolves the real file extension for a picked paper-texture image (from the
+ * content provider's display name) so we do not mislabel JPEG/WebP bytes as PNG.
+ */
+private fun paperTextureExtensionFromUri(context: android.content.Context, uri: Uri): String {
+    var ext: String? = null
+    runCatching {
+        context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                val idx = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                if (idx >= 0) {
+                    cursor.getString(idx)?.let { name ->
+                        ext = name.substringAfterLast('.', "").lowercase()
+                    }
+                }
+            }
+        }
+    }
+    return ext?.takeIf { it.isNotBlank() } ?: "png"
+}
+
+/**
+ * Deletes a stored paper-texture file (used when the texture is replaced or
+ * cleared so internal storage does not accumulate orphans).
+ */
+private fun deletePaperTextureFile(path: String?) {
+    if (path.isNullOrBlank()) return
+    val file = File(path)
+    if (file.name.startsWith("paper_texture_")) {
+        runCatching { file.delete() }
     }
 }
 

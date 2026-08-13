@@ -105,6 +105,17 @@ class SettingsManager(context: Context) {
         }.apply()
     }
 
+    /** All paper-texture file paths currently referenced by any page, so orphan
+     *  files no longer referenced by any pref key can be deleted (page removed,
+     *  texture cleared, etc.). */
+    fun allPaperTexturePaths(): List<String> {
+        val out = mutableListOf<String>()
+        prefs.all.forEach { (key, value) ->
+            if (key.startsWith("paper_texture_") && value is String) out.add(value)
+        }
+        return out
+    }
+
     var deviceTierOverride: String?
         get() = prefs.getString("device_tier_override", null)
         set(value) = prefs.edit().putString("device_tier_override", value).apply()

@@ -11,6 +11,14 @@ import kotlin.math.sqrt
  * path, and the [widthFactor]/[opacityFactor] helpers derive the width/opacity
  * for classic brush rendering.
  *
+ * IMPORTANT (capture-time semantics): the remap is applied ONCE, while the
+ * stroke is being captured, and the remapped value is what is persisted with
+ * the stroke's points (see AnnotationCanvas). Selecting a curve is a pen-feel
+ * setting: it affects strokes drawn AFTER the change, exactly like adjusting
+ * pen pressure sensitivity on a physical stylus. Existing strokes keep the
+ * feel they were drawn with (they are never re-remapped at render time), so
+ * toggling a curve does not mutate previously saved artwork.
+ *
  * Pure math, no Android dependencies, unit-testable on the JVM.
  */
 enum class PressureCurve(val label: String, val settingKey: String, val description: String) {

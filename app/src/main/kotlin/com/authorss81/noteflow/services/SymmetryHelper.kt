@@ -3,6 +3,11 @@ package com.authorss81.noteflow.services
 /**
  * Mirror/symmetry modes for the canvas.
  *
+ * VERTICAL/HORIZONTAL mirror about an axis through a fixed center; RADIAL is
+ * point symmetry (180° rotation about the center), NOT n-fold radial symmetry —
+ * it mirrors both axes at once. The stored setting key for RADIAL stays "radial"
+ * for backward compatibility with pre-existing prefs.
+ *
  * Symmetry is strictly a VIEW-TIME transform: the stored stroke data keeps the
  * real (unmirrored) points so saved notes remain portable and export correctly.
  * The mirror is applied while rendering and, optionally, while capturing input.
@@ -13,7 +18,7 @@ enum class SymmetryMode(val label: String, val settingKey: String) {
     OFF("Off", "off"),
     VERTICAL("Vertical", "vertical"),
     HORIZONTAL("Horizontal", "horizontal"),
-    RADIAL("Radial", "radial");
+    RADIAL("Point", "radial");
 
     companion object {
         fun fromSettingKey(key: String?): SymmetryMode =

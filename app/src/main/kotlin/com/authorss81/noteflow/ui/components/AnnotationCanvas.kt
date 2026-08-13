@@ -319,6 +319,27 @@ fun AnnotationCanvas(
         return index.coerceIn(0, dynamicPageCount - 1)
     }
 
+    // Phase 07: single source of truth for the symmetry mirror axis. Input
+    // (eraser hit-testing) and every render branch must use the SAME center, so
+    // the mirrored copy can be erased in place and the axis stays on the page
+    // grid instead of the raw canvas area. Strokes are stored in world
+    // coordinates, [screenW] is the drawable canvas width and [worldY] anchors
+    // the per-page axis in divided/infinite mode.
+    fun symmetryCenterFor(screenW: Float, worldY: Float): Offset {
+        return when {
+            !isContinuousMode -> Offset(pageWidthPx / 2f, pageHeightPx / 2f)
+            !divideIntoPages -> {
+                val world = computeCanvasWorld(screenW)
+                Offset(world.first / 2f, world.second / 2f)
+            }
+            else -> {
+                val page = getPageFromCanvasY(worldY)
+                val top = calculatePageYOffset(page)
+                Offset(max(screenW, pageWidthPx) / 2f, top + pageHeightPx / 2f)
+            }
+        }
+    }
+
     // Color sampling helper for Eyedropper tool
     fun sampleColorAt(canvasOffset: Offset, targetPage: Int): Color {
         val rawBmp = activeRawBitmapMap[targetPage]
@@ -499,7 +520,21 @@ fun AnnotationCanvas(
             }
 
             // 3. Drawing / Eyedropper / Single-Finger Pan Gestures
-            .pointerInput(currentTool, currentColor, currentWidth, pdfPageFilter, isContinuousMode, activeRawBitmapMap, isLayerLocked) {
+            .pointerInput(currentTool, currentColor, currentWidth, pdfPageFilter, isContinuousMode, activeRawBitmapMap, isLayerLocked, symmetryMode, stabilizerEnabled) {
+                // Phase 07: with a view-time mirror active, erasing a stroke must
+                // also work through the mirrored copy — the user sees a mirrored
+                // stroke and expects to erase it in place. Uses the SAME axis as the
+                // renderer (symmetryCenterFor), so the hit-test and the visual
+                // mirror always agree.
+                val erasesStroke: (Stroke, Offset) -> Boolean = { stroke, offset ->
+                    if (symmetryMode == SymmetryMode.OFF) {
+                        strokeContainsPoint(stroke, offset)
+                    } else {
+                        val c = symmetryCenterFor(size.width.toFloat(), offset.y)
+                        val m = SymmetryHelper.mirrorPoint(offset.x, offset.y, symmetryMode, c.x, c.y)
+                        strokeContainsPoint(stroke, offset) || strokeContainsPoint(stroke, Offset(m.x, m.y))
+                    }
+                }
                 if (currentTool != StrokeTool.TEXT) {
                     detectDragGestures(
                         onDragStart = { offset ->
@@ -540,9 +575,9 @@ fun AnnotationCanvas(
 
                             activeTargetPage = targetPage
                             // Phase 07: fresh smoothing window + remapped pressure per stroke.
-                            if (stabilizerEnabled) {
-                                stabilizerFilter.reset()
-                            }
+                            // Reset unconditionally so stale smoothing state can never leak into a
+                            // new stroke if the toggle changed mid-stroke.
+                            stabilizerFilter.reset()
                             val startPressure = PressureCurveHelper.remapPressure(lastPressure, pressureCurve)
                             val startPoint = PointF(
                                 x = canvasOffset.x.coerceIn(0f, pageWidthPx),
@@ -557,7 +592,7 @@ fun AnnotationCanvas(
                                 sampledColorPreview = sampleColorAt(canvasOffset, targetPage)
                             } else if (currentTool == StrokeTool.ERASER) {
                                 val remaining = activeStrokeList.filterNot { stroke ->
-                                    strokeContainsPoint(stroke, canvasOffset)
+                                    erasesStroke(stroke, canvasOffset)
                                 }
                                 if (remaining.size != activeStrokeList.size) {
                                     activeStrokeList.clear()
@@ -611,7 +646,7 @@ fun AnnotationCanvas(
                             } else if (currentTool == StrokeTool.ERASER) {
                                 val canvasPosition = Offset(rawCanvasX, rawCanvasY)
                                 val remaining = activeStrokeList.filterNot { stroke ->
-                                    strokeContainsPoint(stroke, canvasPosition)
+                                    erasesStroke(stroke, canvasPosition)
                                 }
                                 if (remaining.size != activeStrokeList.size) {
                                     activeStrokeList.clear()
@@ -1135,8 +1170,8 @@ fun AnnotationCanvas(
                         wetBrushEngine = wetBrushEngine,
                         gpuWetBrushesEnabled = gpuWetBrushesEnabled,
                         symmetryMode = symmetryMode,
-                        symmetryCenterX = size.width / 2f,
-                        symmetryCenterY = size.height / 2f
+                        symmetryCenterX = symmetryCenterFor(size.width, 0f).x,
+                        symmetryCenterY = symmetryCenterFor(size.width, 0f).y
                     )
                 } else if (!divideIntoPages) {
                     // Continuous Infinite Canvas (Seamless, without page division gaps)
@@ -1185,8 +1220,8 @@ fun AnnotationCanvas(
                         wetBrushEngine = wetBrushEngine,
                         gpuWetBrushesEnabled = gpuWetBrushesEnabled,
                         symmetryMode = symmetryMode,
-                        symmetryCenterX = canvasW / 2f,
-                        symmetryCenterY = infiniteH / 2f
+                        symmetryCenterX = symmetryCenterFor(size.width, 0f).x,
+                        symmetryCenterY = symmetryCenterFor(size.width, 0f).y
                     )
                 } else {
                     // Continuous Infinite Canvas with Page Divisions & Page Break Badges
@@ -1280,8 +1315,8 @@ fun AnnotationCanvas(
                             wetBrushEngine = wetBrushEngine,
                             gpuWetBrushesEnabled = gpuWetBrushesEnabled,
                             symmetryMode = symmetryMode,
-                            symmetryCenterX = canvasW / 2f,
-                            symmetryCenterY = pageTopY + pageHeightPx / 2f
+                            symmetryCenterX = symmetryCenterFor(size.width, pageTopY).x,
+                            symmetryCenterY = symmetryCenterFor(size.width, pageTopY).y
                         )
                     }
                 }
@@ -1928,21 +1963,21 @@ private fun DrawScope.drawCompositedLayersStrokes(
     // committed strokes keep the real points so saved notes stay portable and
     // export correctly. TEXT strokes are never mirrored (text cannot sensibly
     // reflect).
-    fun DrawScope.drawStrokeWithSymmetry(stroke: Stroke, offsetY: Float, sMode: SymmetryMode) {
+    fun DrawScope.drawStrokeWithSymmetry(stroke: Stroke, offsetY: Float, sMode: SymmetryMode, centerX: Float = symmetryCenterX, centerY: Float = symmetryCenterY) {
         drawSingleStroke(stroke, offsetY, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer)
         if (sMode != SymmetryMode.OFF && stroke.tool != StrokeTool.TEXT) {
             drawSingleStroke(
                 stroke.copy(
                     points = stroke.points.map { p ->
-                        val m = SymmetryHelper.mirrorPoint(p.x, p.y, sMode, symmetryCenterX, symmetryCenterY)
+                        val m = SymmetryHelper.mirrorPoint(p.x, p.y, sMode, centerX, centerY)
                         p.copy(x = m.x, y = m.y)
                     },
                     start = stroke.start?.let { p ->
-                        val m = SymmetryHelper.mirrorPoint(p.x, p.y, sMode, symmetryCenterX, symmetryCenterY)
+                        val m = SymmetryHelper.mirrorPoint(p.x, p.y, sMode, centerX, centerY)
                         p.copy(x = m.x, y = m.y)
                     },
                     end = stroke.end?.let { p ->
-                        val m = SymmetryHelper.mirrorPoint(p.x, p.y, sMode, symmetryCenterX, symmetryCenterY)
+                        val m = SymmetryHelper.mirrorPoint(p.x, p.y, sMode, centerX, centerY)
                         p.copy(x = m.x, y = m.y)
                     }
                 ),
@@ -2020,13 +2055,16 @@ private fun DrawScope.drawCompositedLayersStrokes(
             continue
         }
 
-        val cacheKey = "${pageIdx}_${layer.id}"
+        val cacheKey = "${pageIdx}_${layer.id}_${symmetryMode}"
         val strokesHash = layerStrokes.hashCode()
 
-        // Symmetry is a view-time transform: the layer bitmap cache bakes in the
-        // untransformed points, so bypass the cache (and mirror live) while a
-        // symmetry mode is active.
-        if (layerBitmapCache != null && canvasDrawScope != null && density != null && layoutDirection != null && pageWidth > 0f && pageHeight > 0f && symmetryMode == SymmetryMode.OFF) {
+        // Phase 07: symmetry is a view-time transform, but it does NOT have to be
+        // a per-frame cost. The mirrored copy is baked into the layer bitmap and
+        // the key includes the symmetry mode, so a mode change invalidates it and
+        // the normal cached-blit path is restored. Only the live preview is
+        // mirrored per frame; this avoids re-vectorizing every layer every frame
+        // while a symmetry mode is active.
+        if (layerBitmapCache != null && canvasDrawScope != null && density != null && layoutDirection != null && pageWidth > 0f && pageHeight > 0f) {
             var cache = layerBitmapCache[cacheKey]
             val pw = pageWidth.toInt().coerceAtLeast(1)
             val ph = pageHeight.toInt().coerceAtLeast(1)
@@ -2047,7 +2085,9 @@ private fun DrawScope.drawCompositedLayersStrokes(
                     size = androidx.compose.ui.geometry.Size(pageWidth, pageHeight)
                 ) {
                     for (stroke in layerStrokes) {
-                        drawSingleStroke(stroke, offsetY - pageTopY, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer)
+                        // Cache-local center: the bitmap is page-local, so the mirror
+                        // axis must be shifted by the page offset too.
+                        drawStrokeWithSymmetry(stroke, offsetY - pageTopY, symmetryMode, symmetryCenterX, symmetryCenterY - pageTopY)
                     }
                 }
                 cache.hash = strokesHash
@@ -2065,7 +2105,7 @@ private fun DrawScope.drawCompositedLayersStrokes(
             )
             
             if (isPreviewOnThisLayer && previewStroke != null) {
-                drawSingleStroke(previewStroke, offsetY, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer)
+                drawStrokeWithSymmetry(previewStroke, offsetY, symmetryMode)
             }
         } else {
             val isNormal = layer.blendMode.equals("NORMAL", ignoreCase = true)

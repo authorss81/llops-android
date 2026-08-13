@@ -695,6 +695,9 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     fun deletePagePermanently(id: String) {
         viewModelScope.launch {
             repository.deletePagePermanently(id)
+            // Phase 07: drop the page's paper-texture pref so the orphan-file sweep
+            // in EditorScreen can reclaim the stored file too.
+            settings.setPaperTexturePathForPage(id, null)
             if (selectedPage.value?.id == id) {
                 _selectedPage.value = null
             }
