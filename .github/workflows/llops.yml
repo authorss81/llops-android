@@ -230,6 +230,7 @@ jobs:
 
       - name: Upload recovery patch (if push failed)
         if: always()
+        continue-on-error: true   # artifact quota failures must never fail the run
         uses: actions/upload-artifact@v4
         with:
           name: llops-recovery-${{ needs.select-phase.outputs.phase }}
