@@ -1048,6 +1048,51 @@ object ImportExportService {
     private const val MAX_BACKUP_INPUT_BYTES = 400L * 1024 * 1024 // hard cap before any decrypt/decompress
 
     /**
+     * C1: every column that carries DEK-based field ciphertext (i.e. every
+     * column the decrypt path reads on load). migrateFieldCiphertexts re-keys
+     * exactly these on a cross-device restore; missing one leaves that column
+     * under the old DEK and the decrypt fallback silently returns raw
+     * ciphertext — stroke geometry, titles and version text would all vanish.
+     */
+    internal val fieldEncryptedColumns: Map<String, List<String>> = mapOf(
+        "pages" to listOf("title", "extractedText"),
+        "strokes" to listOf("textContent", "pointsJson"),
+        "media_embeds" to listOf("textContent"),
+        "note_versions" to listOf("title", "extractedText")
+    )
+
+    /**
+     * C1: re-keys a single field-ciphertext value from the backup DEK to the
+     * current DEK. Returns null (leave the value alone) when the value is
+     * plaintext, blank, or already keyed with the new DEK.
+     */
+    internal fun reencryptFieldValue(value: String?, oldDek: ByteArray, newDek: ByteArray): String? {
+        if (value.isNullOrBlank()) return null
+        return try {
+            val plain = EncryptionService.decrypt(value, oldDek)
+            EncryptionService.encrypt(plain, newDek)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /**
+     * H3: rejects a backup whose SQLCipher schema (PRAGMA user_version) is newer
+     * than the app's Room schema. Older backups are allowed so Room migrations
+     * can run forward; a newer schema would later be destroyed by
+     * fallbackToDestructiveMigration. Checked BEFORE files are swapped.
+     */
+    internal fun checkRestoredSchemaNotNewer(userVersion: Long, currentSchemaVersion: Int) {
+        if (userVersion > currentSchemaVersion) {
+            throw IllegalStateException(
+                "Restore rejected: this backup was created by a newer version of the app " +
+                    "(database schema $userVersion, this app supports $currentSchemaVersion). " +
+                    "Update the app first, then restore."
+            )
+        }
+    }
+
+    /**
      * Backup format v2 (password-derived, portable):
      * [magic "NFLB2"][16B salt][12B iv][wrapped DEK (AES-GCM by KEK)][AES-GCM-encrypted zip payload]
      *
@@ -1106,13 +1151,14 @@ object ImportExportService {
                 kek.fill(0.toByte())
             }
         } else {
-            // Legacy format: plain zip, or zip encrypted with the device DEK.
-            var out = zipData
-            if (key != null) {
-                val encryptedBase64 = EncryptionService.encrypt(zipData, key)
-                out = encryptedBase64.toByteArray(Charsets.UTF_8)
+            // H4: a backup must never silently be a plain zip containing
+            // journal/voice/image files. It is either password-encrypted (v2
+            // NFLB2 above) or device-keyed (legacy) — no unencrypted fallback.
+            require(key != null) {
+                "Backup rejected: no encryption key is available and no backup password was provided. Unlock the vault before exporting."
             }
-            FileOutputStream(tempBackupFile).use { fos -> fos.write(out) }
+            val encryptedBase64 = EncryptionService.encrypt(zipData, key)
+            FileOutputStream(tempBackupFile).use { fos -> fos.write(encryptedBase64.toByteArray(Charsets.UTF_8)) }
         }
         tempBackupFile
     }
@@ -1188,6 +1234,43 @@ object ImportExportService {
             return BackupV2Payload(zipBytes, wrappedDek)
         } catch (e: Exception) {
             // File has the v2 magic but the password didn't unlock it.
+            throw IllegalArgumentException("Incorrect backup password.")
+        } finally {
+            kek?.fill(0.toByte())
+        }
+    }
+
+    /**
+     * H1: rejects a wrong backup password BEFORE the live vault is closed or
+     * touched. The wrapped DEK in the v2 header can only be opened with the
+     * correct password (GCM tag), so this is a cheap, side-effect-free check.
+     * Legacy backups carry no password and are skipped (they are validated by
+     * the device DEK inside importBackup).
+     */
+    fun validateBackupPassword(rawBytes: ByteArray, backupPassword: String?) {
+        val magic = BACKUP_MAGIC.toByteArray(Charsets.US_ASCII)
+        if (rawBytes.size <= magic.size) return
+        if (!rawBytes.copyOfRange(0, magic.size).contentEquals(magic)) return
+
+        if (backupPassword == null) {
+            throw IllegalStateException("This backup is protected by a password. Enter the backup password to restore.")
+        }
+        val headerSize = magic.size + BACKUP_SALT_SIZE + BACKUP_IV_SIZE + BACKUP_WRAPPED_DEK_SIZE
+        if (rawBytes.size <= headerSize) {
+            throw IllegalArgumentException("Backup appears corrupted: header is truncated.")
+        }
+        val salt = rawBytes.copyOfRange(magic.size, magic.size + BACKUP_SALT_SIZE)
+        val wrappedDek = rawBytes.copyOfRange(magic.size + BACKUP_SALT_SIZE + BACKUP_IV_SIZE, headerSize)
+        val wrappedB64 = try {
+            android.util.Base64.encodeToString(wrappedDek, android.util.Base64.NO_WRAP)
+        } catch (t: Throwable) {
+            java.util.Base64.getEncoder().encodeToString(wrappedDek)
+        }
+        var kek: ByteArray? = null
+        try {
+            kek = EncryptionService.deriveKey(backupPassword, salt)
+            EncryptionService.decrypt(wrappedB64, kek)
+        } catch (e: Exception) {
             throw IllegalArgumentException("Incorrect backup password.")
         } finally {
             kek?.fill(0.toByte())
@@ -1342,6 +1425,7 @@ object ImportExportService {
     private fun validateAndPrepareRestoredDb(context: Context, tempDb: File, backupDekHex: String?, currentDekHex: String?) {
         val candidates = listOfNotNull(backupDekHex, currentDekHex, "").distinct()
         var openedWith: String? = null
+        var userVersion: Long = -1L
         for (candidate in candidates) {
             try {
                 System.loadLibrary("sqlcipher")
@@ -1351,6 +1435,12 @@ object ImportExportService {
                 try {
                     val cursor = db.rawQuery("PRAGMA integrity_check", null)
                     val ok = cursor.moveToFirst() && cursor.getString(0) == "ok"
+                    if (ok) {
+                        // H3: read the schema version now, while the DB is open.
+                        val versionCursor = db.rawQuery("PRAGMA user_version", null)
+                        if (versionCursor.moveToFirst()) userVersion = versionCursor.getLong(0)
+                        versionCursor.close()
+                    }
                     cursor.close()
                     if (ok) { openedWith = candidate; break }
                 } finally {
@@ -1363,6 +1453,10 @@ object ImportExportService {
         if (openedWith == null) {
             throw IllegalStateException("Restore rejected: the backup database is corrupt or was created on a different device.")
         }
+        // H3: a newer-schema backup must never swap into the live path — a later
+        // fallbackToDestructiveMigration would wipe it. Kept OUTSIDE the candidate
+        // loop so the rejection is not swallowed as a wrong-key retry.
+        checkRestoredSchemaNotNewer(userVersion, com.authorss81.noteflow.data.db.NoteflowDatabase.SCHEMA_VERSION)
 
         if (currentDekHex != null && openedWith != currentDekHex) {
             rekeySqlcipherDb(context, tempDb, openedWith, currentDekHex)
@@ -1387,39 +1481,44 @@ object ImportExportService {
                 tempDb, newDekHex, null, null, null
             )
             try {
-                fun migrateTable(table: String, columns: List<String>) {
-                    for (column in columns) {
-                        val cursor = db.rawQuery("SELECT id, $column FROM $table", null)
-                        val idIdx = cursor.getColumnIndex("id")
-                        val colIdx = cursor.getColumnIndex(column)
-                        val updates = mutableListOf<Pair<String, String>>()
-                        while (cursor.moveToNext()) {
-                            val id = cursor.getString(idIdx)
-                            val value = cursor.getString(colIdx) ?: continue
-                            if (value.isBlank()) continue
-                            val reencrypted = try {
-                                val plain = EncryptionService.decrypt(value, oldDek)
-                                EncryptionService.encrypt(plain, newDek)
-                            } catch (e: Exception) {
-                                null // plaintext or already keyed with new DEK — leave alone
-                            }
-                            if (reencrypted != null) updates.add(id to reencrypted)
-                        }
-                        cursor.close()
-                        updates.forEach { (id, newValue) ->
-                            db.execSQL("UPDATE $table SET $column = ? WHERE id = ?", arrayOf(newValue, id))
-                        }
-                    }
+                // C1: iterate over ALL field-encrypted columns — including
+                // strokes.pointsJson and note_versions.{title,extractedText} —
+                // so cross-device restores never strand ciphertext under the
+                // old DEK (which the read path then returns raw, losing data).
+                for ((table, columns) in fieldEncryptedColumns) {
+                    migrateTable(db, table, columns, oldDek, newDek)
                 }
-                migrateTable("pages", listOf("title", "extractedText"))
-                migrateTable("strokes", listOf("textContent"))
-                migrateTable("media_embeds", listOf("textContent"))
             } finally {
                 db.close()
             }
         } finally {
             oldDek.fill(0.toByte())
             newDek.fill(0.toByte())
+        }
+    }
+
+    private fun migrateTable(
+        db: net.zetetic.database.sqlcipher.SQLiteDatabase,
+        table: String,
+        columns: List<String>,
+        oldDek: ByteArray,
+        newDek: ByteArray
+    ) {
+        for (column in columns) {
+            val cursor = db.rawQuery("SELECT id, $column FROM $table", null)
+            val idIdx = cursor.getColumnIndex("id")
+            val colIdx = cursor.getColumnIndex(column)
+            val updates = mutableListOf<Pair<String, String>>()
+            while (cursor.moveToNext()) {
+                val id = cursor.getString(idIdx)
+                val value = cursor.getString(colIdx)
+                val reencrypted = reencryptFieldValue(value, oldDek, newDek)
+                if (reencrypted != null) updates.add(id to reencrypted)
+            }
+            cursor.close()
+            updates.forEach { (id, newValue) ->
+                db.execSQL("UPDATE $table SET $column = ? WHERE id = ?", arrayOf(newValue, id))
+            }
         }
     }
 
