@@ -25,6 +25,7 @@ import com.authorss81.noteflow.data.model.MediaEmbedType
 import com.authorss81.noteflow.data.model.PointF
 import com.authorss81.noteflow.data.model.Stroke
 import com.authorss81.noteflow.data.model.StrokeTool
+import com.authorss81.noteflow.utils.BackupFileNamePolicy
 
 object ImportExportService {
 
@@ -1233,7 +1234,10 @@ object ImportExportService {
         val dbFile = context.getDatabasePath("noteflow.sqlite")
         val importsDir = getImportsDir(context)
 
-        val tempBackupFile = File(context.cacheDir, "noteflow_backup_${System.currentTimeMillis()}.noteflow")
+        // B2-CRYPTO-06 (phase-106): the temp name becomes the public Downloads
+        // name verbatim (HomeScreen copies it with cacheFile.name), so it must
+        // NOT carry epoch-millis — use the day-granular + random-token policy.
+        val tempBackupFile = File(context.cacheDir, BackupFileNamePolicy.localBackupFileName())
         val zipData: ByteArray = ByteArrayOutputStream().use { baos ->
             ZipOutputStream(baos).use { zos ->
                 if (dbFile.exists()) {

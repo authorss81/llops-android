@@ -7,6 +7,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import com.authorss81.noteflow.utils.BackupFileNamePolicy
 
 /**
  * WebDAV sync engine: uploads/downloads ENCRYPTED VAULT BACKUP FILES to/from
@@ -199,7 +200,11 @@ class WebDavSyncService(private val context: Context) {
             if (!prep.success) return@withContext prep
 
             val serverUrlClean = normalizeBaseUrl(config.serverUrl, config.allowInsecureHttp)
-            val remoteFileName = "noteflow_vault_backup_${System.currentTimeMillis()}.nfb"
+            // B2-CRYPTO-06 (phase-106): the remote filename is visible to any
+            // party who can list the WebDAV folder — never embed epoch-millis.
+            // Day-granular + random token (prefix/suffix kept so the download
+            // listing regex `noteflow_vault_backup_[^<]+\.nfb` still matches).
+            val remoteFileName = BackupFileNamePolicy.remoteVaultBackupFileName()
             val targetUrl = "$serverUrlClean${config.remoteFolderName}/$remoteFileName"
 
             val conn = createConnection(targetUrl, config, "PUT")
