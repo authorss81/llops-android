@@ -652,6 +652,141 @@ interface ShapeFromInkPlugin {
     fun convertToShape(rawStroke: com.authorss81.noteflow.data.model.Stroke): ShapeFromInkOutcome
 }
 
+// ---------------------------------------------------------------------------
+// Phase 26 — lightweight compile-time plugin serving interfaces.
+// Pure-JVM cores + thin keyless-HTTP platform slices. Each plugin is a few KB
+// in the base APK (safe under the hybrid model — see docs/plugin-architecture.md).
+// ---------------------------------------------------------------------------
+
+/** One definition entry for a looked-up word (part of speech + definition). */
+data class DictionaryDefinition(
+    val partOfSpeech: String?,
+    val definition: String
+)
+
+/** Outcome of a dictionary lookup. [source] states where the result came from. */
+data class DictionaryLookup(
+    val word: String,
+    val phonetic: String?,
+    val definitions: List<DictionaryDefinition>,
+    /** "online" (dictionaryapi.dev) or "offline" (bundled word list). */
+    val source: String
+)
+
+/** Outcome of a dictionary request. */
+sealed class DictionaryOutcome {
+    data class Success(val lookup: DictionaryLookup) : DictionaryOutcome()
+    /** The word was not found online or offline; [message] is user-facing. */
+    data class NotFound(val message: String) : DictionaryOutcome()
+    /** The request failed; [message] is a validated, user-facing reason. */
+    data class Error(val message: String) : DictionaryOutcome()
+}
+
+/**
+ * Serving interface for the [PluginCapability.Dictionary] capability.
+ *
+ * Keyless [dictionaryapi.dev] JSON with an honest OFFLINE fallback to a small
+ * bundled word list, so a lookup genuinely works without a network (the result
+ * is labelled with its source). Network runs on `Dispatchers.IO` and is strictly
+ * user-initiated. Never throws into the caller.
+ */
+interface DictionaryPlugin {
+    suspend fun lookupWord(word: String): DictionaryOutcome
+}
+
+/** A single weather forecast period (daily minimum/maximum + conditions). */
+data class WeatherSnapshot(
+    val date: String,
+    val city: String,
+    val tempMinC: Double,
+    val tempMaxC: Double,
+    val weatherCode: Int,
+    val weatherDescription: String,
+    val windSpeedKmh: Double,
+    /** When false, [date]/conditions were derived from the fixed default city. */
+    val sourceNote: String
+)
+
+/** Outcome of a weather request. */
+sealed class WeatherOutcome {
+    data class Success(val snapshot: WeatherSnapshot) : WeatherOutcome()
+    /** The forecast could not be fetched; [message] is user-facing. */
+    data class Error(val message: String) : WeatherOutcome()
+}
+
+/**
+ * Serving interface for the [PluginCapability.Weather] capability.
+ *
+ * Keyless [Open-Meteo] forecast (no GPS, no API key). The location is the
+ * fixed default city or coarse lat/lon from the plugin's namespaced settings —
+ * NEVER the device's location. Network runs on `Dispatchers.IO` and is strictly
+ * user-initiated; offline yields a clear [WeatherOutcome.Error].
+ */
+interface WeatherPlugin {
+    suspend fun currentWeather(): WeatherOutcome
+}
+
+/** Outcome of a unit-conversion request. */
+sealed class UnitConversionOutcome {
+    /** [text] is the human-readable result, e.g. "2 km = 1.2427 mi". */
+    data class Success(val text: String) : UnitConversionOutcome()
+    /** The query could not be parsed/converted; [message] is user-facing. */
+    data class Error(val message: String) : UnitConversionOutcome()
+}
+
+/**
+ * Serving interface for the [PluginCapability.UnitConversion] capability.
+ *
+ * PURE JVM, fully offline, zero dependencies: "2 km to mi" → "2 km = 1.2427 mi".
+ * Supports length, mass, temperature and basic (fixed reference-rate) currency
+ * conversion. The conversion matrix lives in the plugin package and is unit-tested.
+ */
+interface UnitConverterPlugin {
+    fun convert(query: String): UnitConversionOutcome
+}
+
+/** The two structural styles the outline generator can produce. */
+enum class OutlineStyle { OUTLINE, CHECKLIST }
+
+/** Outcome of an outline/checklist generation request. */
+sealed class OutlineOutcome {
+    /** [text] is the generated Markdown (headings, nested bullets or checkboxes). */
+    data class Success(val text: String) : OutlineOutcome()
+    /** The input had nothing to structure; [message] is user-facing. */
+    data class Error(val message: String) : OutlineOutcome()
+}
+
+/**
+ * Serving interface for the [PluginCapability.OutlineGenerator] capability.
+ *
+ * PURE Kotlin: from the current selection/note it produces a structured outline
+ * or a checkbox checklist. Grouping/indent logic is pure-JVM unit-tested.
+ */
+interface OutlineGeneratorPlugin {
+    fun generateOutline(text: String, style: OutlineStyle): OutlineOutcome
+}
+
+/** Outcome of a citation-formatting request. */
+sealed class CitationOutcome {
+    /** [markdown] is the clean `[title](url)` link; [titleFetched] tells how. */
+    data class Success(val markdown: String, val titleFetched: Boolean) : CitationOutcome()
+    /** The input was unusable; [message] is user-facing. */
+    data class Error(val message: String) : CitationOutcome()
+}
+
+/**
+ * Serving interface for the [PluginCapability.CitationFormatter] capability.
+ *
+ * Formats a pasted URL (and optional title) into a clean Markdown
+ * `[title](url)` link. When no title is supplied the plugin fetches the page's
+ * `<title>` over HTTPS and, on any network failure, honestly falls back to a
+ * host-derived label (never silently wrong). Network runs on `Dispatchers.IO`,
+ * strictly user-initiated.
+ */
+interface CitationPlugin {
+    suspend fun formatCitation(url: String, title: String?): CitationOutcome
+}
+
 /**
  * Serving interface for the [PluginCapability.ScreenshotNote] capability.
  *

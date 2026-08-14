@@ -81,13 +81,29 @@ sealed class PluginCapability(
     /** Convert a freehand ink stroke into a clean geometric shape on demand. Non-exclusive (Phase 25). */
     data object ShapeFromInk : PluginCapability("shape_from_ink", "Ink to Shape")
 
+    /** Word definitions (online API + bundled offline fallback). Non-exclusive (Phase 26). */
+    data object Dictionary : PluginCapability("dictionary", "Dictionary")
+
+    /** Dated weather snapshot (keyless Open-Meteo, no GPS). Non-exclusive (Phase 26). */
+    data object Weather : PluginCapability("weather", "Weather")
+
+    /** Inline unit conversion ("2 km to mi"). Non-exclusive (Phase 26). */
+    data object UnitConversion : PluginCapability("unit_conversion", "Unit Converter")
+
+    /** Generate an outline or checkbox list from selected text. Non-exclusive (Phase 26). */
+    data object OutlineGenerator : PluginCapability("outline_generator", "Outline & Checklist")
+
+    /** Format a pasted URL/title into a Markdown `[title](url)` link. Non-exclusive (Phase 26). */
+    data object CitationFormatter : PluginCapability("citation_formatter", "Citation Formatter")
+
     companion object {
         // LAZY: referencing the data-object instances during class-init would
         // capture nulls (their INSTANCE fields are set later in <clinit>).
         private val allCapabilities: List<PluginCapability> by lazy { listOf(
             TextTransform, OCR, WebSearch, FileTransfer, Assistant, Export,
             TextTools, LanguageDetection, WebCapture, ClipShare, Dictation,
-            ReadAloud, Translation, ScreenshotNote, ShapeFromInk
+            ReadAloud, Translation, ScreenshotNote, ShapeFromInk,
+            Dictionary, Weather, UnitConversion, OutlineGenerator, CitationFormatter
         ) }
 
         /** Every known capability, for stable key↔object resolution (Phase 22). */

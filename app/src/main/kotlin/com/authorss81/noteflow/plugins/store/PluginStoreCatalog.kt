@@ -102,8 +102,11 @@ class PluginStoreCatalog(
         return when (primary) {
             PluginCapability.OCR, PluginCapability.ScreenshotNote -> "Vision"
             PluginCapability.TextTransform, PluginCapability.TextTools,
-            PluginCapability.LanguageDetection -> "Text"
-            PluginCapability.WebSearch, PluginCapability.WebCapture -> "Web"
+            PluginCapability.LanguageDetection,
+            PluginCapability.OutlineGenerator, PluginCapability.UnitConversion -> "Text"
+            PluginCapability.WebSearch, PluginCapability.WebCapture,
+            PluginCapability.Weather, PluginCapability.CitationFormatter -> "Web"
+            PluginCapability.Dictionary -> "Reference"
             PluginCapability.Export -> "Export"
             PluginCapability.ClipShare -> "Import"
             PluginCapability.Dictation, PluginCapability.ReadAloud -> "Voice"

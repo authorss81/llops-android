@@ -3,17 +3,22 @@ package com.authorss81.noteflow.plugins
 import android.content.Context
 import android.os.Build
 import com.authorss81.noteflow.plugins.assistant.OnDeviceAssistantPlugin
+import com.authorss81.noteflow.plugins.citation.CitationFormatterPluginImpl
 import com.authorss81.noteflow.plugins.clipshare.ClipToInkFlowPlugin
+import com.authorss81.noteflow.plugins.dictionary.DictionaryPluginImpl
 import com.authorss81.noteflow.plugins.dictation.OnDeviceDictationPlugin
 import com.authorss81.noteflow.plugins.export.ExportEnginePlugin
 import com.authorss81.noteflow.plugins.inktos.InkToShapePlugin
 import com.authorss81.noteflow.plugins.langdetect.LanguageDetectionEngine
 import com.authorss81.noteflow.plugins.ocr.OnDeviceOcrPlugin
+import com.authorss81.noteflow.plugins.outline.OutlineGeneratorPluginImpl
 import com.authorss81.noteflow.plugins.readaloud.OnDeviceReadAloudPlugin
 import com.authorss81.noteflow.plugins.screenshot.ScreenshotNotePluginImpl
 import com.authorss81.noteflow.plugins.store.PluginInstallStore
 import com.authorss81.noteflow.plugins.texttools.TextToolsEngine
 import com.authorss81.noteflow.plugins.translation.OnDeviceTranslationPlugin
+import com.authorss81.noteflow.plugins.unitconverter.UnitConverterPluginImpl
+import com.authorss81.noteflow.plugins.weather.WeatherPluginImpl
 import com.authorss81.noteflow.plugins.webcapture.WebCaptureEngine
 import com.authorss81.noteflow.plugins.websearch.DuckDuckGoWebSearchPlugin
 
@@ -772,7 +777,14 @@ class PluginRegistry(
             ScreenshotNotePluginImpl(),
             // Phase 25: free, compile-time InkStroke→Shape plugin — pure geometry,
             // ~KB, no native deps (safe in the base APK under the hybrid model).
-            InkToShapePlugin()
+            InkToShapePlugin(),
+            // Phase 26: lightweight compile-time plugin pack — pure-JVM cores +
+            // tiny keyless-HTTP clients (a few KB). No ML, no native code.
+            DictionaryPluginImpl(),
+            WeatherPluginImpl(),
+            UnitConverterPluginImpl(),
+            OutlineGeneratorPluginImpl(),
+            CitationFormatterPluginImpl()
         )
     }
 }

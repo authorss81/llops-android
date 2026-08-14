@@ -27,6 +27,21 @@ import com.authorss81.noteflow.plugins.OcrPlugin
 import com.authorss81.noteflow.plugins.PluginCapability
 import com.authorss81.noteflow.plugins.PluginDiagnostics
 import com.authorss81.noteflow.plugins.PluginEnableResult
+import com.authorss81.noteflow.plugins.CitationOutcome
+import com.authorss81.noteflow.plugins.CitationPlugin
+import com.authorss81.noteflow.plugins.DictionaryOutcome
+import com.authorss81.noteflow.plugins.DictionaryPlugin
+import com.authorss81.noteflow.plugins.OutlineGeneratorPlugin
+import com.authorss81.noteflow.plugins.OutlineOutcome
+import com.authorss81.noteflow.plugins.OutlineStyle
+import com.authorss81.noteflow.plugins.UnitConversionOutcome
+import com.authorss81.noteflow.plugins.UnitConverterPlugin
+import com.authorss81.noteflow.plugins.WebCaptureOutcome
+import com.authorss81.noteflow.plugins.WebCapturePlugin
+import com.authorss81.noteflow.plugins.WebSearchOutcome
+import com.authorss81.noteflow.plugins.WebSearchPlugin
+import com.authorss81.noteflow.plugins.WeatherOutcome
+import com.authorss81.noteflow.plugins.WeatherPlugin
 import com.authorss81.noteflow.plugins.PluginLifecycleState
 import com.authorss81.noteflow.plugins.PluginManager
 import com.authorss81.noteflow.plugins.PluginRegistry
@@ -45,10 +60,6 @@ import com.authorss81.noteflow.plugins.TranslationModelStatus
 import com.authorss81.noteflow.plugins.TranslationOutcome
 import com.authorss81.noteflow.plugins.TranslationPlugin
 import com.authorss81.noteflow.plugins.TtsChunk
-import com.authorss81.noteflow.plugins.WebCaptureOutcome
-import com.authorss81.noteflow.plugins.WebCapturePlugin
-import com.authorss81.noteflow.plugins.WebSearchOutcome
-import com.authorss81.noteflow.plugins.WebSearchPlugin
 import com.authorss81.noteflow.services.DatabaseSecurityHelper
 import com.authorss81.noteflow.services.EncryptionService
 import com.authorss81.noteflow.services.ImportExportService
@@ -603,6 +614,69 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
             val capturer = plugin as? WebCapturePlugin
                 ?: throw IllegalStateException("${plugin.name} does not implement WebCapturePlugin")
             capturer.captureWebPage(appContext, url)
+        }
+
+    /**
+     * Phase 26 (Dictionary): route a word lookup through the plugin manager. The
+     * plugin tries the keyless dictionaryapi.dev over HTTPS on `Dispatchers.IO`
+     * and honestly falls back to its bundled offline word list (the result is
+     * labelled with its source) — a lookup genuinely works offline.
+     */
+    suspend fun lookupDictionaryWord(word: String): PluginResult<DictionaryOutcome> =
+        pluginManager.withPluginAsync(PluginCapability.Dictionary, appContext) { plugin ->
+            val dictionary = plugin as? DictionaryPlugin
+                ?: throw IllegalStateException("${plugin.name} does not implement DictionaryPlugin")
+            dictionary.lookupWord(word.trim())
+        }
+
+    /**
+     * Phase 26 (Weather): route a dated weather snapshot through the plugin
+     * manager. The plugin calls the keyless Open-Meteo API on `Dispatchers.IO`
+     * (no GPS — location comes from the plugin's settings/default city) and
+     * returns a typed [WeatherOutcome]; offline surfaces a clear error.
+     */
+    suspend fun fetchWeatherSnapshot(): PluginResult<WeatherOutcome> =
+        pluginManager.withPluginAsync(PluginCapability.Weather, appContext) { plugin ->
+            val weather = plugin as? WeatherPlugin
+                ?: throw IllegalStateException("${plugin.name} does not implement WeatherPlugin")
+            weather.currentWeather()
+        }
+
+    /**
+     * Phase 26 (Unit Converter): route an inline conversion query ("2 km to mi")
+     * through the plugin manager. PURE JVM, fully offline — runs on the
+     * framework's background dispatcher and can never block the UI.
+     */
+    suspend fun convertUnits(query: String): PluginResult<UnitConversionOutcome> =
+        pluginManager.withPluginAsync(PluginCapability.UnitConversion, appContext) { plugin ->
+            val converter = plugin as? UnitConverterPlugin
+                ?: throw IllegalStateException("${plugin.name} does not implement UnitConverterPlugin")
+            converter.convert(query)
+        }
+
+    /**
+     * Phase 26 (Outline & Checklist): route an outline/checklist generation
+     * request through the plugin manager. PURE JVM — runs on the framework's
+     * background dispatcher. The result is previewed in the UI before insertion.
+     */
+    suspend fun generateOutline(text: String, style: OutlineStyle): PluginResult<OutlineOutcome> =
+        pluginManager.withPluginAsync(PluginCapability.OutlineGenerator, appContext) { plugin ->
+            val generator = plugin as? OutlineGeneratorPlugin
+                ?: throw IllegalStateException("${plugin.name} does not implement OutlineGeneratorPlugin")
+            generator.generateOutline(text, style)
+        }
+
+    /**
+     * Phase 26 (Citation Formatter): route a URL → `[title](url)` formatting
+     * request through the plugin manager. The plugin fetches the page `<title>`
+     * over HTTPS on `Dispatchers.IO` (strictly user-initiated) and honestly
+     * falls back to a host-derived label on any failure.
+     */
+    suspend fun formatCitation(url: String, title: String?): PluginResult<CitationOutcome> =
+        pluginManager.withPluginAsync(PluginCapability.CitationFormatter, appContext) { plugin ->
+            val formatter = plugin as? CitationPlugin
+                ?: throw IllegalStateException("${plugin.name} does not implement CitationPlugin")
+            formatter.formatCitation(url, title)
         }
 
     /**

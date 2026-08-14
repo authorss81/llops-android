@@ -31,11 +31,21 @@ import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.Functions
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.Translate
+import androidx.compose.material.icons.outlined.Book
+import androidx.compose.material.icons.outlined.Calculate
+import androidx.compose.material.icons.outlined.Link
+import androidx.compose.material.icons.outlined.ListAlt
+import androidx.compose.material.icons.outlined.WbSunny
 import com.authorss81.noteflow.plugins.NoteflowPlugin
 import com.authorss81.noteflow.plugins.PluginCapability
 import com.authorss81.noteflow.plugins.PluginResult
 import com.authorss81.noteflow.ui.components.VersionHistoryBottomSheet
 import com.authorss81.noteflow.ui.components.WebSearchDialog
+import com.authorss81.noteflow.ui.components.DictionaryDialog
+import com.authorss81.noteflow.ui.components.WeatherDialog
+import com.authorss81.noteflow.ui.components.UnitConverterDialog
+import com.authorss81.noteflow.ui.components.OutlineGeneratorDialog
+import com.authorss81.noteflow.ui.components.CitationFormatterDialog
 import kotlinx.coroutines.launch
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -173,6 +183,12 @@ fun MarkdownPreviewScreen(
     var showTranslation by remember { mutableStateOf(false) }
     var pendingTransformPlugin by remember { mutableStateOf<NoteflowPlugin?>(null) }
     val transformScope = rememberCoroutineScope()
+    // Phase 26 — lightweight compile-time plugins.
+    var showDictionary by remember { mutableStateOf(false) }
+    var showWeather by remember { mutableStateOf(false) }
+    var showUnitConverter by remember { mutableStateOf(false) }
+    var showOutline by remember { mutableStateOf(false) }
+    var showCitation by remember { mutableStateOf(false) }
 
     val primaryColor = MaterialTheme.colorScheme.primary
     val configuration = androidx.compose.ui.platform.LocalConfiguration.current
@@ -391,6 +407,85 @@ fun MarkdownPreviewScreen(
                                         onClick = {
                                             showPluginMenu = false
                                             showTranslation = true
+                                        }
+                                    )
+                                }
+                            }
+                            // Phase 26 — lightweight compile-time plugins (dictionary,
+                            // weather, unit converter, outline & checklist, citation).
+                            val dictionaryPlugins = viewModel.pluginRegistry.pluginsForCapability(PluginCapability.Dictionary)
+                            if (dictionaryPlugins.isNotEmpty()) {
+                                HorizontalDivider()
+                                dictionaryPlugins.forEach { plugin ->
+                                    val runnable = viewModel.isPluginUsable(plugin.id)
+                                    DropdownMenuItem(
+                                        text = { Text(if (runnable) "Look up a word…" else "Dictionary (off)") },
+                                        leadingIcon = { Icon(Icons.Outlined.Book, contentDescription = null) },
+                                        enabled = runnable,
+                                        onClick = {
+                                            showPluginMenu = false
+                                            showDictionary = true
+                                        }
+                                    )
+                                }
+                            }
+                            val weatherPlugins = viewModel.pluginRegistry.pluginsForCapability(PluginCapability.Weather)
+                            if (weatherPlugins.isNotEmpty()) {
+                                weatherPlugins.forEach { plugin ->
+                                    val runnable = viewModel.isPluginUsable(plugin.id)
+                                    DropdownMenuItem(
+                                        text = { Text(if (runnable) "Weather snapshot…" else "Weather (off)") },
+                                        leadingIcon = { Icon(Icons.Outlined.WbSunny, contentDescription = null) },
+                                        enabled = runnable,
+                                        onClick = {
+                                            showPluginMenu = false
+                                            flushSave()
+                                            showWeather = true
+                                        }
+                                    )
+                                }
+                            }
+                            val unitConverterPlugins = viewModel.pluginRegistry.pluginsForCapability(PluginCapability.UnitConversion)
+                            if (unitConverterPlugins.isNotEmpty()) {
+                                unitConverterPlugins.forEach { plugin ->
+                                    val runnable = viewModel.isPluginUsable(plugin.id)
+                                    DropdownMenuItem(
+                                        text = { Text(if (runnable) "Unit Converter…" else "Unit Converter (off)") },
+                                        leadingIcon = { Icon(Icons.Outlined.Calculate, contentDescription = null) },
+                                        enabled = runnable,
+                                        onClick = {
+                                            showPluginMenu = false
+                                            showUnitConverter = true
+                                        }
+                                    )
+                                }
+                            }
+                            val outlinePlugins = viewModel.pluginRegistry.pluginsForCapability(PluginCapability.OutlineGenerator)
+                            if (outlinePlugins.isNotEmpty()) {
+                                outlinePlugins.forEach { plugin ->
+                                    val runnable = viewModel.isPluginUsable(plugin.id)
+                                    DropdownMenuItem(
+                                        text = { Text(if (runnable) "Outline / checklist…" else "Outline & Checklist (off)") },
+                                        leadingIcon = { Icon(Icons.Outlined.ListAlt, contentDescription = null) },
+                                        enabled = runnable,
+                                        onClick = {
+                                            showPluginMenu = false
+                                            showOutline = true
+                                        }
+                                    )
+                                }
+                            }
+                            val citationPlugins = viewModel.pluginRegistry.pluginsForCapability(PluginCapability.CitationFormatter)
+                            if (citationPlugins.isNotEmpty()) {
+                                citationPlugins.forEach { plugin ->
+                                    val runnable = viewModel.isPluginUsable(plugin.id)
+                                    DropdownMenuItem(
+                                        text = { Text(if (runnable) "Cite a URL…" else "Citation Formatter (off)") },
+                                        leadingIcon = { Icon(Icons.Outlined.Link, contentDescription = null) },
+                                        enabled = runnable,
+                                        onClick = {
+                                            showPluginMenu = false
+                                            showCitation = true
                                         }
                                     )
                                 }
@@ -715,6 +810,68 @@ fun MarkdownPreviewScreen(
                         viewModel.showSnackbar("Note replaced with translation")
                     },
                     onDismiss = { showTranslation = false }
+                )
+            }
+
+            // Phase 26 — lightweight compile-time plugin dialogs.
+            if (showDictionary) {
+                DictionaryDialog(
+                    viewModel = viewModel,
+                    onInsert = { text ->
+                        contentText = if (contentText.isBlank()) text else contentText.trimEnd() + "\n\n$text\n"
+                        flushSave()
+                        viewModel.showSnackbar("Definition inserted into note")
+                    },
+                    onDismiss = { showDictionary = false }
+                )
+            }
+
+            if (showWeather) {
+                WeatherDialog(
+                    viewModel = viewModel,
+                    onInsert = { text ->
+                        contentText = if (contentText.isBlank()) text else contentText.trimEnd() + "\n\n$text\n"
+                        flushSave()
+                        viewModel.showSnackbar("Weather snapshot inserted into note")
+                    },
+                    onDismiss = { showWeather = false }
+                )
+            }
+
+            if (showUnitConverter) {
+                UnitConverterDialog(
+                    viewModel = viewModel,
+                    onInsert = { text ->
+                        contentText = if (contentText.isBlank()) text else contentText.trimEnd() + "\n\n$text\n"
+                        flushSave()
+                        viewModel.showSnackbar("Conversion inserted into note")
+                    },
+                    onDismiss = { showUnitConverter = false }
+                )
+            }
+
+            if (showOutline) {
+                OutlineGeneratorDialog(
+                    viewModel = viewModel,
+                    sourceText = contentText,
+                    onInsert = { text ->
+                        contentText = contentText.trimEnd() + "\n\n$text"
+                        flushSave()
+                        viewModel.showSnackbar("Outline inserted into note")
+                    },
+                    onDismiss = { showOutline = false }
+                )
+            }
+
+            if (showCitation) {
+                CitationFormatterDialog(
+                    viewModel = viewModel,
+                    onInsert = { link ->
+                        contentText = if (contentText.isBlank()) link else contentText.trimEnd() + "\n\n$link\n"
+                        flushSave()
+                        viewModel.showSnackbar("Citation inserted into note")
+                    },
+                    onDismiss = { showCitation = false }
                 )
             }
         }
