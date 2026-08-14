@@ -58,6 +58,7 @@ Everything lives in `com.authorss81.noteflow.plugins`:
 | `translation/…` | Translation (Phase 16) — ML Kit `translate` (keyless, API 26+) + pure `TranslationCatalog` (28 targets, source auto-detection via Lingua). Serves `Translation` (exclusive). |
 | `assistant/…` | On-Device Assistant (Phase 16) — MediaPipe `tasks-genai` (Qwen2-0.5B GGUF, user-downloaded) + pure `AssistantPrompts`/`AssistantStoragePolicy` + `AssistantModelDownloader`. Serves `Assistant` (exclusive). |
 | `store/…` | The Plugin Store (Phase 21) — `PluginInstallStore`, `PluginStoreCatalog`, `PluginStoreController` (bundled-definition install/uninstall lifecycle; no network catalog, no APK loading). |
+| `runtime/…` | The hybrid-architecture seams (Phase 22) — `PluginEntry` (unified catalog entry for bundled + remote), `PluginVersion`, `PluginEntryStore` (+codec), `PluginContext` (deny-by-default capability facade), `PluginRuntime` (+`PluginRuntimeRegistry`, honest `NotYetImplemented` stubs for Phases 23/24). See `docs/plugin-architecture.md`. |
 | `CaseChangePlugin.kt` | The store's OPTIONAL plugin (Phase 21) — UPPER/lower/Title Case TextTransform; NOT in `defaultPlugins()`, downloaded from the store. |
 | `screenshot/…` | Screenshot→Note (Phase 16) — reuses the existing annotated-page renderer + persist + OCR route; pure `ScreenshotFlowPlanner`. Serves `ScreenshotNote`. |
 
@@ -421,6 +422,14 @@ State machine per catalog entry: `Not downloaded → Download → REGISTERED (of
 → Enable → ENABLED/AVAILABLE → Disable → DISABLED (data kept) → … → Delete →
 Not downloaded (wiped)`.
 
+**Phase 22 unified the catalog.** Every store row now wraps the single
+[`PluginEntry`](plugin-architecture.md) type (`plugins/runtime/PluginEntry.kt`)
+that covers bundled AND remote plugins, and the store UI labels each entry
+**bundled** (compiled into the APK) or **remote** (downloadable + signature-verified,
+Phase 23) alongside its version. The catalog merges any persisted remote entries
+from `PluginEntryStore` automatically. See `docs/plugin-architecture.md` for the
+full hybrid design (state machine, facade, update model, security).
+
 Where the pieces live:
 
 | File | Purpose |
@@ -480,21 +489,31 @@ export routing, disabled-skip).
 
 ## Design rules (non-negotiable)
 
+- **Hybrid model — see `docs/plugin-architecture.md`.** The catalog has exactly ONE
+  entry type, `PluginEntry` (`plugins/runtime/`), covering BOTH buckets; the store
+  rows label each as **bundled** or **remote**. Everything below follows from that.
 - **Base-APK size is a first-class constraint.** Heavy/native features (camera
   OCR/QR, large ML engines, the local LLM) are NOT baked into the base APK — they
   ship as **downloadable, signature-verified plugins** fetched over HTTPS only on
-  explicit user consent (Phase 23 runtime: download → pinned-cert verify → load).
+  explicit user consent. The Phase-23 runtime (download → pinned-cert-hash + sha256
+  verify → `DexClassLoader`) plugs into the `PluginRuntime` seams
+  (`plugins/runtime/PluginRuntime.kt`, currently honest `NotYetImplemented` stubs).
   Lightweight pure-JVM / small-keyless-HTTP plugins ship compile-time because they
   cost a few KB. Never add a large native dependency to the base app.
 - **Compile-time registration for built-ins.** The `defaultPlugins()` list is the
   API for compile-time plugins. No `ServiceLoader` surprises. The Plugin Store
-  today installs bundled *definitions*; the Phase-23 runtime adds verified
-  downloadable DEX for heavy features (downloadable code never receives direct
-  DB/keystore/decrypted-content handles — only a whitelisted capability facade).
+  installs bundled *definitions* today; the Phase-23 runtime adds verified
+  downloadable DEX for heavy features. Downloadable code NEVER receives direct
+  DB/keystore/`EncryptionService`/decrypted-content handles — only the whitelisted
+  `PluginContext` capability facade (`plugins/runtime/PluginContext.kt`, deny-by-default
+  until Phase 23 grants per-capability calls).
 - **Delete ≠ disable.** Disable keeps data (re-enableable); Delete wipes opt-in,
   ever-enabled history and all `plugins.<id>.*` settings, deletes downloaded
-  assets, and removes the plugin from the registry until re-download (which
-  starts fresh, off).
+  assets AND the persisted entry blob (`plugin_entry_<id>`), and removes the plugin
+  from the registry until re-download (which starts fresh, off).
+- **Verify before any load; re-verify on every load.** A remote artifact must pass
+  its pinned cert + SHA-256 checks before ANY load and again on EVERY load. Tamper
+  is a hard failure, never a partial load.
 - **No new third-party dependencies** in the framework package.
 - **Opt-in by default.** `SettingsManager.isPluginEnabled` defaults to `false`.
 - **Derived state is never stale.** `resolve()` recomputes availability, deps and
@@ -514,3 +533,5 @@ export routing, disabled-skip).
   persistence, routing, disabled-skip, unavailable-capability failure,
   once-per-process `onEnable`, dependency/conflict arbitration, manifest
   validation, error isolation, settings namespacing, and the plugin's output.
+  Phase 22 adds the runtime-seam suites (`PluginVersionTest`, `PluginEntryStoreTest`,
+  `PluginContextFacadeTest`, `PluginRuntimeSeamTest`).

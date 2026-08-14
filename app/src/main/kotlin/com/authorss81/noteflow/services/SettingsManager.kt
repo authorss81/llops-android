@@ -237,18 +237,43 @@ class SettingsManager(context: Context) {
     }
 
     // Phase 21: COMPLETE removal of a plugin's persisted state. Removes the
-    // opt-in flag, the ever-enabled flag, the uninstalled flag and every
-    // namespaced `plugins.<id>.*` setting. Used by the store's Delete action
-    // (delete = gone + settings wiped; disable = off but re-enableable).
+    // opt-in flag, the ever-enabled flag, the uninstalled flag, the persisted
+    // catalog entry blob and every namespaced `plugins.<id>.*` setting. Used by
+    // the store's Delete action (delete = gone + settings wiped; disable = off
+    // but re-enableable).
     fun wipePluginState(pluginId: String) {
         val prefix = "plugins.$pluginId."
         val keys = prefs.all.keys.filter { key ->
             key == "plugin_enabled_$pluginId" ||
                 key == "plugin_ever_enabled_$pluginId" ||
                 key == "plugin_uninstalled_$pluginId" ||
+                key == "plugin_entry_$pluginId" ||
                 key.startsWith(prefix)
         }
         prefs.edit().apply { keys.forEach { remove(it) } }.apply()
+    }
+
+    // Phase 22: persisted unified catalog-entry blobs (downloadable/remote plugin
+    // definitions). A plugin's catalog entry survives process restarts with its
+    // downloadUrl / sha256 / pinnedCertHash / updateChannel intact; Delete
+    // removes it via wipePluginState above. Bundled entries are never persisted
+    // here (they are derived from the compile-time registry).
+    fun getPluginEntryJson(pluginId: String): String? =
+        prefs.getString("plugin_entry_$pluginId", null)
+
+    fun setPluginEntryJson(pluginId: String, json: String?) {
+        prefs.edit().apply {
+            if (json == null) remove("plugin_entry_$pluginId") else putString("plugin_entry_$pluginId", json)
+        }.apply()
+    }
+
+    /** The ids of every persisted plugin-entry blob (for enumeration). */
+    fun allPluginEntryIds(): Set<String> {
+        val out = mutableSetOf<String>()
+        prefs.all.keys.forEach { key ->
+            if (key.startsWith("plugin_entry_")) out.add(key.removePrefix("plugin_entry_"))
+        }
+        return out
     }
 
     // Phase 11: per-plugin namespaced settings. Every key lives under

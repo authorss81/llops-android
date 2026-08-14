@@ -17,6 +17,11 @@
     @com.google.gson.annotations.SerializedName <fields>;
 }
 
+# Phase 22: Gson reflection over the plugin-entry wire DTO. The internal
+# PluginEntryCodec$PluginEntryDto fields are read/written reflectively with no
+# @SerializedName annotations, so R8 must not rename/remove them in release.
+-keep class com.authorss81.noteflow.plugins.runtime.PluginEntryCodec$PluginEntryDto { *; }
+
 # Coroutines rules are handled automatically by kotlinx-coroutines-core R8 rules
 
 # MediaPipe tasks-genai (on-device LLM) references protobuf classes that R8

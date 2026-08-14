@@ -55,8 +55,11 @@ import com.authorss81.noteflow.services.SettingsManager
 import com.authorss81.noteflow.services.SettingsPluginEnableStore
 import com.authorss81.noteflow.services.SettingsPluginInstallStore
 import com.authorss81.noteflow.services.SettingsPluginSettingsStore
+import com.authorss81.noteflow.plugins.runtime.PluginRuntime
+import com.authorss81.noteflow.plugins.runtime.PluginRuntimeRegistry
 import com.authorss81.noteflow.plugins.store.PluginStoreCatalog
 import com.authorss81.noteflow.plugins.store.PluginStoreController
+import com.authorss81.noteflow.services.SettingsPluginEntryStore
 import com.authorss81.noteflow.theme.AppThemeMode
 import com.authorss81.noteflow.ui.components.WorkspaceTemplate
 import com.authorss81.noteflow.plugins.AndroidPluginLogger
@@ -99,8 +102,13 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     val pluginDiagnostics = PluginDiagnostics(pluginRegistry, pluginManager)
 
     // Phase 21: plugin store — bundled catalog + install/uninstall lifecycle.
-    val pluginStoreCatalog = PluginStoreCatalog(pluginRegistry)
+    // Phase 22: the catalog also merges persisted REMOTE (downloadable) entries
+    // from the unified PluginEntryStore (seam for Phase 23/24 downloadable
+    // plugins); the PluginRuntime is the stub seam registered by later phases.
+    private val pluginEntryStore = SettingsPluginEntryStore(settings)
+    val pluginStoreCatalog = PluginStoreCatalog(pluginRegistry, pluginEntryStore)
     val pluginStoreController = PluginStoreController(pluginRegistry, pluginStoreCatalog, AndroidPluginLogger())
+    val pluginRuntime: PluginRuntime = PluginRuntimeRegistry.current()
 
     init {
         // Fire onEnable once per process for plugins already enabled in a

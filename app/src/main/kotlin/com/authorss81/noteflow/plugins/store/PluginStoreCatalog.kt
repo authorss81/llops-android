@@ -5,69 +5,94 @@ import com.authorss81.noteflow.plugins.NoteflowPlugin
 import com.authorss81.noteflow.plugins.PluginCapability
 import com.authorss81.noteflow.plugins.PluginPermission
 import com.authorss81.noteflow.plugins.PluginRegistry
-import com.authorss81.noteflow.plugins.SemanticVersion
+import com.authorss81.noteflow.plugins.runtime.PluginEntry
+import com.authorss81.noteflow.plugins.runtime.PluginEntrySource
+import com.authorss81.noteflow.plugins.runtime.PluginEntryStore
+import com.authorss81.noteflow.plugins.runtime.PluginVersion
 
 /**
- * One entry in the plugin store's catalog — the user-facing definition of a
- * downloadable/installable plugin.
+ * One row the plugin store renders — the unified catalog [PluginEntry]
+ * (Phase 22: bundled + downloadable covered by ONE type) plus the store's own
+ * OPTIONAL flag.
  *
- * Phase 21 honesty: EVERY entry is bundled in the APK (compile-time rule — the
- * store never loads runtime bytecode). `bundled = true` for all. `optional`
- * marks the definitions that are NOT installed by default: they ship in the
- * catalog as "Not downloaded" and only become part of the active registry after
- * the user taps Download.
+ * All familiar accessors delegate to [entry] so existing callers (UI, tests,
+ * controller) keep working unchanged. `bundled`/`sourceLabel` mark the entry
+ * as **bundled** (compiled into the APK) vs **remote** (downloadable,
+ * signature-verified — Phase 23+).
  */
 data class PluginStoreEntry(
-    val pluginId: String,
-    val name: String,
-    val description: String,
-    val version: SemanticVersion,
-    val capabilities: Set<PluginCapability>,
-    val category: String,
-    val bundled: Boolean,
-    val optional: Boolean,
-    /** Size of heavy model assets installed on download (assistant), else null. */
-    val installSizeBytes: Long?,
-    val permissions: Set<PluginPermission>
-)
+    val entry: PluginEntry,
+    val optional: Boolean
+) {
+    val pluginId: String get() = entry.id
+    val name: String get() = entry.name
+    val description: String get() = entry.description
+    val version: PluginVersion get() = entry.version
+    val capabilities: Set<PluginCapability> get() = entry.capabilities
+    val category: String get() = entry.category
+    val permissions: Set<PluginPermission> get() = entry.permissions
+    val installSizeBytes: Long? get() = entry.installSizeBytes
+    val bundled: Boolean get() = entry.isBundled
+    val updateChannel: String get() = entry.updateChannel
+    val downloadUrl: String? get() = entry.downloadUrl
+
+    /** Store marker: "bundled" (compiled-in) vs "remote" (downloadable). */
+    val sourceLabel: String get() = entry.source.label
+}
 
 /**
- * The bundled plugin catalog (Phase 21).
+ * The plugin catalog (Phase 21, extended Phase 22).
  *
- * Built from the registry's COMPLETE compiled set — every built-in plugin PLUS
- * every optional store-only definition (compiled in the APK via the registry's
- * `optionalPluginFactories`). A real network catalog is intentionally NOT used:
- * every definition ships in the APK, so the store degrades gracefully offline
- * by construction and "Download" is an honest install of the bundled definition
- * — see [PluginStoreController]. Because entries come from a single source
- * ([PluginRegistry.compiledPlugins], which de-duplicates by id), an optional
- * plugin is listed exactly once whether installed or not.
+ * Bundled entries are built from the registry's COMPLETE compiled set — every
+ * built-in plugin PLUS every optional store-only definition — so the store
+ * degrades gracefully offline by construction and "Download" of a bundled entry
+ * is an honest install of a compiled definition (see [PluginStoreController]).
+ *
+ * Phase 22: the catalog ALSO merges any persisted REMOTE (downloadable) entries
+ * from the [PluginEntryStore]. Today no remote entries are seeded (Phase 23/24
+ * add them), so every row is "bundled"; when a future phase saves a remote
+ * entry the store automatically lists it with its downloadUrl/sha256/
+ * pinnedCertHash and a "remote" marker — no catalog redesign needed.
  */
 class PluginStoreCatalog(
-    registry: PluginRegistry
+    registry: PluginRegistry,
+    private val entryStore: PluginEntryStore? = null
 ) {
 
-    private val entries: List<PluginStoreEntry> = registry.compiledPlugins.map { p ->
+    private val bundledEntries: List<PluginStoreEntry> = registry.compiledPlugins.map { p ->
         PluginStoreEntry(
-            pluginId = p.id,
-            name = p.name,
-            description = p.description,
-            version = p.version,
-            capabilities = p.capabilities,
-            category = categoryFor(p.capabilities),
-            bundled = true,
-            optional = !registry.isBuiltIn(p.id),
-            installSizeBytes = sizeBytesFor(p),
-            permissions = p.manifest.permissions
+            entry = PluginEntry(
+                id = p.id,
+                name = p.name,
+                description = p.description,
+                version = PluginVersion.from(p.version),
+                capabilities = p.capabilities,
+                category = categoryFor(p.capabilities),
+                permissions = p.manifest.permissions,
+                downloadUrl = null,
+                installSizeBytes = sizeBytesFor(p),
+                updateChannel = PluginEntry.DEFAULT_CHANNEL,
+                sha256 = null,
+                pinnedCertHash = null,
+                source = PluginEntrySource.BUNDLED
+            ),
+            optional = !registry.isBuiltIn(p.id)
         )
     }
 
-    /** Every catalog entry (bundled definitions, installed or not). */
-    fun entries(): List<PluginStoreEntry> = entries
+    private val bundledIds: Set<String> = bundledEntries.map { it.pluginId }.toSet()
+
+    /** Every catalog entry — bundled definitions first, then persisted remote entries. */
+    fun entries(): List<PluginStoreEntry> {
+        val remotes = entryStore?.all().orEmpty()
+            .filter { it.isDownloadable && it.id !in bundledIds }
+            .map { PluginStoreEntry(entry = it, optional = false) }
+        return bundledEntries + remotes
+    }
 
     /** The catalog entry for [pluginId], or null when unknown. */
     fun entryFor(pluginId: String): PluginStoreEntry? =
-        entries.firstOrNull { it.pluginId == pluginId }
+        entries().firstOrNull { it.pluginId == pluginId }
 
     private fun sizeBytesFor(plugin: NoteflowPlugin): Long? =
         (plugin as? AssistantPlugin)?.expectedModelSizeBytes()

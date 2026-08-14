@@ -45,6 +45,18 @@ sealed class PluginPermission(val key: String, val label: String) {
 
     /** Microphone access — only used while the user is actively dictating. */
     data object RecordAudio : PluginPermission("record_audio", "Microphone (while dictating)")
+
+    companion object {
+        // LAZY: referencing the data-object instances during class-init would
+        // capture nulls (their INSTANCE fields are set later in <clinit>).
+        private val allPermissions: List<PluginPermission> by lazy { listOf(Internet, RecordAudio) }
+
+        /** Every known permission, for stable key↔object resolution (Phase 22). */
+        val ALL: List<PluginPermission> get() = allPermissions
+
+        /** The canonical permission for [key], or null when unknown. */
+        fun byKey(key: String): PluginPermission? = allPermissions.firstOrNull { it.key == key }
+    }
 }
 
 /**

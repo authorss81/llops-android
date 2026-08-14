@@ -124,6 +124,7 @@ fun PluginStoreDialog(
                                             buildString {
                                                 append("v${entry.version}")
                                                 append("  ·  ${entry.category}")
+                                                append("  ·  ${entry.sourceLabel}")
                                                 append("  ·  " + entry.capabilities.joinToString(", ") { it.label })
                                                 if (entry.permissions.isNotEmpty()) {
                                                     append("  ·  " + entry.permissions.joinToString(", ") { it.label })
