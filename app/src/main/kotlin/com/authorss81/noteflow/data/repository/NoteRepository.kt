@@ -6,6 +6,7 @@ import com.authorss81.noteflow.data.model.*
 import com.authorss81.noteflow.services.DatabaseSecurityHelper
 import com.authorss81.noteflow.services.EncryptionService
 import com.authorss81.noteflow.services.VaultKeyHolder
+import com.authorss81.noteflow.services.WikiLinkParser
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOn
@@ -53,6 +54,10 @@ class NoteRepository(private var db: NoteflowDatabase) {
             searchCorpusGeneration++
             cachedSearchCorpus = null
         }
+        // B2-DOS-11: the WikiLink/tag builders must not serve a scan from a previous
+        // unlock epoch — this hook fires on lock, key replacement and every page
+        // mutation, which is exactly the "per unlock epoch" cache boundary.
+        WikiLinkParser.invalidateCaches()
     }
 
     private suspend fun loadSearchCorpus(): List<NotePageEntity> {

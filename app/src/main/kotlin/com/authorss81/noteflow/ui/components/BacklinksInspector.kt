@@ -14,7 +14,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.authorss81.noteflow.data.model.NotePageEntity
@@ -34,7 +33,6 @@ fun BacklinksInspectorBottomSheet(
     onOpenPage: (NotePageEntity) -> Unit,
     onDismiss: () -> Unit
 ) {
-    val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
     var explicitLinks by remember { mutableStateOf<List<BacklinkMatch>>(emptyList()) }
@@ -45,11 +43,15 @@ fun BacklinksInspectorBottomSheet(
         activePage.title.replace(".md", "").replace(".txt", "").trim()
     }
 
-    fun refreshBacklinks() {
+    fun refreshBacklinks(forceRefresh: Boolean = false) {
         scope.launch {
             isLoading = true
             val allPages = viewModel.repository.getAllActivePages()
-            val (linked, unlinked) = WikiLinkParser.findBacklinks(activePage, allPages, context)
+            // B2-DOS-11: findBacklinks caches per unlock epoch + caps the scanned
+            // set; the rememberCoroutineScope teardown cancels the build when the
+            // bottom sheet closes. forceRefresh=true bypasses the cache after an
+            // in-place file edit (convert-to-[[WikiLink]]).
+            val (linked, unlinked) = WikiLinkParser.findBacklinks(activePage, allPages, forceRefresh)
             explicitLinks = linked
             unlinkedMentions = unlinked
             isLoading = false
@@ -230,7 +232,10 @@ fun BacklinksInspectorBottomSheet(
                                                         }
                                                     }
                                                     viewModel.showSnackbar("Converted to [[WikiLink]]!")
-                                                    refreshBacklinks()
+                                                    // Direct file edit bypasses the repository, so drop the stale cached
+                                                    // full-text for that page before forcing a fresh scan.
+                                                    WikiLinkParser.invalidateTextCache(match.page.id)
+                                                    refreshBacklinks(forceRefresh = true)
                                                 }
                                             }
                                         }

@@ -18,7 +18,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.authorss81.noteflow.data.model.NotePageEntity
@@ -33,7 +32,6 @@ fun TagExplorerView(
     onSelectTagFilter: (tagPath: String?, matchingPageIds: Set<String>?) -> Unit,
     activeTagFilter: String?
 ) {
-    val context = LocalContext.current
     var tagHierarchy by remember { mutableStateOf<List<TagNode>>(emptyList()) }
     var allActivePages by remember { mutableStateOf<List<NotePageEntity>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
@@ -45,7 +43,9 @@ fun TagExplorerView(
             isLoading = true
             val pages = viewModel.repository.getAllActivePages()
             allActivePages = pages
-            tagHierarchy = WikiLinkParser.buildTagHierarchy(pages, context)
+            // B2-DOS-11: cached per unlock epoch + capped scan set; the LaunchEffect
+            // teardown cancels the build when the panel closes.
+            tagHierarchy = WikiLinkParser.buildTagHierarchy(pages)
             isLoading = false
         }
     }

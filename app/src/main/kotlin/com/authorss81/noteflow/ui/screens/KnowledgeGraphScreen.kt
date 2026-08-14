@@ -21,7 +21,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
@@ -60,7 +59,6 @@ fun KnowledgeGraphScreen(
 ) {
     BackHandler(onBack = onBack)
 
-    val context = LocalContext.current
     var searchQuery by remember { mutableStateOf("") }
 
     var allPages by remember { mutableStateOf<List<NotePageEntity>>(emptyList()) }
@@ -78,29 +76,15 @@ fun KnowledgeGraphScreen(
     val errorColor = MaterialTheme.colorScheme.error
     val tertiaryColor = MaterialTheme.colorScheme.tertiary
 
-    // Fetch all active pages and compute graph nodes & edges
+    // B2-DOS-11: the edge scan runs via WikiLinkParser.buildWikiLinkEdges — cached
+    // per unlock epoch, scan-set capped, on Dispatchers.Default, and cancelled when
+    // this LaunchedEffect leaves composition (the panel closes).
     LaunchedEffect(Unit) {
         val active = viewModel.repository.getAllActivePages()
         allPages = active
 
-        val newEdges = withContext(Dispatchers.IO) {
-            val edgeList = mutableListOf<GraphEdge>()
-
-            for (page in active) {
-                val text = WikiLinkParser.getFullTextForPage(context, page)
-                val wikiLinks = WikiLinkParser.extractWikiLinks(text)
-                for (link in wikiLinks) {
-                    val targetPage = active.find {
-                        it.title.equals(link.targetTitle, ignoreCase = true) ||
-                        it.title.replace(".md", "").equals(link.targetTitle, ignoreCase = true)
-                    }
-                    if (targetPage != null && targetPage.id != page.id) {
-                        edgeList.add(GraphEdge(page.id, targetPage.id))
-                    }
-                }
-            }
-            edgeList.distinct()
-        }
+        val newEdges =
+            WikiLinkParser.buildWikiLinkEdges(active).map { GraphEdge(it.sourcePageId, it.targetPageId) }
         edges = newEdges
 
         // Initialize node positions in an orbital circle layout
