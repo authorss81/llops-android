@@ -26,6 +26,7 @@ import kotlin.math.min
 import kotlin.math.sin
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -275,6 +276,14 @@ class InkToShapePluginTest {
         assertEquals(InkToShapeGeometry.ShapeType.ARROW, d!!.type)
     }
 
+    @Test
+    fun `long arrow converts to ARROW not LINE`() {
+        val d = InkToShapeGeometry.detect(arrowStroke(600f, angleDegrees = 0f))
+        assertEquals(InkToShapeGeometry.ShapeType.ARROW, d!!.type)
+        assertTrue(d!!.endDirectionChangeDegrees > 10f)
+        assertEquals(5, d.points.size)
+    }
+
     // ---- 1b. wrong-shaped strokes must NOT convert ------------------------
 
     @Test
@@ -355,7 +364,12 @@ class InkToShapePluginTest {
         // keepOriginal on → the raw stroke is KEPT and the shape inserted alongside.
         reg.settingsFor(InkToShapePlugin.ID).setBoolean(InkToShapePlugin.SETTING_KEEP_ORIGINAL, true)
         reg.notifyConfigChanged(InkToShapePlugin.ID)
-        assertFalse(convert().replaceOriginal)
+        val kept = convert()
+        assertFalse(kept.replaceOriginal)
+        // The snapped shape must carry a NEW id — reusing the raw stroke's id
+        // would collide on the strokes table primary key and drop one of them
+        // on save (NoteRepository.saveStrokesForPage upserts by id).
+        assertNotEquals(lineStroke.id, kept.snappedStroke.id)
 
         // Back off → replace again.
         reg.settingsFor(InkToShapePlugin.ID).setBoolean(InkToShapePlugin.SETTING_KEEP_ORIGINAL, false)

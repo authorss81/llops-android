@@ -47,7 +47,7 @@ points, per-shape quality metrics) or `null`. Detection order + **thresholds**:
 | LINE | `straightness = directDistance/pathLength` > 0.82 AND perpendicular deviation < 0.10 × span. 2-point strokes accepted. |
 | RECTANGLE (incl. rounded-rect) | closed loop (`direct < 0.28 × boundingDiag`), perimeter-fit ratio ≥ 0.72, corner-coverage ≥ 2, margin = `max(5, 0.06×diag)`. Checked BEFORE ellipse so a traced square stays a square. Snaps to the exact bounding-box corners (5 points, closed). |
 | ELLIPSE | closed loop, ≥ 10 pts, ellipse-equation fit deviation < 0.35, circularity ≥ 0.30. Circle vs ellipse distanced by the circularity ratio; snaps to a 37-point ellipse. |
-| ARROW | ≥ 8 pts, straightness in 0.55–0.82, perpendicular deviation < 0.12 × span, final-segment direction change ≥ 10° (the head vee). |
+| ARROW | ≥ 8 pts, straightness in 0.55–0.95 (checked BEFORE line so long arrows whose head adds little to path length still convert), perpendicular deviation < 0.12 × span, final-segment direction change ≥ 10° (the head vee). |
 
 Anything that fits none of these honestly returns `null` → `NotAShape`; the raw
 stroke is **never** mutated or faked into a shape (no fake conversion). Tiny
@@ -79,14 +79,15 @@ specks (< 15 px bounding diagonal) are ignored.
   plugin is AVAILABLE; when off it reads **"Unavailable — enable Ink to Shape in
   Plugins"** and the button is disabled. "Keep original stroke" toggle.
 - **Results**: `Success` → Snackbar "Converted ink to <kind>", stroke history
-  replaced/kept per the toggle; `NotAShape` → honest "didn't look like a shape";
-  `Failure`/`Unavailable` → the plugin's reason, never a silent no-op.
+  replaced/kept per the toggle; `NotAShape` → honest message ("No clean shape
+  detected — the stroke is too rough or not a line, circle, rectangle or
+  arrow."); `Failure`/`Unavailable` → the plugin's reason, never a silent no-op.
 - **Undo**: implemented through the existing `handleStrokesChange(updated)`,
   which pushes the previous `strokes` onto the undo stack — a conversion is one
   undo away (equal for keep-original mode). No new history machinery, no silent
   data loss.
 
-## 5. Tests — `InkToShapePluginTest.kt` (24 pure-JVM tests)
+## 5. Tests — `InkToShapePluginTest.kt` (25 pure-JVM tests)
 
 - **Detection accuracy** on synthetic point sets: straight line (incl. 2 points),
   slightly-wavy (→ NotAShape), closed circle (→ ELLIPSE, circularity > 0.8,
@@ -127,13 +128,8 @@ heavy/native features stay downloadable, see `docs/plugin-architecture.md`).
 
 ## 8. Definition-of-done check
 
-- `gradle testDebugUnitTest --tests InkToShapePluginTest` — 24 tests pass. Full
-  suite: 487/488 pass. The single failure is **pre-existing and unrelated**:
-  `PluginUpdateEngineTest` "a hash mismatch on the downloaded artifact is never
-  applied" also fails on the untouched baseline (`c16d2ea`, verified by stashing
-  all Phase-25 changes) — a Phase-24 assertion that expects the hash-mismatch
-  failure message to contain "signature verification"; flagged for the Phase-27
-  bug-fix queue, not a regression from this phase.
+- `gradle testDebugUnitTest --tests InkToShapePluginTest` — 25 tests pass. Full
+  suite: **489/489 pass, 0 failures** (verified at commit `00d9b35`, clean tree).
 - `gradle assembleDebug` — BUILD SUCCESSFUL.
 - "Convert to shape" wires end-to-end through the capability interface for all
   four shape kinds, respects enable/disable (button + "enable in Plugins" hint),

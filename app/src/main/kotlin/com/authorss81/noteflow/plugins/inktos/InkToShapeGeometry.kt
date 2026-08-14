@@ -109,7 +109,51 @@ object InkToShapeGeometry {
         val directDistance = dist(start, end)
         val straightness = directDistance / max(1f, pathLength)
 
-        // 1. Straight line — direct distance ≈ path length AND the path hugs
+        // 1. Arrow — a straight shaft PLUS an explicit direction change at the
+        //    end (the head vee). Checked BEFORE the plain-line test so LONG
+        //    arrows (whose head adds little to path length → straightness can
+        //    exceed the LINE threshold of 0.82) are still recognized as arrows.
+        //    The upper band (0.95, not 0.82) lets arrows up to ~2m of canvas
+        //    space convert; genuinely straight lines (straightness ≈ 1.0) and
+        //    gentle wavy strokes (> 0.95) are excluded by the band and fall
+        //    through to the LINE gate.
+        if (points.size >= 8 &&
+            straightness in 0.55f..0.95f &&
+            perpendicularDeviation(points, start, end) / max(1f, directDistance) < 0.12f
+        ) {
+            val headDegrees = endDirectionChangeDegrees(points, start, end)
+            if (headDegrees >= 10f) {
+                val angle = atan2(end.y - start.y, end.x - start.x)
+                // 24px head height, ±30° vee — must match the canvas renderer's
+                // ARROW tool head (AnnotationCanvas draw-case), so the stored
+                // snapped geometry is pixel-identical to what gets drawn.
+                val headLength = 24f
+                val headAngle = PI.toFloat() / 6f // 30 degrees
+
+                val p1x = end.x - headLength * cos(angle - headAngle)
+                val p1y = end.y - headLength * sin(angle - headAngle)
+                val p2x = end.x - headLength * cos(angle + headAngle)
+                val p2y = end.y - headLength * sin(angle + headAngle)
+
+                val arrowPts = listOf(
+                    InkPoint(start.x, start.y),
+                    InkPoint(end.x, end.y),
+                    InkPoint(p1x, p1y),
+                    InkPoint(end.x, end.y),
+                    InkPoint(p2x, p2y)
+                )
+                return DetectedShape(
+                    type = ShapeType.ARROW,
+                    points = arrowPts,
+                    start = start,
+                    end = end,
+                    straightness = straightness,
+                    endDirectionChangeDegrees = headDegrees
+                )
+            }
+        }
+
+        // 2. Straight line — direct distance ≈ path length AND the path hugs
         //    the start→end line (a wavy mark that retraces itself can't sneak in).
         if (straightness > snapThreshold &&
             perpendicularDeviation(points, start, end) / max(1f, directDistance) < 0.10f
@@ -126,7 +170,7 @@ object InkToShapeGeometry {
         val isClosedLoop = directDistance < boundingDiag * 0.28f
 
         if (isClosedLoop && points.size >= 6) {
-            // 2. Rectangle / rounded-rect — check BEFORE the ellipse so a traced
+            // 3. Rectangle / rounded-rect — check BEFORE the ellipse so a traced
             //    square (which also fits an ellipse) is a rectangle, not a circle.
             if (points.size >= 8) {
                 val margin = max(5f, boundingDiag * 0.06f)
@@ -182,42 +226,6 @@ object InkToShapeGeometry {
                         straightness = straightness
                     )
                 }
-            }
-        }
-
-        // 4. Arrow — straight shaft whose arrowhead adds enough path length to
-        //    fall BELOW the LINE threshold, low overall deviation, AND an explicit
-        //    direction change at the end (the head vee).
-        if (points.size >= 8 &&
-            straightness in 0.55f..0.82f &&
-            perpendicularDeviation(points, start, end) / max(1f, directDistance) < 0.12f
-        ) {
-            val headDegrees = endDirectionChangeDegrees(points, start, end)
-            if (headDegrees >= 10f) {
-                val angle = atan2(end.y - start.y, end.x - start.x)
-                val headLength = min(35f, max(15f, directDistance * 0.2f))
-                val headAngle = PI.toFloat() / 6f // 30 degrees
-
-                val p1x = end.x - headLength * cos(angle - headAngle)
-                val p1y = end.y - headLength * sin(angle - headAngle)
-                val p2x = end.x - headLength * cos(angle + headAngle)
-                val p2y = end.y - headLength * sin(angle + headAngle)
-
-                val arrowPts = listOf(
-                    InkPoint(start.x, start.y),
-                    InkPoint(end.x, end.y),
-                    InkPoint(p1x, p1y),
-                    InkPoint(end.x, end.y),
-                    InkPoint(p2x, p2y)
-                )
-                return DetectedShape(
-                    type = ShapeType.ARROW,
-                    points = arrowPts,
-                    start = start,
-                    end = end,
-                    straightness = straightness,
-                    endDirectionChangeDegrees = headDegrees
-                )
             }
         }
 

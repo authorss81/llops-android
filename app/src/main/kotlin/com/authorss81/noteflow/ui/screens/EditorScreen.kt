@@ -146,6 +146,10 @@ fun EditorScreen(
                 .getBoolean(InkToShapePlugin.SETTING_KEEP_ORIGINAL, false)
         )
     }
+    // Stroke ids already converted to a shape this session (Phase 25). Guards
+    // against re-converting the same raw stroke in keep-original mode, where it
+    // remains in the stroke list after conversion.
+    val convertedStrokeIds = remember { mutableStateListOf<String>() }
     com.authorss81.noteflow.utils.JankStatsHelper.MonitorJank("EditorScreen")
     // 22.9: tactile feedback for high-value affordances (skipped when the user
     // has reduce-motion/remove-animations enabled system-wide).
@@ -765,16 +769,24 @@ fun EditorScreen(
     // background dispatcher; the result is a normal undoable canvas operation
     // (handleStrokesChange pushes the pre-state onto the undo stack), and a
     // non-shape stroke is rejected honestly with no fake conversion.
+    // `convertedStrokeIds` guards against re-converting a stroke that already
+    // became a shape (in keep-original mode the raw stroke stays in the list,
+    // so a second tap would otherwise duplicate the shape).
     fun convertLatestStrokeToShape() {
         val freehand = strokes.lastOrNull { it.tool.isFreehandTool }
         if (freehand == null) {
             viewModel.showSnackbar("No freehand stroke to convert — draw a line, circle, rectangle or arrow first")
             return
         }
+        if (freehand.id in convertedStrokeIds) {
+            viewModel.showSnackbar("That stroke was already converted to a shape — draw a new one to convert it")
+            return
+        }
         scope.launch {
             when (val result = viewModel.convertStrokeToShape(freehand)) {
                 is PluginResult.Success -> when (val outcome = result.value) {
                     is ShapeFromInkOutcome.Success -> {
+                        convertedStrokeIds += freehand.id
                         val updated = if (outcome.replaceOriginal) {
                             strokes.map { if (it.id == freehand.id) outcome.snappedStroke else it }
                         } else {

@@ -416,7 +416,7 @@ user-triggered action.
   | **LINE** | straightness > 0.82 AND perpendicular deviation < 10% of the span (2-point strokes accepted) |
   | **RECTANGLE** (incl. rounded) | closed loop, perimeter fit ≥ 0.72, corner coverage ≥ 2, margin = `max(5px, 6% of diagonal)` — checked BEFORE ellipse so a traced square stays a square |
   | **ELLIPSE** | closed loop, ≥ 10 points, ellipse-equation fit deviation < 0.35, circularity ≥ 0.30 (circle vs ellipse distanced by circularity) |
-  | **ARROW** | ≥ 8 points, straightness in 0.55–0.82, perpendicular deviation < 12%, final-segment direction change ≥ 10° (the head vee) |
+  | **ARROW** | ≥ 8 points, straightness in 0.55–0.95 (checked BEFORE the line gate so long arrows — whose head adds little to path length — still convert), perpendicular deviation < 12%, final-segment direction change ≥ 10° (the head vee). Snapped head geometry matches the canvas's own 24px / 30° arrowhead render. |
 
   Anything that fits none of these honestly returns `NotAShape` — the stroke is
   **never** mutated or faked into a shape.
@@ -438,12 +438,13 @@ user-triggered action.
   Shape Auto-Snap toggle): a **Convert to Shape** button (only enabled when the
   plugin is opted in; otherwise it shows "Unavailable — enable Ink to Shape in
   Plugins") and the "Keep original stroke" toggle. Conversion shows a Snackbar
-  naming the detected shape; non-shapes show an honest "didn't look like a shape"
-  message.
+  naming the detected shape; non-shapes show an honest message ("No clean shape
+  detected — the stroke is too rough or not a line, circle, rectangle or arrow.")
+  and the raw stroke is left untouched.
 - **Size:** the whole plugin is a few KB of Kotlin — it stays **compile-time**
   (base APK), consistent with the "lightweight pure-JVM stays bundled" rule in
   `docs/plugin-architecture.md`.
-- **Tests:** `InkToShapePluginTest` (24 tests) — synthetic straight/wavy/closed
+- **Tests:** `InkToShapePluginTest` (25 tests) — synthetic straight/wavy/closed
   ellipse/rect/rounded-rect/arrow/zigzag/triangle/blob point sets, correct-shape
   detection, wrong-shape rejection, plugin conversion, the keep-original toggle,
   capability routing (`NO_PLUGIN_INSTALLED` / `NONE_ENABLED` / `AVAILABLE`) and

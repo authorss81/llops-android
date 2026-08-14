@@ -129,12 +129,14 @@ crisp geometric shape **on explicit user command** — it is orthogonal to the
 canvas's built-in draw-end auto-snap (`ShapeRecognitionHelper.trySnapShape`),
 which must not be bypassed or duplicated by the plugin.
 
-A plugin that serves it implements the `ShapeFromInkPlugin` serving interface:
+A plugin that serves it implements the `ShapeFromInkPlugin` serving interface
+(declared in `plugins/NoteflowPlugin.kt` — it is a plain interface, not a
+`NoteflowPlugin` subtype; implement it on a class that ALSO implements
+`NoteflowPlugin`, like the reference plugin does):
 
 ```kotlin
-interface ShapeFromInkPlugin : NoteflowPlugin {
-    val supportsKeepOriginal: Boolean get() = true
-    fun convertToShape(stroke: Stroke): ShapeFromInkOutcome
+interface ShapeFromInkPlugin {
+    fun convertToShape(rawStroke: Stroke): ShapeFromInkOutcome
 }
 ```
 
@@ -162,7 +164,7 @@ Contract:
   surface as unavailable (`NO_PLUGIN_INSTALLED` / `NONE_ENABLED` /
   `Unavailable`) — never a silent no-op on the Convert button.
 - Reference implementation: `plugins/inktos/InkToShapePlugin` +
-  `plugins/inktos/InkToShapeGeometry` (pure JVM, 24 unit tests).
+  `plugins/inktos/InkToShapeGeometry` (pure JVM, 25 unit tests).
 
 ---
 

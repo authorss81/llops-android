@@ -2,6 +2,7 @@ package com.authorss81.noteflow.plugins.inktos
 
 import android.content.Context
 import com.authorss81.noteflow.data.model.PointF
+import java.util.UUID
 import com.authorss81.noteflow.data.model.Stroke
 import com.authorss81.noteflow.data.model.StrokeTool
 import com.authorss81.noteflow.plugins.NoteflowPlugin
@@ -82,9 +83,14 @@ class InkToShapePlugin : NoteflowPlugin, ShapeFromInkPlugin {
 
         val snapped = buildStroke(rawStroke, detected)
         val keepOriginal = keepOriginal()
+        // keep-original mode: the raw stroke stays in the list, so the snapped
+        // shape MUST carry a fresh id — reusing rawStroke.id would collide on
+        // the strokes table primary key and silently drop one of them on save
+        // (NoteRepository.saveStrokesForPage upserts by id).
+        val snappedStroke = if (keepOriginal) snapped.copy(id = UUID.randomUUID().toString()) else snapped
         return ShapeFromInkOutcome.Success(
             kind = detected.type.toShapeKind(),
-            snappedStroke = snapped,
+            snappedStroke = snappedStroke,
             replaceOriginal = !keepOriginal
         )
     }
