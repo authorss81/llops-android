@@ -1093,9 +1093,75 @@ object ImportExportService {
     private const val BACKUP_MAGIC = "NFLB2"
     private const val BACKUP_SALT_SIZE = 16
     private const val BACKUP_IV_SIZE = 12
-    // EncryptionService.encrypt output: 1 version byte + 12-byte IV + 48-byte ciphertext+tag.
+    // EncryptionService.encrypt/encryptAad output: 1 version byte + 12-byte IV + 32-byte
+    // ciphertext + 16-byte tag.
     private const val BACKUP_WRAPPED_DEK_SIZE = 61
     private const val MAX_BACKUP_INPUT_BYTES = 400L * 1024 * 1024 // hard cap before any decrypt/decompress
+
+    // B2-CRYPTO-03: domain separation for the two KEK uses in backup v2. The DEK
+    // wrap and the zip-payload GCM now authenticate DIFFERENT AAD domains, so a
+    // ciphertext produced in one role can never be accepted in the other even if
+    // a salt+IV pair is ever reused.
+    internal val BACKUP_DEK_WRAP_AAD: ByteArray = "backup/dek-wrap".toByteArray(Charsets.UTF_8)
+    internal val BACKUP_PAYLOAD_AAD: ByteArray = "backup/payload".toByteArray(Charsets.UTF_8)
+
+    /** Serialized v2 header: [magic "NFLB2"][salt][payloadIv][wrappedDek]. */
+    internal fun buildBackupHeader(salt: ByteArray, payloadIv: ByteArray, wrappedDek: ByteArray): ByteArray {
+        val magic = BACKUP_MAGIC.toByteArray(Charsets.US_ASCII)
+        return ByteArray(magic.size + salt.size + payloadIv.size + wrappedDek.size).also { out ->
+            var off = 0
+            System.arraycopy(magic, 0, out, off, magic.size); off += magic.size
+            System.arraycopy(salt, 0, out, off, salt.size); off += salt.size
+            System.arraycopy(payloadIv, 0, out, off, payloadIv.size); off += payloadIv.size
+            System.arraycopy(wrappedDek, 0, out, off, wrappedDek.size)
+        }
+    }
+
+    /**
+     * B2-CRYPTO-03 fix: the payload GCM authenticates the whole header
+     * (magic|salt|payloadIv|wrappedDek) under the 'backup/payload' domain AAD,
+     * binding every payload to its own header. Splice another export's header
+     * onto a payload and the tag fails.
+     */
+    internal fun encryptBackupPayload(zipData: ByteArray, kek: ByteArray, payloadIv: ByteArray, header: ByteArray): ByteArray {
+        val cipher = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(
+            javax.crypto.Cipher.ENCRYPT_MODE,
+            javax.crypto.spec.SecretKeySpec(kek, "AES"),
+            javax.crypto.spec.GCMParameterSpec(128, payloadIv)
+        )
+        cipher.updateAAD(BACKUP_PAYLOAD_AAD)
+        cipher.updateAAD(header)
+        return cipher.doFinal(zipData)
+    }
+
+    /**
+     * Inverse of [encryptBackupPayload]. On a tag mismatch (wrong password or a
+     * forged/spliced header) falls back to the legacy zero-AAD payload so v2
+     * backups exported before the B2-CRYPTO-03 binding still restore — a
+     * spliced new-format payload fails both the AAD path and this legacy path.
+     */
+    internal fun decryptBackupPayload(cipherText: ByteArray, kek: ByteArray, payloadIv: ByteArray, header: ByteArray): ByteArray {
+        try {
+            val cipher = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
+            cipher.init(
+                javax.crypto.Cipher.DECRYPT_MODE,
+                javax.crypto.spec.SecretKeySpec(kek, "AES"),
+                javax.crypto.spec.GCMParameterSpec(128, payloadIv)
+            )
+            cipher.updateAAD(BACKUP_PAYLOAD_AAD)
+            cipher.updateAAD(header)
+            return cipher.doFinal(cipherText)
+        } catch (e: javax.crypto.AEADBadTagException) {
+            val legacy = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
+            legacy.init(
+                javax.crypto.Cipher.DECRYPT_MODE,
+                javax.crypto.spec.SecretKeySpec(kek, "AES"),
+                javax.crypto.spec.GCMParameterSpec(128, payloadIv)
+            )
+            return legacy.doFinal(cipherText)
+        }
+    }
 
     /**
      * C1: every column that carries DEK-based field ciphertext (i.e. every
@@ -1182,19 +1248,14 @@ object ImportExportService {
             val salt = EncryptionService.generateSalt()
             val kek = EncryptionService.deriveKey(backupPassword, salt)
             try {
-                val wrappedDek = EncryptionService.encrypt(key, kek)
+                val wrappedDek = EncryptionService.encryptAad(key, kek, BACKUP_DEK_WRAP_AAD)
                 val payloadIv = ByteArray(BACKUP_IV_SIZE)
                 java.security.SecureRandom().nextBytes(payloadIv)
-                val cipher = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
-                cipher.init(javax.crypto.Cipher.ENCRYPT_MODE, javax.crypto.spec.SecretKeySpec(kek, "AES"), javax.crypto.spec.GCMParameterSpec(128, payloadIv))
-                val cipherText = cipher.doFinal(zipData)
+                val header = buildBackupHeader(salt, payloadIv, wrappedDek)
+                val cipherText = encryptBackupPayload(zipData, kek, payloadIv, header)
 
                 FileOutputStream(tempBackupFile).use { fos ->
-                    fos.write(BACKUP_MAGIC.toByteArray(Charsets.US_ASCII))
-                    fos.write(salt)
-                    fos.write(payloadIv)
-                    val wrappedDekBytes = android.util.Base64.decode(wrappedDek, android.util.Base64.NO_WRAP)
-                    fos.write(wrappedDekBytes)
+                    fos.write(header)
                     fos.write(cipherText)
                 }
             } finally {
@@ -1274,13 +1335,8 @@ object ImportExportService {
         var kek: ByteArray? = null
         try {
             kek = EncryptionService.deriveKey(backupPassword, salt)
-            val cipher = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
-            cipher.init(
-                javax.crypto.Cipher.DECRYPT_MODE,
-                javax.crypto.spec.SecretKeySpec(kek, "AES"),
-                javax.crypto.spec.GCMParameterSpec(128, iv)
-            )
-            val zipBytes = cipher.doFinal(cipherText)
+            val header = rawBytes.copyOfRange(0, headerSize)
+            val zipBytes = decryptBackupPayload(cipherText, kek, iv, header)
             return BackupV2Payload(zipBytes, wrappedDek)
         } catch (e: Exception) {
             // File has the v2 magic but the password didn't unlock it.
@@ -1311,15 +1367,10 @@ object ImportExportService {
         }
         val salt = rawBytes.copyOfRange(magic.size, magic.size + BACKUP_SALT_SIZE)
         val wrappedDek = rawBytes.copyOfRange(magic.size + BACKUP_SALT_SIZE + BACKUP_IV_SIZE, headerSize)
-        val wrappedB64 = try {
-            android.util.Base64.encodeToString(wrappedDek, android.util.Base64.NO_WRAP)
-        } catch (t: Throwable) {
-            java.util.Base64.getEncoder().encodeToString(wrappedDek)
-        }
         var kek: ByteArray? = null
         try {
             kek = EncryptionService.deriveKey(backupPassword, salt)
-            EncryptionService.decrypt(wrappedB64, kek)
+            EncryptionService.decryptAad(wrappedDek, kek, BACKUP_DEK_WRAP_AAD)
         } catch (e: Exception) {
             throw IllegalArgumentException("Incorrect backup password.")
         } finally {
@@ -1368,10 +1419,7 @@ object ImportExportService {
                     val magicBytes = BACKUP_MAGIC.toByteArray(Charsets.US_ASCII)
                     val salt = rawBytes.copyOfRange(magicBytes.size, magicBytes.size + BACKUP_SALT_SIZE)
                     kek = EncryptionService.deriveKey(backupPassword!!, salt)
-                    EncryptionService.decrypt(
-                        android.util.Base64.encodeToString(wrappedDek, android.util.Base64.NO_WRAP),
-                        kek
-                    ).toHexString()
+                    EncryptionService.decryptAad(wrappedDek, kek, BACKUP_DEK_WRAP_AAD).toHexString()
                 } catch (e: Exception) {
                     null
                 } finally {

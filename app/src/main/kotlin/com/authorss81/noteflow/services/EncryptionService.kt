@@ -93,6 +93,61 @@ object EncryptionService {
         return decryptCore(combined, key, offset = 0, withAad = false)
     }
 
+    /**
+     * Domain-separated AAD encryption (B2-CRYPTO-03). Same wire format as
+     * [encrypt] ([PAYLOAD_VERSION] byte + 12-byte IV) but binds the given
+     * caller-supplied AAD instead of the fixed [FIELD_AAD], so two KEK uses in
+     * the same format (e.g. backup v2's DEK wrap vs payload) can never be
+     * decrypted into each other's context. Returns the raw combined bytes
+     * (version + IV + ciphertext/tag) — callers that need Base64 encode it.
+     */
+    fun encryptAad(data: ByteArray, key: ByteArray, aad: ByteArray): ByteArray {
+        val iv = ByteArray(GCM_IV_LENGTH)
+        SecureRandom().nextBytes(iv)
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(GCM_TAG_LENGTH, iv))
+        cipher.updateAAD(aad)
+        val cipherText = cipher.doFinal(data)
+        val combined = ByteArray(1 + iv.size + cipherText.size)
+        combined[0] = PAYLOAD_VERSION
+        System.arraycopy(iv, 0, combined, 1, iv.size)
+        System.arraycopy(cipherText, 0, combined, 1 + iv.size, cipherText.size)
+        return combined
+    }
+
+    /**
+     * Decrypts a [encryptAad] payload under its AAD. On a tag mismatch the
+     * pre-B2-CRYPTO-03 wrapped-DEK format (authenticated under [FIELD_AAD])
+     * is retried so backups exported before domain separation still restore.
+     */
+    fun decryptAad(combined: ByteArray, key: ByteArray, aad: ByteArray): ByteArray {
+        if (combined.size < GCM_IV_LENGTH) throw IllegalArgumentException("Invalid encrypted payload")
+        val versioned = combined[0] == PAYLOAD_VERSION && combined.size >= GCM_IV_LENGTH + 1
+        if (versioned) {
+            try {
+                return decryptCoreAad(combined, key, aad, offset = 1)
+            } catch (e: javax.crypto.AEADBadTagException) {
+                return decryptCoreAad(combined, key, FIELD_AAD, offset = 1)
+            }
+        }
+        return decryptCoreAad(combined, key, aad, offset = 0)
+    }
+
+    private fun decryptCoreAad(combined: ByteArray, key: ByteArray, aad: ByteArray, offset: Int): ByteArray {
+        if (combined.size < offset + GCM_IV_LENGTH) throw IllegalArgumentException("Invalid encrypted payload")
+
+        val iv = ByteArray(GCM_IV_LENGTH)
+        System.arraycopy(combined, offset, iv, 0, GCM_IV_LENGTH)
+        val cipherTextSize = combined.size - offset - GCM_IV_LENGTH
+        val cipherText = ByteArray(cipherTextSize)
+        System.arraycopy(combined, offset + GCM_IV_LENGTH, cipherText, 0, cipherTextSize)
+
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(GCM_TAG_LENGTH, iv))
+        cipher.updateAAD(aad)
+        return cipher.doFinal(cipherText)
+    }
+
     private fun decryptCore(combined: ByteArray, key: ByteArray, offset: Int, withAad: Boolean): ByteArray {
         if (combined.size < offset + GCM_IV_LENGTH) throw IllegalArgumentException("Invalid encrypted payload")
 
