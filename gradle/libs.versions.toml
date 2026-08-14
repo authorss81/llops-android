@@ -77,6 +77,11 @@ jsoup = { group = "org.jsoup", name = "jsoup", version.ref = "jsoup" }
 # base app gets it transitively via lifecycle; the plugin module declares it).
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 
+# Phase 31: kotlinx-coroutines-test — JVM-only; lets unit tests install a Main
+# dispatcher so the ViewModel (which eagerly builds stateIn(viewModelScope,..)
+# flows) can be constructed in a plain JVM test.
+kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "coroutines" }
+
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
 android-library = { id = "com.android.library", version.ref = "agp" }

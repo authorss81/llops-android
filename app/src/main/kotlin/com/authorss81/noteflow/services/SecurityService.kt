@@ -21,10 +21,18 @@ class SecurityService(private val context: Context) {
     private fun getOrCreateKey(authRequired: Boolean = false): SecretKey {
         val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
         val alias = if (authRequired) "${KEY_ALIAS}_auth" else KEY_ALIAS
-        
+
+        // Phase 31 Part C3: NEVER blindly cast `keyStore.getEntry(alias, null)`
+        // to SecretKeyEntry. The stored entry on a given device/emulator may be a
+        // PrivateKeyEntry, a TrustedCertificateEntry, a migrated/legacy entry, or
+        // unreadable — an unchecked `as SecretKeyEntry` then throws
+        // ClassCastException during DEK init and kills cold start. Inspect the
+        // entry type instead; a wrong/invalid entry is cleared and re-created.
+        resolveSecretKeyEntry(keyStore, alias)?.let { return it }
+        // Wrong-typed / unreadable entry under the alias: delete it so the
+        // generator below mints a fresh SecretKey entry instead of colliding.
         if (keyStore.containsAlias(alias)) {
-            val entry = keyStore.getEntry(alias, null) as KeyStore.SecretKeyEntry
-            return entry.secretKey
+            runCatching { keyStore.deleteEntry(alias) }
         }
  
         val keyGenerator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE)
@@ -149,4 +157,25 @@ class SecurityService(private val context: Context) {
             .remove(PREF_DEK_STORAGE)
             .apply()
     }
+}
+
+/**
+ * Phase 31 Part C3 seam: resolve the DEK-wrapping key stored at [alias] WITHOUT
+ * an unchecked cast. Returns the key only when the alias holds a genuine
+ * [KeyStore.SecretKeyEntry]; returns null for an absent alias, a wrong-typed
+ * entry (PrivateKeyEntry / TrustedCertificateEntry / migrated-legacy entry),
+ * or an entry that cannot be read (getEntry threw). A null result means the
+ * caller must clear the alias and mint a fresh key — never a crash.
+ *
+ * Pure JVM (only java.security.KeyStore) so the wrong-entry-type path is
+ * unit-testable with a fake/in-memory keystore on the JVM.
+ */
+internal fun resolveSecretKeyEntry(keyStore: KeyStore, alias: String): KeyStore.SecretKeyEntry? {
+    if (!keyStore.containsAlias(alias)) return null
+    val entry = try {
+        keyStore.getEntry(alias, null)
+    } catch (e: Exception) {
+        null
+    }
+    return entry as? KeyStore.SecretKeyEntry
 }

@@ -201,6 +201,23 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         updateCoordinator = pluginUpdateCoordinator
     )
 
+    // Declared ABOVE the first init {} block on purpose: init calls
+    // refreshPluginStates(), which writes these MutableStateFlow backing
+    // properties. If they were declared below the init block they would still
+    // be null when init runs and ViewModel creation would NPE on cold start.
+    private val _pluginEnabledIds = MutableStateFlow(pluginRegistry.allPlugins.associate { it.id to pluginRegistry.isEnabled(it.id) })
+    val pluginEnabledIds: StateFlow<Map<String, Boolean>> = _pluginEnabledIds.asStateFlow()
+
+    private val _pluginStates = MutableStateFlow<Map<String, PluginStateInfo>>(emptyMap())
+    val pluginStates: StateFlow<Map<String, PluginStateInfo>> = _pluginStates.asStateFlow()
+
+    private val _pluginDiagnostics = MutableStateFlow<List<PluginDiagnostics.Entry>>(emptyList())
+    val pluginDiagnosticsEntries: StateFlow<List<PluginDiagnostics.Entry>> = _pluginDiagnostics.asStateFlow()
+
+    // Phase 21: plugin store UI state (rows + per-plugin download progress/busy/messages).
+    private val _storeRows = MutableStateFlow<List<PluginStoreController.StoreRow>>(emptyList())
+    val storeRows: StateFlow<List<PluginStoreController.StoreRow>> = _storeRows.asStateFlow()
+
     init {
         // Phase 23: register the real downloadable-plugin runtime (the lazy
         // `pluginRuntime` above swaps the Phase-22 stub via the registry seam).
@@ -227,19 +244,6 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         pluginRegistry.onProcessStart(appContext)
         refreshPluginStates()
     }
-
-    private val _pluginEnabledIds = MutableStateFlow(pluginRegistry.allPlugins.associate { it.id to pluginRegistry.isEnabled(it.id) })
-    val pluginEnabledIds: StateFlow<Map<String, Boolean>> = _pluginEnabledIds.asStateFlow()
-
-    private val _pluginStates = MutableStateFlow<Map<String, PluginStateInfo>>(emptyMap())
-    val pluginStates: StateFlow<Map<String, PluginStateInfo>> = _pluginStates.asStateFlow()
-
-    private val _pluginDiagnostics = MutableStateFlow<List<PluginDiagnostics.Entry>>(emptyList())
-    val pluginDiagnosticsEntries: StateFlow<List<PluginDiagnostics.Entry>> = _pluginDiagnostics.asStateFlow()
-
-    // Phase 21: plugin store UI state (rows + per-plugin download progress/busy/messages).
-    private val _storeRows = MutableStateFlow<List<PluginStoreController.StoreRow>>(emptyList())
-    val storeRows: StateFlow<List<PluginStoreController.StoreRow>> = _storeRows.asStateFlow()
 
     private val _storeProgress = MutableStateFlow<Map<String, Float>>(emptyMap())
     val storeProgress: StateFlow<Map<String, Float>> = _storeProgress.asStateFlow()

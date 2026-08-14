@@ -84,6 +84,28 @@ android {
         compose = true
         buildConfig = true
     }
+
+    // Phase 31 Part C2: force native-lib EXTRACTION at install time. The previous
+    // `android:extractNativeLibs="false"` (memory-map .so straight from the APK)
+    // causes dlopen/UnsatisfiedLinkError cold-start crashes on SDK 36 devices with
+    // strict 16KB/4KB page alignment (SQLCipher .so). useLegacyPackaging=true makes
+    // AGP emit extractNativeLibs=true in the merged manifest, so AGP can never
+    // re-inject the false value behind our back.
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
+
+    // Phase 31: the NoteflowViewModel construction test drives plugin availability
+    // checks + AndroidPluginLogger (android.util.Log) against the "mockable" android.jar.
+    // Returning default values (instead of throwing "Method ... not mocked") keeps the
+    // required pure-JVM construction test green without pulling in Robolectric.
+    testOptions {
+        unitTests {
+            isReturnDefaultValues = true
+        }
+    }
 }
 
 // Stopgap: AGP 8.7.3's profile compiler crashes with "String index out of range: 62"
@@ -164,5 +186,9 @@ dependencies {
     implementation(libs.lingua)
     implementation(libs.jsoup)
 
+    // Phase 31: JVM unit tests. kotlinx-coroutines-test lets the construction test
+    // install a Main dispatcher so NoteflowViewModel's eager stateIn(viewModelScope,..)
+    // flows can be built outside Android. junit is the existing test runner.
     testImplementation("junit:junit:4.13.2")
+    testImplementation(libs.kotlinx.coroutines.test)
 }
