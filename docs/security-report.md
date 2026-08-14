@@ -795,3 +795,108 @@ No DB schema, workflow, or dependency changes were made.
 - **Evidence:** `createPage` stores an empty `extractedText` as the raw `""` string, not GCM (`NoteRepository.kt:358-362`); `saveStrokesForPage` stores blank text/points unencrypted (`NoteRepository.kt:551-563`); `isFieldEncrypted` returns `true` for ANY blank value (`NoteRepository.kt:150-151`), so `reencryptPlaintextFields` (`NoteRepository.kt:165-230`) permanently treats blank columns as already-encrypted and never touches them; all decrypt paths skip blanks (`NoteRepository.kt:449,460,609,800-802`). Malformed short inputs (< 12 bytes) throw `IllegalArgumentException` at `EncryptionService.kt:79` before any tag check.
 - **Exploit scenario:** An attacker who can zero a field's ciphertext column (the same write primitives as B2-CRYPTO-09) silently erases a note's title/body to "" — at the field layer this is indistinguishable from a legitimately-blank record (there is no tag for blanks), and it is displayed as an empty note rather than flagged as tampered. The `isBlank`-based classification also means an empty plaintext value is asserted to be "encrypted and fine", so any integrity-checking logic that relies on `isFieldEncrypted` gives a false pass for emptied fields. Combined with the WAL/un-checkpointed-file gap (B1-DB-6) and the fail-open HMAC (B1-CRYPTO-06), this removes field-granularity detection for blanking attacks. No confidentiality impact — integrity/hardening.
 - **Fix:** Encrypt empty strings as a real AEAD payload (AES-GCM of empty plaintext is a valid 28-byte ciphertext) so blanks carry a tag; replace the `isBlank` "encrypted?" probe with a structural format check (payload length ≥ 13 and version marker), never content-blankness; on any store, authenticate the full field row including its blank-ness.
+
+---
+
+## Resolution status (added by Phase 33 - security-fix phase generation)
+
+> Phase 33 (2026-08-14) read this report, triaged every finding, and created one fix phase
+> per finding (or tight group) in `workspace/phase-NN`. The final document-fix phase closes
+> the pipeline. See `workspace/SECURITY_FIX_PLAN.md` for the machine-readable mapping
+> (finding id -> phase -> severity -> file:line -> verification command). Phase 33 does NOT
+> implement fixes - it only plans them; each phase's PROMPT.md implements its own finding.
+
+### Fix phases (finding -> phase)
+
+| Finding id | Severity | Fix phase | Status |
+|-----------|----------|-----------|--------|
+| B1-CRYPTO-01 | CRITICAL | phase-39 | `NOT STARTED` (planned) |
+| B1-NET-01 | HIGH | phase-40 | `NOT STARTED` (planned) |
+| B1-NET-02 | HIGH | phase-41 | `NOT STARTED` (planned) |
+| B1-NET-03 | HIGH | phase-42 | `NOT STARTED` (planned) |
+| B1-DB-1 | HIGH | phase-43 | `NOT STARTED` (planned) |
+| B1-DB-4 | HIGH | phase-44 | `NOT STARTED` (planned) |
+| B1-CRYPTO-02 | HIGH | phase-45 | `NOT STARTED` (planned) |
+| B1-AUTH-01 | HIGH | phase-46 | `NOT STARTED` (planned) |
+| B1-AUTH-02 | HIGH | phase-47 | `NOT STARTED` (planned) |
+| B2-LOG-01 | HIGH | phase-48 | `NOT STARTED` (planned) |
+| B2-UI-1 | HIGH | phase-49 | `NOT STARTED` (planned) |
+| B2-DOS-01 | HIGH | phase-50 | `NOT STARTED` (planned) |
+| B1-NET-04 | MEDIUM | phase-51 | `NOT STARTED` (planned) |
+| B1-NET-05 | MEDIUM | phase-52 | `NOT STARTED` (planned) |
+| B1-DB-2 | MEDIUM | phase-53 | `NOT STARTED` (planned) |
+| B1-DB-3 | MEDIUM | phase-54 | `NOT STARTED` (planned) |
+| B1-DB-5 | MEDIUM | phase-55 | `NOT STARTED` (planned) |
+| B1-DB-7 | MEDIUM | phase-56 | `NOT STARTED` (planned) |
+| B1-PLAT-1 | MEDIUM | phase-57 | `NOT STARTED` (planned) |
+| B1-PLAT-2 | MEDIUM | phase-58 | `NOT STARTED` (planned) |
+| B1-PLAT-3 | MEDIUM | phase-59 | `NOT STARTED` (planned) |
+| B1-PLAT-4 | MEDIUM | phase-60 | `NOT STARTED` (planned) |
+| B1-PLAT-7 | MEDIUM | phase-61 | `NOT STARTED` (planned) |
+| B1-CRYPTO-03 | MEDIUM | phase-62 | `NOT STARTED` (planned) |
+| B1-CRYPTO-04 | MEDIUM | phase-63 | `NOT STARTED` (planned) |
+| B1-CRYPTO-05 | MEDIUM | phase-64 | `NOT STARTED` (planned) |
+| B1-CRYPTO-07 | MEDIUM | phase-65 | `NOT STARTED` (planned) |
+| B1-CRYPTO-08 | MEDIUM | phase-66 | `NOT STARTED` (planned) |
+| B1-AUTH-03 | MEDIUM | phase-67 | `NOT STARTED` (planned) |
+| B1-AUTH-04 | MEDIUM | phase-68 | `NOT STARTED` (planned) |
+| B1-AUTH-05 | MEDIUM | phase-69 | `NOT STARTED` (planned) |
+| B2-LOG-02 | MEDIUM | phase-70 | `NOT STARTED` (planned) |
+| B2-LOG-03 | MEDIUM | phase-71 | `NOT STARTED` (planned) |
+| B2-UI-2 | MEDIUM | phase-72 | `NOT STARTED` (planned) |
+| B2-UI-3 | MEDIUM | phase-73 | `NOT STARTED` (planned) |
+| B2-UI-5 | MEDIUM | phase-74 | `NOT STARTED` (planned) |
+| B2-DEPS-03 | MEDIUM | phase-75 | `NOT STARTED` (planned) |
+| B2-DEPS-04 | MEDIUM | phase-76 | `NOT STARTED` (planned) |
+| B2-DEPS-05 | MEDIUM | phase-77 | `NOT STARTED` (planned) |
+| B2-DOS-02 | MEDIUM | phase-78 | `NOT STARTED` (planned) |
+| B2-DOS-03 | MEDIUM | phase-79 | `NOT STARTED` (planned) |
+| B2-DOS-04 | MEDIUM | phase-80 | `NOT STARTED` (planned) |
+| B2-DOS-05 | MEDIUM | phase-81 | `NOT STARTED` (planned) |
+| B2-DOS-06 | MEDIUM | phase-82 | `NOT STARTED` (planned) |
+| B2-DOS-07 | MEDIUM | phase-83 | `NOT STARTED` (planned) |
+| B2-CRYPTO-04 | MEDIUM | phase-84 | `NOT STARTED` (planned) |
+| B1-NET-06 | LOW | phase-85 | `NOT STARTED` (planned) |
+| B1-NET-07 | LOW | phase-86 | `NOT STARTED` (planned) |
+| B1-DB-6 | LOW | phase-87 | `NOT STARTED` (planned) |
+| B1-DB-8 | LOW | phase-88 | `NOT STARTED` (planned) |
+| B1-PLAT-5 | LOW | phase-89 | `NOT STARTED` (planned) |
+| B1-PLAT-8 | LOW | phase-90 | `NOT STARTED` (planned) |
+| B1-CRYPTO-06 | LOW | phase-91 | `NOT STARTED` (planned) |
+| B1-AUTH-07 | LOW | phase-92 | `NOT STARTED` (planned) |
+| B2-LOG-04 | LOW | phase-93 | `NOT STARTED` (planned) |
+| B2-LOG-05 | LOW | phase-94 | `NOT STARTED` (planned) |
+| B2-UI-4 | LOW | phase-95 | `NOT STARTED` (planned) |
+| B2-UI-6 | LOW | phase-96 | `NOT STARTED` (planned) |
+| B2-DEPS-01 | LOW | phase-97 | `NOT STARTED` (planned) |
+| B2-DOS-08 | LOW | phase-98 | `NOT STARTED` (planned) |
+| B2-DOS-09 | LOW | phase-99 | `NOT STARTED` (planned) |
+| B2-DOS-10 | LOW | phase-100 | `NOT STARTED` (planned) |
+| B2-DOS-11 | LOW | phase-101 | `NOT STARTED` (planned) |
+| B2-CRYPTO-01 | LOW | phase-102 | `NOT STARTED` (planned) |
+| B2-CRYPTO-02 | LOW | phase-103 | `NOT STARTED` (planned) |
+| B2-CRYPTO-03 | LOW | phase-104 | `NOT STARTED` (planned) |
+| B2-CRYPTO-05 | LOW | phase-105 | `NOT STARTED` (planned) |
+| B2-CRYPTO-06 | LOW | phase-106 | `NOT STARTED` (planned) |
+| B2-CRYPTO-09 | LOW | phase-107 | `NOT STARTED` (planned) |
+| B2-CRYPTO-10 | LOW | phase-108 | `NOT STARTED` (planned) |
+| B1-NET-08 | INFO | phase-109 | `NOT STARTED` (planned) |
+| B1-NET-09 | INFO | phase-110 | `NOT STARTED` (planned) |
+| B2-LOG-07 | INFO | phase-111 | `NOT STARTED` (planned) |
+| B2-DEPS-02 | INFO | phase-112 | `NOT STARTED` (planned) |
+| B2-CRYPTO-07 | INFO | phase-113 | `NOT STARTED` (planned) |
+| B2-CRYPTO-08 | INFO | phase-114 | `NOT STARTED` (planned) |
+
+### Resolved at triage (no fix phase)
+
+| Finding id | Severity | Reason |
+|-----------|----------|--------|
+| B1-PLAT-6 | INFO | applicationId vs namespace mismatch. Resolved at triage: aligning `namespace` to the applicationId is a MAJOR architectural change (Phase 21.10, requires explicit user approval per AGENTS.md hard rule); its only runtime consequence (hardcoded regex) is fixed by phase-89 (B1-PLAT-5). |
+| B2-LOG-06 | INFO | No telemetry/crash SDK in the base APK (positive finding). Resolved at triage: no independent fix - the accidental disclosure channels it contrasts are fixed by phase-48 (B2-LOG-01) and phase-70 (B2-LOG-02); keeping the no-SDK posture is the fix. |
+| B2-DEPS-06 | INFO | Dependency age / no-additional-CVE sweep (positive finding). Resolved at triage: no confirmed CVE beyond B2-DEPS-01 (phase-97); the recommended cadence + CI advisory scanner are maintenance/process items (and a CI-scanner implementation would edit `.github/workflows/`, which is prohibited). |
+
+### Pipeline tail
+
+- Highest phase before Phase 33: `phase-38`. Fix phases: `phase-39`..`phase-114` (76 phases, 76 findings - 75 one-finding phases + 1 grouping of B1-AUTH-06 into B1-DB-4).
+- Final phase: **phase-115** (document fix - final status & consistency sweep) - ALWAYS LAST.
+- Every finding above maps to exactly one phase, or is marked resolved-at-triage here.
