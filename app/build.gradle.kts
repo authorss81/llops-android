@@ -103,6 +103,11 @@ kotlin {
 }
 
 dependencies {
+    // Phase 29: shared plugin framework surface (NoteflowPlugin, PluginCapability,
+    // PluginContext, PluginEntry, PluginVersion…) compiled once so downloadable
+    // plugin artifacts (plugins/llm) share class identity with the base app.
+    implementation(project(":plugin-sdk"))
+
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.compose)

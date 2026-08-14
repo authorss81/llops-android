@@ -32,7 +32,7 @@ object GlassThemeMath {
         return (lighter + 0.05) / (darker + 0.05)
     }
 
-    fun isReadable(fg: Color, bg: Color, minRatio: Double = MIN_CONTRAST_RATIO): Boolean =
+    fun isReadable(fg: Color, bg: Color, minRatio: Double = MIN_CONTRAST_RATIO.toDouble()): Boolean =
         contrastRatio(fg, bg) >= minRatio
 
     /** Linearly interpolate two opaque colors by [t] in 0..1. */

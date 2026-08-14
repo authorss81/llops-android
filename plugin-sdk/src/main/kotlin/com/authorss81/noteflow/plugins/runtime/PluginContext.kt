@@ -224,3 +224,17 @@ fun interface PluginContextFactory {
             }
     }
 }
+
+/**
+ * A downloadable plugin that wants its capability facade at load time implements
+ * this and receives its [PluginContext] via [setContext] right after
+ * instantiation (Phase 23 runtime loader).
+ *
+ * The plugin code NEVER constructs or reaches for a `Context`, DB, keystore,
+ * `EncryptionService` or decrypted-content handle — it only ever holds the
+ * [PluginContext] the runtime gives it. Bundled plugins do not need this
+ * interface (they are wired directly by the app).
+ */
+interface PluginContextAware {
+    fun setContext(context: PluginContext)
+}

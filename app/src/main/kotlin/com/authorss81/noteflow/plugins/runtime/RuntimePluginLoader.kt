@@ -20,16 +20,18 @@ fun interface ClassLoaderFactory {
 
 /**
  * A plugin that wants its capability facade at load time implements this and
- * receives its [PluginContext] via [setContext] right after instantiation.
+ * receives its [PluginContext] via [setContext] right after instantiation
+ * (Phase 23 runtime loader).
  *
  * The plugin code NEVER constructs or reaches for a `Context`, DB, keystore,
  * `EncryptionService` or decrypted-content handle — it only ever holds the
  * [PluginContext] the runtime gives it. Bundled plugins do not need this
  * interface (they are wired directly by the app).
+ *
+ * PHASE 29: [PluginContextAware] moved into `plugin-sdk` (same package, so the
+ * simple name resolves here without an import) — downloadable plugin artifacts
+ * compile against the same type the base app resolves.
  */
-interface PluginContextAware {
-    fun setContext(context: PluginContext)
-}
 
 /** The `META-INF/plugin-entry.properties` descriptor of a downloadable plugin. */
 data class PluginEntryDescriptor(

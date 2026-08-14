@@ -26,6 +26,7 @@ mediapipeTasksGenai = "0.10.25"
 # Phase 15: productivity/knowledge plugin pack (pure-JVM, CI-testable).
 lingua = "1.2.2"
 jsoup = "1.17.2"
+coroutines = "1.9.0"
 
 [libraries]
 androidx-ink-authoring = { group = "androidx.ink", name = "ink-authoring", version.ref = "ink" }
@@ -72,8 +73,13 @@ mediapipe-tasks-genai = { group = "com.google.mediapipe", name = "tasks-genai", 
 lingua = { group = "com.github.pemistahl", name = "lingua", version.ref = "lingua" }
 jsoup = { group = "org.jsoup", name = "jsoup", version.ref = "jsoup" }
 
+# Phase 29: downloadable LLM plugin module — explicit coroutines dependency (the
+# base app gets it transitively via lifecycle; the plugin module declares it).
+kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
+
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
+android-library = { id = "com.android.library", version.ref = "agp" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }

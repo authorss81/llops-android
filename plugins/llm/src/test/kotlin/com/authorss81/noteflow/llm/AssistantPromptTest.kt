@@ -1,14 +1,14 @@
-package com.authorss81.noteflow
+package com.authorss81.noteflow.llm
 
-import com.authorss81.noteflow.plugins.assistant.AssistantPrompts
-import com.authorss81.noteflow.plugins.assistant.AssistantStoragePolicy
+import com.authorss81.noteflow.llm.policy.AssistantPrompts
+import com.authorss81.noteflow.llm.policy.AssistantStoragePolicy
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Phase 16 Assistant pure-JVM tests: prompt assembly (context truncation,
+ * Phase 29: LLM-plugin pure-JVM tests (moved from the base app): prompt assembly (context truncation,
  * task phrasing) and the model-download storage policy (identity, free-space
  * guard, plausibility check).
  */

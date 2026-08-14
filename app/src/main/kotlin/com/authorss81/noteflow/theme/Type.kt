@@ -81,12 +81,13 @@ fun typographyFor(mode: AppThemeMode, systemDark: Boolean): Typography {
         AppThemeMode.LIGHT, AppThemeMode.SEPIA -> false
         AppThemeMode.SYSTEM -> systemDark
         AppThemeMode.DYNAMIC -> systemDark
+        AppThemeMode.GLASS -> systemDark
     }
     
     val useSerif = when (mode) {
         AppThemeMode.LIGHT, AppThemeMode.SEPIA -> true
         AppThemeMode.DARK, AppThemeMode.AMOLED -> false
-        AppThemeMode.SYSTEM, AppThemeMode.DYNAMIC -> !isDark
+        AppThemeMode.SYSTEM, AppThemeMode.DYNAMIC, AppThemeMode.GLASS -> !isDark
     }
     
     val displayFont = if (useSerif) FontFamily.Serif else FontFamily.Default
