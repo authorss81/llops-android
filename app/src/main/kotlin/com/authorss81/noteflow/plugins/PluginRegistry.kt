@@ -2,7 +2,6 @@ package com.authorss81.noteflow.plugins
 
 import android.content.Context
 import android.os.Build
-import com.authorss81.noteflow.plugins.assistant.OnDeviceAssistantPlugin
 import com.authorss81.noteflow.plugins.citation.CitationFormatterPluginImpl
 import com.authorss81.noteflow.plugins.clipshare.ClipToInkFlowPlugin
 import com.authorss81.noteflow.plugins.dictionary.DictionaryPluginImpl
@@ -773,7 +772,11 @@ class PluginRegistry(
             OnDeviceDictationPlugin(),
             OnDeviceReadAloudPlugin(),
             OnDeviceTranslationPlugin(),
-            OnDeviceAssistantPlugin(),
+            // Phase 29: the local-LLM assistant is NOT compiled into the base APK
+            // anymore — it ships as the downloadable `plugins/llm` plugin (Plugin
+            // Store → "On-Device Assistant"). The Assistant capability is unserved
+            // until the user installs that artifact; requests fail loudly with the
+            // store hint (see NoteflowViewModel.assistant*).
             ScreenshotNotePluginImpl(),
             // Phase 25: free, compile-time InkStroke→Shape plugin — pure geometry,
             // ~KB, no native deps (safe in the base APK under the hybrid model).

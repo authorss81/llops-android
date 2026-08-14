@@ -43,6 +43,7 @@ import com.authorss81.noteflow.plugins.WebSearchPlugin
 import com.authorss81.noteflow.plugins.WeatherOutcome
 import com.authorss81.noteflow.plugins.WeatherPlugin
 import com.authorss81.noteflow.plugins.PluginLifecycleState
+import com.authorss81.noteflow.plugins.PluginFailureReason
 import com.authorss81.noteflow.plugins.PluginManager
 import com.authorss81.noteflow.plugins.PluginRegistry
 import com.authorss81.noteflow.plugins.PluginResult
@@ -786,6 +787,11 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         }
 
     suspend fun assistantSummarize(noteText: String): PluginResult<AssistantOutcome> =
+        assistantRewire("summarize") {
+            assistantSummarizeInner(noteText)
+        }
+
+    private suspend fun assistantSummarizeInner(noteText: String): PluginResult<AssistantOutcome> =
         pluginManager.withPluginAsync(PluginCapability.Assistant, appContext) { plugin ->
             val assistant = plugin as? AssistantPlugin
                 ?: throw IllegalStateException("${plugin.name} does not implement AssistantPlugin")
@@ -793,33 +799,67 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         }
 
     suspend fun assistantExtractActionItems(noteText: String): PluginResult<AssistantOutcome> =
-        pluginManager.withPluginAsync(PluginCapability.Assistant, appContext) { plugin ->
-            val assistant = plugin as? AssistantPlugin
-                ?: throw IllegalStateException("${plugin.name} does not implement AssistantPlugin")
-            assistant.extractActionItems(appContext, noteText)
+        assistantRewire("extract action items") {
+            pluginManager.withPluginAsync(PluginCapability.Assistant, appContext) { plugin ->
+                val assistant = plugin as? AssistantPlugin
+                    ?: throw IllegalStateException("${plugin.name} does not implement AssistantPlugin")
+                assistant.extractActionItems(appContext, noteText)
+            }
         }
 
     suspend fun assistantAnswerQuestion(noteText: String, question: String): PluginResult<AssistantOutcome> =
-        pluginManager.withPluginAsync(PluginCapability.Assistant, appContext) { plugin ->
-            val assistant = plugin as? AssistantPlugin
-                ?: throw IllegalStateException("${plugin.name} does not implement AssistantPlugin")
-            assistant.answerQuestion(appContext, noteText, question)
+        assistantRewire("answer questions") {
+            pluginManager.withPluginAsync(PluginCapability.Assistant, appContext) { plugin ->
+                val assistant = plugin as? AssistantPlugin
+                    ?: throw IllegalStateException("${plugin.name} does not implement AssistantPlugin")
+                assistant.answerQuestion(appContext, noteText, question)
+            }
         }
 
     suspend fun assistantSuggestTags(noteText: String): PluginResult<AssistantOutcome> =
-        pluginManager.withPluginAsync(PluginCapability.Assistant, appContext) { plugin ->
-            val assistant = plugin as? AssistantPlugin
-                ?: throw IllegalStateException("${plugin.name} does not implement AssistantPlugin")
-            assistant.suggestTags(appContext, noteText)
+        assistantRewire("suggest tags") {
+            pluginManager.withPluginAsync(PluginCapability.Assistant, appContext) { plugin ->
+                val assistant = plugin as? AssistantPlugin
+                    ?: throw IllegalStateException("${plugin.name} does not implement AssistantPlugin")
+                assistant.suggestTags(appContext, noteText)
+            }
         }
 
     /** Download the assistant's small LLM (user consent + progress callback). */
     suspend fun assistantDownloadModel(onProgress: (Float) -> Unit): PluginResult<AssistantOutcome> =
-        pluginManager.withPluginAsync(PluginCapability.Assistant, appContext) { plugin ->
-            val assistant = plugin as? AssistantPlugin
-                ?: throw IllegalStateException("${plugin.name} does not implement AssistantPlugin")
-            assistant.downloadModel(appContext, onProgress)
+        assistantRewire("download the model") {
+            pluginManager.withPluginAsync(PluginCapability.Assistant, appContext) { plugin ->
+                val assistant = plugin as? AssistantPlugin
+                    ?: throw IllegalStateException("${plugin.name} does not implement AssistantPlugin")
+                assistant.downloadModel(appContext, onProgress)
+            }
         }
+
+    /**
+     * PHASE 29: the base APK no longer compiles the local-LLM engine — the
+     * Assistant capability is served by the DOWNLOADABLE `plugins/llm` plugin
+     * (installed from the Plugin Store) or by the compile-time Cloud AI plugin
+     * (after adding an API key in Settings → API Keys). When no assistant
+     * plugin is installed, rewrite the manager's generic "no plugin" message
+     * into an honest, actionable store hint instead of a dead end.
+     */
+    private fun <T> assistantRewire(action: String, block: () -> PluginResult<T>): PluginResult<T> {
+        val result = block()
+        return when (result) {
+            is PluginResult.Failure ->
+                if (result.reason == PluginFailureReason.NO_PLUGIN_INSTALLED) {
+                    PluginResult.Failure(
+                        result.reason,
+                        "The AI assistant isn't installed. Open the ⋮ menu → Plugin Store to install the " +
+                            "on-device LLM (Downloads a ~50 MB engine), or add an OpenAI-compatible API key in " +
+                            "Settings → API Keys to use the cloud assistant instead. This request was not sent anywhere."
+                    )
+                } else {
+                    result
+                }
+            else -> result
+        }
+    }
 
     /**
      * Capture the current canvas as an image note via the Screenshot plugin

@@ -152,10 +152,13 @@ dependencies {
     implementation(libs.mlkit.text.recognition)
 
     // Phase 16: on-device translation (ML Kit translate — keyless, offline-first,
-    // models download on explicit user action) + the local-LLM assistant runtime
-    // (MediaPipe tasks-genai; GGUF model downloaded by the user once).
+    // models download on explicit user action).
     implementation(libs.mlkit.translate)
-    implementation(libs.mediapipe.tasks.genai)
+
+    // Phase 29: the MediaPipe tasks-genai local-LLM engine is deliberately NOT
+    // in the base APK. It ships as the downloadable, signature-verified
+    // `plugins/llm` artifact (Plugin Store) so users who never use the AI
+    // assistant don't carry its ~50 MB of native libraries.
 
     // Phase 15: productivity & knowledge plugin pack (pure-JVM cores).
     implementation(libs.lingua)
