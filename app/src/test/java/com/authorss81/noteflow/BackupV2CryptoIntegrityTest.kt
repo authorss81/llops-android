@@ -80,7 +80,10 @@ class BackupV2CryptoIntegrityTest {
             EncryptionService.decryptAad(wrap, KEK, ImportExportService.BACKUP_PAYLOAD_AAD)
         }
 
-        // And a payload ciphertext must never be accepted as a wrapped DEK.
+        // And a payload ciphertext must never be accepted as a wrapped DEK. It is
+        // presented in the full [version][IV][ct+tag] wire format so decryptAad
+        // deterministically takes its versioned branch instead of depending on
+        // the first ciphertext byte coincidentally matching PAYLOAD_VERSION.
         val iv = ByteArray(12) { 3 }
         val header = ImportExportService.buildBackupHeader(SALT, iv, wrap)
         val payload = ImportExportService.encryptBackupPayload(
@@ -90,8 +93,13 @@ class BackupV2CryptoIntegrityTest {
             "payload in vault zip".toByteArray(Charsets.UTF_8),
             ImportExportService.decryptBackupPayload(payload, KEK, iv, header)
         )
+        val versionedPayload = ByteArray(1 + iv.size + payload.size).also { out ->
+            out[0] = 1
+            System.arraycopy(iv, 0, out, 1, iv.size)
+            System.arraycopy(payload, 0, out, 1 + iv.size, payload.size)
+        }
         assertThrows(AEADBadTagException::class.java) {
-            EncryptionService.decryptAad(payload, KEK, ImportExportService.BACKUP_DEK_WRAP_AAD)
+            EncryptionService.decryptAad(versionedPayload, KEK, ImportExportService.BACKUP_DEK_WRAP_AAD)
         }
         // Wrapped DEK fed into the payload decrypt path is rejected too.
         assertThrows(AEADBadTagException::class.java) {

@@ -1102,6 +1102,13 @@ object ImportExportService {
     // wrap and the zip-payload GCM now authenticate DIFFERENT AAD domains, so a
     // ciphertext produced in one role can never be accepted in the other even if
     // a salt+IV pair is ever reused.
+    //
+    // Deliberate asymmetry: the wrap domain is a bare constant whose salt/header
+    // binding is TRANSITIVE — the salt is bound through KEK derivation, and the
+    // payload tag authenticates the whole header (magic|salt|iv|wrappedDek). The
+    // payload domain intentionally binds the header bytes in addition to its own
+    // constant, because the payload tag is what finally ties the ciphertext to
+    // its own IV/DEK/header.
     internal val BACKUP_DEK_WRAP_AAD: ByteArray = "backup/dek-wrap".toByteArray(Charsets.UTF_8)
     internal val BACKUP_PAYLOAD_AAD: ByteArray = "backup/payload".toByteArray(Charsets.UTF_8)
 
@@ -1136,10 +1143,15 @@ object ImportExportService {
     }
 
     /**
-     * Inverse of [encryptBackupPayload]. On a tag mismatch (wrong password or a
-     * forged/spliced header) falls back to the legacy zero-AAD payload so v2
-     * backups exported before the B2-CRYPTO-03 binding still restore — a
-     * spliced new-format payload fails both the AAD path and this legacy path.
+     * Inverse of [encryptBackupPayload]. Tries the bounded decrypt first
+     * (BACKUP_PAYLOAD_AAD + the exact header); on a tag mismatch it retries the
+     * legacy zero-AAD decrypt so backups exported before the B2-CRYPTO-03 binding
+     * still restore. The retry only ever rescues a genuinely pre-fix payload: a
+     * spliced or corrupt NEW-format payload's tag was computed over the
+     * AAD+header, so the zero-AAD retry cannot verify it, and a wrong password
+     * fails both attempts (the GCM tag also covers the key). Every mismatch is
+     * therefore rejected on both paths — the retry is never a way around the
+     * binding.
      */
     internal fun decryptBackupPayload(cipherText: ByteArray, kek: ByteArray, payloadIv: ByteArray, header: ByteArray): ByteArray {
         try {
@@ -1313,7 +1325,39 @@ object ImportExportService {
         return entryBytes
     }
 
-    private data class BackupV2Payload(val zipBytes: ByteArray, val wrappedDek: ByteArray?)
+    private data class BackupV2Payload(val zipBytes: ByteArray, val dekHex: String?, val kek: ByteArray?)
+
+    /**
+     * Payload decrypt with the B2-CRYPTO-03 diagnostics: a tag failure is
+     * reported as CORRUPTION when a probe unwrap of the wrapped DEK proves the
+     * password was correct (header/payload tampering or a splice), and as a
+     * wrong password only when the DEK does not open either. A one-size-fits-all
+     * 'Incorrect backup password' would mislead on a spliced/corrupt file.
+     */
+    private fun decryptBackupPayloadOrThrow(
+        cipherText: ByteArray,
+        kek: ByteArray,
+        payloadIv: ByteArray,
+        header: ByteArray,
+        wrappedDek: ByteArray
+    ): ByteArray {
+        try {
+            return decryptBackupPayload(cipherText, kek, payloadIv, header)
+        } catch (e: Exception) {
+            val passwordCorrect = try {
+                EncryptionService.decryptAad(wrappedDek, kek, BACKUP_DEK_WRAP_AAD).also { it.fill(0.toByte()) }
+                true
+            } catch (t: Exception) {
+                false
+            }
+            if (passwordCorrect) {
+                throw IllegalArgumentException(
+                    "Backup appears corrupted: the header and the encrypted payload do not match.", e
+                )
+            }
+            throw IllegalArgumentException("Incorrect backup password.", e)
+        }
+    }
 
     private fun tryParseBackupV2(rawBytes: ByteArray, backupPassword: String?): BackupV2Payload? {
         val magic = BACKUP_MAGIC.toByteArray(Charsets.US_ASCII)
@@ -1334,15 +1378,25 @@ object ImportExportService {
         }
         var kek: ByteArray? = null
         try {
-            kek = EncryptionService.deriveKey(backupPassword, salt)
+            val derivedKek = EncryptionService.deriveKey(backupPassword, salt)
+            kek = derivedKek
             val header = rawBytes.copyOfRange(0, headerSize)
-            val zipBytes = decryptBackupPayload(cipherText, kek, iv, header)
-            return BackupV2Payload(zipBytes, wrappedDek)
+            val zipBytes = decryptBackupPayloadOrThrow(cipherText, derivedKek, iv, header, wrappedDek)
+            // The SAME derived KEK also unwraps the backup DEK — the restore path
+            // runs a single PBKDF2 in this method instead of one pass per step.
+            val dekHex = try {
+                EncryptionService.decryptAad(wrappedDek, derivedKek, BACKUP_DEK_WRAP_AAD)
+                    .also { it.fill(0.toByte()) }
+                    .toHexString()
+            } catch (e: Exception) {
+                null
+            }
+            // KEK ownership hands off to importBackup, which zeroizes it on every
+            // outcome; the failure paths below zeroize it before rethrowing.
+            return BackupV2Payload(zipBytes, dekHex, derivedKek)
         } catch (e: Exception) {
-            // File has the v2 magic but the password didn't unlock it.
-            throw IllegalArgumentException("Incorrect backup password.")
-        } finally {
             kek?.fill(0.toByte())
+            throw e
         }
     }
 
@@ -1408,32 +1462,23 @@ object ImportExportService {
 
         // v2 password-derived format (portable across devices).
         tryParseBackupV2(rawBytes, backupPassword)?.let { v2 ->
-            val currentDek = key
-                ?: throw IllegalStateException("Cannot restore: no data key available on this device.")
-            val currentDekHex = currentDek.toHexString()
+            try {
+                val currentDek = key
+                    ?: throw IllegalStateException("Cannot restore: no data key available on this device.")
+                val currentDekHex = currentDek.toHexString()
 
-            val wrappedDek = v2.wrappedDek
-            val legacyDekHex = if (wrappedDek != null) {
-                var kek: ByteArray? = null
-                try {
-                    val magicBytes = BACKUP_MAGIC.toByteArray(Charsets.US_ASCII)
-                    val salt = rawBytes.copyOfRange(magicBytes.size, magicBytes.size + BACKUP_SALT_SIZE)
-                    kek = EncryptionService.deriveKey(backupPassword!!, salt)
-                    EncryptionService.decryptAad(wrappedDek, kek, BACKUP_DEK_WRAP_AAD).toHexString()
-                } catch (e: Exception) {
-                    null
-                } finally {
-                    kek?.fill(0.toByte())
+                if (v2.dekHex == null) {
+                    // Zip decrypted but the backup's DEK did not — backup is corrupt.
+                    throw IllegalStateException("Backup appears corrupted: could not unlock the backup key.")
                 }
-            } else null
 
-            if (wrappedDek != null && legacyDekHex == null) {
-                // Zip decrypted but the backup's DEK did not — backup is corrupt.
-                throw IllegalStateException("Backup appears corrupted: could not unlock the backup key.")
+                rawBytes = v2.zipBytes
+                restoreFromZip(context, rawBytes, v2.dekHex, currentDekHex)
+            } finally {
+                // The derived KEK is zeroized on every restore outcome (success,
+                // corrupt-DEK early throw, no-data-key early throw, restore failure).
+                v2.kek?.fill(0.toByte())
             }
-
-            rawBytes = v2.zipBytes
-            restoreFromZip(context, rawBytes, legacyDekHex, currentDekHex)
             return@withContext
         }
 

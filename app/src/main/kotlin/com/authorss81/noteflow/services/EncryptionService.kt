@@ -119,6 +119,11 @@ object EncryptionService {
      * Decrypts a [encryptAad] payload under its AAD. On a tag mismatch the
      * pre-B2-CRYPTO-03 wrapped-DEK format (authenticated under [FIELD_AAD])
      * is retried so backups exported before domain separation still restore.
+     *
+     * The fallback retries only an [javax.crypto.AEADBadTagException] (a
+     * well-formed ciphertext whose AAD differs); format/size errors propagate
+     * because re-AADing cannot fix them — the same policy [decrypt] already
+     * uses for legacy payloads.
      */
     fun decryptAad(combined: ByteArray, key: ByteArray, aad: ByteArray): ByteArray {
         if (combined.size < GCM_IV_LENGTH) throw IllegalArgumentException("Invalid encrypted payload")
