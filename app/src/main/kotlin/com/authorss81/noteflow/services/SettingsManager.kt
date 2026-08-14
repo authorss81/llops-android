@@ -236,6 +236,17 @@ class SettingsManager(context: Context) {
         prefs.edit().putBoolean("plugin_uninstalled_$pluginId", uninstalled).apply()
     }
 
+    // Phase 23: explicit consent to download a REMOTE (downloadable) plugin.
+    // The FIRST download requires the user to say yes in the store; the consent
+    // is persisted so a re-download does not re-prompt, and Delete wipes it
+    // (a re-download after Delete starts from consent-required again).
+    fun isPluginDownloadConsented(pluginId: String): Boolean =
+        prefs.getBoolean("plugin_download_consent_$pluginId", false)
+
+    fun setPluginDownloadConsented(pluginId: String, consented: Boolean) {
+        prefs.edit().putBoolean("plugin_download_consent_$pluginId", consented).apply()
+    }
+
     // Phase 21: COMPLETE removal of a plugin's persisted state. Removes the
     // opt-in flag, the ever-enabled flag, the uninstalled flag, the persisted
     // catalog entry blob and every namespaced `plugins.<id>.*` setting. Used by
@@ -248,6 +259,7 @@ class SettingsManager(context: Context) {
                 key == "plugin_ever_enabled_$pluginId" ||
                 key == "plugin_uninstalled_$pluginId" ||
                 key == "plugin_entry_$pluginId" ||
+                key == "plugin_download_consent_$pluginId" ||
                 key.startsWith(prefix)
         }
         prefs.edit().apply { keys.forEach { remove(it) } }.apply()

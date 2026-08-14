@@ -254,6 +254,38 @@ class PluginRegistry(
     // ---- store lifecycle (Phase 21) -----------------------------------------
 
     /**
+     * Re-register a DOWNLOADABLE (remote) plugin at process start (Phase 23).
+     *
+     * A remote plugin is not compiled in — after a restart its persisted
+     * artifact is re-loaded by the runtime and this method re-joins the
+     * materialized instance to the active registry. It does NOT touch the
+     * install state (the plugin is already installed) and refuses to duplicate
+     * an id already active. Validation is identical to [installPlugin].
+     */
+    @Synchronized
+    fun registerRemotePlugin(plugin: NoteflowPlugin, context: Context? = null): PluginInstallResult {
+        if (plugin.id in rejectedIds || plugin.id in validationErrors) {
+            val errors = validationErrors[plugin.id]?.joinToString("; ") ?: "rejected"
+            return PluginInstallResult.Refused(plugin.id, "Cannot restore: invalid manifest ($errors).")
+        }
+        val knownIds = basePlugins.map { it.id }.toSet() + optionalPlugins.map { it.id }.toSet()
+        if (plugin.id !in knownIds) {
+            val validation = PluginManifestValidator.validate(plugin.manifest, currentApiLevel)
+            if (validation is ManifestValidation.Invalid) {
+                return PluginInstallResult.Refused(
+                    plugin.id, "Cannot restore: ${validation.errors.joinToString("; ")}."
+                )
+            }
+        }
+        if (extraPlugins.none { it.id == plugin.id }) {
+            extraPlugins.add(plugin)
+        }
+        refreshAvailability(context)
+        logger.lifecycle("restored", plugin.id, plugin.name)
+        return PluginInstallResult.Installed(plugin.id)
+    }
+
+    /**
      * Install a bundled plugin definition at runtime — the store's "Download".
      *
      * Honest semantics under the compile-time rule: this NEVER loads bytecode.

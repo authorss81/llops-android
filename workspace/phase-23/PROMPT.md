@@ -1,4 +1,4 @@
-# Phase 23: Downloadable-plugin runtime — download, verify, load [NOT STARTED]
+# Phase 23: Downloadable-plugin runtime — download, verify, load [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with a hardened plugin framework (Phases 10–11), a plugin store UI (Phase 21),

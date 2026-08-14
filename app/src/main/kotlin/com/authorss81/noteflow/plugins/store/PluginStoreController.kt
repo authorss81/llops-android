@@ -12,21 +12,26 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 /**
- * The plugin store's pure-JVM lifecycle logic (Phase 21).
+ * The plugin store's pure-JVM lifecycle logic (Phase 21, extended Phase 23).
  *
- * Implements the store's install/uninstall state machine over the bundled
- * catalog + compile-time registry. HONEST semantics under the compile-time
- * rule:
+ * Implements the store's install/uninstall state machine over the unified
+ * catalog (bundled definitions + remote entries) + the compile-time registry.
+ * HONEST semantics under the hybrid rule:
  *
- * - **Download** installs a plugin DEFINITION that is already bundled in the
- *   APK — never a network fetch, never an executable APK. It activates the
- *   definition (for an optional plugin it becomes part of the registry; for a
- *   previously-deleted built-in it flips install state back on). Progress is
- *   reported so the UI has real progress/error states, and the operation
- *   runs off the main thread.
+ * - **Bundled Download** installs a plugin DEFINITION that is already compiled
+ *   in the APK — never a network fetch, never an executable APK. It activates
+ *   the definition (for an optional plugin it becomes part of the registry; for
+ *   a previously-deleted built-in it flips install state back on).
+ * - **Remote Download** (Phase 23) goes through [RemotePluginInstaller] — the
+ *   FIRST download needs explicit user consent ([DownloadOutcome.NeedsConsent]),
+ *   after which the installer performs HTTPS download → pinned-cert + sha256
+ *   verification → load → registry install. Downloaded plugins are OFF by
+ *   default (registry install starts REGISTERED) and toggleable from the store.
+ *   Progress is reported so the UI has real progress/error states.
  * - **Delete** is "gone + settings wiped": it tears down the plugin, deletes
- *   its downloaded model/assets, wipes its namespaced settings and opt-in
- *   history, and removes it from the registry.
+ *   its downloaded model/assets AND (for remote plugins) the downloaded
+ *   artifact + persisted catalog entry, wipes its namespaced settings and
+ *   opt-in history, and removes it from the registry.
  * - **Disable / Enable** are delegated to [PluginRegistry.setEnabled] and keep
  *   all data (re-enableable).
  *
@@ -36,12 +41,18 @@ import kotlinx.coroutines.withContext
 class PluginStoreController(
     private val registry: PluginRegistry,
     private val catalog: PluginStoreCatalog,
-    private val logger: PluginLogger = PluginLogger.NoOp
+    private val logger: PluginLogger = PluginLogger.NoOp,
+    private val remoteInstaller: RemotePluginInstaller? = null
 ) {
 
-    /** Outcome of a store "Download" (bundled-definition install). */
+    /** Outcome of a store "Download". */
     sealed class DownloadOutcome {
         data class Installed(val pluginId: String) : DownloadOutcome()
+
+        /** Remote plugin, first download — explicit user consent is required
+         *  before any bytes move. Call [grantRemoteConsent] then re-download. */
+        data class NeedsConsent(val pluginId: String, val message: String) : DownloadOutcome()
+
         data class Failed(val pluginId: String, val message: String) : DownloadOutcome()
     }
 
@@ -75,9 +86,14 @@ class PluginStoreController(
     }
 
     /**
-     * Download (install) a bundled plugin definition. Reports progress 0f→1f;
-     * runs the install (including the registry's availability re-check) off the
-     * main thread. Never throws.
+     * Download a plugin. Two honest paths:
+     * - **Bundled** — install the compiled definition (offline, no APK loading;
+     *   progress reported).
+     * - **Remote** — first download needs explicit consent
+     *   ([DownloadOutcome.NeedsConsent]); after consent the installer downloads
+     *   the signed artifact over HTTPS, verifies pinned-cert + sha256, loads and
+     *   installs it (REGISTERED — off by default). Runs off the main thread.
+     * Never throws.
      */
     suspend fun download(
         pluginId: String,
@@ -89,19 +105,52 @@ class PluginStoreController(
         if (registry.isInstalled(pluginId)) {
             return DownloadOutcome.Failed(pluginId, "This plugin is already downloaded.")
         }
+        if (entry.bundled) {
+            return downloadBundled(entry, context, onProgress)
+        }
+        // REMOTE (downloadable) plugin — the verified-download runtime path.
+        val installer = remoteInstaller
+            ?: return DownloadOutcome.Failed(
+                pluginId,
+                "This is a remote (downloadable) plugin, but remote downloads are not wired in this build."
+            )
+        if (!installer.isConsented(pluginId)) {
+            return DownloadOutcome.NeedsConsent(
+                pluginId,
+                "This plugin adds features from a third party. " +
+                    "It is signature-verified (pinned certificate + SHA-256) before any code runs, " +
+                    "and it stays OFF until you enable it. Download and install?"
+            )
+        }
+        onProgress(0f)
+        return withContext(Dispatchers.Default) {
+            installer.install(entry.entry, onProgress)
+        }
+    }
+
+    /** Record explicit consent for [pluginId]'s remote download. Returns false
+     *  when no remote installer is wired (the consent cannot be granted). */
+    fun grantRemoteConsent(pluginId: String): Boolean {
+        val installer = remoteInstaller ?: return false
+        installer.grantConsent(pluginId)
+        return true
+    }
+
+    /** Bundled-definition install (offline). */
+    private suspend fun downloadBundled(
+        entry: PluginStoreEntry,
+        context: Context?,
+        onProgress: (Float) -> Unit
+    ): DownloadOutcome {
+        val pluginId = entry.pluginId
         // The definition is always one of the registry's compiled set — built-in
         // or optional bundled (optional definitions are RE-materialized from
         // their factory on process restart, so an installed optional plugin is
-        // found here even after the app was killed). A catalog entry that is NOT
-        // in the compiled set is a remote (downloadable) plugin: the bundled-
-        // definition store path cannot install it, and it must go through the
-        // PluginRuntime seam instead (Phase 23) — say so honestly rather than a
-        // confusing "missing definition".
+        // found here even after the app was killed).
         val plugin = registry.compiledPlugins.firstOrNull { it.id == pluginId }
             ?: return DownloadOutcome.Failed(
                 pluginId,
-                "This is a remote (downloadable) plugin — it cannot be installed by the bundled store. " +
-                    "Remote downloads go through the PluginRuntime runtime (Phase 23)."
+                "This plugin definition is not available in this build."
             )
         onProgress(0f)
         // Brief, real install window + the actual registry install (which
@@ -128,15 +177,22 @@ class PluginStoreController(
     /**
      * Delete a plugin COMPLETELY: downloaded model/assets removed, opt-in +
      * settings wiped, and the plugin absent from the registry until re-download.
-     * Never throws.
+     * For a REMOTE (downloadable) plugin the downloaded artifact + persisted
+     * catalog entry are also removed. Never throws.
      */
     fun delete(pluginId: String, context: Context?): DeleteOutcome {
         val plugin = registry.allPlugins.firstOrNull { it.id == pluginId }
             ?: return DeleteOutcome.Failed(pluginId, "This plugin is not installed.")
         // Remove downloaded assets BEFORE the registry forgets the plugin.
         plugin.deleteDownloadedAssets(context)
+        val entry = catalog.entryFor(pluginId)
         return when (val result = registry.uninstallPlugin(pluginId, context)) {
             is PluginUninstallResult.Uninstalled -> {
+                // A downloadable plugin's artifact + entry blob are owned by the
+                // runtime/store, not the plugin itself — remove them too.
+                if (entry != null && !entry.bundled) {
+                    remoteInstaller?.deleteArtifact(entry.entry)
+                }
                 logger.lifecycle("store-delete", pluginId, plugin.name)
                 DeleteOutcome.Deleted(pluginId)
             }

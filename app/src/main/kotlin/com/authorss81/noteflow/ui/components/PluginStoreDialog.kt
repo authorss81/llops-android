@@ -44,6 +44,7 @@ fun PluginStoreDialog(
     val busy by viewModel.storeBusy.collectAsState()
     val progress by viewModel.storeProgress.collectAsState()
     val messages by viewModel.storeMessages.collectAsState()
+    val pendingConsentId by viewModel.pendingConsentPluginId.collectAsState()
     // pluginId pending a destructive-delete confirmation.
     var pendingDeleteId by remember { mutableStateOf<String?>(null) }
     // pluginId → inline message (e.g. an enable refusal with its reason).
@@ -147,8 +148,8 @@ fun PluginStoreDialog(
                                     )
                                     if (!entry.bundled) {
                                         Text(
-                                            "Remote (downloadable) plugin — the verified-download runtime " +
-                                                "lands in Phase 23; Download will report exactly why it cannot run yet.",
+                                            "Remote (downloadable) plugin — downloaded over HTTPS, verified " +
+                                                "(pinned certificate + SHA-256) before any code runs, and OFF until you enable it.",
                                             style = MaterialTheme.typography.labelSmall,
                                             color = colorScheme.outline
                                         )
@@ -159,7 +160,11 @@ fun PluginStoreDialog(
                                             modifier = Modifier.fillMaxWidth()
                                         )
                                         Text(
-                                            if (entry.bundled) "Installing bundled definition…" else "Preparing remote download…",
+                                            if (entry.bundled) {
+                                                "Installing bundled definition…"
+                                            } else {
+                                                "Downloading + verifying…"
+                                            },
                                             style = MaterialTheme.typography.labelSmall,
                                             color = colorScheme.outline
                                         )
@@ -290,6 +295,36 @@ fun PluginStoreDialog(
             },
             dismissButton = {
                 TextButton(onClick = { pendingDeleteId = null }) { Text("Cancel") }
+            }
+        )
+    }
+
+    // Phase 23: confirm before the FIRST download of a remote plugin. No bytes
+    // are fetched until the user explicitly approves — this dialog is the
+    // approval. It explains the signature-verification guarantees honestly.
+    val consentId = pendingConsentId
+    if (consentId != null) {
+        val consentRow = rows.firstOrNull { it.entry.pluginId == consentId }
+        val consentMessage = messages[consentId]
+        AlertDialog(
+            onDismissRequest = { viewModel.respondStoreConsent(grant = false) },
+            icon = { Icon(Icons.Outlined.Download, contentDescription = null, tint = colorScheme.primary) },
+            title = { Text("Download remote plugin?") },
+            text = {
+                Text(
+                    consentMessage ?: consentRow?.entry?.let {
+                        "Download \"${it.name}\"? It is downloaded over HTTPS, verified against a pinned " +
+                            "certificate + SHA-256 before any code runs, and stays OFF until you enable it."
+                    } ?: "Download this plugin?"
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { viewModel.respondStoreConsent(grant = true) }) {
+                    Text("Download", color = colorScheme.primary)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.respondStoreConsent(grant = false) }) { Text("Cancel") }
             }
         )
     }

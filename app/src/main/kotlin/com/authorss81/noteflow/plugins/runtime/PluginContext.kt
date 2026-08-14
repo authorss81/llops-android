@@ -1,5 +1,7 @@
 package com.authorss81.noteflow.plugins.runtime
 
+import com.authorss81.noteflow.plugins.PluginCapability
+
 /**
  * Result of a capability-facade call. The facade NEVER throws at plugin code
  * and NEVER leaks internals — every call resolves to a typed outcome:
@@ -87,17 +89,138 @@ class DefaultPluginContext(
 }
 
 /**
- * Creates the [PluginContext] handed to a plugin at load time. Phase 22 ships
- * the deny-by-default factory; Phase 23 swaps in a capability-aware one without
- * changing the rest of the runtime.
+ * The host-side implementation of the capability facade (Phase 23).
+ *
+ * A [PluginContext] NEVER touches the database, keystore, [EncryptionService]
+ * or decrypted content itself — it only decides GRANT vs DENY and delegates the
+ * actual operation to this host, which lives in app code. The host is the only
+ * place that can reach the note editor / network / model-download flow, and the
+ * plugin never holds a reference to it.
+ */
+interface FacadeHost {
+    fun insertText(text: String): FacadeResult<Unit>
+    fun showResult(title: String, body: String): FacadeResult<Unit>
+    fun httpGet(url: String): FacadeResult<String>
+    fun readSelection(): FacadeResult<String>
+    fun requestModelDownload(sizeBytes: Long): FacadeResult<Unit>
+}
+
+/** A single facade call, used as the whitelist unit (see [FacadeWhitelist]). */
+enum class FacadeCall { INSERT_TEXT, SHOW_RESULT, HTTP_GET_HTTPS, READ_SELECTION, REQUEST_MODEL_DOWNLOAD }
+
+/**
+ * The capability whitelist matrix (Phase 23 — fills in the Phase-22 deny-by-
+ * default skeleton; see `docs/plugin-architecture.md` § Capability whitelist).
+ *
+ * A plugin is granted EXACTLY the calls its capability needs — never "because it
+ * is trusted". The rule is a pure function of the plugin's declared
+ * [PluginCapability] set, so it is unit-testable.
+ */
+object FacadeWhitelist {
+
+    /** capability → the facade calls it is granted. */
+    private val grants: Map<PluginCapability, Set<FacadeCall>> = mapOf(
+        PluginCapability.TextTransform to setOf(
+            FacadeCall.INSERT_TEXT, FacadeCall.SHOW_RESULT, FacadeCall.READ_SELECTION
+        ),
+        PluginCapability.OCR to setOf(
+            FacadeCall.INSERT_TEXT, FacadeCall.SHOW_RESULT, FacadeCall.HTTP_GET_HTTPS,
+            FacadeCall.READ_SELECTION, FacadeCall.REQUEST_MODEL_DOWNLOAD
+        ),
+        PluginCapability.WebSearch to setOf(
+            FacadeCall.INSERT_TEXT, FacadeCall.SHOW_RESULT, FacadeCall.HTTP_GET_HTTPS,
+            FacadeCall.READ_SELECTION
+        ),
+        PluginCapability.WebCapture to setOf(
+            FacadeCall.INSERT_TEXT, FacadeCall.SHOW_RESULT, FacadeCall.HTTP_GET_HTTPS,
+            FacadeCall.READ_SELECTION
+        ),
+        PluginCapability.Assistant to setOf(
+            FacadeCall.INSERT_TEXT, FacadeCall.SHOW_RESULT, FacadeCall.HTTP_GET_HTTPS,
+            FacadeCall.READ_SELECTION, FacadeCall.REQUEST_MODEL_DOWNLOAD
+        ),
+        PluginCapability.Export to setOf(
+            FacadeCall.SHOW_RESULT, FacadeCall.READ_SELECTION
+        )
+    )
+
+    /**
+     * The union of grants for [capabilities]. Unknown/unlisted capabilities
+     * contribute nothing — deny-by-default for anything not on the matrix.
+     */
+    fun grantedFor(capabilities: Set<PluginCapability>): Set<FacadeCall> =
+        capabilities.fold(emptySet()) { acc, capability ->
+            acc + (grants[capability].orEmpty())
+        }
+}
+
+/**
+ * Capability-aware [PluginContext] (Phase 23).
+ *
+ * Grants exactly the facade calls the plugin's capability whitelist allows and
+ * delegates the granted operation to [host]. Everything else resolves to
+ * [FacadeResult.Denied] with an honest reason — deny-by-default is preserved
+ * for any capability/call not on the matrix.
+ *
+ * TLS rule: `httpGet` is only ever granted as the HTTPS variant. A plugin whose
+ * whitelist includes [FacadeCall.HTTP_GET_HTTPS] may still not request a
+ * cleartext URL — `httpsOnly == false` is refused (never a downgrade).
+ */
+class CapabilityAwarePluginContext(
+    override val pluginId: String,
+    private val capabilities: Set<PluginCapability>,
+    private val host: FacadeHost
+) : PluginContext {
+
+    private val granted: Set<FacadeCall> = FacadeWhitelist.grantedFor(capabilities)
+
+    override fun insertText(text: String): FacadeResult<Unit> =
+        if (FacadeCall.INSERT_TEXT in granted) host.insertText(text) else deny("insertText")
+
+    override fun showResult(title: String, body: String): FacadeResult<Unit> =
+        if (FacadeCall.SHOW_RESULT in granted) host.showResult(title, body) else deny("showResult")
+
+    override fun httpGet(url: String, httpsOnly: Boolean): FacadeResult<String> = when {
+        FacadeCall.HTTP_GET_HTTPS !in granted -> deny("httpGet")
+        !httpsOnly -> FacadeResult.Denied(
+            "httpGet refused: plugin '$pluginId' is only granted TLS (https) requests — never a cleartext downgrade."
+        )
+        else -> host.httpGet(url)
+    }
+
+    override fun readSelection(): FacadeResult<String> =
+        if (FacadeCall.READ_SELECTION in granted) host.readSelection() else deny("readSelection")
+
+    override fun requestModelDownload(sizeBytes: Long): FacadeResult<Unit> =
+        if (FacadeCall.REQUEST_MODEL_DOWNLOAD in granted) {
+            host.requestModelDownload(sizeBytes)
+        } else {
+            deny("requestModelDownload")
+        }
+
+    private fun deny(call: String): FacadeResult<Nothing> = FacadeResult.Denied(
+        "capability-facade call '$call' is not granted to plugin '$pluginId' (its capability whitelist does not include it)."
+    )
+}
+
+/**
+ * Creates the [PluginContext] handed to a plugin at load time. [DEFAULT] keeps
+ * the Phase-22 deny-by-default behaviour (used by the standalone stub runtime);
+ * [capabilityAware] builds the Phase-23 whitelist-granting facade over [host].
  */
 fun interface PluginContextFactory {
     fun contextFor(entry: PluginEntry): PluginContext
 
     companion object {
-        /** The Phase-22 default: everything denied. */
+        /** Everything denied — the honest default until a factory is wired. */
         val DEFAULT: PluginContextFactory = PluginContextFactory { entry ->
             DefaultPluginContext(entry.id)
         }
+
+        /** Capability-whitelist facade over [host] (Phase 23 runtime). */
+        fun capabilityAware(host: FacadeHost): PluginContextFactory =
+            PluginContextFactory { entry ->
+                CapabilityAwarePluginContext(entry.id, entry.capabilities, host)
+            }
     }
 }

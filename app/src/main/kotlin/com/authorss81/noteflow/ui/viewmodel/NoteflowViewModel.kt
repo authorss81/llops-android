@@ -58,8 +58,16 @@ import com.authorss81.noteflow.services.SettingsPluginSettingsStore
 import com.authorss81.noteflow.plugins.runtime.PluginRuntime
 import com.authorss81.noteflow.plugins.runtime.PluginRuntimeRegistry
 import com.authorss81.noteflow.plugins.runtime.RuntimeOutcome
+import com.authorss81.noteflow.plugins.runtime.SignatureVerifiedPluginRuntime
+import com.authorss81.noteflow.plugins.runtime.HttpsPluginDownloadTransport
+import com.authorss81.noteflow.plugins.runtime.PluginDownloader
+import com.authorss81.noteflow.plugins.runtime.PluginContextFactory
 import com.authorss81.noteflow.plugins.store.PluginStoreCatalog
 import com.authorss81.noteflow.plugins.store.PluginStoreController
+import com.authorss81.noteflow.services.AppClassLoaderFactory
+import com.authorss81.noteflow.services.AppFacadeHost
+import com.authorss81.noteflow.services.DownloadablePluginInstaller
+import com.authorss81.noteflow.services.PluginArtifactStorage
 import com.authorss81.noteflow.services.SettingsPluginEntryStore
 import com.authorss81.noteflow.theme.AppThemeMode
 import com.authorss81.noteflow.ui.components.WorkspaceTemplate
@@ -102,20 +110,67 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     val pluginManager = PluginManager(pluginRegistry, AndroidPluginLogger())
     val pluginDiagnostics = PluginDiagnostics(pluginRegistry, pluginManager)
 
-    // Phase 21: plugin store — bundled catalog + install/uninstall lifecycle.
-    // Phase 22: the catalog also merges persisted REMOTE (downloadable) entries
-    // from the unified PluginEntryStore (seam for Phase 23/24 downloadable
-    // plugins); the PluginRuntime is the stub seam registered by later phases.
+    // Phase 21/22: plugin store — bundled catalog + install/uninstall lifecycle
+    // over the unified PluginEntryStore (persists REMOTE/downloadable entries).
     private val pluginEntryStore = SettingsPluginEntryStore(settings)
-    val pluginStoreCatalog = PluginStoreCatalog(pluginRegistry, pluginEntryStore)
-    val pluginStoreController = PluginStoreController(pluginRegistry, pluginStoreCatalog, AndroidPluginLogger())
 
-    // The active PluginRuntime, read lazily on every access so a Phase 23/24
-    // `PluginRuntimeRegistry.register(...)` after this ViewModel is constructed
-    // is always seen (a construction-time snapshot would pin the stub forever).
-    val pluginRuntime: PluginRuntime get() = PluginRuntimeRegistry.current()
+    // Phase 23: the downloadable-plugin runtime. The artifact storage, HTTPS
+    // transport, DexClassLoader factory, capability facade host and installer
+    // are all wired here; PluginRuntimeRegistry is swapped from the honest
+    // Phase-22 stub to the real SignatureVerifiedPluginRuntime.
+    private val pluginArtifactStorage = PluginArtifactStorage(appContext)
+    private val pluginDownloader = PluginDownloader(
+        transport = HttpsPluginDownloadTransport(),
+        freeSpace = { pluginArtifactStorage.freeBytes() },
+        logger = AndroidPluginLogger()
+    )
+    val pluginRuntime: PluginRuntime by lazy {
+        SignatureVerifiedPluginRuntime(
+            artifactResolver = pluginArtifactStorage,
+            classLoaderFactory = AppClassLoaderFactory(pluginArtifactStorage.optimizedDir().absolutePath),
+            contextFactory = PluginContextFactory.capabilityAware(AppFacadeHost()),
+            parentClassLoader = appContext.classLoader,
+        )
+    }
+    private val pluginRemoteInstaller = DownloadablePluginInstaller(
+        settings = settings,
+        registry = pluginRegistry,
+        entryStore = pluginEntryStore,
+        storage = pluginArtifactStorage,
+        runtime = pluginRuntime,
+        downloader = pluginDownloader,
+        logger = AndroidPluginLogger()
+    )
+
+    val pluginStoreCatalog = PluginStoreCatalog(pluginRegistry, pluginEntryStore)
+    val pluginStoreController = PluginStoreController(
+        pluginRegistry,
+        pluginStoreCatalog,
+        AndroidPluginLogger(),
+        remoteInstaller = pluginRemoteInstaller
+    )
 
     init {
+        // Phase 23: register the real downloadable-plugin runtime (the lazy
+        // `pluginRuntime` above swaps the Phase-22 stub via the registry seam).
+        PluginRuntimeRegistry.register(pluginRuntime)
+        // Re-materialize downloadable plugins installed in a previous session:
+        // the persisted entry + on-disk artifact are re-verified and re-loaded
+        // into the registry BEFORE onProcessStart so opt-in hooks fire.
+        pluginEntryStore.all().forEach { entry ->
+            if (pluginRegistry.isInstalled(entry.id)) {
+                when (val loaded = pluginRuntime.load(entry)) {
+                    is RuntimeOutcome.Success ->
+                        pluginRegistry.registerRemotePlugin(loaded.value.plugin, appContext)
+                    is RuntimeOutcome.Failed -> {
+                        // Artifact missing/corrupt: keep the plugin "installed"
+                        // state honest by refusing silently; the store still
+                        // lists it and Delete cleans up. Never log contents.
+                    }
+                    is RuntimeOutcome.NotYetImplemented -> Unit
+                }
+            }
+        }
         // Fire onEnable once per process for plugins already enabled in a
         // previous session (see PluginRegistry.onProcessStart).
         pluginRegistry.onProcessStart(appContext)
@@ -143,6 +198,23 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
 
     private val _storeMessages = MutableStateFlow<Map<String, String>>(emptyMap())
     val storeMessages: StateFlow<Map<String, String>> = _storeMessages.asStateFlow()
+
+    // Phase 23: a pending remote-download consent request (set when the store
+    // answers NeedsConsent; null when no dialog is pending).
+    private val _pendingConsentPluginId = MutableStateFlow<String?>(null)
+    val pendingConsentPluginId: StateFlow<String?> = _pendingConsentPluginId.asStateFlow()
+
+    /** Respond to the pending remote-download consent dialog. */
+    fun respondStoreConsent(grant: Boolean) {
+        val pluginId = _pendingConsentPluginId.value ?: return
+        _pendingConsentPluginId.value = null
+        if (!grant) return
+        if (pluginStoreController.grantRemoteConsent(pluginId)) {
+            storeDownload(pluginId)
+        } else {
+            _storeMessages.update { it + (pluginId to "Remote downloads are not available in this build.") }
+        }
+    }
 
     private fun refreshPluginStates() {
         _pluginEnabledIds.value = pluginRegistry.allPlugins.associate { it.id to pluginRegistry.isEnabled(it.id) }
@@ -176,10 +248,10 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
      * Store "Download". Two honest paths:
      * - **Bundled** definitions are installed via [PluginStoreController] (offline,
      *   no APK loading; progress reported).
-     * - **Remote** (downloadable) entries go through the [PluginRuntime] seam —
-     *   the Phase-22 runtime is an honest [RuntimeOutcome.NotYetImplemented] stub,
-     *   so the user is told exactly why it cannot run yet instead of a generic
-     *   failure. Phase 23/24 swap the real implementation behind the same call.
+     * - **Remote** (downloadable) entries go through the same controller: the
+     *   FIRST download requires explicit user consent (Phase 23) before any byte
+     *   moves, then HTTPS download → pinned-cert + sha256 verification → load →
+     *   registry install (REGISTERED — off by default). Progress is real.
      */
     fun storeDownload(pluginId: String) {
         if (pluginId in _storeBusy.value) return
@@ -187,19 +259,22 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         if (storeEntry != null && !storeEntry.bundled) {
             viewModelScope.launch {
                 _storeBusy.update { it + pluginId }
+                _storeProgress.update { it + (pluginId to 0f) }
                 _storeMessages.update { it - pluginId }
-                val outcome = pluginRuntime.load(storeEntry.entry)
+                val outcome = pluginStoreController.download(pluginId, appContext) { progress ->
+                    _storeProgress.update { it + (pluginId to progress) }
+                }
                 _storeBusy.update { it - pluginId }
                 when (outcome) {
-                    is RuntimeOutcome.Success ->
+                    is PluginStoreController.DownloadOutcome.Installed ->
                         _storeMessages.update {
                             it + (pluginId to "Downloaded — this remote plugin is now available.")
                         }
-                    is RuntimeOutcome.NotYetImplemented ->
-                        _storeMessages.update {
-                            it + (pluginId to "Remote download not wired yet: ${outcome.message}")
-                        }
-                    is RuntimeOutcome.Failed ->
+                    is PluginStoreController.DownloadOutcome.NeedsConsent -> {
+                        _pendingConsentPluginId.value = pluginId
+                        _storeMessages.update { it + (pluginId to outcome.message) }
+                    }
+                    is PluginStoreController.DownloadOutcome.Failed ->
                         _storeMessages.update { it + (pluginId to outcome.message) }
                 }
                 refreshPluginStates()
@@ -230,6 +305,7 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
                         })
                     }
                 }
+                is PluginStoreController.DownloadOutcome.NeedsConsent -> Unit
                 is PluginStoreController.DownloadOutcome.Failed ->
                     _storeMessages.update { it + (pluginId to outcome.message) }
             }
