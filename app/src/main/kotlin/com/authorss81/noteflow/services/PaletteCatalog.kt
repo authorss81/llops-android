@@ -154,7 +154,7 @@ object PaletteCatalog {
         // Yellows
         s(ColorFamily.YELLOWS, 0xFAFA33), s(ColorFamily.YELLOWS, 0xFFD60A),
         s(ColorFamily.YELLOWS, 0xFACC15), s(ColorFamily.YELLOWS, 0xEAB308),
-        s(ColorFamily.YELLOWS, 0xCA8A04), s(ColorFamily.YELLOWS, 0xFDE047),
+        s(ColorFamily.YELLOWS, 0xC98E04), s(ColorFamily.YELLOWS, 0xFDE047),
         s(ColorFamily.YELLOWS, 0xFFE135), s(ColorFamily.YELLOWS, 0xFFC400),
         s(ColorFamily.YELLOWS, 0xE5C100),
         // Greens
@@ -177,8 +177,8 @@ object PaletteCatalog {
         s(ColorFamily.PURPLES, 0x6B21A8),
         // Pinks
         s(ColorFamily.PINKS, 0xEC4899), s(ColorFamily.PINKS, 0xF472B6),
-        s(ColorFamily.PINKS, 0xDB2777), s(ColorFamily.PINKS, 0xBE185D),
-        s(ColorFamily.PINKS, 0xF9A8D4), s(ColorFamily.PINKS, 0xFB7185),
+        s(ColorFamily.PINKS, 0xDB2777), s(ColorFamily.PINKS, 0xBE185E),
+        s(ColorFamily.PINKS, 0xF9A8D4), s(ColorFamily.PINKS, 0xFB71AB),
         s(ColorFamily.PINKS, 0xF43F5E), s(ColorFamily.PINKS, 0xE863A4),
         s(ColorFamily.PINKS, 0xD85A9A),
         // Browns
