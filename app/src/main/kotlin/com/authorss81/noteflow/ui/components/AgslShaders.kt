@@ -48,6 +48,7 @@ object AgslShaders {
         uniform float uSeed;         // per-stroke seed: spatial dither so grain differs per stroke
         uniform float uStrokeSeed;   // secondary per-stroke seed: rotates grain/bristle phase
         uniform float uBrushStyle;   // style selector (see style constants above)
+        uniform float uVibrancy;     // 0..1 render-time saturation lift on deposited pigment (0 = classic)
 
         float hash21(float2 p) {
             float2 q = p * 127.1 + float2(311.7, 74.7) + float2(uSeed, uSeed * 1.7);
@@ -82,6 +83,24 @@ object AgslShaders {
             
             half4 base = contents.eval(coord);
             float normDist = dist / uBrushRadius;
+
+            // Phase 19: saturate the deposited pigment toward fully saturated so
+            // OIL_PAINT/WATERCOLOR (and every style) keep their pigment character
+            // while gaining vibrancy. Hue and max channel (value) are preserved,
+            // so the result is always in gamut and uVibrancy == 0 is bit-identical
+            // to the pre-phase-19 shader for the same inputs.
+            half3 vibBrushColor = uBrushColor.rgb;
+            if (uVibrancy > 0.0) {
+                float maxc = max(vibBrushColor.r, max(vibBrushColor.g, vibBrushColor.b));
+                float minc = min(vibBrushColor.r, min(vibBrushColor.g, vibBrushColor.b));
+                float cd = maxc - minc;
+                float s = maxc > 0.0 ? cd / maxc : 0.0;
+                float s2 = s + (1.0 - s) * uVibrancy;
+                if (s2 > s && cd > 0.0001) {
+                    // c' = v - (v - c) * (v - (v - s2*v))/cd = v - (v-c)*(s2/cd)*v
+                    vibBrushColor = clamp(maxc - (maxc - vibBrushColor) * ((maxc - (maxc * (1.0 - s2))) / cd), 0.0, 1.0);
+                }
+            }
             
             // Hardness uniform applied to falloff transition
             float falloff = smoothstep(1.0, uHardness, normDist);
@@ -154,9 +173,9 @@ object AgslShaders {
             }
             half3 mixedRgb;
             if (base.a > 0.0) {
-                mixedRgb = base.rgb + (1.0 - (1.0 - base.rgb) * (1.0 - uBrushColor.rgb) - base.rgb) * pigmentFactor;
+                mixedRgb = base.rgb + (1.0 - (1.0 - base.rgb) * (1.0 - vibBrushColor) - base.rgb) * pigmentFactor;
             } else {
-                mixedRgb = uBrushColor.rgb;
+                mixedRgb = vibBrushColor;
             }
 
             // Impasto: Thick paint 3D relief with bristle lines and lighting
@@ -373,7 +392,8 @@ object AgslShaders {
             paperGrain: Float = 0.5f,
             seed: Float = 0f,
             strokeSeed: Float = 0f,
-            brushStyle: Int = StyleIds.DEFAULT
+            brushStyle: Int = StyleIds.DEFAULT,
+            vibrancy: Float = 0f
         ) {
             runtimeShader.setFloatUniform("uPrevPos", prevX, prevY)
             runtimeShader.setFloatUniform("uBrushPos", brushX, brushY)
@@ -388,6 +408,7 @@ object AgslShaders {
             runtimeShader.setFloatUniform("uSeed", seed)
             runtimeShader.setFloatUniform("uStrokeSeed", strokeSeed)
             runtimeShader.setFloatUniform("uBrushStyle", brushStyle.toFloat())
+            runtimeShader.setFloatUniform("uVibrancy", vibrancy.coerceIn(0f, 1f))
         }
     }
 }

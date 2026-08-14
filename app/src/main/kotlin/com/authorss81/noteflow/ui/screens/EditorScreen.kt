@@ -47,6 +47,7 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.authorss81.noteflow.data.model.*
@@ -54,6 +55,8 @@ import com.authorss81.noteflow.plugins.PluginCapability
 import com.authorss81.noteflow.plugins.export.mimeType
 import com.authorss81.noteflow.services.ImportExportService
 import com.authorss81.noteflow.services.HarmonyScheme
+import com.authorss81.noteflow.services.PaletteCatalog
+import com.authorss81.noteflow.services.PaletteMath
 import com.authorss81.noteflow.services.PressureCurve
 import com.authorss81.noteflow.services.SymmetryMode
 import com.authorss81.noteflow.services.VoiceNoteManager
@@ -241,24 +244,11 @@ fun EditorScreen(
     var stylusPressureEnabled by remember { mutableStateOf(true) }
     var advancedBrushesEnabled by remember { mutableStateOf(false) }
 
-    // Dynamic Color Palette Manager (Eyedropper Sampled Colors)
+    // Dynamic Color Palette Manager (Eyedropper Sampled Colors + recent colors)
+    // Phase 19: default is the curated, organized vibrant palette (PaletteCatalog).
     var customPalette by remember {
         mutableStateOf(
-            listOf(
-                Color(0xFF1B365D), // Deep Ink Blue
-                Color(0xFFDC2626), // Crimson Red
-                Color(0xFF16A34A), // Forest Green
-                Color(0xFFD97706), // Amber
-                Color(0xFF9333EA), // Royal Purple
-                Color(0xFF0D9488), // Teal
-                Color(0xFFE11D48), // Coral Pink
-                Color(0xFF475569), // Slate Charcoal
-                Color(0xFF000000), // Pitch Black
-                Color(0xFFFFFFFF), // Cream White
-                Color(0xFF4F46E5), // Indigo
-                Color(0xFFCA8A04), // Warm Ochre
-                Color(0xFFFF00AA)  // Rainbow
-            )
+            PaletteCatalog.defaultColorInts().map { Color(it) }
         )
     }
 
@@ -302,6 +292,12 @@ fun EditorScreen(
     var divideIntoPages by remember { mutableStateOf(true) }
     var gpuWetBrushesEnabled by remember { mutableStateOf(viewModel.settings.gpuWetBrushesEnabled) }
     var shapeAutoSnapEnabled by remember { mutableStateOf(viewModel.settings.shapeAutoSnapEnabled) }
+
+    // Phase 19: dual eraser mode + render-time vibrancy. Stored in SharedPreferences
+    // (SettingsManager), no DB schema change. OFF by default.
+    var eraserMode by remember { mutableStateOf(com.authorss81.noteflow.services.EraserMode.fromSettingKey(viewModel.settings.eraserModeKey)) }
+    var vibrancyEnabled by remember { mutableStateOf(viewModel.settings.vibrancyEnabled) }
+    var vibrancyBoostLevel by remember { mutableFloatStateOf(viewModel.settings.vibrancyBoostLevel) }
 
     // Phase 07 painting features: stabilizer / pressure curve / symmetry mode.
     var stabilizerEnabled by remember { mutableStateOf(viewModel.settings.strokeStabilizerEnabled) }
@@ -1388,7 +1384,10 @@ fun EditorScreen(
                 onPlaceSticker = { canvasOffset, targetPage ->
                     handlePlaceSticker(canvasOffset, targetPage)
                 },
-                activeBrushPresetId = activeBrushPresetId
+                activeBrushPresetId = activeBrushPresetId,
+                eraserMode = eraserMode,
+                vibrancyEnabled = vibrancyEnabled,
+                vibrancyBoostLevel = vibrancyBoostLevel
             )
 
             // Voice note failure banner (real recorder/playback errors — no silent fakes)
@@ -1516,6 +1515,19 @@ fun EditorScreen(
             ToolPickerBottomSheet(
                 currentTool = currentTool,
                 showStrokePreviews = showStrokePreviewsInPicker,
+                eraserMode = eraserMode,
+                onEraserModeChange = { mode ->
+                    eraserMode = mode
+                    viewModel.settings.eraserModeKey = mode.key
+                    viewModel.showSnackbar(
+                        if (mode == com.authorss81.noteflow.services.EraserMode.PARTIAL) {
+                            "Partial eraser on — drag over strokes to trim them"
+                        } else {
+                            "Whole-stroke eraser on — any touch removes the stroke"
+                        },
+                        isLong = false
+                    )
+                },
                 onToolSelect = { tool ->
                     currentTool = tool
                     activePresetId = null
@@ -1679,6 +1691,20 @@ fun EditorScreen(
                 activeBrushPresetName = activeBrushPresetId
                     ?.let { com.authorss81.noteflow.services.BrushPresetPack.byId(it)?.name },
                 onOpenBrushPresets = { toolbarState = FloatingToolbarState.BRUSH_PRESETS },
+                vibrancyEnabled = vibrancyEnabled,
+                onVibrancyToggle = { enabled ->
+                    vibrancyEnabled = enabled
+                    viewModel.settings.vibrancyEnabled = enabled
+                    viewModel.showSnackbar(
+                        if (enabled) "Vibrancy ON — richer, more saturated colors (render-time only)" else "Vibrancy OFF — stored colors restored",
+                        isLong = false
+                    )
+                },
+                vibrancyBoostLevel = vibrancyBoostLevel,
+                onVibrancyBoostChange = { level ->
+                    vibrancyBoostLevel = level
+                    viewModel.settings.vibrancyBoostLevel = level
+                },
                 onDismiss = { toolbarState = FloatingToolbarState.COLLAPSED }
             )
         }
@@ -2096,6 +2122,8 @@ private fun FloatingBottomToolbarPill(
 private fun ToolPickerBottomSheet(
     currentTool: StrokeTool,
     showStrokePreviews: Boolean = false,
+    eraserMode: com.authorss81.noteflow.services.EraserMode = com.authorss81.noteflow.services.EraserMode.STROKE,
+    onEraserModeChange: (com.authorss81.noteflow.services.EraserMode) -> Unit = {},
     onToolSelect: (StrokeTool) -> Unit,
     onDismiss: () -> Unit,
     onSnackbar: (String, Boolean) -> Unit = { _, _ -> }
@@ -2116,6 +2144,48 @@ private fun ToolPickerBottomSheet(
                 style = MaterialTheme.typography.titleLarge
             )
             Spacer(modifier = Modifier.height(16.dp))
+
+            // Phase 19: eraser sub-menu — shown while the ERASER is active so the
+            // whole-stroke vs partial-erase choice is always reachable, not dead UI.
+            if (currentTool == StrokeTool.ERASER) {
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(14.dp)) {
+                        Text(
+                            text = "Eraser Mode",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            com.authorss81.noteflow.services.EraserMode.entries.forEach { mode ->
+                                FilterChip(
+                                    selected = eraserMode == mode,
+                                    onClick = { onEraserModeChange(mode) },
+                                    label = {
+                                        Text(
+                                            text = mode.label,
+                                            style = MaterialTheme.typography.labelMedium
+                                        )
+                                    },
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "Whole Stroke removes anything the eraser touches. " +
+                                "Partial trims freehand strokes into segments; text & shapes are removed whole.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(16.dp))
+            }
 
             val wetToolsList = StrokeTool.entries.filter { com.authorss81.noteflow.services.BrushStrokeMath.isWetRenderedTool(it) }
             val standardTools = StrokeTool.entries.filter { it !in wetToolsList }
@@ -2145,7 +2215,9 @@ private fun ToolPickerBottomSheet(
                         onClick = {
                             if (!reduceMotion) haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
                             onToolSelect(tool)
-                            onDismiss()
+                            // Phase 19: stay open for the ERASER so the mode chips
+                            // (whole-stroke vs partial) are immediately visible.
+                            if (tool != StrokeTool.ERASER) onDismiss()
                         },
                         shape = RoundedCornerShape(16.dp),
                         color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
@@ -2292,99 +2364,174 @@ private fun ColorPickerBottomSheet(
                     text = if (advancedBrushesEnabled) "Advanced Stroke Color" else "Stroke Color",
                     style = MaterialTheme.typography.titleLarge
                 )
-                Box(
-                    modifier = Modifier
-                        .size(36.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(currentColor)
-                        .border(1.5.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(8.dp))
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(
+                        text = "#%06X".format(java.util.Locale.US, currentColor.toArgb() and 0xFFFFFF),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Box(
+                        modifier = Modifier
+                            .size(44.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(currentColor)
+                            .border(1.5.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(10.dp))
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            if (advancedBrushesEnabled) {
-                // Initialize HSV from currentColor using safe android.graphics API
-                val initialHsv = remember(currentColor) {
-                    val hsv = FloatArray(3)
-                    android.graphics.Color.colorToHSV(currentColor.toArgb(), hsv)
-                    hsv
-                }
+            // Phase 19: scrollable, organized color picker — HSV panel (advanced
+            // mode only), recent colors, curated family sections, saved swatches.
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .heightIn(max = 430.dp)
+            ) {
+                if (advancedBrushesEnabled) {
+                    // Initialize HSV from currentColor using safe android.graphics API
+                    val initialHsv = remember(currentColor) {
+                        val hsv = FloatArray(3)
+                        android.graphics.Color.colorToHSV(currentColor.toArgb(), hsv)
+                        hsv
+                    }
 
-                var h by remember(currentColor) { mutableFloatStateOf(initialHsv[0]) }
-                var s by remember(currentColor) { mutableFloatStateOf(initialHsv[1]) }
-                var v by remember(currentColor) { mutableFloatStateOf(initialHsv[2]) }
+                    var h by remember(currentColor) { mutableFloatStateOf(initialHsv[0]) }
+                    var s by remember(currentColor) { mutableFloatStateOf(initialHsv[1]) }
+                    var v by remember(currentColor) { mutableFloatStateOf(initialHsv[2]) }
 
-                val derivedColor = remember(h, s, v) {
-                    val argb = android.graphics.Color.HSVToColor(floatArrayOf(h, s, v))
-                    Color(argb)
-                }
+                    val derivedColor = remember(h, s, v) {
+                        val argb = android.graphics.Color.HSVToColor(floatArrayOf(h, s, v))
+                        Color(argb)
+                    }
 
-                Text(
-                    text = "HSV Color Customization",
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.primary
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                // Hue Slider
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(text = "H", style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(16.dp))
-                    Slider(
-                        value = h,
-                        onValueChange = {
-                            h = it
-                            onColorSelect(derivedColor)
-                        },
-                        valueRange = 0f..360f,
-                        modifier = Modifier.weight(1f)
+                    Text(
+                        text = "HSV Color Customization",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.primary
                     )
-                    Text(text = "${h.toInt()}°", style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(36.dp))
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Hue Slider
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(text = "H", style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(16.dp))
+                        Slider(
+                            value = h,
+                            onValueChange = {
+                                h = it
+                                onColorSelect(derivedColor)
+                            },
+                            valueRange = 0f..360f,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Text(text = "${h.toInt()}°", style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(36.dp))
+                    }
+
+                    // Saturation Slider
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(text = "S", style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(16.dp))
+                        Slider(
+                            value = s,
+                            onValueChange = {
+                                s = it
+                                onColorSelect(derivedColor)
+                            },
+                            valueRange = 0f..1f,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Text(text = "${(s * 100).toInt()}%", style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(36.dp))
+                    }
+
+                    // Value/Brightness Slider
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(text = "V", style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(16.dp))
+                        Slider(
+                            value = v,
+                            onValueChange = {
+                                v = it
+                                onColorSelect(derivedColor)
+                            },
+                            valueRange = 0f..1f,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Text(text = "${(v * 100).toInt()}%", style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(36.dp))
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Button(
+                        onClick = { onSaveSwatch(derivedColor) },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Outlined.Check, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Save to Custom Swatches")
+                    }
+
+                    Spacer(modifier = Modifier.height(24.dp))
                 }
 
-                // Saturation Slider
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(text = "S", style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(16.dp))
-                    Slider(
-                        value = s,
-                        onValueChange = {
-                            s = it
-                            onColorSelect(derivedColor)
-                        },
-                        valueRange = 0f..1f,
-                        modifier = Modifier.weight(1f)
+                // Curated families: static, organized, deduped sections.
+                val familySections = remember {
+                    com.authorss81.noteflow.services.ColorFamily.entries.mapNotNull { family ->
+                        val swatches = com.authorss81.noteflow.services.PaletteCatalog.forFamily(family)
+                        if (swatches.isNotEmpty()) family to swatches else null
+                    }
+                }
+                val catalogArgbSet = remember {
+                    com.authorss81.noteflow.services.PaletteCatalog.curated.map { it.argb }.toSet()
+                }
+                val recentColors = remember(palette) {
+                    val extras = palette.filter { it.toArgb() !in catalogArgbSet }
+                    val source = if (extras.isNotEmpty()) extras.asReversed() else palette.asReversed()
+                    source.distinctBy { it.toArgb() }.take(16)
+                }
+
+                if (recentColors.isNotEmpty()) {
+                    Text(
+                        text = "Recent Colors",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.primary
                     )
-                    Text(text = "${(s * 100).toInt()}%", style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(36.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        items(recentColors) { color ->
+                            ColorSwatch(
+                                color = color,
+                                isSelected = currentColor.toArgb() == color.toArgb(),
+                                size = 38.dp,
+                                onClick = { onColorSelect(color) }
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(20.dp))
                 }
 
-                // Value/Brightness Slider
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(text = "V", style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(16.dp))
-                    Slider(
-                        value = v,
-                        onValueChange = {
-                            v = it
-                            onColorSelect(derivedColor)
-                        },
-                        valueRange = 0f..1f,
-                        modifier = Modifier.weight(1f)
+                familySections.forEach { (family, swatches) ->
+                    Text(
+                        text = family.label,
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.primary
                     )
-                    Text(text = "${(v * 100).toInt()}%", style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(36.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        items(swatches) { swatch ->
+                            ColorSwatch(
+                                color = Color(swatch.argb),
+                                isSelected = currentColor.toArgb() == swatch.argb,
+                                size = 34.dp,
+                                onClick = { onColorSelect(Color(swatch.argb)) }
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(16.dp))
                 }
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                Button(
-                    onClick = { onSaveSwatch(derivedColor) },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Icon(Icons.Outlined.Check, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Save to Custom Swatches")
-                }
-
-                Spacer(modifier = Modifier.height(16.dp))
 
                 if (savedSwatches.isNotEmpty()) {
                     Text(
@@ -2393,21 +2540,13 @@ private fun ColorPickerBottomSheet(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Spacer(modifier = Modifier.height(8.dp))
-
-                    LazyVerticalGrid(
-                        columns = GridCells.Fixed(6),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 120.dp)
-                    ) {
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         items(savedSwatches) { swatch ->
                             val swatchColor = Color(swatch.colorInt)
                             val isSelected = currentColor.toArgb() == swatch.colorInt
                             Box(
                                 modifier = Modifier
-                                    .aspectRatio(1f)
+                                    .size(34.dp)
                                     .clip(CircleShape)
                                     .background(swatchColor)
                                     .border(
@@ -2415,11 +2554,17 @@ private fun ColorPickerBottomSheet(
                                         color = if (isSelected) MaterialTheme.colorScheme.primary else Color.Gray.copy(alpha = 0.4f),
                                         shape = CircleShape
                                     )
-                                    .clickable {
-                                        onColorSelect(swatchColor)
-                                    },
+                                    .clickable { onColorSelect(swatchColor) },
                                 contentAlignment = Alignment.Center
                             ) {
+                                if (isSelected) {
+                                    Icon(
+                                        Icons.Outlined.Check,
+                                        contentDescription = "Selected",
+                                        tint = if (swatchColor.luminance() > 0.5f) Color.Black else Color.White,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                }
                                 Box(
                                     modifier = Modifier
                                         .align(Alignment.TopEnd)
@@ -2431,62 +2576,6 @@ private fun ColorPickerBottomSheet(
                                 ) {
                                     Text("×", color = Color.White, style = MaterialTheme.typography.labelSmall)
                                 }
-                                if (isSelected) {
-                                    Icon(
-                                        Icons.Outlined.Check,
-                                        contentDescription = "Selected",
-                                        tint = if (swatchColor.luminance() > 0.5f) Color.Black else Color.White,
-                                        modifier = Modifier.size(14.dp)
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            } else {
-                // Classic Simple Color Palette Row
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(6),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 280.dp)
-                ) {
-                    items(palette) { color ->
-                        val selected = currentColor == color
-                        val isRainbow = color == Color(0xFFFF00AA)
-                        val boxModifier = if (isRainbow) {
-                            Modifier
-                                .aspectRatio(1f)
-                                .clip(CircleShape)
-                                .background(Brush.linearGradient(listOf(Color.Red, Color.Yellow, Color.Green, Color.Cyan, Color.Blue, Color.Magenta)))
-                        } else {
-                            Modifier
-                                .aspectRatio(1f)
-                                .clip(CircleShape)
-                                .background(color)
-                        }
-                        Box(
-                            modifier = boxModifier
-                                .border(
-                                    width = if (selected) 3.dp else 1.dp,
-                                    color = if (selected) MaterialTheme.colorScheme.primary else Color.Gray.copy(alpha = 0.4f),
-                                    shape = CircleShape
-                                )
-                                .clickable {
-                                    onColorSelect(color)
-                                    onDismiss()
-                                },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            if (selected) {
-                                Icon(
-                                    Icons.Outlined.Check,
-                                    contentDescription = "Selected",
-                                    tint = if (color.luminance() > 0.5f) Color.Black else Color.White,
-                                    modifier = Modifier.size(16.dp)
-                                )
                             }
                         }
                     }
@@ -2499,6 +2588,41 @@ private fun ColorPickerBottomSheet(
                 onColorSelect = onColorSelect
             )
             Spacer(modifier = Modifier.height(24.dp))
+        }
+    }
+}
+
+/**
+ * Phase 19: reusable color swatch circle used across the organized palette
+ * (recent colors + curator families). Selected swatches get a check overlay.
+ */
+@Composable
+private fun ColorSwatch(
+    color: Color,
+    isSelected: Boolean,
+    size: Dp,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .size(size)
+            .clip(CircleShape)
+            .background(color)
+            .border(
+                width = if (isSelected) 3.dp else 1.dp,
+                color = if (isSelected) MaterialTheme.colorScheme.primary else Color.Gray.copy(alpha = 0.4f),
+                shape = CircleShape
+            )
+            .clickable { onClick() },
+        contentAlignment = Alignment.Center
+    ) {
+        if (isSelected) {
+            Icon(
+                Icons.Outlined.Check,
+                contentDescription = "Selected",
+                tint = if (color.luminance() > 0.5f) Color.Black else Color.White,
+                modifier = Modifier.size(16.dp)
+            )
         }
     }
 }
@@ -2799,6 +2923,10 @@ private fun CanvasSettingsBottomSheet(
     onInsertPageAfter: () -> Unit,
     activeBrushPresetName: String? = null,
     onOpenBrushPresets: () -> Unit = {},
+    vibrancyEnabled: Boolean = false,
+    onVibrancyToggle: (Boolean) -> Unit = {},
+    vibrancyBoostLevel: Float = 0.4f,
+    onVibrancyBoostChange: (Float) -> Unit = {},
     onDismiss: () -> Unit
 ) {
     ModalBottomSheet(
@@ -3115,6 +3243,56 @@ private fun CanvasSettingsBottomSheet(
                     checked = shapeAutoSnapEnabled,
                     onCheckedChange = onShapeAutoSnapToggle
                 )
+            }
+
+            // Phase 19: render-time vibrancy — richer, more saturated colors.
+            // OFF by default; stored color values are never modified.
+            Spacer(modifier = Modifier.height(16.dp))
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Icon(Icons.Outlined.AutoAwesome, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Vibrancy", style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    "Saturation lift at render time — saved colors stay true",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        Switch(
+                            checked = vibrancyEnabled,
+                            onCheckedChange = onVibrancyToggle
+                        )
+                    }
+                    if (vibrancyEnabled) {
+                        Text(
+                            text = "Boost: ${(vibrancyBoostLevel * 100).toInt()}%",
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                        Slider(
+                            value = vibrancyBoostLevel,
+                            onValueChange = onVibrancyBoostChange,
+                            valueRange = 0f..1f,
+                            steps = 9
+                        )
+                        Text(
+                            text = "Works on all brush types (vector fallback included) and the AGSL wet shader.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
             }
 
             // Phase 13: Ready-made brush presets (WetBrushEngine params). Only

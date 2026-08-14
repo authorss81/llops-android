@@ -127,6 +127,24 @@ class SettingsManager(context: Context) {
             }.apply()
         }
 
+    // Phase 19: dual erasers — "STROKE" (classic whole-stroke eraser) is the
+    // default so existing behaviour is unchanged; "PARTIAL" trims each touched
+    // stroke into surviving segments. SharedPreferences only, no DB schema change.
+    var eraserModeKey: String
+        get() = prefs.getString("eraser_mode_key", "STROKE") ?: "STROKE"
+        set(value) = prefs.edit().putString("eraser_mode_key", value).apply()
+
+    // Phase 19: render-time vibrancy/saturation boost. OFF by default so stored
+    // colors and existing notes render unchanged; stored colorInt is never mutated.
+    var vibrancyEnabled: Boolean
+        get() = prefs.getBoolean("vibrancy_enabled", false)
+        set(value) = prefs.edit().putBoolean("vibrancy_enabled", value).apply()
+
+    // Perceptual saturation boost applied at render time only (0..1, default 0.4).
+    var vibrancyBoostLevel: Float
+        get() = prefs.getFloat("vibrancy_boost_level", 0.4f).coerceIn(0f, 1f)
+        set(value) = prefs.edit().putFloat("vibrancy_boost_level", value.coerceIn(0f, 1f)).apply()
+
     // Phase 18: brush-physics render settings (SharedPreferences only, no schema change).
     // Velocity width modulation defaults OFF so existing brushes keep their classic look.
     var velocityModulationEnabled: Boolean

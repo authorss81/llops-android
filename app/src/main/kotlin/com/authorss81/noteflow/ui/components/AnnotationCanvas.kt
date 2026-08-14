@@ -136,8 +136,14 @@ fun AnnotationCanvas(
     // Phase 13: rich canvas content.
     selectedStickerId: String? = null,
     onPlaceSticker: (Offset, Int) -> Unit = { _, _ -> },
-    activeBrushPresetId: String? = null
+    activeBrushPresetId: String? = null,
+    // Phase 19: dual erasers (STROKE = classic whole-stroke, PARTIAL = trim to
+    // surviving segments) + render-time vibrancy/saturation boost (0 = off).
+    eraserMode: com.authorss81.noteflow.services.EraserMode = com.authorss81.noteflow.services.EraserMode.STROKE,
+    vibrancyEnabled: Boolean = false,
+    vibrancyBoostLevel: Float = 0f
 ) {
+    val vibrancyBoost = if (vibrancyEnabled) vibrancyBoostLevel.coerceIn(0f, 1f) else 0f
     var internalZoomScale by remember { mutableFloatStateOf(zoomScale) }
     var internalPanOffset by remember { mutableStateOf(panOffset) }
 
@@ -211,6 +217,11 @@ fun AnnotationCanvas(
     var activeTargetPage by remember { mutableIntStateOf(pdfPageFilter) }
     var dynamicPageCount by remember { mutableIntStateOf(1) }
     var isPanningBlackSpace by remember { mutableStateOf(false) }
+
+    // Phase 19: sampled erase path (canvas coords) accumulated for the whole
+    // duration of one eraser drag, so the PARTIAL eraser splits each stroke by
+    // the FULL erase path rather than only the latest sample.
+    val eraseSamples = remember { mutableStateListOf<androidx.compose.ui.geometry.Offset>() }
 
     // Phase 07: stroke stabilizer (one filter instance per continuous stroke).
     val stabilizerFilter = remember { StrokeStabilizer.create() }
@@ -390,7 +401,9 @@ fun AnnotationCanvas(
     }
 
     val layerBitmapCache = remember { mutableMapOf<String, com.authorss81.noteflow.ui.components.LayerBitmapCache>() }
-    LaunchedEffect(strokes, layers) {
+    // Phase 19: vibrancy is baked into the layer bitmaps, so a vibe change
+    // invalidates the cache the same way a stroke/layer change does.
+    LaunchedEffect(strokes, layers, vibrancyBoost) {
         layerBitmapCache.values.forEach {
             com.authorss81.noteflow.utils.BitmapPool.release(it.bitmap.asAndroidBitmap())
         }
@@ -564,7 +577,7 @@ fun AnnotationCanvas(
             }
 
             // 3. Drawing / Eyedropper / Single-Finger Pan Gestures
-            .pointerInput(currentTool, currentColor, currentWidth, pdfPageFilter, isContinuousMode, activeRawBitmapMap, isLayerLocked, symmetryMode, stabilizerEnabled) {
+            .pointerInput(currentTool, currentColor, currentWidth, pdfPageFilter, isContinuousMode, activeRawBitmapMap, isLayerLocked, symmetryMode, stabilizerEnabled, eraserMode) {
                 // Phase 07: with a view-time mirror active, erasing a stroke must
                 // also work through the mirrored copy — the user sees a mirrored
                 // stroke and expects to erase it in place. Uses the SAME axis as the
@@ -577,6 +590,46 @@ fun AnnotationCanvas(
                         val c = symmetryCenterFor(size.width.toFloat(), offset.y)
                         val m = SymmetryHelper.mirrorPoint(offset.x, offset.y, symmetryMode, c.x, c.y)
                         strokeContainsPoint(stroke, offset) || strokeContainsPoint(stroke, Offset(m.x, m.y))
+                    }
+                }
+                // Phase 19: shared eraser handler. STROKE mode keeps the classic
+                // remove-whole-stroke behaviour. PARTIAL mode segments every hit
+                // polyline (freehand tools with >= 2 points) into surviving runs
+                // using the full accumulated erase path; non-polyline strokes
+                // (text, shapes) fall back to whole-stroke removal — an honest
+                // gate, matching the classic eraser, not a fake "partial".
+                fun applyEraser(canvasOffset: Offset) {
+                    val partial = eraserMode == com.authorss81.noteflow.services.EraserMode.PARTIAL
+                    val samples = eraseSamples.map {
+                        com.authorss81.noteflow.services.StrokeSegmenter.ErasePoint(it.x, it.y)
+                    }
+                    val newList = mutableListOf<Stroke>()
+                    var changed = false
+                    for (stroke in activeStrokeList) {
+                        if (erasesStroke(stroke, canvasOffset)) {
+                            changed = true
+                            val canPartial = partial &&
+                                stroke.tool.isFreehandTool &&
+                                stroke.points.size > 1 &&
+                                stroke.tool != StrokeTool.LASER
+                            if (canPartial) {
+                                val result = com.authorss81.noteflow.services.StrokeSegmenter.segment(
+                                    stroke = stroke,
+                                    eraseSamples = samples,
+                                    extraRadius = com.authorss81.noteflow.services.StrokeSegmenter.DEFAULT_EXTRA_RADIUS
+                                )
+                                newList.addAll(result.surviving)
+                            }
+                            // else: stroke is dropped whole (classic eraser behaviour)
+                        } else {
+                            newList.add(stroke)
+                        }
+                    }
+                    if (changed) {
+                        activeStrokeList.clear()
+                        activeStrokeList.addAll(newList)
+                        val otherStrokes = if (isContinuousMode) emptyList() else strokes.filter { it.pdfPage != pdfPageFilter }
+                        onStrokesChanged(otherStrokes + newList)
                     }
                 }
                 // Phase 13: the STICKER tool places stickers via tap only; it is
@@ -639,15 +692,9 @@ fun AnnotationCanvas(
                                 eyedropperPosition = offset
                                 sampledColorPreview = sampleColorAt(canvasOffset, targetPage)
                             } else if (currentTool == StrokeTool.ERASER) {
-                                val remaining = activeStrokeList.filterNot { stroke ->
-                                    erasesStroke(stroke, canvasOffset)
-                                }
-                                if (remaining.size != activeStrokeList.size) {
-                                    activeStrokeList.clear()
-                                    activeStrokeList.addAll(remaining)
-                                    val otherStrokes = if (isContinuousMode) emptyList() else strokes.filter { it.pdfPage != pdfPageFilter }
-                                    onStrokesChanged(otherStrokes + remaining)
-                                }
+                                eraseSamples.clear()
+                                eraseSamples.add(canvasOffset)
+                                applyEraser(canvasOffset)
                             } else {
                                 activeStart = startPoint
                                 activeEnd = startPoint
@@ -693,15 +740,8 @@ fun AnnotationCanvas(
                                 sampledColorPreview = sampleColorAt(canvasPosition, activeTargetPage)
                             } else if (currentTool == StrokeTool.ERASER) {
                                 val canvasPosition = Offset(rawCanvasX, rawCanvasY)
-                                val remaining = activeStrokeList.filterNot { stroke ->
-                                    erasesStroke(stroke, canvasPosition)
-                                }
-                                if (remaining.size != activeStrokeList.size) {
-                                    activeStrokeList.clear()
-                                    activeStrokeList.addAll(remaining)
-                                    val otherStrokes = if (isContinuousMode) emptyList() else strokes.filter { it.pdfPage != pdfPageFilter }
-                                    onStrokesChanged(otherStrokes + remaining)
-                                }
+                                eraseSamples.add(canvasPosition)
+                                applyEraser(canvasPosition)
                             } else if (currentTool.isFreehandTool) {
                                 // Phase 07: stabilizer (per-axis EWMA) smooths touch jitter
                                 // while staying responsive; disabled => identical behaviour.
@@ -1222,7 +1262,8 @@ fun AnnotationCanvas(
                         symmetryCenterX = symmetryCenterFor(size.width, 0f).x,
                         symmetryCenterY = symmetryCenterFor(size.width, 0f).y,
                         strokeRenderOpts = strokeRenderOpts,
-                        liveStrokeSeed = currentStrokeSeed
+                        liveStrokeSeed = currentStrokeSeed,
+                        vibrancyBoost = vibrancyBoost
                     )
                 } else if (!divideIntoPages) {
                     // Continuous Infinite Canvas (Seamless, without page division gaps)
@@ -1274,7 +1315,8 @@ fun AnnotationCanvas(
                         symmetryCenterX = symmetryCenterFor(size.width, 0f).x,
                         symmetryCenterY = symmetryCenterFor(size.width, 0f).y,
                         strokeRenderOpts = strokeRenderOpts,
-                        liveStrokeSeed = currentStrokeSeed
+                        liveStrokeSeed = currentStrokeSeed,
+                        vibrancyBoost = vibrancyBoost
                     )
                 } else {
                     // Continuous Infinite Canvas with Page Divisions & Page Break Badges
@@ -1371,7 +1413,8 @@ fun AnnotationCanvas(
                             symmetryCenterX = symmetryCenterFor(size.width, pageTopY).x,
                             symmetryCenterY = symmetryCenterFor(size.width, pageTopY).y,
                             strokeRenderOpts = strokeRenderOpts,
-                            liveStrokeSeed = currentStrokeSeed
+                            liveStrokeSeed = currentStrokeSeed,
+                            vibrancyBoost = vibrancyBoost
                         )
                     }
                 }
@@ -1924,7 +1967,7 @@ private fun DrawScope.drawPaperTemplate(
     }
 }
 
-private fun convertToInkStroke(stroke: Stroke, context: android.content.Context? = null): InkStroke? {
+private fun convertToInkStroke(stroke: Stroke, context: android.content.Context? = null, vibrancy: Float = 0f): InkStroke? {
     if (stroke.points.isEmpty()) return null
     if (stroke.tool == StrokeTool.CALLIGRAPHIC || stroke.tool == StrokeTool.CHISEL_MARKER) return null
     try {
@@ -1939,7 +1982,14 @@ private fun convertToInkStroke(stroke: Stroke, context: android.content.Context?
                           stroke.tool.isShapeTool) &&
                           !com.authorss81.noteflow.services.BrushStrokeMath.isWetRenderedTool(stroke.tool)
 
-        val brushColorInt = if (isSolidTool) stroke.color.copy(alpha = 1.0f).toArgb() else stroke.colorInt
+        // Phase 19: render-time vibrancy applies to the advanced ink path too
+        // (pure render; stored colorInt is never touched).
+        val renderColorInt = if (vibrancy > 0f) {
+            com.authorss81.noteflow.services.ColorVibrancy.boostColorInt(stroke.colorInt, vibrancy)
+        } else {
+            stroke.colorInt
+        }
+        val brushColorInt = if (isSolidTool) Color(renderColorInt).copy(alpha = 1.0f).toArgb() else renderColorInt
         val brush = InkBrush.createWithColorIntArgb(
             family,
             brushColorInt,
@@ -2036,14 +2086,15 @@ private fun DrawScope.drawCompositedLayersStrokes(
     symmetryCenterX: Float = 0f,
     symmetryCenterY: Float = 0f,
     strokeRenderOpts: StrokeRenderOpts = StrokeRenderOpts(),
-    liveStrokeSeed: Float = 0f
+    liveStrokeSeed: Float = 0f,
+    vibrancyBoost: Float = 0f
 ) {
     // Phase 07: view-time mirror. Symmetry never touches stored point data —
     // committed strokes keep the real points so saved notes stay portable and
     // export correctly. TEXT strokes are never mirrored (text cannot sensibly
     // reflect).
     fun DrawScope.drawStrokeWithSymmetry(stroke: Stroke, offsetY: Float, sMode: SymmetryMode, centerX: Float = symmetryCenterX, centerY: Float = symmetryCenterY) {
-        drawSingleStroke(stroke, offsetY, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer, renderOpts = strokeRenderOpts)
+        drawSingleStroke(stroke, offsetY, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer, renderOpts = strokeRenderOpts, vibrancy = vibrancyBoost)
         if (sMode != SymmetryMode.OFF && stroke.tool != StrokeTool.TEXT) {
             drawSingleStroke(
                 stroke.copy(
@@ -2063,7 +2114,8 @@ private fun DrawScope.drawCompositedLayersStrokes(
                 offsetY,
                 isDarkPaper = isDarkPaper,
                 inkRenderer = inkRenderer,
-                renderOpts = strokeRenderOpts
+                renderOpts = strokeRenderOpts,
+                vibrancy = vibrancyBoost
             )
         }
     }
@@ -2079,7 +2131,7 @@ private fun DrawScope.drawCompositedLayersStrokes(
             pageWidth > 0f && pageHeight > 0f
         ) {
             val defaultLayerId = "layer_default"
-            val cacheKey = "${pageIdx}_${defaultLayerId}_${symmetryMode}"
+            val cacheKey = "${pageIdx}_${defaultLayerId}_${symmetryMode}_v${vibrancyBoost}"
             val strokesHash = strokes.hashCode()
             var cache = layerBitmapCache[cacheKey]
             val pw = pageWidth.toInt().coerceAtLeast(1)
@@ -2178,12 +2230,13 @@ private fun DrawScope.drawCompositedLayersStrokes(
                 wetCanvasEngine = wetCanvasEngine ?: com.authorss81.noteflow.services.WetCanvasEngine(),
                 wetBrushEngine = wetBrushEngine,
                 strokeRenderOpts = strokeRenderOpts,
-                liveStrokeSeed = liveStrokeSeed
+                liveStrokeSeed = liveStrokeSeed,
+                vibrancyBoost = vibrancyBoost
             )
             continue
         }
 
-        val cacheKey = "${pageIdx}_${layer.id}_${symmetryMode}"
+        val cacheKey = "${pageIdx}_${layer.id}_${symmetryMode}_v${vibrancyBoost}"
         val strokesHash = layerStrokes.hashCode()
 
         // Phase 07: symmetry is a view-time transform, but it does NOT have to be
@@ -2290,7 +2343,8 @@ private fun DrawScope.drawWetLayerPass(
     wetCanvasEngine: com.authorss81.noteflow.services.WetCanvasEngine,
     wetBrushEngine: com.authorss81.noteflow.services.WetBrushEngine,
     strokeRenderOpts: StrokeRenderOpts = StrokeRenderOpts(),
-    liveStrokeSeed: Float = 0f
+    liveStrokeSeed: Float = 0f,
+    vibrancyBoost: Float = 0f
 ) {
     if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU && wetMixingEffect != null) {
         val brushPos = activePoints.lastOrNull() ?: activeStart
@@ -2317,7 +2371,8 @@ private fun DrawScope.drawWetLayerPass(
                     previewStroke?.id ?: "preview"
                 ),
                 strokeSeed = liveStrokeSeed,
-                brushStyle = preset.brushStyle
+                brushStyle = preset.brushStyle,
+                vibrancy = vibrancyBoost
             )
             hasEffect = true
         }
@@ -2363,10 +2418,10 @@ private fun DrawScope.drawWetLayerPass(
 
         fun drawStrokes() {
             for (stroke in layerStrokes) {
-                drawSingleStroke(stroke, 0f, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer, renderOpts = strokeRenderOpts)
+                drawSingleStroke(stroke, 0f, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer, renderOpts = strokeRenderOpts, vibrancy = vibrancyBoost)
             }
             if (previewStroke != null) {
-                drawSingleStroke(previewStroke, 0f, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer, renderOpts = strokeRenderOpts)
+                drawSingleStroke(previewStroke, 0f, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer, renderOpts = strokeRenderOpts, vibrancy = vibrancyBoost)
             }
         }
 
@@ -2407,10 +2462,10 @@ private fun DrawScope.drawWetLayerPass(
         }
     } else {
         for (stroke in layerStrokes) {
-            drawSingleStroke(stroke, 0f, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer, renderOpts = strokeRenderOpts)
+            drawSingleStroke(stroke, 0f, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer, renderOpts = strokeRenderOpts, vibrancy = vibrancyBoost)
         }
         if (previewStroke != null) {
-            drawSingleStroke(previewStroke, 0f, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer, renderOpts = strokeRenderOpts)
+            drawSingleStroke(previewStroke, 0f, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer, renderOpts = strokeRenderOpts, vibrancy = vibrancyBoost)
         }
     }
 }
@@ -2420,11 +2475,12 @@ private fun DrawScope.drawSingleStroke(
     offsetY: Float,
     isDarkPaper: Boolean = false,
     inkRenderer: CanvasStrokeRenderer? = null,
-    renderOpts: StrokeRenderOpts = StrokeRenderOpts()
+    renderOpts: StrokeRenderOpts = StrokeRenderOpts(),
+    vibrancy: Float = 0f
 ) {
     if (stroke.isAdvanced && inkRenderer != null) {
         try {
-            val inkStroke = convertToInkStroke(stroke)
+            val inkStroke = convertToInkStroke(stroke, vibrancy = vibrancy)
             if (inkStroke != null) {
                 val nativeCanvas = drawContext.canvas.nativeCanvas
                 val matrix = android.graphics.Matrix()
@@ -2439,7 +2495,14 @@ private fun DrawScope.drawSingleStroke(
         }
     }
 
-    var rawColor = stroke.color
+    // Phase 19: render-time vibrancy/saturation boost. NEVER written back to the
+    // stored stroke — saved colorInt stays exactly as picked.
+    val baseColor: Color = if (vibrancy > 0f) {
+        Color(com.authorss81.noteflow.services.ColorVibrancy.boostColorInt(stroke.color.toArgb(), vibrancy))
+    } else {
+        stroke.color
+    }
+    var rawColor = baseColor
     if (isDarkPaper && stroke.tool != StrokeTool.HIGHLIGHTER) {
         val lum = 0.299f * rawColor.red + 0.587f * rawColor.green + 0.114f * rawColor.blue
         if (lum < 0.2f) {
@@ -2457,7 +2520,7 @@ private fun DrawScope.drawSingleStroke(
                       !com.authorss81.noteflow.services.BrushStrokeMath.isWetRenderedTool(stroke.tool)
 
     val color = when {
-        stroke.tool == StrokeTool.HIGHLIGHTER -> stroke.color.copy(alpha = 0.35f)
+        stroke.tool == StrokeTool.HIGHLIGHTER -> baseColor.copy(alpha = 0.35f)
         isSolidTool -> rawColor.copy(alpha = 1.0f)
         else -> rawColor
     }
@@ -3048,7 +3111,7 @@ private fun DrawScope.drawSingleStroke(
                     val plainText = parsedTextResult.second
                     val lines = plainText.split("\n")
                     val paint = android.graphics.Paint().apply {
-                        this.color = stroke.colorInt
+                        this.color = baseColor.toArgb()
                         textSize = textStyle.fontSizeSp * 1.5f
                         isAntiAlias = true
                         typeface = when (textStyle.fontStyle) {
