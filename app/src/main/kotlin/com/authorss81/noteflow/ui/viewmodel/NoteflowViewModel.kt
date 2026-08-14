@@ -843,7 +843,7 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
      * plugin is installed, rewrite the manager's generic "no plugin" message
      * into an honest, actionable store hint instead of a dead end.
      */
-    private fun <T> assistantRewire(action: String, block: () -> PluginResult<T>): PluginResult<T> {
+    private suspend fun <T> assistantRewire(action: String, block: suspend () -> PluginResult<T>): PluginResult<T> {
         val result = block()
         return when (result) {
             is PluginResult.Failure ->

@@ -119,6 +119,27 @@ Per area:
   committed. Lesson for later phases: subagents must append, never rewrite, a
   shared report file.
 
+### Trivial fixes applied during verification (pre-existing build breaks)
+
+Phase 30 made no security changes, but DoD verification (`gradle
+testDebugUnitTest` / `gradle assembleDebug`) was blocked by two PRE-EXISTING
+Phase-29 compilation errors in the audited commit `6e96a73`. Both were fixed as
+trivial one-line changes so the build/tests could run; security audit findings
+were otherwise left untouched for later fix phases:
+
+1. `plugins/llm/build.gradle.kts:147-148` — `private const val` is illegal at
+   the top level of a Gradle Kotlin DSL script (everything in a `.gradle.kts`
+   compiles inside the implicit script class body, not true top-level scope).
+   Changed `const val` → `val` for `KEYSTORE_ALIAS`/`DEFAULT_KEY_PASSWORD`.
+   Note (relevant to security): this also confirms B2-DEPS-04's claim that the
+   plugin-signing keystore password is committed in source.
+2. `NoteflowViewModel.kt:846` — `assistantRewire` declared a non-suspend
+   `() -> PluginResult<T>` lambda but every call site passes a suspend lambda
+   (so `withPluginAsync` inside it could not be called). Made the helper
+   `suspend` with a `suspend () -> PluginResult<T>` parameter.
+
+No DB schema, workflow, or dependency changes were made.
+
 ---
 
 ## Findings

@@ -144,8 +144,8 @@ tasks.register<Jar>("packagePlugin") {
 // an ephemeral self-signed keystore into `build/plugin-signing/` so the whole
 // pipeline stays runnable offline (the pinned hashes then rotate per build and
 // are injected into the app at build time — see `:app:generateLlmPluginSeed`).
-private const val KEYSTORE_ALIAS = "plugin-signing"
-private const val DEFAULT_KEY_PASSWORD = "inkflow.2026.plugins"
+private val KEYSTORE_ALIAS = "plugin-signing"
+private val DEFAULT_KEY_PASSWORD = "inkflow.2026.plugins"
 
 val pluginSigningKeystore: Provider<RegularFile> = providers.provider {
     val target = layout.buildDirectory.file("plugin-signing/plugin-signing.jks").get()
