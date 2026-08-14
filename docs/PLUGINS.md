@@ -35,7 +35,7 @@ Everything lives in `com.authorss81.noteflow.plugins`:
 
 | File | Purpose |
 |------|---------|
-| `PluginCapability.kt` | The sealed extension points (`TextTransform`, `OCR`, `WebSearch`, `Export`, `TextTools`, `LanguageDetection`, `WebCapture`, `ClipShare`, `FileTransfer`, `Assistant`, `Dictation`, `ReadAloud`, `Translation`, `ScreenshotNote`) — each with an `exclusive` flag. |
+| `PluginCapability.kt` | The sealed extension points (`TextTransform`, `OCR`, `WebSearch`, `Export`, `TextTools`, `LanguageDetection`, `WebCapture`, `ClipShare`, `FileTransfer`, `Assistant`, `Dictation`, `ReadAloud`, `Translation`, `ScreenshotNote`, `ShapeFromInk`) — each with an `exclusive` flag. |
 | `PluginManifest.kt` | `PluginManifest`, `SemanticVersion` (`Major.Minor.Patch`), `PluginPermission`, and the manifest validator. |
 | `NoteflowPlugin.kt` | The plugin interface (manifest-derived identity, tri-state `availability`, lifecycle hooks) + per-capability *serving interfaces* (`TextTransformPlugin`, …). |
 | `PluginLifecycle.kt` | `PluginLifecycleState` (REGISTERED/ENABLED/AVAILABLE/UNAVAILABLE/DISABLED/REJECTED), derived `PluginStateInfo`, enable result + enable-order resolution types. |
@@ -61,6 +61,7 @@ Everything lives in `com.authorss81.noteflow.plugins`:
 | `runtime/…` | The hybrid-architecture seams (Phase 22) — `PluginEntry` (unified catalog entry for bundled + remote), `PluginVersion`, `PluginEntryStore` (+codec), `PluginContext` (deny-by-default capability facade), `PluginRuntime` (+`PluginRuntimeRegistry`, honest `NotYetImplemented` stubs for Phases 23/24). See `docs/plugin-architecture.md`. |
 | `CaseChangePlugin.kt` | The store's OPTIONAL plugin (Phase 21) — UPPER/lower/Title Case TextTransform; NOT in `defaultPlugins()`, downloaded from the store. |
 | `screenshot/…` | Screenshot→Note (Phase 16) — reuses the existing annotated-page renderer + persist + OCR route; pure `ScreenshotFlowPlanner`. Serves `ScreenshotNote`. |
+| `inktos/…` | Ink→Shape (Phase 25) — free, lightweight, compile-time plugin that converts freehand ink strokes into crisp shapes (line / rectangle / rounded-rect / ellipse / arrow) on explicit user command. Pure JVM `InkToShapeGeometry` core + thin `InkToShapePlugin` wrapper. Serves `ShapeFromInk`. |
 
 Supporting pieces outside the framework package:
 
@@ -70,7 +71,7 @@ Supporting pieces outside the framework package:
 | `services/SettingsPluginEnableStore.kt` | Production `PluginEnableStore` adapter. |
 | `services/SettingsPluginSettingsStore.kt` | Production `PluginSettingsStore` adapter. |
 | `ui/components/PluginSettingsDialog.kt` | Settings → Plugins (state + reason + version + diagnostics "Test now" + refusal-aware toggles). |
-| `ui/viewmodel/NoteflowViewModel.kt` | Wires registry/manager/diagnostics into the app + `transformNoteText()` + Phase 15 routes (`exportNote`, `analyzeNoteText`, `diffNoteTexts`, `detectNoteLanguage`, `autoTagNoteLanguage`, `captureWebPage`, `parseSharedClip`, `autoTagLanguageOnSave`). |
+| `ui/viewmodel/NoteflowViewModel.kt` | Wires registry/manager/diagnostics into the app + `transformNoteText()` + Phase 15 routes (`exportNote`, `analyzeNoteText`, `diffNoteTexts`, `detectNoteLanguage`, `autoTagNoteLanguage`, `captureWebPage`, `parseSharedClip`, `autoTagLanguageOnSave`) + Phase 25 `convertStrokeToShape`. |
 
 ## Core concepts
 
@@ -89,7 +90,8 @@ Today `TextTransform` (ROT13 proof), `OCR` (on-device ML Kit), `WebSearch`
 `LanguageDetection` and `WebCapture` are implemented for real. Phase 16 added
 `Dictation`, `ReadAloud`, `Translation` and `ScreenshotNote`, and turned
 `Assistant` from a declared extension point into a real, user-downloaded local
-LLM. The only remaining capability with no serving plugin is `FileTransfer` —
+LLM. Phase 25 added `ShapeFromInk` — converting freehand ink into crisp shapes on
+demand. The only remaining capability with no serving plugin is `FileTransfer` —
 requests for it fail loudly with `NO_PLUGIN_INSTALLED`. See the phase-12 and
 phase-16 implementation notes below.
 
@@ -395,6 +397,57 @@ default, and individually toggleable in Settings → Plugins.
 - **UI:** EditorScreen's overflow menu → "Screenshot → new note" (and "…+
   OCR"); success opens the new note via the existing page-open path.
 - **Tests:** `ScreenshotFlowTest` (7 tests — mode + OCR-decision logic).
+
+## Ink → Shape (`inktos/`, capability `ShapeFromInk`) — Phase 25
+
+A free, lightweight, compile-time plugin that converts a **freehand ink stroke
+into a crisp shape** (line / rectangle / rounded-rectangle / ellipse / arrow) on
+explicit user command. It deliberately complements — and never replaces — the
+existing **auto-snap** behaviour (`ShapeRecognitionHelper.trySnapShape` runs on
+draw-end); Ink→Shape is strictly **on-demand** and is an independent,
+user-triggered action.
+
+- **Pure JVM core:** `InkToShapeGeometry` (Android-free, no Compose, no model
+  classes) takes a `List<InkPoint>` and returns a `DetectedShape` or `null`. All
+  decision logic is JVM-unit-tested. Detection order and thresholds:
+
+  | Shape | Trigger |
+  |-------|---------|
+  | **LINE** | straightness > 0.82 AND perpendicular deviation < 10% of the span (2-point strokes accepted) |
+  | **RECTANGLE** (incl. rounded) | closed loop, perimeter fit ≥ 0.72, corner coverage ≥ 2, margin = `max(5px, 6% of diagonal)` — checked BEFORE ellipse so a traced square stays a square |
+  | **ELLIPSE** | closed loop, ≥ 10 points, ellipse-equation fit deviation < 0.35, circularity ≥ 0.30 (circle vs ellipse distanced by circularity) |
+  | **ARROW** | ≥ 8 points, straightness in 0.55–0.82, perpendicular deviation < 12%, final-segment direction change ≥ 10° (the head vee) |
+
+  Anything that fits none of these honestly returns `NotAShape` — the stroke is
+  **never** mutated or faked into a shape.
+- **Thin wrapper:** `InkToShapePlugin : NoteflowPlugin, ShapeFromInkPlugin`
+  maps the app's `Stroke` points to `InkPoint`s and the detected shape back to a
+  crisp `Stroke` (tool switched to `LINE` / `RECTANGLE` / `ELLIPSE` / `ARROW`,
+  the stroke's color/width preserved). `convertToShape()` returns
+  `ShapeFromInkOutcome.Success(kind, snappedStroke, replaceOriginal)` /
+  `NotAShape` / `Error`.
+- **Undoable:** the canvas routes the result through the existing
+  `handleStrokesChange` undo path, so a conversion is one undo away. `keep
+  original stroke` (`plugins.<id>.keepOriginal`, default **off** = replace) keeps
+  the raw ink alongside the shape instead.
+- **Canvas never reaches into the geometry core.** `EditorScreen` only talks to
+  the plugin through the `ShapeFromInk` capability (via
+  `NoteflowViewModel.convertStrokeToShape`), exactly like every other feature —
+  no hardcoded plugin logic in the canvas.
+- **UI:** `CanvasSettingsBottomSheet` gains an "Ink → Shape" section (below the
+  Shape Auto-Snap toggle): a **Convert to Shape** button (only enabled when the
+  plugin is opted in; otherwise it shows "Unavailable — enable Ink to Shape in
+  Plugins") and the "Keep original stroke" toggle. Conversion shows a Snackbar
+  naming the detected shape; non-shapes show an honest "didn't look like a shape"
+  message.
+- **Size:** the whole plugin is a few KB of Kotlin — it stays **compile-time**
+  (base APK), consistent with the "lightweight pure-JVM stays bundled" rule in
+  `docs/plugin-architecture.md`.
+- **Tests:** `InkToShapePluginTest` (24 tests) — synthetic straight/wavy/closed
+  ellipse/rect/rounded-rect/arrow/zigzag/triangle/blob point sets, correct-shape
+  detection, wrong-shape rejection, plugin conversion, the keep-original toggle,
+  capability routing (`NO_PLUGIN_INSTALLED` / `NONE_ENABLED` / `AVAILABLE`) and
+  the store listing.
 
 ## Plugin Store — install/uninstall lifecycle (Phase 21)
 

@@ -582,6 +582,76 @@ sealed class ScreenshotCaptureOutcome {
     data class Error(val message: String) : ScreenshotCaptureOutcome()
 }
 
+// ---------------------------------------------------------------------------
+// Phase 25 — InkStroke→Shape: on-demand freehand-stroke-to-shape conversion.
+// The geometry core (`plugins/inktos/InkToShapeGeometry`) is PURE JVM and is
+// deliberately Android-free; only this serving interface + the thin plugin
+// wrapper touch the app's `Stroke` model. The canvas NEVER reaches into the
+// geometry — it calls the plugin through this capability exactly like any
+// other plugin feature.
+// ---------------------------------------------------------------------------
+
+/** The four geometric kinds the Ink→Shape plugin can produce. */
+enum class ShapeKind(val label: String) {
+    LINE("Line"), RECTANGLE("Rectangle"), ELLIPSE("Ellipse"), ARROW("Arrow")
+}
+
+/**
+ * Outcome of converting a freehand stroke into a clean shape. Typed so the
+ * canvas can distinguish a real conversion ([Success], with the crisp stroke
+ * and whether it should REPLACE the original or be inserted alongside), an
+ * honest rejection ([NotAShape] — the mark is too rough / the wrong kind, so
+ * NOTHING changes and no fake shape is produced) and a hard failure ([Error]).
+ */
+sealed class ShapeFromInkOutcome {
+    /**
+     * The stroke converted successfully.
+     *
+     * @param kind the detected geometric kind.
+     * @param snappedStroke the crisp, clean stroke to place on the canvas
+     *   (same id/color/width/page/layer as the raw stroke).
+     * @param replaceOriginal when true the canvas should REPLACE the original
+     *   freehand stroke with [snappedStroke]; when false the original stays and
+     *   the shape is inserted alongside it (the namespaced `keepOriginal`
+     *   setting decides).
+     */
+    data class Success(
+        val kind: ShapeKind,
+        val snappedStroke: com.authorss81.noteflow.data.model.Stroke,
+        val replaceOriginal: Boolean
+    ) : ShapeFromInkOutcome()
+
+    /**
+     * No clean shape could be detected in this stroke. [message] is
+     * user-facing. The stroke is left untouched — the plugin never guesses.
+     */
+    data class NotAShape(val message: String) : ShapeFromInkOutcome()
+
+    /** The conversion request failed; [message] is user-facing. */
+    data class Error(val message: String) : ShapeFromInkOutcome()
+}
+
+/**
+ * Serving interface for the [PluginCapability.ShapeFromInk] capability.
+ *
+ * A plugin that implements this interface converts a raw freehand stroke into a
+ * crisp geometric shape (line / rectangle / rounded-rect / ellipse / arrow) on
+ * demand. It is distinct from the canvas's built-in auto-snap-on-draw-end: this
+ * is an EXPLICIT, user-triggered convert that goes through the plugin framework
+ * so it can be toggled on/off in Settings → Plugins / the Plugin Store.
+ *
+ * Implementations must be pure geometry — no ML, no network, no native code.
+ */
+interface ShapeFromInkPlugin {
+    /**
+     * Convert a raw freehand [stroke] into a clean shape, or reject it
+     * honestly. Runs on the caller's thread (the canvas calls it through
+     * [PluginManager.withPluginAsync] so it can never block the UI). Must never
+     * return null — the manager treats null as [PluginResult.Failure].
+     */
+    fun convertToShape(rawStroke: com.authorss81.noteflow.data.model.Stroke): ShapeFromInkOutcome
+}
+
 /**
  * Serving interface for the [PluginCapability.ScreenshotNote] capability.
  *

@@ -52,7 +52,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.authorss81.noteflow.data.model.*
 import com.authorss81.noteflow.plugins.PluginCapability
+import com.authorss81.noteflow.plugins.PluginResult
+import com.authorss81.noteflow.plugins.ShapeFromInkOutcome
 import com.authorss81.noteflow.plugins.export.mimeType
+import com.authorss81.noteflow.plugins.inktos.InkToShapePlugin
 import com.authorss81.noteflow.services.ImportExportService
 import com.authorss81.noteflow.services.HarmonyScheme
 import com.authorss81.noteflow.services.PaletteCatalog
@@ -131,6 +134,18 @@ fun EditorScreen(
     val ocrAvailable = viewModel.pluginRegistry
         .availablePlugins(PluginCapability.OCR, context)
         .isNotEmpty()
+    // Phase 25: Ink → Shape is available only while the plugin is enabled +
+    // device-available. When disabled the "Convert to Shape" action is grayed
+    // out with an "enable it in Plugins" hint — never a silently dead button.
+    val inkToShapeAvailable = viewModel.pluginRegistry
+        .availablePlugins(PluginCapability.ShapeFromInk, context)
+        .isNotEmpty()
+    var inkToShapeKeepOriginal by remember {
+        mutableStateOf(
+            viewModel.pluginRegistry.settingsFor(InkToShapePlugin.ID)
+                .getBoolean(InkToShapePlugin.SETTING_KEEP_ORIGINAL, false)
+        )
+    }
     com.authorss81.noteflow.utils.JankStatsHelper.MonitorJank("EditorScreen")
     // 22.9: tactile feedback for high-value affordances (skipped when the user
     // has reduce-motion/remove-animations enabled system-wide).
@@ -740,6 +755,40 @@ fun EditorScreen(
             strokes = nextState
             triggerAutoSave(nextState)
             if (!reduceMotion) haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+        }
+    }
+
+    // Phase 25: on-demand InkStroke→Shape conversion. Takes the LATEST freehand
+    // stroke, runs the Ink→Shape plugin, and either REPLACES it with the crisp
+    // shape or inserts the shape alongside it (namespaced `keepOriginal`
+    // setting, decided by the plugin). Routes through the plugin manager on a
+    // background dispatcher; the result is a normal undoable canvas operation
+    // (handleStrokesChange pushes the pre-state onto the undo stack), and a
+    // non-shape stroke is rejected honestly with no fake conversion.
+    fun convertLatestStrokeToShape() {
+        val freehand = strokes.lastOrNull { it.tool.isFreehandTool }
+        if (freehand == null) {
+            viewModel.showSnackbar("No freehand stroke to convert — draw a line, circle, rectangle or arrow first")
+            return
+        }
+        scope.launch {
+            when (val result = viewModel.convertStrokeToShape(freehand)) {
+                is PluginResult.Success -> when (val outcome = result.value) {
+                    is ShapeFromInkOutcome.Success -> {
+                        val updated = if (outcome.replaceOriginal) {
+                            strokes.map { if (it.id == freehand.id) outcome.snappedStroke else it }
+                        } else {
+                            strokes + outcome.snappedStroke
+                        }
+                        handleStrokesChange(updated)
+                        viewModel.showSnackbar("Converted ink to ${outcome.kind.label}")
+                    }
+                    is ShapeFromInkOutcome.NotAShape -> viewModel.showSnackbar(outcome.message)
+                    is ShapeFromInkOutcome.Error -> viewModel.showSnackbar(outcome.message)
+                }
+                is PluginResult.Failure -> viewModel.showSnackbar(result.message)
+                is PluginResult.Unavailable -> viewModel.showSnackbar(result.message)
+            }
         }
     }
 
@@ -1644,6 +1693,18 @@ fun EditorScreen(
                 onShapeAutoSnapToggle = { enabled ->
                     shapeAutoSnapEnabled = enabled
                     viewModel.settings.shapeAutoSnapEnabled = enabled
+                },
+                inkToShapeAvailable = inkToShapeAvailable,
+                inkToShapeKeepOriginal = inkToShapeKeepOriginal,
+                onInkToShapeKeepOriginalChange = { enabled ->
+                    inkToShapeKeepOriginal = enabled
+                    viewModel.pluginRegistry.settingsFor(InkToShapePlugin.ID)
+                        .setBoolean(InkToShapePlugin.SETTING_KEEP_ORIGINAL, enabled)
+                    viewModel.pluginRegistry.notifyConfigChanged(InkToShapePlugin.ID)
+                },
+                onConvertToShape = {
+                    toolbarState = FloatingToolbarState.COLLAPSED
+                    convertLatestStrokeToShape()
                 },
                 stabilizerEnabled = stabilizerEnabled,
                 onStabilizerToggle = { enabled ->
@@ -2903,6 +2964,10 @@ private fun CanvasSettingsBottomSheet(
     onGpuWetBrushesToggle: (Boolean) -> Unit = {},
     shapeAutoSnapEnabled: Boolean = true,
     onShapeAutoSnapToggle: (Boolean) -> Unit = {},
+    inkToShapeAvailable: Boolean = true,
+    inkToShapeKeepOriginal: Boolean = false,
+    onInkToShapeKeepOriginalChange: (Boolean) -> Unit = {},
+    onConvertToShape: () -> Unit = {},
     stabilizerEnabled: Boolean = false,
     onStabilizerToggle: (Boolean) -> Unit = {},
     pressureCurve: PressureCurve = PressureCurve.LINEAR,
@@ -3243,6 +3308,68 @@ private fun CanvasSettingsBottomSheet(
                     checked = shapeAutoSnapEnabled,
                     onCheckedChange = onShapeAutoSnapToggle
                 )
+            }
+
+            // Phase 25: Ink → Shape — explicit on-demand convert through the
+            // plugin framework (distinct from auto-snap above). Grayed out with
+            // an enable-hint while the plugin is off/unavailable.
+            Spacer(modifier = Modifier.height(16.dp))
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Icon(Icons.Outlined.Polyline, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Ink → Shape", style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    if (inkToShapeAvailable) {
+                                        "Convert the latest freehand stroke to a clean shape"
+                                    } else {
+                                        "Unavailable — enable Ink to Shape in Plugins"
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                    Button(
+                        onClick = onConvertToShape,
+                        enabled = inkToShapeAvailable,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Outlined.AutoFixHigh, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Convert to Shape")
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Keep original stroke", style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                if (inkToShapeKeepOriginal) "Shape inserted alongside the ink" else "Shape replaces the ink (undoable)",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = inkToShapeKeepOriginal,
+                            enabled = inkToShapeAvailable,
+                            onCheckedChange = onInkToShapeKeepOriginalChange
+                        )
+                    }
+                }
             }
 
             // Phase 19: render-time vibrancy — richer, more saturated colors.

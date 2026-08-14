@@ -10,6 +10,8 @@ import com.authorss81.noteflow.data.repository.NoteRepository
 import com.authorss81.noteflow.plugins.CaseChangePlugin
 import com.authorss81.noteflow.plugins.ClipParseOutcome
 import com.authorss81.noteflow.plugins.ClipSharePlugin
+import com.authorss81.noteflow.plugins.ShapeFromInkOutcome
+import com.authorss81.noteflow.plugins.ShapeFromInkPlugin
 import com.authorss81.noteflow.plugins.AssistantOutcome
 import com.authorss81.noteflow.plugins.AssistantPlugin
 import com.authorss81.noteflow.plugins.DictationPlugin
@@ -496,6 +498,20 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
             val transformer = plugin as? TextTransformPlugin
                 ?: throw IllegalStateException("${plugin.name} does not implement TextTransformPlugin")
             transformer.transformText(text)
+        }
+
+    /**
+     * Route an on-demand InkStroke→Shape conversion through the plugin manager.
+     * The geometry core is pure CPU so it runs on the framework's background
+     * dispatcher and can never block the main thread. Returns a typed
+     * [ShapeFromInkOutcome] — Success (crisp shape + replace/keep decision),
+     * NotAShape (honest rejection — stroke untouched) or Error — never throws.
+     */
+    suspend fun convertStrokeToShape(stroke: com.authorss81.noteflow.data.model.Stroke): PluginResult<ShapeFromInkOutcome> =
+        pluginManager.withPluginAsync(PluginCapability.ShapeFromInk, appContext) { plugin ->
+            val converter = plugin as? ShapeFromInkPlugin
+                ?: throw IllegalStateException("${plugin.name} does not implement ShapeFromInkPlugin")
+            converter.convertToShape(stroke)
         }
 
     /**

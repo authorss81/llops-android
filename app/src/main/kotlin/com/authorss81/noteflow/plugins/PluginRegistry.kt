@@ -6,6 +6,7 @@ import com.authorss81.noteflow.plugins.assistant.OnDeviceAssistantPlugin
 import com.authorss81.noteflow.plugins.clipshare.ClipToInkFlowPlugin
 import com.authorss81.noteflow.plugins.dictation.OnDeviceDictationPlugin
 import com.authorss81.noteflow.plugins.export.ExportEnginePlugin
+import com.authorss81.noteflow.plugins.inktos.InkToShapePlugin
 import com.authorss81.noteflow.plugins.langdetect.LanguageDetectionEngine
 import com.authorss81.noteflow.plugins.ocr.OnDeviceOcrPlugin
 import com.authorss81.noteflow.plugins.readaloud.OnDeviceReadAloudPlugin
@@ -768,7 +769,10 @@ class PluginRegistry(
             OnDeviceReadAloudPlugin(),
             OnDeviceTranslationPlugin(),
             OnDeviceAssistantPlugin(),
-            ScreenshotNotePluginImpl()
+            ScreenshotNotePluginImpl(),
+            // Phase 25: free, compile-time InkStroke→Shape plugin — pure geometry,
+            // ~KB, no native deps (safe in the base APK under the hybrid model).
+            InkToShapePlugin()
         )
     }
 }

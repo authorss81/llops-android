@@ -1,4 +1,4 @@
-# Phase 25: InkStroke→Shape canvas plugin — free, compile-time [NOT STARTED]
+# Phase 25: InkStroke→Shape canvas plugin — free, compile-time [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with a working canvas (`AnnotationCanvas`), a shape auto-snap

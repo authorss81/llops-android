@@ -110,6 +110,7 @@ class PluginStoreCatalog(
             PluginCapability.Translation -> "Language"
             PluginCapability.Assistant -> "AI"
             PluginCapability.FileTransfer -> "Transfer"
+            PluginCapability.ShapeFromInk -> "Canvas"
             else -> "Other"
         }
     }

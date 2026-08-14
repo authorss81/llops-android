@@ -78,13 +78,16 @@ sealed class PluginCapability(
     /** Capture the current canvas as an image note (optionally OCR). Non-exclusive (Phase 16). */
     data object ScreenshotNote : PluginCapability("screenshot_note", "Screenshot to Note")
 
+    /** Convert a freehand ink stroke into a clean geometric shape on demand. Non-exclusive (Phase 25). */
+    data object ShapeFromInk : PluginCapability("shape_from_ink", "Ink to Shape")
+
     companion object {
         // LAZY: referencing the data-object instances during class-init would
         // capture nulls (their INSTANCE fields are set later in <clinit>).
         private val allCapabilities: List<PluginCapability> by lazy { listOf(
             TextTransform, OCR, WebSearch, FileTransfer, Assistant, Export,
             TextTools, LanguageDetection, WebCapture, ClipShare, Dictation,
-            ReadAloud, Translation, ScreenshotNote
+            ReadAloud, Translation, ScreenshotNote, ShapeFromInk
         ) }
 
         /** Every known capability, for stable key↔object resolution (Phase 22). */

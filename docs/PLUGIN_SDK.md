@@ -122,6 +122,48 @@ with the same deterministic result. This only punishes real overlap — enabling
 plugin while it's the only candidate always succeeds; disabling a conflict winner
 re-arbitrates immediately.
 
+### The `ShapeFromInk` capability contract
+
+`ShapeFromInk` (non-exclusive) lets a plugin convert a freehand ink stroke into a
+crisp geometric shape **on explicit user command** — it is orthogonal to the
+canvas's built-in draw-end auto-snap (`ShapeRecognitionHelper.trySnapShape`),
+which must not be bypassed or duplicated by the plugin.
+
+A plugin that serves it implements the `ShapeFromInkPlugin` serving interface:
+
+```kotlin
+interface ShapeFromInkPlugin : NoteflowPlugin {
+    val supportsKeepOriginal: Boolean get() = true
+    fun convertToShape(stroke: Stroke): ShapeFromInkOutcome
+}
+```
+
+Contract:
+
+- `convertToShape` must be **fast and pure** (pure JVM geometry, no I/O, no
+  network, no model inference) — it is routed off the main thread via
+  `withPluginAsync`, but the core must stay trivially unit-testable.
+- Return one of the sealed `ShapeFromInkOutcome` values:
+  - `Success(kind: ShapeKind, snappedStroke: Stroke, replaceOriginal: Boolean)`
+    — the stroke was confidently a `LINE` / `RECTANGLE` / `ELLIPSE` / `ARROW`;
+    `snappedStroke` carries the crisp geometry (tool switched to the matching
+    shape tool, original color/width preserved), and `replaceOriginal` is the
+    plugin's *recommendation* (from its `plugins.<id>.keepOriginal` setting).
+  - `NotAShape` — the ink matched no shape. **Never** mutate or "fake" a shape
+    for strokes that don't fit; returning `NotAShape` is the honest contract and
+    the UI must surface it as a clear "didn't look like a shape" message.
+  - `Error(message)` — unexpected failure (never a thrown exception).
+- The **canvas never reaches into plugin geometry code** — callers route through
+  `PluginManager.withPluginAsync(PluginCapability.ShapeFromInk, …)` exactly like
+  any other capability and only touch `ShapeFromInkPlugin`/`ShapeFromInkOutcome`
+  types. The result must be applied through the host's normal undoable stroke
+  history so a conversion is one undo away.
+- A plugin that is not opted-in or not device-available must make the feature
+  surface as unavailable (`NO_PLUGIN_INSTALLED` / `NONE_ENABLED` /
+  `Unavailable`) — never a silent no-op on the Convert button.
+- Reference implementation: `plugins/inktos/InkToShapePlugin` +
+  `plugins/inktos/InkToShapeGeometry` (pure JVM, 24 unit tests).
+
 ---
 
 ## 4. Versioning & settings migration
