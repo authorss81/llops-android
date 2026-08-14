@@ -17,6 +17,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import com.authorss81.noteflow.services.BiometricAuthHelper
 import com.authorss81.noteflow.services.WebDavCredentialStore
 import com.authorss81.noteflow.services.WebDavSyncService
 import com.authorss81.noteflow.ui.viewmodel.NoteflowViewModel
@@ -47,6 +48,12 @@ fun WebDavSyncDialog(
     var statusIsError by remember { mutableStateOf(false) }
     var isLoading by remember { mutableStateOf(false) }
 
+    // B1-NET-08: "remembered credentials" opt in to a biometric auth gate when
+    // the user has enabled global biometric unlock (and a strong biometric is
+    // actually enrolled). A plain (no recent biometric) thief or in-process
+    // plugin can no longer decrypt the stored WebDAV password in that mode.
+    val biometricEnabled by viewModel.biometricEnabled.collectAsState()
+
     val syncService = remember { WebDavSyncService(context) }
 
     // Pre-fill from the encrypted credential store (AndroidKeyStore-backed),
@@ -66,7 +73,15 @@ fun WebDavSyncDialog(
 
     fun rememberCredentialsIfRequested() {
         if (rememberMe) {
-            credentialStore.save(serverUrl, username, passwordOrToken)
+            val authBound = biometricEnabled && BiometricAuthHelper.isBiometricAvailable(context)
+            val saved = credentialStore.save(serverUrl, username, passwordOrToken, authBound)
+            if (!saved) {
+                // B1-NET-08: never silently keep the previous credentials while
+                // the UI believes the new ones were persisted.
+                statusIsError = false
+                syncStatus = "Sync succeeded, but your credentials could not be saved " +
+                    "securely (keystore/biometric unavailable). Re-enter them next time."
+            }
         } else {
             credentialStore.clear()
         }
