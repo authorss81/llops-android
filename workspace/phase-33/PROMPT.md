@@ -13,8 +13,11 @@ severity, `file:line`, the exploit, and the suggested fix.
 
 ## Step 2 — Create fix phases (one per finding or tight group)
 For EVERY finding you will fix, create a phase directory. Number them
-sequentially after the highest existing phase number (e.g. if the highest is
-phase-33, the first fix phase is phase-34, then 35, 36, …). Each phase:
+**dynamically**: run `Get-ChildItem workspace -Directory -Filter "phase-*"` (or
+the git equivalent), find the highest existing `phase-NN` number, and start the
+new fix phases at that + 1 (e.g. if the highest is phase-38, the first fix phase
+is phase-39, then 40, 41, …). Do NOT assume a fixed number — the repo gains
+phases over time. Each phase:
 - Must be scoped so an AI can finish it in **under 30 minutes** (one finding or
   a small tightly-related group per phase — no mega-phases).
 - CRITICAL findings first, then HIGH, MEDIUM, LOW, INFO (don't skip LOW/INFO —
@@ -34,8 +37,8 @@ phase-33, the first fix phase is phase-34, then 35, 36, …). Each phase:
   triage" with the reason.
 
 ## Step 3 — Final document-fix phase (always last)
-After all fix phases, add a FINAL phase (highest number) titled
-**Document fix — final status & consistency sweep**:
+After all fix phases, add a FINAL phase (number = highest existing phase + 1 at
+that time) titled **Document fix — final status & consistency sweep**:
 - Re-run a status audit of ALL phases (like Phase 20) and mark every heading
   `[DONE]`/`[DEFERRED]`/`[BLOCKED]`/`[PARTIAL]`/`[NOT STARTED]`/`[CANCELLED]`
   beside it.
