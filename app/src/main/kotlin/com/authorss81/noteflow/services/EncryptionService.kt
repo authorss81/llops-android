@@ -43,7 +43,8 @@ object EncryptionService {
 
     private fun base64Encode(data: ByteArray): String {
         return try {
-            Base64.encodeToString(data, Base64.NO_WRAP)
+            val encoded = Base64.encodeToString(data, Base64.NO_WRAP)
+            if (encoded != null) encoded else java.util.Base64.getEncoder().encodeToString(data)
         } catch (e: Throwable) {
             java.util.Base64.getEncoder().encodeToString(data)
         }
@@ -51,7 +52,8 @@ object EncryptionService {
 
     private fun base64Decode(str: String): ByteArray {
         return try {
-            Base64.decode(str, Base64.NO_WRAP)
+            val decoded = Base64.decode(str, Base64.NO_WRAP)
+            if (decoded != null) decoded else java.util.Base64.getDecoder().decode(str)
         } catch (e: Throwable) {
             java.util.Base64.getDecoder().decode(str)
         }
@@ -74,23 +76,25 @@ object EncryptionService {
         return base64Encode(combined)
     }
 
+    /**
+     * Decrypts a field payload produced by [encrypt].
+     *
+     * B2-CRYPTO-05 (deterministic format selection): this app has only ever
+     * written versioned payloads — `[PAYLOAD_VERSION][12-byte IV][ciphertext+tag]`
+     * authenticated under [FIELD_AAD] — so a payload whose first byte is not the
+     * version marker is rejected outright. A GCM tag mismatch is final and is
+     * NEVER retried against a re-guessed legacy layout; the old code ran a second
+     * full decrypt on any AEADBadTagException (a measurable timing/tag oracle
+     * that classified rows as versioned vs legacy and gave every bad tag one
+     * malleable retry). There is no legacy no-AAD format to fall back to.
+     */
     fun decrypt(encryptedBase64: String, key: ByteArray): ByteArray {
         val combined = base64Decode(encryptedBase64)
-        if (combined.size < GCM_IV_LENGTH) throw IllegalArgumentException("Invalid encrypted payload")
-
-        // Payload v1: [version byte][12-byte IV][ciphertext] with AAD.
-        // Legacy payloads (no version byte) are decrypted without AAD.
-        // A version byte collision in a legacy payload is resolved by trying
-        // versioned decryption first and falling back on tag mismatch.
-        val versioned = combined[0] == PAYLOAD_VERSION && combined.size >= GCM_IV_LENGTH + 1
-        if (versioned) {
-            try {
-                return decryptCore(combined, key, offset = 1, withAad = true)
-            } catch (e: javax.crypto.AEADBadTagException) {
-                // Fall through to legacy format
-            }
+        if (combined.size < GCM_IV_LENGTH + 1) throw IllegalArgumentException("Invalid encrypted payload")
+        if (combined[0] != PAYLOAD_VERSION) {
+            throw IllegalArgumentException("Unsupported payload format: missing version marker")
         }
-        return decryptCore(combined, key, offset = 0, withAad = false)
+        return decryptCore(combined, key)
     }
 
     /**
@@ -122,8 +126,8 @@ object EncryptionService {
      *
      * The fallback retries only an [javax.crypto.AEADBadTagException] (a
      * well-formed ciphertext whose AAD differs); format/size errors propagate
-     * because re-AADing cannot fix them — the same policy [decrypt] already
-     * uses for legacy payloads.
+     * because re-AADing cannot fix them — the same policy [decrypt] follows
+     * for malformed/unversioned payloads.
      */
     fun decryptAad(combined: ByteArray, key: ByteArray, aad: ByteArray): ByteArray {
         if (combined.size < GCM_IV_LENGTH) throw IllegalArgumentException("Invalid encrypted payload")
@@ -153,22 +157,18 @@ object EncryptionService {
         return cipher.doFinal(cipherText)
     }
 
-    private fun decryptCore(combined: ByteArray, key: ByteArray, offset: Int, withAad: Boolean): ByteArray {
-        if (combined.size < offset + GCM_IV_LENGTH) throw IllegalArgumentException("Invalid encrypted payload")
-
+    private fun decryptCore(combined: ByteArray, key: ByteArray): ByteArray {
         val iv = ByteArray(GCM_IV_LENGTH)
-        System.arraycopy(combined, offset, iv, 0, GCM_IV_LENGTH)
-        val cipherTextSize = combined.size - offset - GCM_IV_LENGTH
+        System.arraycopy(combined, 1, iv, 0, GCM_IV_LENGTH)
+        val cipherTextSize = combined.size - 1 - GCM_IV_LENGTH
         val cipherText = ByteArray(cipherTextSize)
-        System.arraycopy(combined, offset + GCM_IV_LENGTH, cipherText, 0, cipherTextSize)
+        System.arraycopy(combined, 1 + GCM_IV_LENGTH, cipherText, 0, cipherTextSize)
 
         val secretKey = SecretKeySpec(key, "AES")
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         val parameterSpec = GCMParameterSpec(GCM_TAG_LENGTH, iv)
         cipher.init(Cipher.DECRYPT_MODE, secretKey, parameterSpec)
-        if (withAad) {
-            cipher.updateAAD(FIELD_AAD)
-        }
+        cipher.updateAAD(FIELD_AAD)
         return cipher.doFinal(cipherText)
     }
 
