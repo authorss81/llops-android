@@ -33,6 +33,10 @@ class PluginFrameworkTest {
             if (enabled) ever.add(pluginId)
         }
         override fun hasEverBeenEnabled(pluginId: String): Boolean = pluginId in ever
+        override fun wipe(pluginId: String) {
+            state[pluginId] = false
+            ever.remove(pluginId)
+        }
     }
 
     /** A plugin that declares WebSearch but can never run on this device. */

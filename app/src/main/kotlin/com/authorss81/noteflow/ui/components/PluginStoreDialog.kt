@@ -172,11 +172,23 @@ fun PluginStoreDialog(
                                     )
                                 }
                                 if (storeMessage != null) {
-                                    Text(
-                                        storeMessage,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = colorScheme.primary
-                                    )
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            storeMessage,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = colorScheme.primary,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        TextButton(
+                                            onClick = { viewModel.clearStoreMessage(entry.pluginId) },
+                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                                        ) {
+                                            Text("Dismiss", style = MaterialTheme.typography.labelSmall)
+                                        }
+                                    }
                                 }
 
                                 Row(

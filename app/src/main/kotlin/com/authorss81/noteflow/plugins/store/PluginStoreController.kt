@@ -76,7 +76,8 @@ class PluginStoreController(
 
     /**
      * Download (install) a bundled plugin definition. Reports progress 0f→1f;
-     * runs the install off the main thread. Never throws.
+     * runs the install (including the registry's availability re-check) off the
+     * main thread. Never throws.
      */
     suspend fun download(
         pluginId: String,
@@ -88,17 +89,21 @@ class PluginStoreController(
         if (registry.isInstalled(pluginId)) {
             return DownloadOutcome.Failed(pluginId, "This plugin is already downloaded.")
         }
-        val plugin = entry.createInstance?.invoke()
-            ?: registry.compiledPlugins.firstOrNull { it.id == pluginId }
+        // The definition is always one of the registry's compiled set — built-in
+        // or optional bundled (optional definitions are RE-materialized from
+        // their factory on process restart, so an installed optional plugin is
+        // found here even after the app was killed).
+        val plugin = registry.compiledPlugins.firstOrNull { it.id == pluginId }
             ?: return DownloadOutcome.Failed(pluginId, "This plugin's definition is missing.")
         onProgress(0f)
-        // Brief, real install window so the UI's progress + error states are
-        // observable (this is a bundled-definition install, not a network fetch).
-        withContext(Dispatchers.Default) {
+        // Brief, real install window + the actual registry install (which
+        // re-evaluates every plugin's availability gate) run off the main
+        // thread so the store never blocks the UI.
+        val result = withContext(Dispatchers.Default) {
             delay(INSTALL_DELAY_MS)
+            onProgress(0.6f)
+            registry.installPlugin(plugin, context)
         }
-        onProgress(0.6f)
-        val result = registry.installPlugin(plugin, context)
         return when (result) {
             is PluginInstallResult.Installed -> {
                 onProgress(1f)

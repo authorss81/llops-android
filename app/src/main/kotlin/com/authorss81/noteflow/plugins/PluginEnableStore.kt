@@ -25,8 +25,10 @@ interface PluginEnableStore {
      * Delete action — delete is "gone + settings wiped", unlike disable which
      * keeps everything re-enableable). The plugin is left disabled AND its
      * ever-enabled flag is reset, so a later re-install starts from REGISTERED.
+     *
+     * Implementations MUST reset both the enabled flag AND the ever-enabled
+     * history (a default that only disables would make a re-install derive as
+     * DISABLED instead of REGISTERED).
      */
-    fun wipe(pluginId: String) {
-        setEnabled(pluginId, false)
-    }
+    fun wipe(pluginId: String)
 }

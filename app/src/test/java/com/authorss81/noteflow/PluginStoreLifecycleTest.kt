@@ -40,6 +40,8 @@ class PluginStoreLifecycleTest {
             enableStore = enableStore,
             settingsStore = settingsStore,
             installStore = installStore,
+            // The store's optional definition ships compiled in the APK.
+            optionalPluginFactories = listOf({ CaseChangePlugin() }),
             currentApiLevel = 26
         )
         val catalog = PluginStoreCatalog(registry)
@@ -54,7 +56,11 @@ class PluginStoreLifecycleTest {
         val (registry, catalog, controller) = newStore()
 
         assertEquals(baseIds, registry.allPlugins.map { it.id })
-        assertEquals(registry.compiledPlugins.size + 1, catalog.entries().size)
+        // The optional definition ships compiled (so the store can list it as
+        // "Not downloaded"), and the catalog lists it exactly once.
+        assertTrue(registry.compiledPlugins.any { it.id == caseChangeId })
+        assertEquals(1, catalog.entries().count { it.pluginId == caseChangeId })
+        assertEquals(registry.compiledPlugins.size, catalog.entries().size)
 
         val rows = controller.rows(null)
         val rot13 = rows.first { it.entry.pluginId == "com.authorss81.noteflow.plugins.rot13" }
@@ -70,8 +76,10 @@ class PluginStoreLifecycleTest {
     @Test
     fun `download installs the bundled definition and makes it available`() = runBlocking {
         val (registry, catalog, controller) = newStore()
+        // Definition is compiled-in but NOT installed before download.
         assertFalse(registry.isInstalled(caseChangeId))
-        assertTrue(registry.compiledPlugins.none { it.id == caseChangeId })
+        assertTrue(registry.compiledPlugins.any { it.id == caseChangeId })
+        assertFalse(registry.allPlugins.any { it.id == caseChangeId })
 
         val progress = mutableListOf<Float>()
         val outcome = controller.download(caseChangeId, null) { progress.add(it) }
@@ -85,6 +93,7 @@ class PluginStoreLifecycleTest {
         assertTrue(registry.isInstalled(caseChangeId))
         assertTrue(registry.allPlugins.any { it.id == caseChangeId })
         assertTrue(catalog.entryFor(caseChangeId)?.optional == true)
+        assertEquals(1, catalog.entries().count { it.pluginId == caseChangeId })
 
         // Enable → derived state is AVAILABLE (gate is Ok on any API 26+).
         assertEquals(
@@ -100,6 +109,47 @@ class PluginStoreLifecycleTest {
             (plugin as TextTransformPlugin).transformText("hello world")
         }
         assertEquals("HELLO WORLD", (result as PluginResult.Success).value)
+    }
+
+    @Test
+    fun `an installed optional plugin is re-materialized after a process restart`() = runBlocking {
+        // Shared persisted install store simulates SharedPreferences surviving
+        // a process restart; the registry is reconstructed fresh.
+        val installStore = InMemoryPluginInstallStore(baseIds)
+        val reg1 = PluginRegistry(
+            enableStore = InMemoryEnableStore(),
+            settingsStore = InMemoryPluginSettingsStore(),
+            installStore = installStore,
+            optionalPluginFactories = listOf({ CaseChangePlugin() }),
+            currentApiLevel = 26
+        )
+        val ctl1 = PluginStoreController(reg1, PluginStoreCatalog(reg1))
+        ctl1.download(caseChangeId, null) {}
+        reg1.setEnabled(caseChangeId, true)
+        assertTrue(reg1.allPlugins.any { it.id == caseChangeId })
+
+        // "Restart": a brand-new registry over the same install store.
+        val reg2 = PluginRegistry(
+            enableStore = InMemoryEnableStore(),
+            settingsStore = InMemoryPluginSettingsStore(),
+            installStore = installStore,
+            optionalPluginFactories = listOf({ CaseChangePlugin() }),
+            currentApiLevel = 26
+        )
+        // The definition is active again (not just "installed in name"), and
+        // opt-in is honored by the freshly derived state.
+        assertTrue(reg2.isInstalled(caseChangeId))
+        assertTrue(reg2.allPlugins.any { it.id == caseChangeId })
+        val row = PluginStoreController(reg2, PluginStoreCatalog(reg2)).rows(null)
+            .first { it.entry.pluginId == caseChangeId }
+        assertTrue(row.installed)
+        assertNotNull(row.state)
+
+        // It is deleted cleanly (the pre-fix behavior left it stuck).
+        val ctl2 = PluginStoreController(reg2, PluginStoreCatalog(reg2))
+        val deleted = ctl2.delete(caseChangeId, null)
+        assertTrue(deleted is PluginStoreController.DeleteOutcome.Deleted)
+        assertFalse(installStore.isInstalled(caseChangeId))
     }
 
     @Test

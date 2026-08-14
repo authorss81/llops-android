@@ -57,6 +57,12 @@ import com.authorss81.noteflow.plugins.websearch.DuckDuckGoWebSearchPlugin
  *   via [installPlugin]. Defaults to a store where EVERY plugin is installed
  *   (backward compatible — existing tests/callers keep every plugin active).
  * @param plugins the installed plugins (defaults to the built-in set).
+ * @param optionalPluginFactories factory list for OPTIONAL bundled store plugins
+ *   (Phase 21). A factory is compiled-in but NOT installed by default; it is
+ *   listed in the store as "Not downloaded" until the user installs it. A plugin
+ *   the user already installed (persisted via [installStore]) is re-materialized
+ *   at construction so it survives process restarts. Factory instances are the
+ *   canonical definitions (no duplicate catalog entries).
  * @param currentApiLevel device API level used for manifest validation
  *   (injected for JVM testability; production passes Build.VERSION.SDK_INT).
  * @param logger lifecycle/failure logging (NoOp by default for JVM tests).
@@ -66,41 +72,44 @@ class PluginRegistry(
     private val settingsStore: PluginSettingsStore = InMemoryPluginSettingsStore(),
     private val plugins: List<NoteflowPlugin> = defaultPlugins(),
     private val installStore: PluginInstallStore = AllInstalledInstallStore,
+    private val optionalPluginFactories: List<() -> NoteflowPlugin> = emptyList(),
     private val currentApiLevel: Int = Build.VERSION.SDK_INT,
     private val logger: PluginLogger = PluginLogger.NoOp
 ) {
 
     private val basePlugins = plugins
 
+    /** Optional bundled definitions (store-only): compiled in, NOT active by default. */
+    private val optionalPlugins: List<NoteflowPlugin> = optionalPluginFactories.map { it() }
+
     /** Plugins added at runtime via [installPlugin] (compiled, but not default). */
     private val extraPlugins = mutableListOf<NoteflowPlugin>()
 
-    /** Every compiled plugin the app ships with, installed or not (Phase 21). */
-    val compiledPlugins: List<NoteflowPlugin> get() = basePlugins + extraPlugins
+    /** Every compiled plugin the app ships with, installed or not (Phase 21).
+     *  Includes the OPTIONAL definitions (so the store can list them as
+     *  "Not downloaded") and any runtime-installed extras. Never lists an id
+     *  twice. */
+    val compiledPlugins: List<NoteflowPlugin>
+        get() = (basePlugins + optionalPlugins + extraPlugins).distinctBy { it.id }
 
-    /** Plugins currently installed ("downloaded") — the active registry set. */
+    /** Plugins currently installed ("downloaded") — the active registry set.
+     *  Optional definitions re-materialized on process restart (see [init]) are
+     *  active exactly when their persisted install state says so. */
     private fun activePlugins(): List<NoteflowPlugin> =
-        (basePlugins + extraPlugins).filter { installStore.isInstalled(it.id) }
+        compiledPlugins.filter { installStore.isInstalled(it.id) }
 
     private fun pluginById(id: String): NoteflowPlugin? =
         activePlugins().firstOrNull { it.id == id }
 
-    private val registrationOrder: Map<String, Int> = run {
-        val seen = mutableSetOf<String>()
+    /** Fresh registration order over the CURRENT compiled set, so runtime
+     *  installs (Phase 21 store) participate in conflict arbitration instead of
+     *  crashing with a missing key. */
+    private fun registrationOrder(): Map<String, Int> {
         val out = mutableMapOf<String, Int>()
-        basePlugins.forEachIndexed { index, p ->
-            if (p.id !in seen) {
-                seen.add(p.id)
-                out[p.id] = index
-            }
+        compiledPlugins.forEachIndexed { index, p ->
+            if (p.id !in out) out[p.id] = index
         }
-        extraPlugins.forEachIndexed { index, p ->
-            if (p.id !in seen) {
-                seen.add(p.id)
-                out[p.id] = basePlugins.size + index
-            }
-        }
-        out
+        return out
     }
 
     /** Plugin ids that failed manifest validation or are duplicate ids. */
@@ -112,11 +121,19 @@ class PluginRegistry(
     private val arbitrationDisabledNotified = mutableSetOf<String>()
 
     init {
+        // Phase 21: re-materialize optional definitions the user already
+        // installed in a previous session (install state persists in the store
+        // across restarts) — otherwise the plugin would be "installed" in name
+        // but absent from the active registry.
+        optionalPlugins.filter { installStore.isInstalled(it.id) }.forEach { extraPlugins.add(it) }
+
         val occurrences = mutableMapOf<String, MutableList<Int>>()
-        basePlugins.forEachIndexed { i, p -> occurrences.getOrPut(p.id) { mutableListOf() }.add(i) }
+        (basePlugins + optionalPlugins).forEachIndexed { i, p ->
+            occurrences.getOrPut(p.id) { mutableListOf() }.add(i)
+        }
         val rejected = mutableSetOf<String>()
         val errors = mutableMapOf<String, List<String>>()
-        basePlugins.forEachIndexed { i, p ->
+        (basePlugins + optionalPlugins).forEachIndexed { i, p ->
             val firstIndex = occurrences.getValue(p.id).first()
             if (firstIndex != i) {
                 rejected.add(p.id)
@@ -257,7 +274,12 @@ class PluginRegistry(
             val errors = validationErrors[plugin.id]?.joinToString("; ") ?: "rejected"
             return PluginInstallResult.Refused(plugin.id, "Cannot install: invalid manifest ($errors).")
         }
-        if (plugin.id !in basePlugins.map { it.id }) {
+        // Built-in and optional bundled definitions already live in
+        // [compiledPlugins]; installing flips their persisted state on. Only a
+        // genuinely unknown definition (not a built-in/optional bundled one)
+        // needs to be validated and added at runtime.
+        val knownIds = basePlugins.map { it.id }.toSet() + optionalPlugins.map { it.id }.toSet()
+        if (plugin.id !in knownIds) {
             val validation = PluginManifestValidator.validate(plugin.manifest, currentApiLevel)
             if (validation is ManifestValidation.Invalid) {
                 return PluginInstallResult.Refused(
@@ -311,6 +333,9 @@ class PluginRegistry(
 
     /** Whether [pluginId] is currently installed ("downloaded") via the store. */
     fun isInstalled(pluginId: String): Boolean = installStore.isInstalled(pluginId)
+
+    /** Whether [pluginId] is a built-in (default) plugin — i.e. NOT optional. */
+    fun isBuiltIn(pluginId: String): Boolean = basePlugins.any { it.id == pluginId }
 
     /** Whether [pluginId] was rejected (invalid manifest / duplicate id). */
     fun isRejected(pluginId: String): Boolean = pluginId in rejectedIds
@@ -500,7 +525,7 @@ class PluginRegistry(
             }
             if (candidates.size <= 1) return@forEach
             val sorted = candidates.sortedWith(
-                compareByDescending<NoteflowPlugin> { it.version }.thenBy { registrationOrder.getValue(it.id) }
+                compareByDescending<NoteflowPlugin> { it.version }.thenBy { registrationOrder().getValue(it.id) }
             )
             val winner = sorted.first()
             sorted.drop(1).forEach { losers[it.id] = winner.id }
@@ -646,7 +671,7 @@ class PluginRegistry(
             }
             for (rival in rivals) {
                 val ranked = listOf(plugin, rival).sortedWith(
-                    compareByDescending<NoteflowPlugin> { it.version }.thenBy { registrationOrder.getValue(it.id) }
+                    compareByDescending<NoteflowPlugin> { it.version }.thenBy { registrationOrder().getValue(it.id) }
                 )
                 if (ranked.first().id == rival.id) {
                     return "Cannot enable: conflicts with '${rival.name}' for ${cap.label} — " +

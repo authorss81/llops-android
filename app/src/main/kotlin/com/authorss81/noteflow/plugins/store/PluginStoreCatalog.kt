@@ -1,7 +1,6 @@
 package com.authorss81.noteflow.plugins.store
 
 import com.authorss81.noteflow.plugins.AssistantPlugin
-import com.authorss81.noteflow.plugins.CaseChangePlugin
 import com.authorss81.noteflow.plugins.NoteflowPlugin
 import com.authorss81.noteflow.plugins.PluginCapability
 import com.authorss81.noteflow.plugins.PluginPermission
@@ -29,59 +28,37 @@ data class PluginStoreEntry(
     val optional: Boolean,
     /** Size of heavy model assets installed on download (assistant), else null. */
     val installSizeBytes: Long?,
-    val permissions: Set<PluginPermission>,
-    /** Non-null for optional plugins: creates the compiled definition on download. */
-    internal val createInstance: (() -> NoteflowPlugin)? = null
+    val permissions: Set<PluginPermission>
 )
 
 /**
  * The bundled plugin catalog (Phase 21).
  *
- * Built from the registry's compiled set PLUS the optional store-only plugins
- * (definitions bundled in the APK that the user must explicitly download). A
- * real network catalog is intentionally NOT used: every definition ships in the
- * APK, so the store degrades gracefully offline by construction and "Download"
- * is an honest install of the bundled definition — see [PluginStoreController].
+ * Built from the registry's COMPLETE compiled set — every built-in plugin PLUS
+ * every optional store-only definition (compiled in the APK via the registry's
+ * `optionalPluginFactories`). A real network catalog is intentionally NOT used:
+ * every definition ships in the APK, so the store degrades gracefully offline
+ * by construction and "Download" is an honest install of the bundled definition
+ * — see [PluginStoreController]. Because entries come from a single source
+ * ([PluginRegistry.compiledPlugins], which de-duplicates by id), an optional
+ * plugin is listed exactly once whether installed or not.
  */
 class PluginStoreCatalog(
     registry: PluginRegistry
 ) {
 
-    private val entries: List<PluginStoreEntry> = buildList {
-        registry.compiledPlugins.forEach { p ->
-            add(
-                PluginStoreEntry(
-                    pluginId = p.id,
-                    name = p.name,
-                    description = p.description,
-                    version = p.version,
-                    capabilities = p.capabilities,
-                    category = categoryFor(p.capabilities),
-                    bundled = true,
-                    optional = false,
-                    installSizeBytes = sizeBytesFor(p),
-                    permissions = p.manifest.permissions,
-                    createInstance = null
-                )
-            )
-        }
-        // Optional, store-only plugin: bundled definition, NOT registered by
-        // default. Downloading installs it into the registry (see the DoD's
-        // "install/uninstall plugin DEFINITIONS, not loaded bytecode").
-        add(
-            PluginStoreEntry(
-                pluginId = CASE_CHANGE_ID,
-                name = "Case Converter",
-                description = "Converts note text to UPPERCASE, lowercase or Title Case.",
-                version = SemanticVersion(1, 0, 0),
-                capabilities = setOf(PluginCapability.TextTransform),
-                category = "Text",
-                bundled = true,
-                optional = true,
-                installSizeBytes = null,
-                permissions = emptySet(),
-                createInstance = { CaseChangePlugin() }
-            )
+    private val entries: List<PluginStoreEntry> = registry.compiledPlugins.map { p ->
+        PluginStoreEntry(
+            pluginId = p.id,
+            name = p.name,
+            description = p.description,
+            version = p.version,
+            capabilities = p.capabilities,
+            category = categoryFor(p.capabilities),
+            bundled = true,
+            optional = !registry.isBuiltIn(p.id),
+            installSizeBytes = sizeBytesFor(p),
+            permissions = p.manifest.permissions
         )
     }
 
@@ -110,9 +87,5 @@ class PluginStoreCatalog(
             PluginCapability.FileTransfer -> "Transfer"
             else -> "Other"
         }
-    }
-
-    private companion object {
-        const val CASE_CHANGE_ID = "com.authorss81.noteflow.plugins.casechange"
     }
 }

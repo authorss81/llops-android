@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.authorss81.noteflow.data.db.NoteflowDatabase
 import com.authorss81.noteflow.data.model.*
 import com.authorss81.noteflow.data.repository.NoteRepository
+import com.authorss81.noteflow.plugins.CaseChangePlugin
 import com.authorss81.noteflow.plugins.ClipParseOutcome
 import com.authorss81.noteflow.plugins.ClipSharePlugin
 import com.authorss81.noteflow.plugins.AssistantOutcome
@@ -88,6 +89,10 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         pluginEnableStore,
         pluginSettingsStore,
         installStore = pluginInstallStore,
+        // Phase 21: the store's OPTIONAL plugin. The factory is compiled in the
+        // APK but NOT active until the user downloads it; an installed optional
+        // plugin is re-materialized from this factory on process restart.
+        optionalPluginFactories = listOf({ CaseChangePlugin() }),
         logger = AndroidPluginLogger()
     )
     val pluginManager = PluginManager(pluginRegistry, AndroidPluginLogger())
@@ -171,8 +176,21 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
             }
             _storeBusy.update { it - pluginId }
             when (outcome) {
-                is PluginStoreController.DownloadOutcome.Installed ->
-                    _storeMessages.update { it + (pluginId to "Downloaded — this plugin is now available.") }
+                is PluginStoreController.DownloadOutcome.Installed -> {
+                    // A previously-deleted plugin with on-device model assets
+                    // (e.g. the assistant's GGUF) had them wiped by Delete; the
+                    // store re-installs the definition only, so tell the user
+                    // where to restore the model.
+                    val needsModel = pluginStoreCatalog.entryFor(pluginId)?.installSizeBytes != null
+                    _storeMessages.update {
+                        it + (pluginId to if (needsModel) {
+                            "Downloaded — this plugin is now available, but its on-device model was " +
+                                "deleted earlier and must be re-downloaded from the plugin's own flow."
+                        } else {
+                            "Downloaded — this plugin is now available."
+                        })
+                    }
+                }
                 is PluginStoreController.DownloadOutcome.Failed ->
                     _storeMessages.update { it + (pluginId to outcome.message) }
             }
