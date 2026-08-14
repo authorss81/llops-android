@@ -1136,6 +1136,15 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         _themeMode.value = mode
     }
 
+    // Phase 28: GLASS-theme frosted-blur master switch (GFX gate in GlassBlurGate).
+    private val _glassBlurEnabled = MutableStateFlow(settings.glassBlurEnabled)
+    val glassBlurEnabled: StateFlow<Boolean> = _glassBlurEnabled.asStateFlow()
+
+    fun setGlassBlurEnabled(enabled: Boolean) {
+        settings.glassBlurEnabled = enabled
+        _glassBlurEnabled.value = enabled
+    }
+
     fun setUseSidebarLayout(enabled: Boolean) {
         settings.useSidebarLayout = enabled
         _useSidebarLayout.value = enabled

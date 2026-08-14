@@ -173,6 +173,46 @@ private val AmoledColorScheme = darkColorScheme(
     scrim = Color(0xFF000000)
 )
 
+/** Phase 28: GLASS (glassmorphism) color scheme — translucent frosted surfaces
+ *  over a colorful ambient background. Panel roles are derived from the ambient
+ *  with guaranteed on-panel text contrast (see GlassThemeMath). */
+private fun glassColorScheme(isDark: Boolean): ColorScheme {
+    val ambientBase = if (isDark) GlassAmbientDarkTop else GlassAmbientLightTop
+    val roles = GlassThemeMath.derivePanelRoles(ambientBase, isDark)
+    val background = if (isDark) GlassAmbientDarkBottom else GlassAmbientLightBottom
+    val onBackground = roles.onPanel
+
+    val base = if (isDark) darkColorScheme() else lightColorScheme()
+    return base.copy(
+        primary = if (isDark) Color(0xFF9DB3FF) else Color(0xFF4F6EF7),
+        onPrimary = if (isDark) Color(0xFF0B1E3A) else Color.White,
+        primaryContainer = if (isDark) Color(0xFF312C7D) else Color(0xFFDCE4FF),
+        onPrimaryContainer = if (isDark) Color(0xFFE3E9FF) else Color(0xFF1B2A4A),
+        secondary = if (isDark) Color(0xFFB5A8FF) else Color(0xFF7C5CD6),
+        onSecondary = if (isDark) Color(0xFF0B1E3A) else Color.White,
+        background = background,
+        onBackground = onBackground,
+        surface = roles.panelFrost,
+        onSurface = roles.onPanel,
+        surfaceVariant = roles.surfaceElevated,
+        onSurfaceVariant = roles.onPanel.copy(alpha = 0.92f),
+        surfaceDim = if (isDark) GlassAmbientDarkBottom else GlassAmbientLightTop,
+        surfaceBright = roles.surfaceElevated,
+        surfaceContainerLowest = background,
+        surfaceContainerLow = roles.panelFrost,
+        surfaceContainer = roles.surfaceElevated,
+        surfaceContainerHigh = roles.surfaceElevated,
+        surfaceContainerHighest = if (isDark) roles.surfaceElevated else Color.White.copy(alpha = 0.8f),
+        outline = roles.outlineSoft,
+        outlineVariant = roles.outlineSoft,
+        inverseSurface = roles.onPanel,
+        inverseOnSurface = roles.panelSolid,
+        inversePrimary = Color(0xFFC9D5FF),
+        surfaceTint = roles.onPanel,
+        scrim = Color.Black
+    )
+}
+
 @Composable
 private fun schemeFor(mode: AppThemeMode, systemDark: Boolean): ColorScheme {
     return when (mode) {
@@ -180,6 +220,7 @@ private fun schemeFor(mode: AppThemeMode, systemDark: Boolean): ColorScheme {
         AppThemeMode.SEPIA -> SepiaColorScheme
         AppThemeMode.DARK -> DarkColorScheme
         AppThemeMode.AMOLED -> AmoledColorScheme
+        AppThemeMode.GLASS -> glassColorScheme(systemDark)
         AppThemeMode.SYSTEM -> if (systemDark) DarkColorScheme else LightColorScheme
         AppThemeMode.DYNAMIC -> {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {

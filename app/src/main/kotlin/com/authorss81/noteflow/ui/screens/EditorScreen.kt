@@ -827,114 +827,52 @@ fun EditorScreen(
 
     Scaffold(
         topBar = {
-            Surface(
-                tonalElevation = 3.dp,
-                shadowElevation = 2.dp,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .statusBarsPadding()
-            ) {
-                Row(
+            // Phase 28: GLASS theme → the top bar is a frosted translucent panel
+            // (blurred where renderable); every other theme keeps the classic
+            // opaque elevated surface. The drawing canvas is NEVER wrapped here.
+            val glassActive = themeMode == com.authorss81.noteflow.theme.AppThemeMode.GLASS
+            if (glassActive) {
+                com.authorss81.noteflow.theme.FrostedGlassSurface(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(56.dp)
-                        .padding(horizontal = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                        .statusBarsPadding(),
+                    shape = androidx.compose.foundation.shape.RectangleShape,
+                    fillColor = MaterialTheme.colorScheme.surface,
+                    borderColor = MaterialTheme.colorScheme.outline,
+                    applyBlur = glassBlur
                 ) {
-                    // Navigation Back Button
-                    IconButton(
-                        onClick = {
-                            saveJob?.cancel()
-                            if (isInitialLoadComplete) {
-                                viewModel.viewModelScope.launch(NonCancellable + Dispatchers.IO) {
-                                    viewModel.repository.saveStrokesForPage(page.id, strokes)
-                                    viewModel.repository.saveCanvasItemsForPage(page.id, stickyNotes, mediaEmbeds)
-                                    viewModel.repository.saveLayersForPage(page.id, layers)
-                                }
-                            }
-                            onBack()
-                        },
-                        modifier = Modifier.size(48.dp)
-                    ) {
-                        Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
-                    }
-
-                    Spacer(modifier = Modifier.width(4.dp))
-
-                    // Page Title Display with Edit Indicator
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .weight(1f)
-                            .clip(RoundedCornerShape(8.dp))
-                            .clickable { showRenameDialog = true }
-                            .padding(horizontal = 8.dp, vertical = 6.dp)
-                    ) {
-                        Text(
-                            text = page.title,
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Icon(
-                            Icons.Outlined.Edit,
-                            contentDescription = "Rename Page",
-                            modifier = Modifier.size(16.dp),
-                            tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f)
-                        )
-                    }
-
-                    // Voice Note Recording Pill
-                    FilterChip(
-                        selected = isRecordingVoice,
-                        onClick = {
-                            if (!reduceMotion) haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                            if (isRecordingVoice) {
-                                val result = voiceNoteManager.stopRecording()
-                                if (result != null) {
-                                    val pageStride = 1528f + 64f
-                                    val centerViewportY = (-panOffset.y + 600f) / zoomScale
-                                    val activePageIdx = if (!isContinuousMode) currentPdfPage else (centerViewportY / pageStride).toInt().coerceIn(0, if (isPdf) (pdfTotalPages - 1).coerceAtLeast(0) else Int.MAX_VALUE)
-                                    val activePageYOffset = if (isContinuousMode) activePageIdx * pageStride else 0f
-
-                                    val newAudioEmbed = CanvasMediaEmbed(
-                                        pageId = page.id,
-                                        type = MediaEmbedType.AUDIO_NOTE,
-                                        width = 320f,
-                                        height = 135f,
-                                        x = 100f,
-                                        y = activePageYOffset + 150f,
-                                        contentUrlOrPath = result.filePath,
-                                        durationMs = result.durationMs,
-                                        waveformAmplitudes = result.waveformAmplitudes,
-                                        pdfPage = activePageIdx
-                                    )
-                                    handleMediaEmbedsChange(mediaEmbeds + newAudioEmbed)
-                                }
-                            } else {
-                                val hasPermission = androidx.core.content.ContextCompat.checkSelfPermission(
-                                    context,
-                                    android.Manifest.permission.RECORD_AUDIO
-                                ) == android.content.pm.PackageManager.PERMISSION_GRANTED
-
-                                if (hasPermission) {
-                                    voiceNoteManager.startRecording(page.id)
-                                } else {
-                                    recordAudioPermissionLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
-                                }
-                            }
-                        },
-                        label = {
-                            if (isRecordingVoice) {
-                                val sec = (recordingElapsedMs / 1000) % 60
-                                val min = (recordingElapsedMs / 1000) / 60
-                                Text(String.format("%02d:%02d", min, sec))
-                            } else {
-                                Text("Voice")
-                            }
-                        },
+                    EditorTopBarRow(
+                        page = page,
+                        viewModel = viewModel,
+                        onBack = onBack,
+                        onShowRenameDialog = { showRenameDialog = true },
+                        isRecordingVoice = isRecordingVoice,
+                        recordingElapsedMs = recordingElapsedMs,
+                        reduceMotion = reduceMotion,
+                        onToggleVoice = { onToggleVoiceForTopBar() }
+                    )
+                }
+            } else {
+                Surface(
+                    tonalElevation = 3.dp,
+                    shadowElevation = 2.dp,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .statusBarsPadding()
+                ) {
+                    EditorTopBarRow(
+                        page = page,
+                        viewModel = viewModel,
+                        onBack = onBack,
+                        onShowRenameDialog = { showRenameDialog = true },
+                        isRecordingVoice = isRecordingVoice,
+                        recordingElapsedMs = recordingElapsedMs,
+                        reduceMotion = reduceMotion,
+                        onToggleVoice = { onToggleVoiceForTopBar() }
+                    )
+                }
+            }
+        },
                         leadingIcon = {
                             Icon(
                                 if (isRecordingVoice) Icons.Outlined.MicOff else Icons.Outlined.Mic,
@@ -4146,7 +4084,7 @@ private fun StickerPickerBottomSheet(
                 .padding(horizontal = 20.dp, vertical = 8.dp)
         ) {
             Text(
-                text = "Offline Stickers",
+                text = "Sticker Gallery",
                 style = MaterialTheme.typography.titleLarge
             )
             Text(
@@ -4154,9 +4092,56 @@ private fun StickerPickerBottomSheet(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
-            val stickers = com.authorss81.noteflow.services.StickerCatalog.all()
+            // Phase 28: searchable + category-filterable sticker/emoji picker.
+            var query by remember { mutableStateOf("") }
+            var activeCategory by remember { mutableStateOf<String?>(null) }
+
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                modifier = Modifier.fillMaxWidth(),
+                placeholder = { Text("Search stickers…") },
+                leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
+                trailingIcon = if (query.isNotEmpty()) {
+                    {
+                        IconButton(onClick = { query = "" }) {
+                            Icon(Icons.Outlined.Close, contentDescription = "Clear search")
+                        }
+                    }
+                } else null,
+                singleLine = true,
+                shape = RoundedCornerShape(14.dp)
+            )
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                item {
+                    FilterChip(
+                        selected = activeCategory == null,
+                        onClick = { activeCategory = null },
+                        label = { Text("All") }
+                    )
+                }
+                items(com.authorss81.noteflow.services.StickerCatalog.CATEGORIES) { category ->
+                    FilterChip(
+                        selected = activeCategory == category,
+                        onClick = { activeCategory = category },
+                        label = { Text(category) }
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            val all = com.authorss81.noteflow.services.StickerCatalog.search(query)
+            val stickers = if (activeCategory == null) all
+                           else all.filter { it.category == activeCategory }
             LazyVerticalGrid(
                 columns = GridCells.Fixed(5),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -4192,6 +4177,16 @@ private fun StickerPickerBottomSheet(
                                 overflow = TextOverflow.Ellipsis
                             )
                         }
+                    }
+                }
+                if (stickers.isEmpty()) {
+                    item {
+                        Text(
+                            text = "No stickers match \u201C$query\u201D",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(vertical = 24.dp)
+                        )
                     }
                 }
             }

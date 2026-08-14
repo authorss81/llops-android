@@ -37,15 +37,23 @@ val AmoledOnPrimary = Color(0xFF000000)
 val AmoledPrimaryContainer = Color(0xFF0369A1)
 val AmoledOnPrimaryContainer = Color(0xFFE0F2FE)
 
+// GLASS (glassmorphism) theme — colorful ambient backgrounds behind translucent
+// frosted panels. Light = soft pastel sky; dark = deep indigo/slate night.
+val GlassAmbientLightTop = Color(0xFFDFE9FF)
+val GlassAmbientLightBottom = Color(0xFFF6E8FF)
+val GlassAmbientDarkTop = Color(0xFF251A4E)
+val GlassAmbientDarkBottom = Color(0xFF0B1E3A)
+
 enum class AppThemeMode {
-    LIGHT, SEPIA, DARK, AMOLED, SYSTEM, DYNAMIC
+    LIGHT, SEPIA, DARK, AMOLED, SYSTEM, DYNAMIC, GLASS
 }
 
-/** 22.9: does the effective theme render with dark surfaces? (used for bar-icon polarity) */
+/** 22.9: does the effective theme render with dark surfaces? (used for bar-icon polarity).
+ *  GLASS follows the system dark state (its ambient gradient has a light and a dark variant). */
 fun isAppDarkTheme(mode: AppThemeMode, systemDark: Boolean): Boolean {
     return when (mode) {
         AppThemeMode.LIGHT, AppThemeMode.SEPIA -> false
         AppThemeMode.DARK, AppThemeMode.AMOLED -> true
-        AppThemeMode.SYSTEM, AppThemeMode.DYNAMIC -> systemDark
+        AppThemeMode.SYSTEM, AppThemeMode.DYNAMIC, AppThemeMode.GLASS -> systemDark
     }
 }
