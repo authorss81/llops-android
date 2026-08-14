@@ -507,8 +507,22 @@ class NoteRepository(private var db: NoteflowDatabase) {
      * saves only write strokes that actually changed (single insert/update per
      * new or edited stroke, plus targeted deletes) instead of the previous
      * delete-all + re-insert-all rewrite of the whole page.
+     *
+     * B2-DOS-10 (phase 100): the map is LRU-bounded so a long editing session
+     * touching many pages never grows it without limit. Evicted entries are
+     * simply re-saved on the next write — a redundant write, never lost data.
      */
-    private val lastSavedStrokeHash = mutableMapOf<String, Int>()
+    private val lastSavedStrokeHash = LruBoundedMap<String, Int>(MAX_LAST_SAVED_STROKE_HASH_ENTRIES)
+
+    /**
+     * Upper bound for [lastSavedStrokeHash]. A stroke UUID key + int hash is a
+     * few tens of bytes; 10k entries keep the diff cache a few hundred KB even
+     * for vaults with tens of thousands of strokes, and eviction only forces a
+     * redundant re-write the next time a cold stroke is saved.
+     */
+    private companion object {
+        const val MAX_LAST_SAVED_STROKE_HASH_ENTRIES = 10_000
+    }
 
     private fun strokeContentHash(s: Stroke): Int {
         var h = s.tool.name.hashCode()

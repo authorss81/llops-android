@@ -28,7 +28,7 @@ class SecurityService(private val context: Context) {
         // unreadable — an unchecked `as SecretKeyEntry` then throws
         // ClassCastException during DEK init and kills cold start. Inspect the
         // entry type instead; a wrong/invalid entry is cleared and re-created.
-        resolveSecretKeyEntry(keyStore, alias)?.let { return it }
+        resolveSecretKeyEntry(keyStore, alias)?.let { return it.secretKey }
         // Wrong-typed / unreadable entry under the alias: delete it so the
         // generator below mints a fresh SecretKey entry instead of colliding.
         if (keyStore.containsAlias(alias)) {
