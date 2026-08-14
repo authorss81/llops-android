@@ -150,6 +150,12 @@ EACH PHASE IS DESIGNED AS A STANDALONE, SELF-CONTAINED DEVELOPMENT MODULE THAT C
 
 ---
 
+> **STATUS MARKERS (added by the Phase-20 audit):** the `[DONE]` / `[PARTIAL]` /
+> `[CANCELLED]` marker on each phase heading is authoritative. The legacy
+> `- [x]` / `- [ ]` checkboxes beneath each heading were NOT re-toggled by that audit
+> and may disagree with the heading marker (a `[DONE]` heading can still contain
+> unchecked rows). Verified per-phase status lives in `docs/phase-status.md`.
+
 ### 🎨 PHASE 1: COLLAPSIBLE UI, SEARCH & CANVAS UX PRECISION [DONE]
 - [x] **1.1 COLLAPSIBLE / FLOATING DISTRACTION-FREE TOOLBARS**:
   - AUTO-HIDING FLOATING DRAWING TOOLBAR THAT COLLAPSES TO A COMPACT BAR ON TOGGLE FOR 100% DISTRACTION-FREE CANVAS PAINTING.

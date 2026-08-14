@@ -20,7 +20,7 @@ painting engine, free features).
 | phase-05 | **UX/accessibility quick wins** [DONE] | Batch 1 UX audit |
 | phase-06 | **WebDAV sync made real+safe+honest** [DONE] | Batch 1 security audit |
 | phase-07 | **Free painting features** [DONE] (reference layer not shipped) | Batch 1 feature audit |
-| phase-08+ | Pending Batch 2/3 verification findings [phase-08 DONE, phase-09 PARTIAL, phase-10/11/12 DONE, phase-13 PARTIAL, phase-14/15/16 DONE, phase-17 CANCELLED, phase-18/19 DONE, phase-20-29 NOT STARTED — see docs/phase-status.md] | Batch 2/3 |
+| phase-08+ | Pending Batch 2/3 verification findings [phase-08 DONE, phase-09 PARTIAL, phase-10/11/12 DONE, phase-13 PARTIAL, phase-14/15/16 DONE, phase-17 CANCELLED, phase-18/19 DONE, phase-20 DONE, phase-21-29 NOT STARTED — see docs/phase-status.md] | Batch 2/3 |
 
 ## How phases run
 

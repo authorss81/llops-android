@@ -8,7 +8,7 @@
 All of the following are now marked:
 
 - `workspace/phase-01/PROMPT.md` … `workspace/phase-16/PROMPT.md`, `phase-18`/`phase-19` (line 1)
-- `workspace/phase-20/PROMPT.md` … `phase-29/PROMPT.md` (line 1, all `[NOT STARTED]`)
+- `workspace/phase-20/PROMPT.md` (line 1, `[DONE]`); `workspace/phase-21/PROMPT.md` … `phase-29/PROMPT.md` (line 1, all `[NOT STARTED]`)
 - `ROADMAP.md` PHASE 1-35 headings
 - `workspace/PHASES.md` phase table (status column updated)
 - `workspace/phase-08/PERF_REPORT.md`, `workspace/phase-10/REPORT.md`, `workspace/phase-14/AUDIT_REPORT.md` (report doc titles)

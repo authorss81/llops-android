@@ -1,4 +1,4 @@
-# Phase 20: Document fix — phase-status audit & clean labeling [NOT STARTED]
+# Phase 20: Document fix — phase-status audit & clean labeling [DONE]
 
 You are working on **InkFlow/Noteflow**, an autonomous-LLM-driven Android app.
 The pipeline has completed many phases. This phase audits every phase directory
