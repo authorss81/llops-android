@@ -78,7 +78,9 @@ object LocalSendMessages {
         val download: Boolean = false
     )
 
-    /** One file's metadata in the /prepare-upload request body. */
+    /**
+     * One file's metadata in the /prepare-upload request body.
+     */
     data class FileMeta(
         val id: String,
         val fileName: String,
@@ -86,6 +88,24 @@ object LocalSendMessages {
         @SerializedName("fileType") val mimeType: String?,
         val sha256: String?,
         val preview: String? = null
+    )
+
+    /**
+     * The SENDER's identity announcement (B1-NET-09, phase-110): a fixed,
+     * user-set `alias` with NO device-model disclosure. We deliberately do NOT
+     * put `Build.MODEL` (or any OS/app/version fingerprint) into
+     * `deviceModel`/`alias` — every LAN host that sees the announce, register
+     * or prepare-upload bodies must not be able to fingerprint the exact handset.
+     */
+    fun senderIdentity(fingerprint: String): Info = Info(
+        alias = "InkFlow",
+        version = LocalSendProtocol.PROTOCOL_VERSION,
+        deviceModel = null,
+        deviceType = "mobile",
+        fingerprint = fingerprint,
+        port = LocalSendProtocol.DEFAULT_PORT,
+        protocol = "http",
+        download = false
     )
 
     // ---- protocol JSON shape (see README.md of localsend/protocol) ----

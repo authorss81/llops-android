@@ -48,6 +48,61 @@ class LocalSendProtocolTest {
         assertFalse(root.has("token")) // v2.2 no token; v2.0-only field must not appear
     }
 
+    // ---- Sender identity (B1-NET-09 / phase-110): no device-model leak ----
+
+    @Test
+    fun senderIdentity_exposesNoDeviceModelOrVersion() {
+        val info = LocalSendMessages.senderIdentity(fingerprint = "inkflow-abc123")
+        assertEquals("InkFlow", info.alias)
+        assertEquals(null, info.deviceModel)
+        assertEquals("mobile", info.deviceType)
+        assertFalse(info.alias.contains(BuildModelPlaceholder.PIXEL))
+    }
+
+    @Test
+    fun senderIdentityAnnounceJson_doesNotLeakModel() {
+        val info = LocalSendMessages.senderIdentity(fingerprint = "inkflow-abc123")
+        val root = JsonParser.parseString(String(LocalSendMessages.buildAnnounce(info), Charsets.UTF_8)).asJsonObject
+        assertEquals("InkFlow", root.get("alias").asString)
+        assertEquals(true, root.get("announce").asBoolean)
+        assertFalse(
+            "Sender announce must not carry a device-model marker.",
+            root.has("deviceModel")
+        )
+    }
+
+    @Test
+    fun senderIdentityRegisterBody_doesNotLeakModel() {
+        val info = LocalSendMessages.senderIdentity(fingerprint = "inkflow-abc123")
+        val root = JsonParser.parseString(LocalSendMessages.buildRegisterBody(info)).asJsonObject
+        assertEquals("InkFlow", root.get("alias").asString)
+        assertFalse(
+            "Sender register body must not carry a device-model marker.",
+            root.has("deviceModel")
+        )
+    }
+
+    @Test
+    fun senderIdentityPrepareUploadBody_doesNotLeakModel() {
+        val info = LocalSendMessages.senderIdentity(fingerprint = "inkflow-abc123")
+        val body = LocalSendMessages.buildPrepareUploadBody(
+            info = info,
+            fileId = "file-1",
+            fileName = "note.md",
+            sizeBytes = 1024,
+            mimeType = "text/markdown",
+            sha256Hex = null
+        )
+        val infoNode = JsonParser.parseString(body).asJsonObject.get("info").asJsonObject
+        assertEquals("InkFlow", infoNode.get("alias").asString)
+        assertFalse(infoNode.has("deviceModel"))
+        assertFalse(body.contains(BuildModelPlaceholder.PIXEL))
+    }
+
+    private object BuildModelPlaceholder {
+        const val PIXEL = "Pixel 8"
+    }
+
     // ---- Discovery response parsing ----
 
     @Test

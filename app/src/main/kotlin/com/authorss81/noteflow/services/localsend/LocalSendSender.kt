@@ -1,6 +1,5 @@
 package com.authorss81.noteflow.services.localsend
 
-import android.os.Build
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -25,6 +24,7 @@ import javax.net.ssl.HttpsURLConnection
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLSession
 import javax.net.ssl.X509TrustManager
+import com.authorss81.noteflow.utils.HttpUserAgent
 
 /**
  * LocalSend sender — real, interoperable implementation (Protocol v2.2).
@@ -72,16 +72,8 @@ class LocalSendSender {
     // Identity shown to receiving devices.
     private val senderFingerprint = "inkflow-" + UUID.randomUUID().toString().replace("-", "")
 
-    private fun senderInfo(): LocalSendMessages.Info = LocalSendMessages.Info(
-        alias = "InkFlow${if (Build.MODEL.isNotBlank()) " (${Build.MODEL})" else ""}",
-        version = LocalSendProtocol.PROTOCOL_VERSION,
-        deviceModel = Build.MODEL.ifBlank { "Android" },
-        deviceType = "mobile",
-        fingerprint = senderFingerprint,
-        port = LocalSendProtocol.DEFAULT_PORT,
-        protocol = "http",
-        download = false
-    )
+    private fun senderInfo(): LocalSendMessages.Info =
+        LocalSendMessages.senderIdentity(fingerprint = senderFingerprint)
 
     // ---------------------------------------------------------------------
     // Discovery
@@ -239,6 +231,7 @@ class LocalSendSender {
             conn.connectTimeout = LEGACY_SCAN_TIMEOUT_MS
             conn.readTimeout = LEGACY_SCAN_TIMEOUT_MS
             conn.doOutput = true
+            conn.setRequestProperty("User-Agent", HttpUserAgent.GENERIC)
             conn.setRequestProperty("Content-Type", "application/json")
             conn.setRequestProperty("Accept", "application/json")
             val body = LocalSendMessages.buildRegisterBody(senderInfo()).toByteArray(Charsets.UTF_8)
@@ -477,6 +470,7 @@ class LocalSendSender {
             url.openConnection() as HttpURLConnection
         }
         conn.readTimeout = readTimeoutMs
+        conn.setRequestProperty("User-Agent", HttpUserAgent.GENERIC)
         return conn
     }
 

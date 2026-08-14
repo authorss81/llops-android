@@ -8,6 +8,7 @@ import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import com.authorss81.noteflow.utils.BackupFileNamePolicy
+import com.authorss81.noteflow.utils.HttpUserAgent
 
 /**
  * WebDAV sync engine: uploads/downloads ENCRYPTED VAULT BACKUP FILES to/from
@@ -152,7 +153,7 @@ class WebDavSyncService(private val context: Context) {
         val auth = "${config.username}:${config.passwordOrToken}"
         val encodedAuth = Base64.encodeToString(auth.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
         conn.setRequestProperty("Authorization", "Basic $encodedAuth")
-        conn.setRequestProperty("User-Agent", "Noteflow-Android-WebDAV-Sync/2026")
+        conn.setRequestProperty("User-Agent", HttpUserAgent.GENERIC)
         return conn
     }
 

@@ -4,6 +4,7 @@ import java.net.URL
 import javax.net.ssl.HttpsURLConnection
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import com.authorss81.noteflow.utils.HttpUserAgent
 
 /**
  * Outcome of fetching the hosted plugin version manifest.
@@ -97,7 +98,7 @@ class HttpsManifestTransport : ManifestTransport {
                 connection.readTimeout = READ_TIMEOUT_MS
                 connection.instanceFollowRedirects = true
                 connection.setRequestProperty("Accept", "application/json")
-                connection.setRequestProperty("User-Agent", "Noteflow-Plugin-Runtime/2026")
+                connection.setRequestProperty("User-Agent", HttpUserAgent.GENERIC)
                 connection.useCaches = false
 
                 val responseCode = connection.responseCode

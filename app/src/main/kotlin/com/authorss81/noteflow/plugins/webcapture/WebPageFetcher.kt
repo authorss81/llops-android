@@ -6,6 +6,7 @@ import java.net.HttpURLConnection
 import java.net.URI
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import com.authorss81.noteflow.utils.HttpUserAgent
 
 /**
  * Platform (network) slice of Web Capture. Fetches an already-validated URL on
@@ -34,7 +35,7 @@ class WebPageFetcher {
                 conn.readTimeout = 15_000
                 conn.instanceFollowRedirects = false
                 conn.requestMethod = "GET"
-                conn.setRequestProperty("User-Agent", USER_AGENT)
+                conn.setRequestProperty("User-Agent", HttpUserAgent.GENERIC)
                 conn.setRequestProperty("Accept", "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8")
                 val status = conn.responseCode
                 if (status in 300..399) {
@@ -82,7 +83,5 @@ class WebPageFetcher {
 
     private companion object {
         const val MAX_REDIRECTS = 5
-        const val USER_AGENT =
-            "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) InkFlow/1.0"
     }
 }

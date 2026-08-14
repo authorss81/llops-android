@@ -13,6 +13,7 @@ import javax.net.ssl.TrustManagerFactory
 import javax.net.ssl.X509TrustManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import com.authorss81.noteflow.utils.HttpUserAgent
 
 /**
  * Production [DownloadTransport] (Phase 23): a pinned, TLS-only HTTPS fetch of
@@ -159,7 +160,7 @@ class HttpsPluginDownloadTransport : DownloadTransport {
             sslSocketFactory = sslContext.socketFactory
             hostnameVerifier = HttpsURLConnection.getDefaultHostnameVerifier()
             setRequestProperty("Accept", "application/octet-stream")
-            setRequestProperty("User-Agent", "Noteflow-Plugin-Runtime/2026")
+            setRequestProperty("User-Agent", HttpUserAgent.GENERIC)
             useCaches = false
         }
     }
