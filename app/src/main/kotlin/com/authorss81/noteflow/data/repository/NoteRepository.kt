@@ -152,15 +152,16 @@ class NoteRepository(private var db: NoteflowDatabase) {
         DatabaseSecurityHelper.updateStoredChecksum(context)
     }
 
-    private fun isFieldEncrypted(value: String, key: ByteArray, table: String, recordId: String, fieldName: String): Boolean {
-        if (value.isBlank()) return true // nothing to encrypt
-        return try {
-            EncryptionService.decryptField(value, key, table, recordId, fieldName)
-            true
-        } catch (e: Exception) {
-            false
-        }
-    }
+    /**
+     * B2-CRYPTO-10 (phase-108): "is this field already encrypted?" is answered by
+     * payload structure + authenticated decrypt ([EncryptionService.isFieldEncrypted]),
+     * NEVER by content blank-ness. The old probe returned `true` for any blank
+     * value, so `reencryptPlaintextFields` treated raw `""` columns as "encrypted
+     * and fine" and never stamped them. Raw blanks are now swept and stored as
+     * real AES-GCM payloads carrying an integrity tag over the blank-ness.
+     */
+    private fun isFieldEncrypted(value: String, key: ByteArray, table: String, recordId: String, fieldName: String): Boolean =
+        EncryptionService.isFieldEncrypted(value, key, table, recordId, fieldName)
 
     /**
      * B2-CRYPTO-09 (phase-107): one-time re-encryption of every existing field
@@ -250,6 +251,11 @@ class NoteRepository(private var db: NoteflowDatabase) {
      * One-time pass: encrypts any plaintext title/extractedText/textContent rows
      * with the given DEK. Called after setting a master password so pre-existing
      * data is not left in the clear (previously only new writes were encrypted).
+     * B2-CRYPTO-10 (phase-108): blank rows are NOW swept too — an empty string is
+     * stored as a real AEAD payload (`[1][12-byte IV][16-byte GCM tag]`, 29
+     * bytes) so a blank column carries an authenticated tag over its blank-ness
+     * instead of sitting raw and tag-less in the vault. NULL columns are left
+     * NULL (there is no stored field content to stamp).
      */
     suspend fun reencryptPlaintextFields(dek: ByteArray) = withContext(Dispatchers.IO) {
         db.withTransaction {
@@ -257,37 +263,35 @@ class NoteRepository(private var db: NoteflowDatabase) {
                 var title = page.title
                 var extracted = page.extractedText
                 var dirty = false
-                if (title.isNotBlank() && !isFieldEncrypted(title, dek, "pages", page.id, "title")) {
+                if (!isFieldEncrypted(title, dek, "pages", page.id, "title")) {
                     title = EncryptionService.encryptField(title.toByteArray(), dek, "pages", page.id, "title")
                     dirty = true
                 }
-                if (!extracted.isNullOrBlank() && !isFieldEncrypted(extracted, dek, "pages", page.id, "extractedText")) {
+                if (extracted != null && !isFieldEncrypted(extracted, dek, "pages", page.id, "extractedText")) {
                     extracted = EncryptionService.encryptField(extracted.toByteArray(), dek, "pages", page.id, "extractedText")
                     dirty = true
                 }
                 if (dirty) db.pageDao().updateEncryptedFields(page.id, title, extracted)
             }
             db.strokeDao().getAllStrokesForReencrypt().forEach { stroke ->
-                val text = stroke.textContent
-                val points = stroke.pointsJson
+                var text = stroke.textContent
+                var points = stroke.pointsJson
                 var dirty = false
-                var newText = text
-                var newPoints = points
-                if (!text.isNullOrBlank() && !isFieldEncrypted(text, dek, "strokes", stroke.id, "textContent")) {
-                    newText = EncryptionService.encryptField(text.toByteArray(), dek, "strokes", stroke.id, "textContent")
+                if (!isFieldEncrypted(text, dek, "strokes", stroke.id, "textContent")) {
+                    text = EncryptionService.encryptField(text.toByteArray(), dek, "strokes", stroke.id, "textContent")
                     dirty = true
                 }
-                if (!points.isNullOrBlank() && !isFieldEncrypted(points, dek, "strokes", stroke.id, "pointsJson")) {
-                    newPoints = EncryptionService.encryptField(points.toByteArray(), dek, "strokes", stroke.id, "pointsJson")
+                if (!isFieldEncrypted(points, dek, "strokes", stroke.id, "pointsJson")) {
+                    points = EncryptionService.encryptField(points.toByteArray(), dek, "strokes", stroke.id, "pointsJson")
                     dirty = true
                 }
                 if (dirty) {
-                    db.strokeDao().updateStrokeFields(stroke.id, newText, newPoints)
+                    db.strokeDao().updateStrokeFields(stroke.id, text, points)
                 }
             }
             db.mediaEmbedDao().getAllEmbedsForReencrypt().forEach { embed ->
                 val text = embed.textContent
-                if (!text.isNullOrBlank() && !isFieldEncrypted(text, dek, "media_embeds", embed.id, "textContent")) {
+                if (text != null && !isFieldEncrypted(text, dek, "media_embeds", embed.id, "textContent")) {
                     val encrypted = EncryptionService.encryptField(text.toByteArray(), dek, "media_embeds", embed.id, "textContent")
                     db.mediaEmbedDao().updateTextContent(embed.id, encrypted)
                 }
@@ -303,11 +307,11 @@ class NoteRepository(private var db: NoteflowDatabase) {
                 var dirty = false
                 var newTitle = title
                 var newExtracted = extracted
-                if (title.isNotBlank() && !isFieldEncrypted(title, dek, "note_versions", version.id, "title")) {
+                if (!isFieldEncrypted(title, dek, "note_versions", version.id, "title")) {
                     newTitle = EncryptionService.encryptField(title.toByteArray(), dek, "note_versions", version.id, "title")
                     dirty = true
                 }
-                if (!extracted.isNullOrBlank() && !isFieldEncrypted(extracted, dek, "note_versions", version.id, "extractedText")) {
+                if (extracted != null && !isFieldEncrypted(extracted, dek, "note_versions", version.id, "extractedText")) {
                     newExtracted = EncryptionService.encryptField(extracted.toByteArray(), dek, "note_versions", version.id, "extractedText")
                     dirty = true
                 }
@@ -445,7 +449,10 @@ class NoteRepository(private var db: NoteflowDatabase) {
         val pageId = UUID.randomUUID().toString()
         val storedTitle = encryptionKey?.let { EncryptionService.encryptField(rawTitle.toByteArray(), it, "pages", pageId, "title") } ?: rawTitle
         val rawExtracted = extractedText ?: ""
-        val storedExtracted = if (encryptionKey != null && rawExtracted.isNotBlank()) {
+        // B2-CRYPTO-10 (phase-108): a blank extractedText is stored as a real AEAD
+        // payload too (never raw ""), so even an empty body carries an integrity
+        // tag that a zeroed column cannot fake.
+        val storedExtracted = if (encryptionKey != null) {
             EncryptionService.encryptField(rawExtracted.toByteArray(), encryptionKey!!, "pages", pageId, "extractedText")
         } else {
             rawExtracted
@@ -652,7 +659,9 @@ class NoteRepository(private var db: NoteflowDatabase) {
 
             val entities = changed.map { stroke ->
                 val rawText = stroke.text
-                val storedText = if (encryptionKey != null && rawText.isNotBlank()) {
+                // B2-CRYPTO-10 (phase-108): blank text is stored as a real AEAD
+                // payload, never raw "" — the row's blank-ness is always tagged.
+                val storedText = if (encryptionKey != null) {
                     EncryptionService.encryptField(rawText.toByteArray(), encryptionKey!!, "strokes", stroke.id, "textContent")
                 } else {
                     rawText
@@ -660,7 +669,7 @@ class NoteRepository(private var db: NoteflowDatabase) {
 
                 val dummyStroke = stroke.copy(text = "")
                 val pointsJson = EncryptionService.serializeStrokes(listOf(dummyStroke))
-                val storedPointsJson = if (encryptionKey != null && pointsJson.isNotBlank()) {
+                val storedPointsJson = if (encryptionKey != null) {
                     EncryptionService.encryptField(pointsJson.toByteArray(), encryptionKey!!, "strokes", stroke.id, "pointsJson")
                 } else {
                     pointsJson
@@ -800,7 +809,8 @@ class NoteRepository(private var db: NoteflowDatabase) {
 
             val entities = embeds.map { embed ->
                 val rawText = embed.textContent ?: ""
-                val storedText = if (encryptionKey != null && rawText.isNotBlank()) {
+                // B2-CRYPTO-10 (phase-108): blank embed text is tagged too.
+                val storedText = if (encryptionKey != null) {
                     EncryptionService.encryptField(rawText.toByteArray(), encryptionKey!!, "media_embeds", embed.id, "textContent")
                 } else {
                     rawText
@@ -883,7 +893,8 @@ class NoteRepository(private var db: NoteflowDatabase) {
         val versionId = UUID.randomUUID().toString()
         val storedTitle = encryptionKey?.let { EncryptionService.encryptField(title.toByteArray(), it, "note_versions", versionId, "title") } ?: title
         val rawExtracted = extractedText ?: ""
-        val storedExtracted = if (encryptionKey != null && rawExtracted.isNotBlank()) {
+        // B2-CRYPTO-10 (phase-108): blank version snapshots are tagged too.
+        val storedExtracted = if (encryptionKey != null) {
             EncryptionService.encryptField(rawExtracted.toByteArray(), encryptionKey!!, "note_versions", versionId, "extractedText")
         } else {
             rawExtracted

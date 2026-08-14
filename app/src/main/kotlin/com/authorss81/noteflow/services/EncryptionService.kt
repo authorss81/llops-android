@@ -262,6 +262,55 @@ object EncryptionService {
         }
     }
 
+    // ---------- B2-CRYPTO-10 (phase-108): blank fields are real AEAD payloads ----------
+
+    /**
+     * Structural "is this ciphertext?" check.
+     *
+     * Decided ONLY by payload structure — the Base64 decodes to at least
+     * [GCM_IV_LENGTH] + 1 bytes (version byte + 12-byte IV is the minimum a
+     * versioned payload can span) and carries the [PAYLOAD_VERSION] marker — and
+     * NEVER by content blank-ness. A blank plaintext stored correctly by this
+     * app is a valid 29-byte AEAD payload (`[1][12-byte IV][16-byte GCM tag]`,
+     * AES-GCM of empty plaintext), so it must classify as encrypted. A raw `""`
+     * (a pre-B2-CRYPTO-10 write, or a column whose ciphertext was zeroed) is not
+     * a payload at all and must classify as NOT encrypted.
+     */
+    fun isEncryptedPayload(encryptedBase64: String): Boolean {
+        if (encryptedBase64.isBlank()) return false
+        val combined = try {
+            base64Decode(encryptedBase64)
+        } catch (e: Exception) {
+            return false
+        }
+        return combined.size >= GCM_IV_LENGTH + 1 && combined[0] == PAYLOAD_VERSION
+    }
+
+    /**
+     * Field-layer classifier (B2-CRYPTO-10 / phase-108).
+     *
+     * Replaces the old probe that returned `true` for any blank value ("nothing
+     * to encrypt"), which let blank columns masquerade as already-encrypted and
+     * made [com.authorss81.noteflow.data.repository.NoteRepository.reencryptPlaintextFields]
+     * permanently skip them. "Is this value an encrypted field column?" is answered
+     * by payload structure first (a raw blank is NOT a payload), then an
+     * authenticated decrypt under the record field AAD:
+     *  - a raw blank `""` → false, so the sweep re-stamps it as a tagged payload;
+     *  - a correctly-stored blank → true, it round-trips to "" and fails
+     *    authentically if the ciphertext column is zeroed afterwards;
+     *  - a malformed/transplanted/garbage value → false, so it is never treated
+     *    as "encrypted and fine".
+     */
+    fun isFieldEncrypted(value: String, key: ByteArray, table: String, recordId: String, fieldName: String): Boolean {
+        if (!isEncryptedPayload(value)) return false
+        return try {
+            decryptField(value, key, table, recordId, fieldName)
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
     fun serializeStrokes(strokes: List<Stroke>): String {
         return gson.toJson(strokes)
     }
