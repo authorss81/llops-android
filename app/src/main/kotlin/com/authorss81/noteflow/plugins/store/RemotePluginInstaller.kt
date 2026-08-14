@@ -25,6 +25,16 @@ interface RemotePluginInstaller {
     fun grantConsent(pluginId: String)
 
     /**
+     * The ACTIVE persisted entry for [pluginId] (a previously downloaded and
+     * already-updated remote plugin), or null when none is persisted yet. The
+     * update path (Phase 24) compares against THIS version — not the bundled
+     * catalog definition — so a second update never downgrades against a stale
+     * catalog copy and records the true previous version for rollback. Default
+     * null keeps existing (test) implementations source-compatible.
+     */
+    fun activeEntryFor(pluginId: String): PluginEntry? = null
+
+    /**
      * Download → verify → load → install [entry] into the registry.
      * Reports progress `0f..1f` into the store's progress flow. Never throws.
      */

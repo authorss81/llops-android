@@ -70,13 +70,13 @@ sealed class RuntimeOutcome<out T> {
 }
 
 /**
- * THE runtime seam of the hybrid plugin architecture (Phase 22 — see
+ * THE runtime seam of the hybrid plugin architecture (Phases 22–24 — see
  * `docs/plugin-architecture.md`).
  *
  * This interface is the ONLY contract the rest of the app holds against the
- * downloadable-plugin machinery. Phases 23/24 register a real implementation
- * through [PluginRuntimeRegistry]; nothing else changes — the store, the
- * registry and the UI already speak [PluginEntry].
+ * downloadable-plugin machinery. Phase 23 filled [verify]/[load]; Phase 24
+ * fills [update]/[rollback] through [PluginRuntimeRegistry]; nothing else
+ * changes — the store, the registry and the UI already speak [PluginEntry].
  *
  * Trust rules the interface bakes in (the implementation MUST honour them):
  * - **Verify BEFORE load.** [verify] must reject tampered artifacts
@@ -105,15 +105,27 @@ interface PluginRuntime {
     fun load(entry: PluginEntry): RuntimeOutcome<LoadedPlugin>
 
     /**
-     * Apply an update to [entry] at [newVersion]: download, re-verify, keep the
-     * previous version for rollback. Implemented in Phase 24.
+     * Apply a user-approved update of the installed [entry] to the
+     * manifest-provided [target] entry (new version + its digests):
+     * download → re-verify (sha256 + pinned cert) → load smoke-test → keep the
+     * previous version for rollback → atomic swap. An update NEVER applies
+     * without [userApproved] == true, is never a downgrade, and any failure
+     * leaves the previous verified version active. Progress `0f..1f` is
+     * reported through [onProgress] so the UI shows a real, monotonic state.
+     * Implemented in Phase 24.
      */
-    fun update(entry: PluginEntry, newVersion: PluginVersion): RuntimeOutcome<PluginUpdateResult>
+    suspend fun update(
+        entry: PluginEntry,
+        target: PluginEntry,
+        userApproved: Boolean,
+        onProgress: (Float) -> Unit
+    ): RuntimeOutcome<PluginUpdateResult>
 
     /**
-     * Restore the previous verified version of [entry]. Implemented in Phase 24.
+     * Restore the previously-active (recorded) verified version of [entry].
+     * Implemented in Phase 24.
      */
-    fun rollback(entry: PluginEntry): RuntimeOutcome<PluginRollbackResult>
+    suspend fun rollback(entry: PluginEntry): RuntimeOutcome<PluginRollbackResult>
 }
 
 /** A [NoteflowPlugin] the runtime materialized + the context it must use. */
@@ -125,44 +137,43 @@ data class LoadedPlugin(
 )
 
 /**
- * HONEST Phase-22 stub: every operation answers [RuntimeOutcome.NotYetImplemented]
- * with the phase that will implement it. It never fabricates a "verified" or
- * "loaded" result — pretending the runtime works would be a fake feature.
+ * HONEST default [PluginRuntime] used until a real runtime is registered
+ * through [PluginRuntimeRegistry]. Phase 23 registers
+ * [SignatureVerifiedPluginRuntime] (download/verify/load), Phase 24 its
+ * update/rollback engine. This default does not fabricate results: operations
+ * that ARE implemented by the registered runtime answer with a clear "no
+ * runtime is wired" failure instead of pretending they worked.
  */
 class NotYetImplementedPluginRuntime : PluginRuntime {
 
     override fun verify(artifact: PluginArtifact): RuntimeOutcome<PluginVerification> =
-        RuntimeOutcome.notYetImplemented(
-            phase = PHASE_DOWNLOAD_VERIFY,
-            message = "verify() for plugin '${artifact.entry.id}' is not implemented yet — " +
-                "pinned-cert-hash + sha256 verification of downloadable artifacts lands in Phase 23."
+        RuntimeOutcome.Failed(
+            "verify() for plugin '${artifact.entry.id}' cannot run: no plugin runtime is registered. " +
+                "Downloadable-plugin verification is implemented by SignatureVerifiedPluginRuntime."
         )
 
     override fun load(entry: PluginEntry): RuntimeOutcome<LoadedPlugin> =
-        RuntimeOutcome.notYetImplemented(
-            phase = PHASE_DOWNLOAD_VERIFY,
-            message = "load() for plugin '${entry.id}' is not implemented yet — " +
-                "DexClassLoader materialization + capability-facade wiring land in Phase 23."
+        RuntimeOutcome.Failed(
+            "load() for plugin '${entry.id}' cannot run: no plugin runtime is registered. " +
+                "Downloadable-plugin loading is implemented by SignatureVerifiedPluginRuntime."
         )
 
-    override fun update(entry: PluginEntry, newVersion: PluginVersion): RuntimeOutcome<PluginUpdateResult> =
-        RuntimeOutcome.notYetImplemented(
-            phase = PHASE_UPDATES,
-            message = "update() for plugin '${entry.id}' -> $newVersion is not implemented yet — " +
-                "user-approved updates land in Phase 24."
+    override suspend fun update(
+        entry: PluginEntry,
+        target: PluginEntry,
+        userApproved: Boolean,
+        onProgress: (Float) -> Unit
+    ): RuntimeOutcome<PluginUpdateResult> =
+        RuntimeOutcome.Failed(
+            "update() for plugin '${entry.id}' cannot run: no plugin runtime is registered. " +
+                "User-approved updates are implemented by SignatureVerifiedPluginRuntime."
         )
 
-    override fun rollback(entry: PluginEntry): RuntimeOutcome<PluginRollbackResult> =
-        RuntimeOutcome.notYetImplemented(
-            phase = PHASE_UPDATES,
-            message = "rollback() for plugin '${entry.id}' is not implemented yet — " +
-                "the keep-previous-until-verified rollback path lands in Phase 24."
+    override suspend fun rollback(entry: PluginEntry): RuntimeOutcome<PluginRollbackResult> =
+        RuntimeOutcome.Failed(
+            "rollback() for plugin '${entry.id}' cannot run: no plugin runtime is registered. " +
+                "The rollback path is implemented by SignatureVerifiedPluginRuntime."
         )
-
-    private companion object {
-        const val PHASE_DOWNLOAD_VERIFY = 23
-        const val PHASE_UPDATES = 24
-    }
 }
 
 /**

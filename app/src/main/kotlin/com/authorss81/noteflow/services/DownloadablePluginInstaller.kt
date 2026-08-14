@@ -45,6 +45,9 @@ class DownloadablePluginInstaller(
         settings.setPluginDownloadConsented(pluginId, true)
     }
 
+    override fun activeEntryFor(pluginId: String): PluginEntry? =
+        entryStore.find(pluginId)
+
     override suspend fun install(
         entry: PluginEntry,
         onProgress: (Float) -> Unit

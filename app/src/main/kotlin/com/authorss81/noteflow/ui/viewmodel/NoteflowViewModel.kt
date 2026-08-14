@@ -62,13 +62,20 @@ import com.authorss81.noteflow.plugins.runtime.SignatureVerifiedPluginRuntime
 import com.authorss81.noteflow.plugins.runtime.HttpsPluginDownloadTransport
 import com.authorss81.noteflow.plugins.runtime.PluginDownloader
 import com.authorss81.noteflow.plugins.runtime.PluginContextFactory
+import com.authorss81.noteflow.plugins.runtime.PluginManifestFetcher
+import com.authorss81.noteflow.plugins.runtime.HttpsManifestTransport
+import com.authorss81.noteflow.plugins.runtime.PluginUpdateEngine
+import com.authorss81.noteflow.plugins.runtime.PluginUpdateInfo
+import com.authorss81.noteflow.plugins.runtime.RuntimePluginLoader
 import com.authorss81.noteflow.plugins.store.PluginStoreCatalog
 import com.authorss81.noteflow.plugins.store.PluginStoreController
 import com.authorss81.noteflow.services.AppClassLoaderFactory
 import com.authorss81.noteflow.services.AppFacadeHost
 import com.authorss81.noteflow.services.DownloadablePluginInstaller
+import com.authorss81.noteflow.services.DownloadablePluginUpdater
 import com.authorss81.noteflow.services.PluginArtifactStorage
 import com.authorss81.noteflow.services.SettingsPluginEntryStore
+import com.authorss81.noteflow.services.SettingsPluginUpdateStore
 import com.authorss81.noteflow.theme.AppThemeMode
 import com.authorss81.noteflow.ui.components.WorkspaceTemplate
 import com.authorss81.noteflow.plugins.AndroidPluginLogger
@@ -117,19 +124,42 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     // Phase 23: the downloadable-plugin runtime. The artifact storage, HTTPS
     // transport, DexClassLoader factory, capability facade host and installer
     // are all wired here; PluginRuntimeRegistry is swapped from the honest
-    // Phase-22 stub to the real SignatureVerifiedPluginRuntime.
+    // Phase-22 stub to the real SignatureVerifiedPluginRuntime. Phase 24 adds
+    // the update engine (verified user-approved updates + rollback) and the
+    // store coordinator that drives them.
     private val pluginArtifactStorage = PluginArtifactStorage(appContext)
     private val pluginDownloader = PluginDownloader(
         transport = HttpsPluginDownloadTransport(),
         freeSpace = { pluginArtifactStorage.freeBytes() },
         logger = AndroidPluginLogger()
     )
+    private val pluginUpdateStore = SettingsPluginUpdateStore(settings)
+    private val pluginClassLoaderFactory =
+        AppClassLoaderFactory(pluginArtifactStorage.optimizedDir().absolutePath)
+    private val pluginContextFactory = PluginContextFactory.capabilityAware(AppFacadeHost())
+    private val pluginUpdateEngine: PluginUpdateEngine by lazy {
+        PluginUpdateEngine(
+            downloader = pluginDownloader,
+            storageDir = pluginArtifactStorage.dir(),
+            artifactResolver = pluginArtifactStorage,
+            entryStore = pluginEntryStore,
+            updateStore = pluginUpdateStore,
+            verifier = com.authorss81.noteflow.plugins.runtime.ArtifactSignatureVerifier(),
+            loader = RuntimePluginLoader(
+                classLoaderFactory = pluginClassLoaderFactory,
+                contextFactory = pluginContextFactory,
+                parentClassLoader = appContext.classLoader
+            ),
+            logger = AndroidPluginLogger()
+        )
+    }
     val pluginRuntime: PluginRuntime by lazy {
         SignatureVerifiedPluginRuntime(
             artifactResolver = pluginArtifactStorage,
-            classLoaderFactory = AppClassLoaderFactory(pluginArtifactStorage.optimizedDir().absolutePath),
-            contextFactory = PluginContextFactory.capabilityAware(AppFacadeHost()),
+            classLoaderFactory = pluginClassLoaderFactory,
+            contextFactory = pluginContextFactory,
             parentClassLoader = appContext.classLoader,
+            updateEngine = pluginUpdateEngine,
         )
     }
     private val pluginRemoteInstaller = DownloadablePluginInstaller(
@@ -141,13 +171,20 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         downloader = pluginDownloader,
         logger = AndroidPluginLogger()
     )
+    private val pluginUpdateCoordinator = DownloadablePluginUpdater(
+        registry = pluginRegistry,
+        runtime = pluginRuntime,
+        manifestFetcher = PluginManifestFetcher(HttpsManifestTransport()),
+        logger = AndroidPluginLogger()
+    )
 
     val pluginStoreCatalog = PluginStoreCatalog(pluginRegistry, pluginEntryStore)
     val pluginStoreController = PluginStoreController(
         pluginRegistry,
         pluginStoreCatalog,
         AndroidPluginLogger(),
-        remoteInstaller = pluginRemoteInstaller
+        remoteInstaller = pluginRemoteInstaller,
+        updateCoordinator = pluginUpdateCoordinator
     )
 
     init {
@@ -203,6 +240,26 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     // answers NeedsConsent; null when no dialog is pending).
     private val _pendingConsentPluginId = MutableStateFlow<String?>(null)
     val pendingConsentPluginId: StateFlow<String?> = _pendingConsentPluginId.asStateFlow()
+
+    // Phase 24: plugin-update UI state. `storeUpdates` (pluginId → offered
+    // update) is populated by "Check for updates"; the per-plugin busy/progress
+    // flows show the verified-update install; `pendingUpdatePluginId` carries a
+    // per-update approval dialog; `storeGeneralMessage` shows check results that
+    // are not specific to one row ("up to date", fetch errors).
+    private val _storeUpdates = MutableStateFlow<Map<String, PluginUpdateInfo>>(emptyMap())
+    val storeUpdates: StateFlow<Map<String, PluginUpdateInfo>> = _storeUpdates.asStateFlow()
+
+    private val _updateBusy = MutableStateFlow<Set<String>>(emptySet())
+    val updateBusy: StateFlow<Set<String>> = _updateBusy.asStateFlow()
+
+    private val _updateProgress = MutableStateFlow<Map<String, Float>>(emptyMap())
+    val updateProgress: StateFlow<Map<String, Float>> = _updateProgress.asStateFlow()
+
+    private val _pendingUpdatePluginId = MutableStateFlow<String?>(null)
+    val pendingUpdatePluginId: StateFlow<String?> = _pendingUpdatePluginId.asStateFlow()
+
+    private val _storeGeneralMessage = MutableStateFlow<String?>(null)
+    val storeGeneralMessage: StateFlow<String?> = _storeGeneralMessage.asStateFlow()
 
     /** Respond to the pending remote-download consent dialog. */
     fun respondStoreConsent(grant: Boolean) {
@@ -343,6 +400,90 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     fun clearStoreMessage(pluginId: String) {
         _storeMessages.update { it - pluginId }
         _storeProgress.update { it - pluginId }
+        _updateProgress.update { it - pluginId }
+    }
+
+    /** Dismiss the store's general (non-row-specific) message. */
+    fun dismissStoreGeneralMessage() {
+        _storeGeneralMessage.value = null
+    }
+
+    // ---- Phase 24: user-approved dynamic updates ------------------------------
+
+    /**
+     * Store "Check for updates": fetch the hosted version manifest (HTTPS,
+     * keyless, user-initiated) and populate [storeUpdates] only for INSTALLED
+     * downloadable plugins whose manifest version is strictly newer (never a
+     * downgrade, never an equal no-op). Results that are not per-row (up to
+     * date / fetch failure) land in [storeGeneralMessage].
+     */
+    fun checkPluginUpdates() {
+        viewModelScope.launch {
+            _storeGeneralMessage.value = null
+            when (val outcome = pluginStoreController.checkForUpdates(appContext)) {
+                is PluginStoreController.UpdateCheckOutcome.UpdatesAvailable -> {
+                    _storeUpdates.value = outcome.updates.associateBy { it.pluginId }
+                    _storeGeneralMessage.value =
+                        "${outcome.updates.size} update(s) available. Review and approve each one."
+                }
+                is PluginStoreController.UpdateCheckOutcome.UpToDate -> {
+                    _storeUpdates.value = emptyMap()
+                    _storeGeneralMessage.value = "All installed plugins are up to date."
+                }
+                is PluginStoreController.UpdateCheckOutcome.Failed -> {
+                    _storeGeneralMessage.value = outcome.message
+                }
+            }
+            refreshPluginStates()
+        }
+    }
+
+    /** Request an update for [pluginId]: opens the per-update approval dialog. */
+    fun requestPluginUpdate(pluginId: String) {
+        if (pluginId in _updateBusy.value) return
+        _pendingUpdatePluginId.value = pluginId
+    }
+
+    /** The user's answer to the pending update-approval dialog. */
+    fun respondUpdateApproval(grant: Boolean) {
+        val pluginId = _pendingUpdatePluginId.value ?: return
+        _pendingUpdatePluginId.value = null
+        if (grant) storePluginUpdate(pluginId)
+    }
+
+    /**
+     * Run the user-APPROVED verified update of [pluginId] (this is only ever
+     * called from [respondUpdateApproval]). The controller re-fetches a fresh
+     * manifest, re-checks the offer is newer, then downloads → re-verifies
+     * (pinned cert + SHA-256) → smoke-tests → swaps; any failure reports a
+     * roll back to the previous version. Progress is real; nothing auto-updates.
+     */
+    private fun storePluginUpdate(pluginId: String) {
+        if (pluginId in _updateBusy.value) return
+        viewModelScope.launch {
+            _updateBusy.update { it + pluginId }
+            _updateProgress.update { it + (pluginId to 0f) }
+            _storeMessages.update { it - pluginId }
+            val outcome = pluginStoreController.update(pluginId, userApproved = true) { progress ->
+                _updateProgress.update { it + (pluginId to progress) }
+            }
+            _updateBusy.update { it - pluginId }
+            when (outcome) {
+                is PluginStoreController.UpdateOutcome.Updated ->
+                    _storeMessages.update {
+                        it + (pluginId to "Updated to v${outcome.toVersion} — verified and active.")
+                    }
+                is PluginStoreController.UpdateOutcome.RolledBack ->
+                    _storeMessages.update { it + (pluginId to outcome.message) }
+                is PluginStoreController.UpdateOutcome.NeedsApproval ->
+                    _pendingUpdatePluginId.value = pluginId
+                is PluginStoreController.UpdateOutcome.Failed ->
+                    _storeMessages.update { it + (pluginId to outcome.message) }
+            }
+            _storeUpdates.update { it - pluginId }
+            _updateProgress.update { it - pluginId }
+            refreshPluginStates()
+        }
     }
 
     /**

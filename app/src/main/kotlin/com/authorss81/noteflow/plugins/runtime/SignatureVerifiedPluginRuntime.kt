@@ -25,8 +25,12 @@ fun interface PluginArtifactResolver {
  *   load (a bit-rotted or replaced file is refused), then materializes the
  *   verified artifact through a plugin [ClassLoader] that implements
  *   [NoteflowPlugin] and receives a capability-aware [PluginContext].
- * - **[update]/[rollback]** — still honest Phase-24 stubs; the previous
- *   version is never discarded here.
+ * - **[update]** — REAL (Phase 24): delegated to an injected [PluginUpdateEngine].
+ *   A user-approved update downloads the new artifact, re-verifies pinned cert +
+ *   SHA-256, runs a load smoke-test, keeps the previous version for rollback,
+ *   then atomically swaps. Any failure leaves the previous version active.
+ * - **[rollback]** — REAL (Phase 24): restores the recorded previous verified
+ *   version through the same engine.
  *
  * Register through [PluginRuntimeRegistry] at startup; the store/registry/UI
  * already speak [PluginEntry] and need no other change.
@@ -36,13 +40,17 @@ fun interface PluginArtifactResolver {
  * @param contextFactory the capability facade factory (capability-aware in prod).
  * @param parentClassLoader parent for the plugin loader (the app classloader).
  * @param verifier the security gate (default [ArtifactSignatureVerifier]).
+ * @param updateEngine the Phase-24 update/rollback orchestrator. When null the
+ *   runtime is read-only: update/rollback answer an honest failure and the
+ *   previous version is untouched.
  */
 class SignatureVerifiedPluginRuntime(
     private val artifactResolver: PluginArtifactResolver,
     private val classLoaderFactory: ClassLoaderFactory,
     private val contextFactory: PluginContextFactory = PluginContextFactory.DEFAULT,
     private val parentClassLoader: ClassLoader = SignatureVerifiedPluginRuntime::class.java.classLoader,
-    private val verifier: ArtifactSignatureVerifier = ArtifactSignatureVerifier()
+    private val verifier: ArtifactSignatureVerifier = ArtifactSignatureVerifier(),
+    private val updateEngine: PluginUpdateEngine? = null
 ) : PluginRuntime {
 
     private val loader = RuntimePluginLoader(classLoaderFactory, contextFactory, parentClassLoader)
@@ -97,17 +105,46 @@ class SignatureVerifiedPluginRuntime(
         return loader.load(entry, artifactPath)
     }
 
-    override fun update(entry: PluginEntry, newVersion: PluginVersion): RuntimeOutcome<PluginUpdateResult> =
-        RuntimeOutcome.notYetImplemented(
-            phase = 24,
-            message = "update() for plugin '${entry.id}' -> $newVersion is not implemented yet — " +
-                "user-approved updates land in Phase 24."
+    override suspend fun update(
+        entry: PluginEntry,
+        target: PluginEntry,
+        userApproved: Boolean,
+        onProgress: (Float) -> Unit
+    ): RuntimeOutcome<PluginUpdateResult> {
+        val engine = updateEngine ?: return RuntimeOutcome.Failed(
+            "update() for plugin '${entry.id}' cannot run — this runtime was built without an update engine."
         )
+        return engine.update(entry, target, userApproved, onProgress)
+    }
 
-    override fun rollback(entry: PluginEntry): RuntimeOutcome<PluginRollbackResult> =
-        RuntimeOutcome.notYetImplemented(
-            phase = 24,
-            message = "rollback() for plugin '${entry.id}' is not implemented yet — " +
-                "the keep-previous-until-verified rollback path lands in Phase 24."
+    override suspend fun rollback(entry: PluginEntry): RuntimeOutcome<PluginRollbackResult> {
+        val engine = updateEngine ?: return RuntimeOutcome.Failed(
+            "rollback() for plugin '${entry.id}' cannot run — this runtime was built without an update engine."
         )
+        return engine.rollback(entry)
+    }
+
+    /**
+     * Build the Phase-24 [PluginUpdateEngine] for a production runtime. Uses the
+     * SAME class-loader factory/context factory/parent as [this] runtime, so a
+     * verified artifact resolves identically whether it is loaded by [load] or
+     * smoke-tested during an update. The engine's downloader/storage/entry
+     * store are supplied by the caller (pure-JVM injectable).
+     */
+    fun buildUpdateEngine(
+        downloader: PluginDownloader,
+        storageDir: java.io.File,
+        entryStore: PluginEntryStore,
+        updateStore: PluginUpdateStore,
+        logger: com.authorss81.noteflow.plugins.PluginLogger = com.authorss81.noteflow.plugins.PluginLogger.NoOp
+    ): PluginUpdateEngine = PluginUpdateEngine(
+        downloader = downloader,
+        storageDir = storageDir,
+        artifactResolver = artifactResolver,
+        entryStore = entryStore,
+        updateStore = updateStore,
+        verifier = verifier,
+        loader = loader,
+        logger = logger
+    )
 }

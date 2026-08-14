@@ -7,6 +7,10 @@ import com.authorss81.noteflow.plugins.PluginLogger
 import com.authorss81.noteflow.plugins.PluginRegistry
 import com.authorss81.noteflow.plugins.PluginStateInfo
 import com.authorss81.noteflow.plugins.PluginUninstallResult
+import com.authorss81.noteflow.plugins.runtime.ManifestFetchResult
+import com.authorss81.noteflow.plugins.runtime.PluginUpdateChecker
+import com.authorss81.noteflow.plugins.runtime.PluginUpdateInfo
+import com.authorss81.noteflow.plugins.runtime.PluginVersion
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -42,7 +46,8 @@ class PluginStoreController(
     private val registry: PluginRegistry,
     private val catalog: PluginStoreCatalog,
     private val logger: PluginLogger = PluginLogger.NoOp,
-    private val remoteInstaller: RemotePluginInstaller? = null
+    private val remoteInstaller: RemotePluginInstaller? = null,
+    private val updateCoordinator: PluginUpdateCoordinator? = null
 ) {
 
     /** Outcome of a store "Download". */
@@ -60,6 +65,36 @@ class PluginStoreController(
     sealed class DeleteOutcome {
         data class Deleted(val pluginId: String) : DeleteOutcome()
         data class Failed(val pluginId: String, val message: String) : DeleteOutcome()
+    }
+
+    /** Outcome of a store "Check for updates". */
+    sealed class UpdateCheckOutcome {
+        /** One or more newer versions are offered by the hosted manifest. */
+        data class UpdatesAvailable(val updates: List<PluginUpdateInfo>) : UpdateCheckOutcome()
+
+        /** Everything installed is current (or the manifest offers nothing newer). */
+        data object UpToDate : UpdateCheckOutcome()
+
+        /** The check could not complete (offline, fetch failure, bad manifest). */
+        data class Failed(val message: String) : UpdateCheckOutcome()
+    }
+
+    /** Outcome of a store "Update" (approved, verified, reversible). */
+    sealed class UpdateOutcome {
+        /** The new version was verified + swapped and is now the active version. */
+        data class Updated(
+            val pluginId: String,
+            val fromVersion: PluginVersion,
+            val toVersion: PluginVersion
+        ) : UpdateOutcome()
+
+        /** The update failed and the previous version is active again. */
+        data class RolledBack(val pluginId: String, val message: String) : UpdateOutcome()
+
+        /** The update was requested without explicit approval — it never ran. */
+        data class NeedsApproval(val pluginId: String) : UpdateOutcome()
+
+        data class Failed(val pluginId: String, val message: String) : UpdateOutcome()
     }
 
     /** One row the store screen renders: catalog definition + install/lifecycle state. */
@@ -201,6 +236,80 @@ class PluginStoreController(
                 DeleteOutcome.Failed(pluginId, result.reason)
             }
         }
+    }
+
+    /**
+     * Store "Check for updates" (Phase 24). Fetches the hosted version manifest
+     * (keyless, HTTPS-only, user-initiated) and compares it against the
+     * INSTALLED downloadable plugins. Reports [UpdateCheckOutcome.UpdatesAvailable]
+     * only when the manifest offers a version strictly newer than what is
+     * installed — never a downgrade, never an equal no-op. Bundled
+     * (compile-time) plugins are excluded ("managed by app update"). Never throws.
+     */
+    suspend fun checkForUpdates(context: Context?): UpdateCheckOutcome {
+        val coordinator = updateCoordinator
+            ?: return UpdateCheckOutcome.Failed("Checking for plugin updates is not wired in this build.")
+        return when (val fetched = coordinator.fetchManifest()) {
+            is ManifestFetchResult.Failed -> UpdateCheckOutcome.Failed(fetched.message)
+            is ManifestFetchResult.Loaded -> {
+                val installedRemote = rows(context)
+                    .filter { !it.entry.bundled && it.installed }
+                    .map { it.entry.entry }
+                val updates = PluginUpdateChecker.check(installedRemote, fetched.manifest)
+                if (updates.isEmpty()) UpdateCheckOutcome.UpToDate
+                else UpdateCheckOutcome.UpdatesAvailable(updates)
+            }
+        }
+    }
+
+    /**
+     * Store "Update" (Phase 24). Applies a user-approved, verified update.
+     *
+     * Consent contract (MANDATORY): an update NEVER runs unless [userApproved]
+     * is true — the approval dialog is the only path to a true value, and a
+     * non-approved request answers [UpdateOutcome.NeedsApproval] without
+     * touching the coordinator. After approval a FRESH manifest is fetched and
+     * the target entry is built from it (an offer is always current at install
+     * time); the coordinator then downloads, re-verifies (pinned cert + SHA-256),
+     * smoke-tests and swaps — any failure leaves the previous version active
+     * ([UpdateOutcome.RolledBack]). Never throws.
+     */
+    suspend fun update(
+        pluginId: String,
+        userApproved: Boolean,
+        onProgress: (Float) -> Unit
+    ): UpdateOutcome {
+        val coordinator = updateCoordinator
+            ?: return UpdateOutcome.Failed(pluginId, "Plugin updates are not wired in this build.")
+        if (!userApproved) {
+            return UpdateOutcome.NeedsApproval(pluginId)
+        }
+        val storeEntry = catalog.entryFor(pluginId)
+            ?: return UpdateOutcome.Failed(pluginId, "This plugin is not in the catalog.")
+        if (storeEntry.bundled) {
+            return UpdateOutcome.Failed(
+                pluginId,
+                "\"${storeEntry.name}\" is a built-in plugin and is managed by the app update — it is not updated from the plugin store."
+            )
+        }
+        // The ACTIVE persisted entry is the current version (a previous update
+        // leaves the catalog definition stale); fall back to the catalog copy
+        // only when nothing is persisted yet.
+        val entry = remoteInstaller?.activeEntryFor(pluginId) ?: storeEntry.entry
+        val manifest = when (val fetched = coordinator.fetchManifest()) {
+            is ManifestFetchResult.Failed -> return UpdateOutcome.Failed(pluginId, fetched.message)
+            is ManifestFetchResult.Loaded -> fetched.manifest
+        }
+        val info = PluginUpdateChecker.check(listOf(entry), manifest)
+            .firstOrNull { it.pluginId == pluginId }
+            ?: return UpdateOutcome.Failed(
+                pluginId,
+                "No newer version of \"${entry.name}\" (v${entry.version}) is available."
+            )
+        // PluginUpdateChecker guarantees info.newVersion is strictly newer.
+        val target = info.toTargetEntry(entry)
+        onProgress(0f)
+        return coordinator.runUpdate(entry, target, userApproved, onProgress)
     }
 
     private companion object {

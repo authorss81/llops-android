@@ -260,6 +260,7 @@ class SettingsManager(context: Context) {
                 key == "plugin_uninstalled_$pluginId" ||
                 key == "plugin_entry_$pluginId" ||
                 key == "plugin_download_consent_$pluginId" ||
+                key == "plugin_update_previous_$pluginId" ||
                 key.startsWith(prefix)
         }
         prefs.edit().apply { keys.forEach { remove(it) } }.apply()
@@ -286,6 +287,20 @@ class SettingsManager(context: Context) {
             if (key.startsWith("plugin_entry_")) out.add(key.removePrefix("plugin_entry_"))
         }
         return out
+    }
+
+    // Phase 24: the update flow's rollback root — the previously-active
+    // (pre-update) version of a downloadable plugin, persisted BEFORE any update
+    // byte moves so a failed update (or mid-update process death) always has a
+    // version to restore. Wiped by store Delete (see wipePluginState below).
+    fun getPluginUpdatePreviousJson(pluginId: String): String? =
+        prefs.getString("plugin_update_previous_$pluginId", null)
+
+    fun setPluginUpdatePreviousJson(pluginId: String, json: String?) {
+        prefs.edit().apply {
+            if (json == null) remove("plugin_update_previous_$pluginId")
+            else putString("plugin_update_previous_$pluginId", json)
+        }.apply()
     }
 
     // Phase 11: per-plugin namespaced settings. Every key lives under

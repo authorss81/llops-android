@@ -15,6 +15,7 @@ import com.authorss81.noteflow.plugins.runtime.RuntimeOutcome
 import com.authorss81.noteflow.plugins.runtime.SignatureVerifiedPluginRuntime
 import java.net.URLClassLoader
 import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -195,19 +196,21 @@ class DownloadablePluginRuntimeTest {
     }
 
     @Test
-    fun `update and rollback are honest Phase-24 stubs`() {
+    fun `update and rollback fail honestly when no update engine is wired`() = runBlocking {
         val ks = TestArtifactBuilder.newKeystore(tmp.root, "stub-signer")
         val artifact = TestArtifactBuilder.build(tmp.root, ks)
         val entry = remoteEntryFor(artifact)
-        val rt = runtime(entry, artifact.file)
+        val rt = runtime(entry, artifact.file) // built WITHOUT an update engine → read-only.
 
-        val update = rt.update(entry, PluginVersion(1, 1, 0))
-        assertTrue(update is RuntimeOutcome.NotYetImplemented)
-        assertEquals(24, (update as RuntimeOutcome.NotYetImplemented).phase)
+        // The pre-Phase-24 read-only runtime must never fabricate a result:
+        // update/rollback answer an honest failure and leave state untouched.
+        val update = rt.update(entry, entry.copy(version = PluginVersion(1, 1, 0)), userApproved = true, onProgress = {})
+        assertTrue(update is RuntimeOutcome.Failed)
+        assertTrue((update as RuntimeOutcome.Failed).message.contains("without an update engine"))
 
         val rollback = rt.rollback(entry)
-        assertTrue(rollback is RuntimeOutcome.NotYetImplemented)
-        assertEquals(24, (rollback as RuntimeOutcome.NotYetImplemented).phase)
+        assertTrue(rollback is RuntimeOutcome.Failed)
+        assertTrue((rollback as RuntimeOutcome.Failed).message.contains("without an update engine"))
     }
 }
 

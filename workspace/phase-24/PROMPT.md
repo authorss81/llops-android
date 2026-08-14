@@ -1,4 +1,4 @@
-# Phase 24: Dynamic plugin updates — latest versions with user approval [NOT STARTED]
+# Phase 24: Dynamic plugin updates — latest versions with user approval [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with a hybrid plugin architecture (Phase 22 skeleton: `PluginEntry` with

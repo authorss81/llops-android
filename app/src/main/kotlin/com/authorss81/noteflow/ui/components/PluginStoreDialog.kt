@@ -6,7 +6,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Extension
+import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Storefront
+import androidx.compose.material.icons.outlined.SystemUpdate
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -20,17 +22,27 @@ import com.authorss81.noteflow.plugins.store.PluginStoreController
 import com.authorss81.noteflow.ui.viewmodel.NoteflowViewModel
 
 /**
- * Phase 21: the Plugin Store.
+ * Phase 21: the Plugin Store (Phases 23/24 extend it).
  *
  * Lists EVERY known plugin from the bundled catalog (installed + optional
  * not-yet-downloaded definitions) with the correct per-plugin button and state:
  *
- * - **Not downloaded** → Download. Honest semantics: every definition is
- *   bundled in the APK (compile-time rule); Download installs the definition
- *   (activates it), it never fetches an APK and never needs the network.
+ * - **Not downloaded** → Download. Honest semantics: every bundled definition is
+ *   compiled in the APK; Download installs the definition (activates it). For a
+ *   REMOTE (downloadable) plugin the FIRST download needs explicit consent, then
+ *   the signed artifact is fetched over HTTPS, verified (pinned certificate +
+ *   SHA-256) and loaded (Phase 23).
  * - **Downloaded** → Delete (with confirmation) + Enable/Disable. Delete
  *   removes the plugin COMPLETELY (settings + downloaded assets wiped, gone
  *   from the registry); Disable is temporary (data kept, re-enableable).
+ * - **Updates (Phase 24)** → "Check for updates" fetches the hosted version
+ *   manifest (HTTPS, keyless, user-initiated); a downloaded remote plugin with
+ *   a newer manifest version shows "Update available (vX → vY)" + an Update
+ *   button that opens a per-update approval dialog ("Approve & install"). The
+ *   approved update is re-downloaded, re-verified (pinned cert + SHA-256),
+ *   smoke-tested and atomically swapped; any failure rolls back to the previous
+ *   version. Bundled plugins are marked "managed by app update". There is NO
+ *   auto-update toggle — every update is manual + approved.
  *
  * Reachable from HomeScreen's ⋮ menu → "Plugin Store" — functional, not dead.
  */
@@ -45,6 +57,12 @@ fun PluginStoreDialog(
     val progress by viewModel.storeProgress.collectAsState()
     val messages by viewModel.storeMessages.collectAsState()
     val pendingConsentId by viewModel.pendingConsentPluginId.collectAsState()
+    // Phase 24: update rows + states.
+    val updates by viewModel.storeUpdates.collectAsState()
+    val updateBusy by viewModel.updateBusy.collectAsState()
+    val updateProgress by viewModel.updateProgress.collectAsState()
+    val pendingUpdateId by viewModel.pendingUpdatePluginId.collectAsState()
+    val generalMessage by viewModel.storeGeneralMessage.collectAsState()
     // pluginId pending a destructive-delete confirmation.
     var pendingDeleteId by remember { mutableStateOf<String?>(null) }
     // pluginId → inline message (e.g. an enable refusal with its reason).
@@ -71,24 +89,68 @@ fun PluginStoreDialog(
             ) {
                 Text(
                     "Plugins marked \"bundled\" ship compiled in this app (install is instant and offline); " +
-                        "plugins marked \"remote\" are downloadable, signature-verified plugins (Phase 23). " +
+                        "plugins marked \"remote\" are downloadable, signature-verified plugins. " +
                         "\"Download\" makes a plugin available; \"Delete\" removes it completely (settings + " +
-                        "downloaded assets wiped); \"Disable\" is temporary and keeps its data.",
+                        "downloaded assets wiped); \"Disable\" is temporary and keeps its data. Remote plugins " +
+                        "can be updated — always manually, always approved, always verified.",
                     style = MaterialTheme.typography.bodySmall,
                     color = colorScheme.onSurfaceVariant
                 )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    OutlinedButton(
+                        onClick = { viewModel.checkPluginUpdates() },
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                    ) {
+                        Icon(Icons.Outlined.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Check for updates", style = MaterialTheme.typography.labelMedium)
+                    }
+                    if (updates.isNotEmpty()) {
+                        Text(
+                            "${updates.size} update(s) available",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = colorScheme.primary,
+                            modifier = Modifier.padding(start = 12.dp)
+                        )
+                    }
+                }
+                generalMessage?.let { message ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            message,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = colorScheme.primary,
+                            modifier = Modifier.weight(1f)
+                        )
+                        TextButton(
+                            onClick = { viewModel.dismissStoreGeneralMessage() },
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                        ) {
+                            Text("Dismiss", style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                }
                 HorizontalDivider(color = colorScheme.outlineVariant.copy(alpha = 0.5f))
                 LazyColumn(
                     modifier = Modifier.fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     items(rows, key = { it.entry.pluginId }) { row ->
-                        val entry = row.entry
+                                val entry = row.entry
                         val info = row.state
                         val isBusy = row.entry.pluginId in busy
                         val downloadProgress = progress[row.entry.pluginId]
                         val storeMessage = messages[row.entry.pluginId]
                         val localMessage = localMessages[row.entry.pluginId]
+                        val updateInfo = updates[entry.pluginId]
+                        val isUpdating = entry.pluginId in updateBusy
+                        val updateProgressVal = updateProgress[entry.pluginId]
 
                         Card(
                             modifier = Modifier.fillMaxWidth(),
@@ -176,6 +238,31 @@ fun PluginStoreDialog(
                                         style = MaterialTheme.typography.labelMedium,
                                         color = statusColor(info?.state)
                                     )
+                                    if (updateInfo != null) {
+                                        Text(
+                                            "Update available (v${entry.version} → v${updateInfo.newVersion})",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = colorScheme.primary,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    } else if (entry.bundled) {
+                                        Text(
+                                            "Managed by app update (updated with the app release).",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = colorScheme.outline
+                                        )
+                                    }
+                                    if (isUpdating) {
+                                        LinearProgressIndicator(
+                                            progress = { (updateProgressVal ?: 0f).coerceIn(0f, 1f) },
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                        Text(
+                                            "Downloading + verifying update…",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = colorScheme.outline
+                                        )
+                                    }
                                 }
 
                                 if (localMessage != null) {
@@ -223,6 +310,17 @@ fun PluginStoreDialog(
                                     } else {
                                         // Rejected plugins cannot be enabled; show Delete only.
                                         val state = info?.state
+                                        updateInfo?.let { update ->
+                                            Button(
+                                                onClick = { viewModel.requestPluginUpdate(entry.pluginId) },
+                                                enabled = !isBusy && !isUpdating,
+                                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                                            ) {
+                                                Icon(Icons.Outlined.SystemUpdate, contentDescription = null, modifier = Modifier.size(16.dp))
+                                                Spacer(Modifier.width(6.dp))
+                                                Text("Update", style = MaterialTheme.typography.labelMedium)
+                                            }
+                                        }
                                         if (state != PluginLifecycleState.REJECTED) {
                                             val wantOn = state == PluginLifecycleState.REGISTERED ||
                                                 state == PluginLifecycleState.DISABLED
@@ -234,7 +332,7 @@ fun PluginStoreDialog(
                                                         localMessages = localMessages + (entry.pluginId to result.reason)
                                                     }
                                                 },
-                                                enabled = !isBusy,
+                                                enabled = !isBusy && !isUpdating,
                                                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
                                             ) {
                                                 Text(
@@ -325,6 +423,62 @@ fun PluginStoreDialog(
             },
             dismissButton = {
                 TextButton(onClick = { viewModel.respondStoreConsent(grant = false) }) { Text("Cancel") }
+            }
+        )
+    }
+
+    // Phase 24: per-update approval. An update NEVER applies silently — this
+    // dialog is the approval (there is no auto-update toggle anywhere). It shows
+    // current → new version, the update notes, the download size, and asks for
+    // an explicit "Approve & install". Refusing/downgrading to an older version
+    // is blocked before the dialog (the checker never offers one).
+    val updateApprovalId = pendingUpdateId
+    if (updateApprovalId != null) {
+        val updateRow = rows.firstOrNull { it.entry.pluginId == updateApprovalId }
+        val update = updates[updateApprovalId]
+        AlertDialog(
+            onDismissRequest = { viewModel.respondUpdateApproval(grant = false) },
+            icon = { Icon(Icons.Outlined.SystemUpdate, contentDescription = null, tint = colorScheme.primary) },
+            title = { Text("Approve update?") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        update?.let {
+                            "\"${updateRow?.entry?.name ?: update.pluginId}\" will be updated from " +
+                                "v${update.currentVersion} to v${update.newVersion}."
+                        } ?: "Update this plugin?",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    update?.updateNotes?.let { notes ->
+                        Text(
+                            "What changed: $notes",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = colorScheme.onSurfaceVariant
+                        )
+                    }
+                    update?.installSizeBytes?.let { size ->
+                        Text(
+                            "Download size: ~${size / (1024 * 1024)} MB",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Text(
+                        "The new version is downloaded over HTTPS and re-verified against a pinned " +
+                            "certificate + SHA-256 before it replaces the current version. If anything " +
+                            "fails, the previous version stays active and can be rolled back to.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colorScheme.onSurfaceVariant
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { viewModel.respondUpdateApproval(grant = true) }) {
+                    Text("Approve & install", color = colorScheme.primary)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.respondUpdateApproval(grant = false) }) { Text("Cancel") }
             }
         )
     }

@@ -9,14 +9,18 @@ import com.authorss81.noteflow.plugins.runtime.PluginRuntime
 import com.authorss81.noteflow.plugins.runtime.PluginRuntimeRegistry
 import com.authorss81.noteflow.plugins.runtime.PluginVersion
 import com.authorss81.noteflow.plugins.runtime.RuntimeOutcome
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Phase 22: the [PluginRuntime] seam is HONESTLY stubbed — every operation
- * answers [RuntimeOutcome.NotYetImplemented] naming the phase that implements
- * it, and the registry seam lets Phase 23/24 swap in the real runtime.
+ * Phase 22/24: the [PluginRuntime] seam. Phase 23 filled verify/load and
+ * Phase 24 filled update/rollback in [SignatureVerifiedPluginRuntime]; the
+ * DEFAULT registry runtime ([NotYetImplementedPluginRuntime]) is the honest
+ * "no runtime is registered" answer (it never fabricates a verified/loaded/
+ * updated result), and the registry seam lets production swap in the real
+ * runtime.
  */
 class PluginRuntimeSeamTest {
 
@@ -40,56 +44,54 @@ class PluginRuntimeSeamTest {
         expectedPinnedCertHash = "sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
     )
 
+    private fun newerEntry() = remoteEntry().copy(version = PluginVersion(1, 1, 0))
+
     @Test
-    fun `verify reports NotYetImplemented for phase 23`() {
+    fun `verify without a registered runtime fails honestly`() {
         val result = NotYetImplementedPluginRuntime().verify(artifact())
 
-        assertTrue(result is RuntimeOutcome.NotYetImplemented)
-        assertEquals(23, (result as RuntimeOutcome.NotYetImplemented).phase)
-        assertTrue(result.message.contains("verify"))
+        assertTrue(result is RuntimeOutcome.Failed)
+        assertTrue((result as RuntimeOutcome.Failed).message.contains("no plugin runtime is registered"))
     }
 
     @Test
-    fun `load reports NotYetImplemented for phase 23`() {
+    fun `load without a registered runtime fails honestly`() {
         val result = NotYetImplementedPluginRuntime().load(remoteEntry())
 
-        assertTrue(result is RuntimeOutcome.NotYetImplemented)
-        assertEquals(23, (result as RuntimeOutcome.NotYetImplemented).phase)
-        assertTrue(result.message.contains("load"))
+        assertTrue(result is RuntimeOutcome.Failed)
+        assertTrue((result as RuntimeOutcome.Failed).message.contains("no plugin runtime is registered"))
     }
 
     @Test
-    fun `update reports NotYetImplemented for phase 24`() {
-        val result = NotYetImplementedPluginRuntime().update(remoteEntry(), PluginVersion(1, 1, 0))
+    fun `update without a registered runtime fails honestly`() = runBlocking {
+        val result = NotYetImplementedPluginRuntime().update(remoteEntry(), newerEntry(), userApproved = true, onProgress = {})
 
-        assertTrue(result is RuntimeOutcome.NotYetImplemented)
-        assertEquals(24, (result as RuntimeOutcome.NotYetImplemented).phase)
-        assertTrue(result.message.contains("update"))
+        assertTrue(result is RuntimeOutcome.Failed)
+        assertTrue((result as RuntimeOutcome.Failed).message.contains("no plugin runtime is registered"))
     }
 
     @Test
-    fun `rollback reports NotYetImplemented for phase 24`() {
+    fun `rollback without a registered runtime fails honestly`() = runBlocking {
         val result = NotYetImplementedPluginRuntime().rollback(remoteEntry())
 
-        assertTrue(result is RuntimeOutcome.NotYetImplemented)
-        assertEquals(24, (result as RuntimeOutcome.NotYetImplemented).phase)
-        assertTrue(result.message.contains("rollback"))
+        assertTrue(result is RuntimeOutcome.Failed)
+        assertTrue((result as RuntimeOutcome.Failed).message.contains("no plugin runtime is registered"))
     }
 
     @Test
-    fun `stub never fabricates a verified or loaded result`() {
+    fun `stub never fabricates a verified or loaded or updated result`() = runBlocking {
         val runtime = NotYetImplementedPluginRuntime()
         // No operation on the stub may ever claim success.
         assertEquals(0, listOf(
             runtime.verify(artifact()),
             runtime.load(remoteEntry()),
-            runtime.update(remoteEntry(), PluginVersion(1, 1, 0)),
+            runtime.update(remoteEntry(), newerEntry(), userApproved = true, onProgress = {}),
             runtime.rollback(remoteEntry())
         ).count { it is RuntimeOutcome.Success<*> })
     }
 
     @Test
-    fun `the registry seam defaults to the stub and can be swapped`() {
+    fun `the registry seam defaults to the stub and can be swapped`() = runBlocking {
         assertTrue(PluginRuntimeRegistry.current() is NotYetImplementedPluginRuntime)
 
         val fake = object : PluginRuntime {
@@ -97,15 +99,19 @@ class PluginRuntimeSeamTest {
                 RuntimeOutcome.Failed("fake verify")
             override fun load(entry: PluginEntry) =
                 RuntimeOutcome.Failed("fake load")
-            override fun update(entry: PluginEntry, newVersion: PluginVersion) =
-                RuntimeOutcome.Failed("fake update")
-            override fun rollback(entry: PluginEntry) =
+            override suspend fun update(
+                entry: PluginEntry,
+                target: PluginEntry,
+                userApproved: Boolean,
+                onProgress: (Float) -> Unit
+            ) = RuntimeOutcome.Failed("fake update")
+            override suspend fun rollback(entry: PluginEntry) =
                 RuntimeOutcome.Failed("fake rollback")
         }
         PluginRuntimeRegistry.register(fake)
         assertEquals(fake, PluginRuntimeRegistry.current())
 
-        // Restore the honest stub so other tests see the default seam.
+        // Restore the honest default so other tests see the default seam.
         PluginRuntimeRegistry.register(NotYetImplementedPluginRuntime())
         assertTrue(PluginRuntimeRegistry.current() is NotYetImplementedPluginRuntime)
     }

@@ -430,6 +430,29 @@ Phase 23) alongside its version. The catalog merges any persisted remote entries
 from `PluginEntryStore` automatically. See `docs/plugin-architecture.md` for the
 full hybrid design (state machine, facade, update model, security).
 
+**Phase 24 added dynamic updates — always manual, always approved, always
+verified.** A downloaded remote plugin can be updated from the store:
+
+- **Check for updates** (store header) fetches the hosted version manifest
+  (`https://plugin-updates.inkflow.app/v1/manifest.json` — HTTPS, keyless,
+  user-initiated; `plugins/runtime/HostedPluginManifest.kt` +
+  `PluginManifestFetcher.kt`) and compares it against the INSTALLED downloadable
+  plugins (`PluginUpdateChecker`). An update is listed ONLY when the manifest
+  version is **strictly newer** than installed on the **same channel** — never a
+  downgrade, never an equal no-op, never for a bundled plugin (built-ins are
+  **"managed by app update"** and update with the app release).
+- **Update** shows a per-update **"Approve & install"** dialog (current → new
+  version, what changed, download size) — there is NO auto-update toggle, and the
+  approval gate is enforced in both the store controller and the runtime engine.
+  On approval the flow is: download (HTTPS) → **re-verify** pinned-cert hash +
+  sha256 → **load smoke-test** → the previous version's files stay intact → atomic
+  swap (`plugins/runtime/PluginUpdateEngine.kt`). ANY failure deletes the new
+  artifact and keeps the previous version active with a clear "rolled back" message.
+- **Rollback** is real: the previous version is recorded (`plugin_update_previous_<id>`,
+  `SettingsPluginUpdateStore.kt`) before any update byte moves, and
+  `PluginRuntime.rollback` restores a re-verified previous version — the sanctioned
+  exception to the no-downgrade rule. Store Delete wipes the record too.
+
 Where the pieces live:
 
 | File | Purpose |
@@ -441,6 +464,10 @@ Where the pieces live:
 | `PluginRegistry.installPlugin/uninstallPlugin` | The registry-level install/uninstall (guarded `onDisable`, cache drop, `compiledPlugins` vs `activePlugins()`). |
 | `ui/components/PluginStoreDialog.kt` | The store UI (status line, Download progress, Enable/Disable/Delete, delete confirmation). |
 | `NoteflowViewModel` | Store rows/progress/busy/messages `StateFlow`s + `storeDownload`/`storeDelete`/`clearStoreMessage`. |
+| `plugins/runtime/HostedPluginManifest.kt` | Phase-24 hosted version manifest (offer fields + strict pure-JVM parser, whole-document refusal). |
+| `plugins/runtime/PluginUpdateChecker.kt` | Phase-24 update comparison (strictly-newer only, channel-matched, remote-only, ordered). |
+| `plugins/runtime/PluginUpdateEngine.kt` | Phase-24 verified update + rollback orchestrator (approval gate, re-verify, smoke-test, keep-previous, atomic swap). |
+| `plugins/store/PluginUpdateCoordinator.kt` | Phase-24 store seam (fetchManifest / runUpdate) → `services/DownloadablePluginUpdater.kt` (production). |
 
 Default behaviour is unchanged for anything that does not opt in: a `PluginRegistry`
 constructed without an install store uses `AllInstalledInstallStore`, so every

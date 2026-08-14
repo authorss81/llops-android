@@ -286,6 +286,34 @@ class PluginRegistry(
     }
 
     /**
+     * REPLACE the active instance of a downloadable plugin with a NEW instance
+     * of the SAME id (Phase 24: the post-update artifact). After a verified
+     * update the runtime materializes the new version's plugin and this method
+     * swaps it into the live registry so the new version serves in-session
+     * (the install state is untouched — the plugin stays installed). The
+     * lifecycle hooks of the new instance fire at the next process start
+     * (`onProcessStart`), matching how a restart picks up a new version; today's
+     * session simply resolves + routes the loaded new instance.
+     */
+    @Synchronized
+    fun replaceRemotePlugin(plugin: NoteflowPlugin, context: Context? = null): PluginInstallResult {
+        if (plugin.id in rejectedIds || plugin.id in validationErrors) {
+            val errors = validationErrors[plugin.id]?.joinToString("; ") ?: "rejected"
+            return PluginInstallResult.Refused(plugin.id, "Cannot replace: invalid manifest ($errors).")
+        }
+        if (!installStore.isInstalled(plugin.id)) {
+            return PluginInstallResult.Refused(plugin.id, "Cannot replace: the plugin is not installed.")
+        }
+        val replaced = extraPlugins.any { it.id == plugin.id }
+        extraPlugins.removeAll { it.id == plugin.id }
+        extraPlugins.add(plugin)
+        refreshAvailability(context)
+        logger.lifecycle("replaced-after-update", plugin.id, plugin.name)
+        return if (replaced) PluginInstallResult.Installed(plugin.id)
+        else PluginInstallResult.Refused(plugin.id, "No active instance of this plugin to replace.")
+    }
+
+    /**
      * Install a bundled plugin definition at runtime — the store's "Download".
      *
      * Honest semantics under the compile-time rule: this NEVER loads bytecode.
