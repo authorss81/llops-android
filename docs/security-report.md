@@ -816,6 +816,7 @@ No DB schema, workflow, or dependency changes were made.
 | B1-NET-03 | HIGH | phase-42 | `NOT STARTED` (planned) |
 | B1-DB-1 | HIGH | phase-43 | `NOT STARTED` (planned) |
 | B1-DB-4 | HIGH | phase-44 | `NOT STARTED` (planned) |
+| B1-AUTH-06 | MEDIUM | phase-44 (grouped with B1-DB-4, same root cause) | `NOT STARTED` (planned) |
 | B1-CRYPTO-02 | HIGH | phase-45 | `NOT STARTED` (planned) |
 | B1-AUTH-01 | HIGH | phase-46 | `NOT STARTED` (planned) |
 | B1-AUTH-02 | HIGH | phase-47 | `NOT STARTED` (planned) |
@@ -897,6 +898,6 @@ No DB schema, workflow, or dependency changes were made.
 
 ### Pipeline tail
 
-- Highest phase before Phase 33: `phase-38`. Fix phases: `phase-39`..`phase-114` (76 phases, 76 findings - 75 one-finding phases + 1 grouping of B1-AUTH-06 into B1-DB-4).
+- Highest phase before Phase 33: `phase-38`. Fix phases: `phase-39`..`phase-114` (76 phases, 77 findings - 75 one-finding phases + 1 grouping of B1-AUTH-06 into B1-DB-4).
 - Final phase: **phase-115** (document fix - final status & consistency sweep) - ALWAYS LAST.
 - Every finding above maps to exactly one phase, or is marked resolved-at-triage here.

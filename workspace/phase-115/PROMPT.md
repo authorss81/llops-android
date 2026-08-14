@@ -5,7 +5,7 @@ Phase-33-generated security-fix pipeline (phases 39-114 fixed the
 `docs/security-report.md` findings; this phase closes the pipeline by making
 every status doc reflect the TRUE post-fix state of the repo). **Read
 `docs/security-report.md`, `docs/phase-status.md`, `ROADMAP.md`, and
-`space/SECURITY_FIX_PLAN.md` (workspace manifest) first.**
+`workspace/SECURITY_FIX_PLAN.md` (workspace manifest) first.**
 
 This phase writes NO application code - it is a documentation-only status audit,
 mirroring Phase 20's method (then check every workspace phase heading and every
@@ -57,7 +57,7 @@ ROADMAP heading against actual code/commits/tests).
   code-verified status marker.
 - Every finding in `docs/security-report.md` is marked fixed (with its phase) or
   `resolved at triage`; the "resolved at triage" list cites the Phase-33 reason.
-- `docs/phase-status.md`, `ROADMAP.md`, `AGENTS.md`, `space/PHASES.md`
+- `docs/phase-status.md`, `ROADMAP.md`, `AGENTS.md`, `workspace/PHASES.md`
   (as applicable) contain no contradictory stale claims.
 - `gradle testDebugUnitTest` + `gradle assembleDebug` still pass (doc-only
   changes must not affect the build; re-run to prove it).
