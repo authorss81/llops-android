@@ -95,7 +95,6 @@ class MainActivity : FragmentActivity() {
         readShareIntent(intent)
 
         lifecycle.addObserver(LifecycleEventObserver { _, event ->
-            AppStartupLogger.logEvent(this@MainActivity, "Lifecycle Event: $event")
             when (event) {
                 Lifecycle.Event.ON_PAUSE -> {
                     com.authorss81.noteflow.services.ClipboardGuard.scrubIfOwnCopy(this)
