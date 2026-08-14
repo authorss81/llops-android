@@ -69,10 +69,10 @@ fun PluginStoreDialog(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Text(
-                    "All plugin definitions ship bundled in this app (compile-time rule — no APK downloading, " +
-                        "fully offline). \"Download\" installs a definition and makes the plugin available; " +
-                        "\"Delete\" removes a plugin completely (settings + downloaded assets wiped); " +
-                        "\"Disable\" is temporary and keeps its data.",
+                    "Plugins marked \"bundled\" ship compiled in this app (install is instant and offline); " +
+                        "plugins marked \"remote\" are downloadable, signature-verified plugins (Phase 23). " +
+                        "\"Download\" makes a plugin available; \"Delete\" removes it completely (settings + " +
+                        "downloaded assets wiped); \"Disable\" is temporary and keeps its data.",
                     style = MaterialTheme.typography.bodySmall,
                     color = colorScheme.onSurfaceVariant
                 )
@@ -145,13 +145,21 @@ fun PluginStoreDialog(
                                         style = MaterialTheme.typography.labelMedium,
                                         color = colorScheme.onSurfaceVariant
                                     )
+                                    if (!entry.bundled) {
+                                        Text(
+                                            "Remote (downloadable) plugin — the verified-download runtime " +
+                                                "lands in Phase 23; Download will report exactly why it cannot run yet.",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = colorScheme.outline
+                                        )
+                                    }
                                     if (downloadProgress != null && isBusy) {
                                         LinearProgressIndicator(
                                             progress = { downloadProgress.coerceIn(0f, 1f) },
                                             modifier = Modifier.fillMaxWidth()
                                         )
                                         Text(
-                                            "Installing bundled definition…",
+                                            if (entry.bundled) "Installing bundled definition…" else "Preparing remote download…",
                                             style = MaterialTheme.typography.labelSmall,
                                             color = colorScheme.outline
                                         )

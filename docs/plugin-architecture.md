@@ -310,4 +310,4 @@ and seed `PluginEntryStore` — nothing else changes.
 | `services/SettingsPluginEntryStore.kt` | production `PluginEntryStore` over `SettingsManager` |
 | `plugins/store/PluginStoreCatalog.kt` | `PluginStoreEntry` wraps `PluginEntry`; catalog merges persisted remote entries |
 | `ui/components/PluginStoreDialog.kt` | version + bundled/remote marker |
-| Tests | `PluginVersionTest`, `PluginEntryStoreTest`, `PluginContextFacadeTest`, `PluginRuntimeSeamTest` (26 tests, pure JVM) |
+| Tests | `PluginVersionTest`, `PluginEntryStoreTest`, `PluginContextFacadeTest`, `PluginRuntimeSeamTest` (25 tests, pure JVM) |

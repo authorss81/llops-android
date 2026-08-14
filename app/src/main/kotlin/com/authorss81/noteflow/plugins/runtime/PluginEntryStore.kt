@@ -81,11 +81,12 @@ class PluginEntryCodec {
 
     /**
      * Decode a JSON string back into a [PluginEntry]. Returns null when the
-     * blob is malformed or the version/source cannot be resolved (never throws).
+     * blob is malformed, the version/source cannot be resolved, or the decoded
+     * entry violates its own invariants (never throws).
      */
     fun decode(json: String): PluginEntry? = try {
         val dto = gson.fromJson(json, PluginEntryDto::class.java) ?: return null
-        fromDto(dto)
+        fromDto(dto)?.takeIf { it.isValid() }
     } catch (_: Exception) {
         null
     }

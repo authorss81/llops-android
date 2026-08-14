@@ -57,6 +57,7 @@ import com.authorss81.noteflow.services.SettingsPluginInstallStore
 import com.authorss81.noteflow.services.SettingsPluginSettingsStore
 import com.authorss81.noteflow.plugins.runtime.PluginRuntime
 import com.authorss81.noteflow.plugins.runtime.PluginRuntimeRegistry
+import com.authorss81.noteflow.plugins.runtime.RuntimeOutcome
 import com.authorss81.noteflow.plugins.store.PluginStoreCatalog
 import com.authorss81.noteflow.plugins.store.PluginStoreController
 import com.authorss81.noteflow.services.SettingsPluginEntryStore
@@ -108,7 +109,11 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     private val pluginEntryStore = SettingsPluginEntryStore(settings)
     val pluginStoreCatalog = PluginStoreCatalog(pluginRegistry, pluginEntryStore)
     val pluginStoreController = PluginStoreController(pluginRegistry, pluginStoreCatalog, AndroidPluginLogger())
-    val pluginRuntime: PluginRuntime = PluginRuntimeRegistry.current()
+
+    // The active PluginRuntime, read lazily on every access so a Phase 23/24
+    // `PluginRuntimeRegistry.register(...)` after this ViewModel is constructed
+    // is always seen (a construction-time snapshot would pin the stub forever).
+    val pluginRuntime: PluginRuntime get() = PluginRuntimeRegistry.current()
 
     init {
         // Fire onEnable once per process for plugins already enabled in a
@@ -168,13 +173,39 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     // ---- Phase 21: plugin store actions --------------------------------------
 
     /**
-     * Store "Download": install the bundled plugin definition for [pluginId].
-     * Reports per-plugin progress; the plugin becomes available + registered on
-     * success (see PluginStoreController for the honest bundled-install
-     * semantics — no network, no APK loading).
+     * Store "Download". Two honest paths:
+     * - **Bundled** definitions are installed via [PluginStoreController] (offline,
+     *   no APK loading; progress reported).
+     * - **Remote** (downloadable) entries go through the [PluginRuntime] seam —
+     *   the Phase-22 runtime is an honest [RuntimeOutcome.NotYetImplemented] stub,
+     *   so the user is told exactly why it cannot run yet instead of a generic
+     *   failure. Phase 23/24 swap the real implementation behind the same call.
      */
     fun storeDownload(pluginId: String) {
         if (pluginId in _storeBusy.value) return
+        val storeEntry = pluginStoreCatalog.entryFor(pluginId)
+        if (storeEntry != null && !storeEntry.bundled) {
+            viewModelScope.launch {
+                _storeBusy.update { it + pluginId }
+                _storeMessages.update { it - pluginId }
+                val outcome = pluginRuntime.load(storeEntry.entry)
+                _storeBusy.update { it - pluginId }
+                when (outcome) {
+                    is RuntimeOutcome.Success ->
+                        _storeMessages.update {
+                            it + (pluginId to "Downloaded — this remote plugin is now available.")
+                        }
+                    is RuntimeOutcome.NotYetImplemented ->
+                        _storeMessages.update {
+                            it + (pluginId to "Remote download not wired yet: ${outcome.message}")
+                        }
+                    is RuntimeOutcome.Failed ->
+                        _storeMessages.update { it + (pluginId to outcome.message) }
+                }
+                refreshPluginStates()
+            }
+            return
+        }
         viewModelScope.launch {
             _storeBusy.update { it + pluginId }
             _storeProgress.update { it + (pluginId to 0f) }

@@ -92,9 +92,17 @@ class PluginStoreController(
         // The definition is always one of the registry's compiled set — built-in
         // or optional bundled (optional definitions are RE-materialized from
         // their factory on process restart, so an installed optional plugin is
-        // found here even after the app was killed).
+        // found here even after the app was killed). A catalog entry that is NOT
+        // in the compiled set is a remote (downloadable) plugin: the bundled-
+        // definition store path cannot install it, and it must go through the
+        // PluginRuntime seam instead (Phase 23) — say so honestly rather than a
+        // confusing "missing definition".
         val plugin = registry.compiledPlugins.firstOrNull { it.id == pluginId }
-            ?: return DownloadOutcome.Failed(pluginId, "This plugin's definition is missing.")
+            ?: return DownloadOutcome.Failed(
+                pluginId,
+                "This is a remote (downloadable) plugin — it cannot be installed by the bundled store. " +
+                    "Remote downloads go through the PluginRuntime runtime (Phase 23)."
+            )
         onProgress(0f)
         // Brief, real install window + the actual registry install (which
         // re-evaluates every plugin's availability gate) run off the main

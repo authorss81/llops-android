@@ -84,6 +84,29 @@ class PluginEntryStoreTest {
     }
 
     @Test
+    fun `codec rejects parseable blobs that violate entry invariants`() {
+        val codec = PluginEntryCodec()
+
+        // REMOTE source but no sha256 — parseable JSON, invalid entry.
+        assertNull(
+            codec.decode(
+                """{"id":"r","name":"R","description":"d","version":"1.0.0","""" +
+                    """"capabilityKeys":["ocr"],"category":"Vision","permissionKeys":[],""" +
+                    """"updateChannel":"stable","downloadUrl":"https://x.example.com/a.apk","source":"REMOTE"}"""
+            )
+        )
+
+        // BUNDLED source carrying a downloadUrl — also invalid.
+        assertNull(
+            codec.decode(
+                """{"id":"b","name":"B","description":"d","version":"1.0.0","""" +
+                    """"capabilityKeys":["text_transform"],"category":"Text","permissionKeys":[],""" +
+                    """"updateChannel":"stable","downloadUrl":"https://x.example.com/a.apk","source":"BUNDLED"}"""
+            )
+        )
+    }
+
+    @Test
     fun `in-memory store save find all remove round-trip`() {
         val store = InMemoryPluginEntryStore()
         val a = remoteEntry("id.a")

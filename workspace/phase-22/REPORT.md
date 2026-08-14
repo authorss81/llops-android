@@ -37,11 +37,11 @@ NO updates — only the architecture doc + the honest skeleton.
 | `services/SettingsManager.kt` | `plugin_entry_<id>` JSON accessors + `allPluginEntryIds()` + Delete wipes the entry blob |
 | `PluginCapability.kt` / `PluginManifest.kt` | Added lazy `byKey()`/`ALL` lookups (key-stable codec resolution) |
 
-### Tests (26 new, pure JVM — full suite: 379 tests green)
-- `PluginVersionTest` (7) — parse/order/isNewerThan/bump/interop.
+### Tests (25 new, pure JVM — full suite: 380 tests green)
+- `PluginVersionTest` (6) — parse/order/isNewerThan/bump/interop.
 - `PluginEntryStoreTest` (6) — codec round-trips (remote + bundled), malformed
-  reject, store CRUD, entry-invariant validation, catalog merges a persisted
-  remote entry alongside bundled definitions.
+  reject, decode rejects invariant-violating blobs, store CRUD, entry-invariant
+  validation, catalog merges a persisted remote entry alongside bundled definitions.
 - `PluginContextFacadeTest` (7) — every facade call is `Denied` with an honest
   reason; context scoped to its plugin id; factory default is deny-by-default.
 - `PluginRuntimeSeamTest` (6) — verify/load report `NotYetImplemented(23)`,
@@ -50,7 +50,7 @@ NO updates — only the architecture doc + the honest skeleton.
 
 ### Verification gates
 - `gradle assembleDebug` — **SUCCESS** (clean rebuild, APK produced).
-- `gradle testDebugUnitTest` — **SUCCESS** (379 tests, incl. the 26 new).
+- `gradle testDebugUnitTest` — **SUCCESS** (380 tests, incl. the 25 new).
 
 ---
 

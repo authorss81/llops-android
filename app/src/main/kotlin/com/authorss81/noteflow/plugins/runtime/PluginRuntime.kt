@@ -129,9 +129,7 @@ data class LoadedPlugin(
  * with the phase that will implement it. It never fabricates a "verified" or
  * "loaded" result — pretending the runtime works would be a fake feature.
  */
-class NotYetImplementedPluginRuntime(
-    private val contextFactory: PluginContextFactory = PluginContextFactory.DEFAULT
-) : PluginRuntime {
+class NotYetImplementedPluginRuntime : PluginRuntime {
 
     override fun verify(artifact: PluginArtifact): RuntimeOutcome<PluginVerification> =
         RuntimeOutcome.notYetImplemented(
@@ -160,9 +158,6 @@ class NotYetImplementedPluginRuntime(
             message = "rollback() for plugin '${entry.id}' is not implemented yet — " +
                 "the keep-previous-until-verified rollback path lands in Phase 24."
         )
-
-    /** The deny-by-default facade this stub hands out on a would-be load. */
-    internal fun defaultContextFor(entry: PluginEntry): PluginContext = contextFactory.contextFor(entry)
 
     private companion object {
         const val PHASE_DOWNLOAD_VERIFY = 23
