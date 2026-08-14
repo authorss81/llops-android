@@ -1,65 +1,52 @@
-# Phase 26: Full security audit (hacker mindset) — 2 batches × 5 parallel subagents [NOT STARTED]
+# Phase 26: Lightweight plugin ecosystem — 5 safe compile-time plugins [NOT STARTED]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
-app. The owner has EXPLICITLY CONSENTED to an adversarial security audit. This
-phase finds and documents security loopholes in the source code (a later phase,
-28, will also attack the built APK with hacking tools).
+app with a hardened hybrid plugin framework (Phases 10–11, 22), a downloadable
+runtime (Phase 23), dynamic updates (Phase 24) and the ink→shape plugin (Phase 25).
+**Read `docs/plugin-architecture.md`** — under the hybrid model these plugins are
+**compile-time** because they are pure-JVM or tiny-keyless-HTTP and add only a few
+KB to the base APK.
 
-Your deliverable is **`docs/security-report.md`** (create it fresh if absent;
-APPEND if present). Follow the AGENTS.md rule: write findings to the file
-INCREMENTALLY as you go, commit/push after each batch, never keep findings only
-in your reply.
+## Add ALL five (each must WORK — no stubs)
+1. **Dictionary plugin** — keyless `dictionaryapi.dev` (no key, JSON) with an
+   offline fallback to a small bundled word list. Inserts "word — definition" into
+   the note. Pure-JVM test: JSON parse + offline fallback.
+2. **Weather plugin** — keyless Open-Meteo (no key). Dated weather snapshot;
+   location-free by default (fixed default city or coarse lat/lon from a setting;
+   NO GPS permission). Pure-JVM test: forecast JSON parse.
+3. **Unit converter plugin** — pure-JVM conversion (length/mass/temperature/
+   currency-basic) inline in the editor ("2 km to mi" → insert result). Fully
+   offline, zero deps. Tests: conversion-matrix correctness.
+4. **Outline/checklist generator plugin** — from selected text, generate a
+   structured outline or checkbox list. Pure Kotlin. Tests: grouping/indent.
+5. **Citation formatter plugin** — format a pasted URL/title into clean Markdown
+   `[title](url)` (fetch title via HTTPS or plain-text fallback). Pure-JVM test:
+   payload building.
 
-## Method (2 batches, 5 parallel subagents each)
-- **Batch 1**: launch **5 parallel subagents** (Task tool). Give each a distinct
-  attack area and tell them to think like a hacker and find real loopholes with
-  `file:line` evidence:
-  1. Cryptography & key management (EncryptionService, VaultKeyHolder,
-     SecurityService, PBKDF2/AES-GCM/AndroidKeyStore usage, DEK wrapping,
-     zeroization, password validation).
-  2. Data-at-rest & DB (NoteflowDatabase, NoteRepository, field encryption,
-     WAL checkpoint, quarantine/restore paths, backup disable, export/import).
-  3. Data-in-transit & network (WebDAV, all HTTP clients, URL construction,
-     TLS, SSRF, redirects, the new cloud-AI endpoint, LocalSend).
-  4. Android platform surface (manifest: exported components, intent filters,
-     exported providers/activities, file_paths.xml, WebView usage, clipboard,
-     debug/release flags, deep links, permissions).
-  5. App logic & auth (authentication flow, biometrics, session/lock,
-     authorization, IDOR-style access between notes, injection in queries,
-     path traversal in imports/exports, plugin error isolation bypasses).
-- **Batch 2**: launch **5 parallel subagents** on DIFFERENT angles, explicitly
-  instructed to find NEW loopholes NOT already in the report:
-  1. Compose/UI-layer issues (state leakage, previews, lazy fields), race
-     conditions, concurrency, TOCTOU.
-  2. Dependency/vuln review (check known CVEs of the libraries in
-     `gradle/libs.versions.toml`; supply-chain notes).
-  3. Logging, crash reporting, telemetry, and information disclosure
-     (PrivacyCrashReporter, AppStartupLogger, error messages, stack traces).
-  4. Resource-exhaustion/DoS vectors (huge notes, zip bombs in import, memory
-     pressure, bitmap pool, recursion).
-  5. Crypto side-channels & edge cases (padding oracles, IV reuse, key reuse,
-     timestamp leaks, RNG usage, timing).
-- Every subagent MUST append its findings to `docs/security-report.md` itself
-  (incremental writes + commit/push after each batch), with: severity
-  (CRITICAL/HIGH/MEDIUM/LOW/INFO), evidence `file:line`, exploit scenario, and a
-  suggested fix.
-- You reconcile the batches: dedupe, merge severities, and ensure the report is
-  complete and consistent.
+## Integration requirements
+- Register all five in the Phase-10 registry (`PluginRegistry.defaultPlugins()`),
+  each individually toggleable in the Phase-21/23 store, `isAvailable()` reflects
+  real availability (e.g. network plugin unavailable offline).
+- Network only on `Dispatchers.IO`, user-initiated, clear offline/error states
+  (reuse the web-search/weather error patterns). Offline-first: graceful offline
+  path each.
+- Add each plugin to `docs/PLUGINS.md` as a full example.
 
 ## Definition of done
-- `docs/security-report.md` written by both batches with findings from all 10
-  subagents, deduped, severity-ranked, `file:line` evidence, and fixes.
-- No finding exists only in a subagent reply — everything is in the file.
-- Evidence that 10 subagents ran (list which agent covered which area).
-- `gradle assembleDebug`/`testDebugUnitTest` still pass (no code changes unless a
-  subagent fixed a trivial finding — prefer documenting over fixing here).
-- The report has a findings-count summary + top-risks section.
+- `gradle assembleDebug` succeeds (keyless HTTP deps allowed; NO ML Kit barcode,
+  NO native OCR, NO LLM — those are downloadable, NOT here).
+- `gradle testDebugUnitTest` passes with pure-JVM tests per plugin (see above).
+- All five plugins reachable via the store, toggleable, functional; no fake
+  recognition/conversion/results. Offline paths genuinely work.
+- Base-APK size delta from this phase is minimal (report it — should be a few
+  hundred KB max from HTTP/JSON libs, not MB).
 
 ## Constraints
-- You are AUTHORIZED to probe the code (consent given). Do NOT attack any
-  external service/device — this is source-code review only.
-- Do NOT fix findings in this phase (that's later phases from the report) except
-  trivial ones — document everything.
-- Do NOT change the DB schema or `.github/workflows/`. No new deps.
-- The report is the single source of truth for later fix phases — be precise
-  (file:line, reproducer, fix suggestion).
+- Permissions: NO new permissions (no GPS, no network-state). Network on IO
+  dispatcher only, user-initiated only, no background sync.
+- Do NOT change the DB schema. Do NOT edit `.github/workflows/`.
+- Never bypass `ClipboardGuard` for copy actions. No logging of content/keys.
+- Keep the plugin boundary clean: plugin logic lives in its plugin package, not in
+  the core ViewModel/screens.
+- Do NOT add heavy deps to the base app (ML Kit, native engines) — defer those to
+  downloadable plugins.

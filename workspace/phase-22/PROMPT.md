@@ -1,108 +1,82 @@
-# Phase 22: Downloadable-plugin runtime + lightweight ecosystem [NOT STARTED]
+# Phase 22: Hybrid plugin architecture skeleton — design + wiring [NOT STARTED]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
-app with a hardened plugin framework (Phases 10–11), an existing plugin set
-(Phases 12/15/16) and a plugin store UI (Phase 21).
+app with a hardened compile-time plugin framework (Phases 10–11, 15, 16), a plugin
+store UI (Phase 21), and an existing plugin set (Phases 12/15/16).
 
-**THE CORE GOAL OF THIS PHASE (read first):** plugins must NOT increase the
-base APK size and must NOT force features onto users they will never use.
-Heavy/native features (camera OCR/QR, large ML engines, LLM) must ship as
-**downloadable, signature-verified plugins** fetched over HTTPS only when the
-user explicitly installs them. Lightweight features (pure-JVM or small-keyless-HTTP)
-stay compile-time because they cost only a few KB.
+**THE CORE GOAL OF THIS PHASE (read first):** plugins must NOT increase the base
+APK size and must NOT force features onto users they will never use. Heavy/native
+features (camera OCR/QR, large ML engines, the local LLM) must ship as
+**downloadable, signature-verified plugins** fetched over HTTPS only on explicit
+user consent. Lightweight features (pure-JVM or small-keyless-HTTP) stay
+compile-time because they cost only a few KB. This is the **hybrid model**.
 
-So this phase delivers TWO things:
-1. **A REAL runtime plugin-loading infrastructure** — the mechanism that lets the
-   app download, verify, install and load plugin code at runtime without baking it
-   into the APK.
-2. **Five NEW lightweight plugins** that are safe to ship compile-time (they are
-   pure-JVM or tiny keyless-HTTP and add negligible size).
+**This phase is the ARCHITECTURAL FOUNDATION.** It does NOT yet implement the full
+downloadable runtime — later phases build the runtime (23), updates (24), the
+ink→shape canvas plugin (25) and the lightweight ecosystem (26) on top of the
+skeleton you design and wire here. The skeleton must be so clear that every later
+phase plugs into it without redesign.
 
-## Part A — Downloadable-plugin runtime (PRIORITY — this is the hard part)
-Build the infrastructure that allows download-and-load without base-APK growth:
+## Deliverable 1 — Architecture design doc (`docs/plugin-architecture.md`)
+A precise, decision-focused design doc that settles the hybrid model ONCE:
+- **Module layout**: base app (compile-time plugins, registry, store, capability
+  routing) vs. runtime package (`plugins/runtime/`) vs. future downloadable plugin
+  modules (separate Gradle modules, e.g. `plugins/llm/`, `plugins/ocr/`). Show the
+  dependency direction (base must NOT depend on downloadable modules; the runtime
+  loads them via `DexClassLoader`).
+- **Unified catalog-entry model**: a single `PluginEntry` that covers BOTH
+  compile-time and downloadable plugins: `id`, `name`, `version` (semver),
+  `capabilities`, `category`, `permissions`, `downloadUrl` (nullable for built-ins),
+  `installSizeBytes`, `updateChannel`, `sha256`, `pinnedCertHash`. This entry type
+  is the seam that Phase-21 store, Phase-23 runtime, and Phase-24 updates all use.
+- **Capability facade contract**: define the narrow `PluginContext` surface
+  (e.g. `insertText`, `showResult`, `httpGet(httpsOnly)`, `readSelection`,
+  `requestModelDownload`) that plugin code may call — NEVER direct DB/keystore/
+  `EncryptionService`/decrypted-content handles. Define the capability whitelist
+  matrix (which capability gets which facade calls).
+- **State machine**: `NOT_DOWNLOADED → VERIFYING → VERIFIED → REGISTERED(off) →
+  ENABLED → DISABLED(kept) → DELETE(wiped)` PLUS update states `UPDATE_AVAILABLE →
+  APPROVING → DOWNLOADING → VERIFYING → READY → ROLLBACK_NEEDED`. Integrate with
+  the Phase-21 lifecycle.
+- **Versioning + update model**: semver, per-plugin update channel, how a new
+  version is discovered (Phase-24 hosted manifest), signature + sha256 re-verify on
+  update, rollback path (keep previous version until new one verified).
+- **Security model**: pinned-cert-hash verification, tamper rejection before ANY
+  load, integrity re-check on every load, no direct data handles. Tie into
+  `docs/PLUGINS.md`.
 
-1. **`PluginDownloader`** — downloads a plugin artifact (a signed plugin APK/AAR
-   containing DEX) over HTTPS to app-private storage. TLS only. Only user-initiated
-   (from the Phase-21 store). Size + free-space guards. Resume/cancel. Never to
-   shared storage.
-2. **Signature verification (MANDATORY, security-critical)** — before ANY plugin
-   code is loaded, verify the downloaded artifact's signature against a pinned
-   certificate hash embedded in the host app (constant, not user-editable).
-   Reject with a clear error if the signature does not match the pinned hash or if
-   the artifact is tampered. `file:line`-documented. This is what makes downloaded
-   code safe enough for an encrypted-notes app.
-3. **`RuntimePluginLoader`** — loads the verified DEX at runtime via
-   `DexClassLoader` + a `ClassLoader` for the plugin package, instantiating plugins
-   through the existing `NoteflowPlugin` interface via reflection. Keep the
-   Phase-10/11 registry API the same for compile-time plugins so existing plugins
-   are untouched.
-4. **Capability isolation** — plugin code NEVER receives direct handles to the
-   Room DB, keystore, `EncryptionService`, or decrypted note content. It only gets
-   a narrow `PluginContext` capability facade (e.g. `insertText`, `showResult`,
-   `httpGet(httpsOnly)`, `readSelection`), explicitly whitelisted per capability.
-   Document the exact surface in `docs/PLUGINS.md`.
-5. **Consent + enablement** — first download requires explicit user consent with
-   clear wording ("this plugin adds features from a third party; it is
-   signature-verified"). Downloaded plugins are OFF by default and toggleable in
-   the Phase-21 store. Persisted list of installed plugins + their SHA-256 + pinned
-   cert hash; integrity re-checked on every load.
-6. **Store wiring** — extend the Phase-21 `PluginStoreDialog` (and its
-   ViewModel/controller) so remote plugins show download/install/delete/disable
-   states, reuse the existing compile-time catalog for the built-ins.
-7. **Tests (pure-JVM)** — signature-verify accept/reject (valid cert, wrong cert,
-   tampered bytes), download-to-install happy path (fake transport), tamper
-   rejection before load, capability-facade deny-by-default.
-
-## Part B — Five lightweight plugins (safe compile-time, ~KB each)
-1. **Dictionary** — keyless `dictionaryapi.dev` (no key, JSON) with an offline
-   fallback to a small bundled word list. Inserts "word — definition" into the
-   note. Pure-JVM test: JSON parse + offline fallback.
-2. **Weather** — keyless Open-Meteo (no key). Dated weather snapshot; location-free
-   by default (fixed default city or coarse lat/lon from a setting; NO GPS
-   permission). Pure-JVM test: forecast JSON parse.
-3. **Unit converter** — pure-JVM conversion (length/mass/temperature/currency-basic)
-   inline in the editor ("2 km to mi" → insert result). Fully offline, zero deps.
-   Tests: conversion-matrix correctness.
-4. **Outline/checklist generator** — from selected text, generate a structured
-   outline or checkbox list. Pure Kotlin. Tests: grouping/indent.
-5. **Citation formatter** — format pasted URL/title into clean Markdown
-   `[title](url)` (fetch title via HTTPS or plain-text fallback). Pure-JVM test:
-   payload building.
-
-**QR/barcode scanning is DELIBERATELY NOT a compile-time plugin** (ML Kit barcode
-is a heavy native dep that would bloat the base APK). It is deferred to a later
-downloadable plugin using the Part-A runtime — note this in the REPORT.md. Do NOT
-add ML Kit barcode to the base app.
-
-## Integration requirements
-- Part-B plugins register in the Phase-10 registry, each individually toggleable
-  in the Phase-21 store, `isAvailable()` reflects real availability.
-- Network only on `Dispatchers.IO`, user-initiated, clear offline/error states
-  (reuse existing patterns). Offline-first: graceful offline path each.
-- Part-A runtime lives under `plugins/runtime/` (or equivalent), clearly separated
-  from compile-time plugin code.
-- Update `docs/PLUGINS.md` with: runtime model, pinned-cert verification, capability
-  facade surface, the downloadable-vs-compile-time split.
+## Deliverable 2 — Compilable skeleton (wiring, not full implementation)
+Implement the skeleton so later phases slot in:
+- `PluginEntry` data class + `PluginEntryStore` (persistence seam over
+  `SettingsManager`, pure-JVM testable) covering built-ins AND downloadable entries.
+- `PluginVersion` (semver compare + bump) with pure-JVM tests.
+- The `PluginContext` capability-facade **interface + deny-by-default skeleton**
+  (a real `DefaultPluginContext` that returns `CapabilityDenied` for everything
+  until a later phase wires permitted calls). Pure-JVM test: deny-by-default.
+- `PluginRuntime` interface: `verify(artifact)`, `load(entry)`, `update(entry)`,
+  `rollback(entry)` — STUBBED with honest `NotYetImplemented` results in this phase
+  (they are built in phases 23/24). Register the seams so phases 23/24 only fill in
+  implementations.
+- Extend the Phase-21 store catalog to carry the unified `PluginEntry` fields
+  (version shown in the store UI; downloadable entries marked "remote", built-ins
+  marked "bundled").
+- `docs/plugin-architecture.md` + update `docs/PLUGINS.md` "Design rules" with the
+  hybrid model (keep the compile-time rule for built-ins; add the downloadable +
+  verified rule for heavy features).
 
 ## Definition of done
-- `gradle testDebugUnitTest` passes (Part-A pure-JVM tests + per-plugin tests).
-- `gradle assembleDebug` succeeds WITHOUT adding ML Kit barcode / native OCR / LLM
-  to the base app. Base APK size delta from this phase is minimal (report it).
-- Part-A: download → verify → load → execute works end-to-end with a small test
-  plugin artifact; tampered/wrong-signature artifacts are rejected before any code
-  runs (`file:line` evidence).
-- Part-B: all five plugins reachable, toggleable, functional; no fake results;
-  offline paths genuinely work.
-- REPORT.md records: pinned cert hash handling, capability surface, base-APK size
-  before/after, and the deferred downloadable plugins (QR, LLM).
+- `docs/plugin-architecture.md` written and consistent with the actual code seams.
+- `PluginEntry`, `PluginVersion`, `PluginContext` (deny-by-default), `PluginRuntime`
+  (stubbed seams) compile; `gradle assembleDebug` succeeds.
+- `gradle testDebugUnitTest` passes: semver tests, entry persistence round-trip,
+  deny-by-default facade tests.
+- Store UI shows version + bundled/remote marker for entries.
+- No fake implementations: stubs return honest `NotYetImplemented`, never pretend
+  to work. REPORT.md records the design decisions + what phases 23–26 will fill in.
 
 ## Constraints
-- Permissions: NO new permissions for Part B (no GPS, no network-state). Camera is
-  NOT added in this phase.
-- Never log keys, passwords, decrypted content, or downloaded artifact contents.
-- Signature pinning is a compile-time constant — never user-editable, never
-  bypassable in release builds.
+- Do NOT implement full download/verify/load here (that is phase 23) and do NOT
+  implement updates (phase 24). Design + seams only.
 - Do NOT change the DB schema. Do NOT edit `.github/workflows/`.
-- Do NOT bypass `ClipboardGuard` for copy actions.
-- Keep the plugin boundary clean: plugin logic lives in its plugin package; the
-  runtime lives in `plugins/runtime/`.
+- Never log keys, passwords, decrypted content. Keep the plugin boundary clean.
+- No new permissions.

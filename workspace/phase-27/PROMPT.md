@@ -1,57 +1,67 @@
-# Phase 27: False-implementation audit & general audit (non-security) [NOT STARTED]
-
+# Phase 27: Brush rendering — fix sharp edges, add rainbow & unique colors, fix color picking [NOT STARTED]
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
-app. Phase 26 audits SECURITY; this phase audits EVERYTHING ELSE: false/claimed
-implementations, broken wiring, dead UI, and general code quality. The owner
-wants an honest accounting of what is REAL versus what is claimed.
+app with an AGSL GPU wet-mixing engine + vector fallback, and brush styles added
+in Phase 18 (charcoal, oil pastel, ink wash, gouache, dry brush, palette knife),
+plus a vibrant color system and palette from Phase 19.
 
-Your deliverable is **`docs/general-audit-report.md`** (create fresh; append if
-present). Write findings INCREMENTALLY and commit/push as you go.
+This phase fixes a visual defect and expands color expressiveness.
 
-## Part A — False-implementation audit (honesty gate)
-For every feature the app claims (in `ROADMAP.md`, `AGENTS.md`, `README.md`,
-`docs/`, phase `PROMPT.md`/`REPORT.md`, changelog), verify against the code with
-`file:line` evidence whether it is:
-- **REAL** — wired, called, works, reachable in UI,
-- **STUB/FAKE** — looks functional but does nothing (e.g. returns hardcoded
-  values, no-op, dead code path),
-- **BROKEN** — wired but fails or is unreachable,
-- **CLAIM-ONLY** — documented but no implementation exists,
-- **DEAD** — implemented but never reachable from any UI entry.
-Cover every area: canvas/brushes, AGSL wet-mixing, WebDAV E2EE sync, plugins
-(OCR/web search/export/etc.), stickers, LocalSend, dictation, TTS, translation,
-assistant, encryption, import/export, markdown preview, knowledge graph,
-templates, voice notes, performance fixes, release signing. Update
-`ROADMAP.md`/`AGENTS.md` claims that are FALSE (correct them honestly) — never
-leave a known false claim standing.
+## 1. Fix sharp/aliased stroke edges
+- Some brush strokes render with **sharp, jagged edges** (visible at certain
+  sizes/zooms, especially in the vector fallback and at hard `uHardness`).
+- Find the exact cause (stroke tessellation, missing anti-aliasing on the
+  polyline joins/caps, shader step edges, `strokeContainsPoint`/dirty-rect
+  margins) and fix it so ALL brush types render smooth edges at all widths and
+  zoom levels.
+- Verify: line joins (`ROUND`), caps, alpha feathering at falloff edges, and the
+  vector-fallback antialiasing path (API < 33). Pure-JVM tests for any geometry
+  math you add (e.g. an edge-feather/falloff function; join/cap raster tests).
+- The fix must not regress performance (respect `WetBrushEngine.currentQuality`
+  degradation).
 
-## Part B — General audit (non-security quality)
-- Dead code / unused imports / unused functions (grep-verify, not vibes).
-- Performance smells (main-thread I/O, per-frame allocations, missing
-  `remember`/`derivedStateOf`, recomposition hotspots, large lists).
-- Correctness smells (swallowed exceptions, `!!` on nullable, silent
-  fallbacks, magic numbers).
-- UX reachability: every feature reachable within ≤3 taps; no orphan UI.
-- Test quality: tests that assert nothing, or test the wrong thing.
-- Docs consistency between files.
-For each finding: `file:line`, category, suggested fix, priority. Prefer
-documenting; only fix trivial things (typos, dead import) this phase.
+## 2. Rainbow & unique multi-color brushes
+- Add **rainbow brush** (and similar unique color effects): the stroke color
+  cycles through hues along the stroke path (per-point hue from position/elapsed,
+  seamless, vibrant). Implement as a real brush style (extend `StrokeTool` or a
+  color-mode flag on existing tools) working on BOTH AGSL and vector fallback.
+- Also add at least one more unique effect color mode, e.g. **gradient** (two
+  picked colors blended along the stroke) and **shimmer/iridescent** (hue varies
+  subtly per stroke-seed with metallic sheen). Each must be distinct, reachable
+  in the color picker, and unit-testable (pure-JVM hue-cycling/gradient math:
+  given progress [0..1] and seed → valid in-gamut color).
+- Ensure these color modes persist correctly (the per-point color is derived at
+  render time from the stroke's seed/mode — do NOT store a color per point;
+  store the mode + seed so persistence is unchanged and round-trips).
+
+## 3. Fix color picking (eyedropper + palette) to work properly
+- Audit the eyedropper (`sampleColorAt` + `onColorSampled`) and
+  `ColorPickerBottomSheet`: sampled color must exactly match the rendered pixel
+  (account for vibrancy boost and paper color), must appear in recent/palette,
+  and must be applied to the current brush. Fix sampling offsets under pan/zoom
+  (screen→canvas coordinate mapping), alpha handling, and dark-paper cases.
+- The HSV sliders must round-trip (drag → color → reopen shows the same value)
+  and never produce out-of-gamut colors.
+- Rainbow/gradient modes must appear as selectable options in the color picker,
+  not hidden.
 
 ## Definition of done
-- `docs/general-audit-report.md` written: verdict per feature
-  (REAL/STUB/FAKE/BROKEN/CLAIM-ONLY/DEAD) with `file:line`, plus a Part-B
-  findings section with priorities.
-- False claims in `ROADMAP.md`/`AGENTS.md`/`README.md` corrected honestly.
-- A summary table: count per verdict, top broken/dead items.
-- `gradle assembleDebug` + `gradle testDebugUnitTest` pass (docs/trivial fixes
-  only — do not refactor in this phase).
-- No finding lives only in a reply; everything is in the file.
+- `gradle assembleDebug` succeeds; `gradle testDebugUnitTest` passes with new
+  tests: edge-feather/falloff math, hue-cycling + gradient + shimmer math
+  (in-gamut, deterministic per seed), eyedropper coordinate mapping, HSV
+  round-trip.
+- Sharp edges eliminated on all brush types (documented before/after).
+- Rainbow/gradient/shimmer render on AGSL AND vector fallback, persist, and are
+  selectable in the picker.
+- Eyedropper picks the exact rendered color (verified under zoom/pan) and applies
+  it correctly.
+- No performance regression at default quality.
 
 ## Constraints
-- Security findings belong in Phase 26's `docs/security-report.md` — do NOT
-  duplicate them here (cross-reference if needed).
-- Do NOT change the DB schema or `.github/workflows/`. No new deps.
-- Do NOT refactor subsystems (AGENTS.md: major architectural change requires
-  user approval) — this phase audits and reports, it does not rewrite.
-- Be brutally honest: label fakes as fakes. The goal is a clean, truthful
-  picture that later phases can act on.
+- NO new third-party dependencies. NO new permissions. NO `INTERNET`.
+- Do NOT change the DB schema (color modes persist as mode+seed on the stroke —
+  extend the stroke model safely if needed, with a migration-safe note).
+- Do NOT edit `.github/workflows/`.
+- Respect API 26+ / low-end: derived color math is cheap; vector fallback must
+  show the same color modes as AGSL.
+- Be honest: if a mode cannot render correctly on both paths this phase, ship it
+  on the path that works and say exactly what is deferred.

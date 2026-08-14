@@ -1,64 +1,93 @@
-# Phase 29: Generate security-fix phases from the audit report + final doc-fix phase [NOT STARTED]
+# Phase 29: API-key integration + downloadable local-LLM plugin + APK build [NOT STARTED]
+You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
+app with a hardened plugin framework and a plugin store (Phases 10–11, 21) and a
+**runtime downloadable-plugin infrastructure (Phase 23: download → signature-verify →
+load)**. It already has an on-device assistant plugin (Phase 16:
+`plugins/assistant/` `MediaPipeLlmEngine`/`OnDeviceAssistantPlugin` — local LLM
+inference).
 
-You are working on **InkFlow/Noteflow**. `docs/security-report.md` now contains
-the full security findings (Phase 26 source audit + Phase 28 APK attack). This
-phase (1) READS that report, (2) CREATES a new set of phases that fix the
-loopholes — critical first, each finishable by an AI in under 30 minutes — and
-(3) adds a final **document-fix** phase at the very end of the pipeline.
+**THE KEY CHANGE THIS PHASE:** the MediaPipe `tasks-genai` engine (~150 MB of
+native libs) MUST NOT stay baked into the base APK — it is exactly the bloat you
+are eliminating. This phase moves the local-LLM feature behind the Phase-23
+downloadable-plugin runtime so users who never use the AI assistant don't carry
+its size or pay its startup cost. This phase (1) adds SECURE API-key integration
+for optional cloud AI plugins, (2) **relocates the local LLM engine out of the
+base app into a downloadable plugin**, and (3) triggers an APK build that is
+SMALLER as a result.
 
-## Step 1 — Read and triage
-Read `docs/security-report.md` (and `docs/general-audit-report.md` for
-non-security items worth fixing). Group findings by severity:
-CRITICAL → HIGH → MEDIUM → LOW → INFO. For each finding capture: id/short title,
-severity, `file:line`, the exploit, and the suggested fix.
+## 1. Secure API-key integration (for cloud AI plugins)
+- Provide a secure **API key manager**: keys stored ENCRYPTED at rest
+  (AndroidKeyStore-wrapped key, AES-GCM — reuse the app's existing
+  `EncryptionService`/`VaultKeyHolder` patterns; never plaintext, never
+  SharedPreferences plaintext, never logged).
+- UI: a "Keys" section in settings to add/edit/delete keys for providers (e.g.
+  OpenAI-compatible, Anthropic, or any generic "API URL + key" provider) with
+  masked input, a visibility toggle, and delete. Keys are per-provider,
+  namespaced, and NEVER exported.
+- Integration: an optional **Cloud AI plugin** that uses a configured key to call
+  a generic chat-completions endpoint (real HTTP, IO dispatcher, user-initiated),
+  clearly labeled "cloud — your text leaves the device". It must be OFF by
+  default, only usable when a key is set, with clear consent wording before the
+  first call. If no key → plugin shows "unavailable, add API key in settings".
+- Security rules: TLS only (https), no key in URLs/logs, error messages never
+  echo the key, timeout + cancellation, response size limits. REVIEW the key
+  handling twice (self-review pass) — nothing may go wrong.
+- Pure-JVM tests: key encryption/decryption round-trip (with a fake secure store
+  seam), masked-input formatting, request-payload builder (no key leakage in
+  body/logs), endpoint validation (https-only, no injection).
 
-## Step 2 — Create fix phases (one per finding or tight group)
-For EVERY finding you will fix, create a phase directory. Number them
-sequentially after the highest existing phase number (e.g. if the highest is
-phase-29, the first fix phase is phase-30, then 31, 32, …). Each phase:
-- Must be scoped so an AI can finish it in **under 30 minutes** (one finding or
-  a small tightly-related group per phase — no mega-phases).
-- CRITICAL findings first, then HIGH, MEDIUM, LOW, INFO (don't skip LOW/INFO —
-  they still get fixed, later in order).
-- Write `workspace/phase-NN/PROMPT.md` following the repo's established phase
-  format and the AGENTS.md hard rules:
-  - **Tell exactly where and how to write/fix**: state the `file:line` to change
-    and the expected fix shape (e.g. "replace `crypto` in `EncryptionService.kt`
-    with X"), the verification (which test command: `gradle testDebugUnitTest`,
-    `gradle assembleDebug`), and the Definition of done.
-  - Respect constraints: no DB-schema changes unless the fix requires one (then
-    a migration-safe note is mandatory), do not edit `.github/workflows/`, no new
-    deps unless required (justify), never log keys/content, use `ClipboardGuard`.
-  - Each PROMPT must reference the source finding (id + severity + file:line).
-- IMPORTANT: do NOT create a phase for a finding you judge as already fixed or
-  non-applicable — list those in `docs/security-report.md` as "resolved at
-  triage" with the reason.
+## 2. Local LLM — move OUT of the base APK into a downloadable plugin
+- The base app currently ships `libs.mediapipe.tasks.genai` (~150 MB native) in
+  `app/build.gradle.kts`. **Remove it from the base app's dependencies** so the
+  base APK no longer contains the LLM engine. Report the base-APK size before/after
+  in REPORT.md (this is a headline result).
+- Deliver the local LLM as a **downloadable plugin artifact** consumed by the
+  Phase-23 runtime: build it in a SEPARATE Gradle module (e.g. `plugins/llm/`)
+  that depends on `tasks-genai` and implements the Phase-10 `NoteflowPlugin`
+  interface + the Phase-23 capability facade (model file in app-private storage,
+  size/free-space guards, summarize/ask capabilities, low-end gating). It is
+  downloaded, signature-verified and installed only on explicit user consent, and
+  is OFF by default.
+- Keep the plugin-side engine code (`MediaPipeLlmEngine`, `AssistantModelDownloader`,
+  `AssistantStoragePolicy`) but relocate it into the plugin module. The base app
+  keeps only a thin "AI assistant unavailable — install from plugin store" stub
+  that routes to the store.
+- If the runtime in Phase 23 is not yet mergeable for this (blocked), STOP and mark
+  the phase `.blocked` with an honest REPORT.md — do NOT re-bake the engine into
+  the base app as a fallback.
+- Pure-JVM tests: model-file guard logic, storage-policy decisions, prompt building,
+  plugin availability reporting (no network, no engine needed).
 
-## Step 3 — Final document-fix phase (always last)
-After all fix phases, add a FINAL phase (highest number) titled
-**Document fix — final status & consistency sweep**:
-- Re-run a status audit of ALL phases (like Phase 20) and mark every heading
-  `[DONE]`/`[DEFERRED]`/`[BLOCKED]`/`[PARTIAL]`/`[NOT STARTED]`/`[CANCELLED]`
-  beside it.
-- Update `docs/phase-status.md` to final truth; update `ROADMAP.md`/`AGENTS.md`
-  so no stale claim remains; verify `docs/security-report.md` findings are all
-  marked fixed/closed with evidence, and `docs/general-audit-report.md` items
-  are marked resolved.
-- Write its PROMPT.md with the same format.
+## 3. Trigger an APK build
+- Ensure `gradle assembleDebug` and `gradle testDebugUnitTest` pass.
+- Build a release APK: `gradle assembleRelease` (or trigger the existing
+  `release.yml` workflow via `gh workflow run`). Document the artifact name and
+  path in this phase's REPORT.md (see DoD).
+- The base APK must be measurably smaller than the previous release (report the
+  delta; tasks-genai no longer in it).
+- The APK will be analyzed in a later phase (Phase 32) — ensure it is
+  downloadable as an artifact (build locally in this job and note where the
+  artifact lives, or ensure release.yml produces one).
 
 ## Definition of done
-- Every security finding in `docs/security-report.md` maps to exactly one new
-  phase (or is marked resolved-at-triage in the report).
-- All new phases numbered sequentially, CRITICAL-first, each under-30-min scope.
-- The final document-fix phase is the last phase in the pipeline.
-- A manifest file `workspace/SECURITY_FIX_PLAN.md` lists: finding id → phase
-  number → severity → file:line → verification command.
-- All PROMPT.md files committed and pushed. Do NOT implement the fixes in this
-  phase — only create the plan + phase prompts.
+- API key manager works: add/edit/delete keys, encrypted at rest, never logged.
+- Cloud AI plugin registered, off-by-default, consent-gated, functional with a
+  key, unavailable without one. Keys never in URLs/logs/errors.
+- Key handling reviewed twice (document both review passes).
+- `tasks-genai` REMOVED from the base app; the local LLM ships as a downloadable,
+  signature-verified plugin consumed via the Phase-23 runtime; base APK is
+  measurably smaller (delta in REPORT.md).
+- `gradle assembleDebug` + `gradle testDebugUnitTest` + `gradle assembleRelease`
+  all succeed; REPORT.md lists the release APK artifact path + size before/after.
+- `docs/` documents the key-manager security model and the downloadable-LLM model.
 
 ## Constraints
-- Do NOT modify application code in this phase — you are PLANNING the fixes.
-- Do NOT edit `.github/workflows/`. No new deps. Do not run builds.
-- Be precise about "where and how to write": every PROMPT has file:line + fix
-  shape + verification + DoD.
-- Keep each phase genuinely under 30 minutes of AI work — split big findings.
+- NO hardcoded keys. NO new INTERNET permission (already present for WebDAV/other
+  plugins). Network only on IO dispatcher, user-initiated, https-only.
+- Do NOT change the DB schema (keys live in the secure store / encrypted prefs,
+  never in the DB plaintext).
+- Do NOT edit `.github/workflows/`.
+- Never bypass `ClipboardGuard`. Never log decrypted content, keys, or secrets.
+- Be honest: cloud AI is labeled cloud; local LLM is offline. Do not blur them.
+- Do NOT fall back to re-baking the LLM engine into the base app if the
+  downloadable runtime is not ready — mark `.blocked` instead.

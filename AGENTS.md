@@ -29,12 +29,14 @@ Guidance for AI agents (opencode, Antigravity, etc.) working on this repo. Read 
 - `allowBackup="false"` + `data_extraction_rules.xml` — never re-enable backup.
 - **Base-APK size is a hard constraint.** Heavy/native features (ML Kit OCR, ML Kit
   barcode/QR, the MediaPipe `tasks-genai` LLM) MUST NOT be baked into the base APK.
-  They ship as **downloadable, signature-verified plugins** (Phase 22 runtime:
+  They ship as **downloadable, signature-verified plugins** (Phase 23 runtime:
   HTTPS download → pinned-cert-hash verify → `DexClassLoader` load → capability
   facade, never direct DB/keystore handles). Lightweight pure-JVM plugins stay
   compile-time. Do NOT add large native deps to the base app; use a separate
-  plugin module instead. Plan: Phase 22 = runtime + lightweight ecosystem,
-  Phase 25 = move the LLM out of the base APK into a downloadable plugin.
+  plugin module instead. Plan: Phase 22 = architecture skeleton, Phase 23 =
+  downloadable runtime, Phase 24 = user-approved updates, Phase 25 = ink→shape,
+  Phase 26 = lightweight ecosystem, Phase 29 = move the LLM out of the base APK
+  into a downloadable plugin.
 - PBKDF2WithHmacSHA256 600k iterations, AES-256-GCM (12-byte IV, 128-bit tag), AndroidKeyStore-wrapped DEK, in-memory zeroization on lock (`NoteRepository.kt`, `EncryptionService.kt`, `SecurityService.kt`).
 - Never log keys, passwords, or decrypted note content. Never add `INTERNET` usage without a real feature.
 - Known broken things (do NOT trust ROADMAP [x] claims — see ROADMAP.md "POST-AUDIT TRUTH TABLE" @ commit ac781de):

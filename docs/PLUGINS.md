@@ -458,7 +458,7 @@ export routing, disabled-skip).
    definition (`PluginStoreCatalog` optional entry + `createInstance`) and — if it
    downloads model/assets on install — implement `NoteflowPlugin.deleteDownloadedAssets`
    so Delete frees them. Heavy native features should additionally be structured as
-   a Phase-22 downloadable module so the base APK stays lean.
+   a Phase-23 downloadable module so the base APK stays lean.
 4. It is now visible in Settings → Plugins (with its derived state, reason,
    version and "Test now"), off by default, and automatically reachable from
    every feature wired to its capability.
@@ -483,12 +483,12 @@ export routing, disabled-skip).
 - **Base-APK size is a first-class constraint.** Heavy/native features (camera
   OCR/QR, large ML engines, the local LLM) are NOT baked into the base APK — they
   ship as **downloadable, signature-verified plugins** fetched over HTTPS only on
-  explicit user consent (Phase 22 runtime: download → pinned-cert verify → load).
+  explicit user consent (Phase 23 runtime: download → pinned-cert verify → load).
   Lightweight pure-JVM / small-keyless-HTTP plugins ship compile-time because they
   cost a few KB. Never add a large native dependency to the base app.
 - **Compile-time registration for built-ins.** The `defaultPlugins()` list is the
   API for compile-time plugins. No `ServiceLoader` surprises. The Plugin Store
-  today installs bundled *definitions*; the Phase-22 runtime adds verified
+  today installs bundled *definitions*; the Phase-23 runtime adds verified
   downloadable DEX for heavy features (downloadable code never receives direct
   DB/keystore/decrypted-content handles — only a whitelisted capability facade).
 - **Delete ≠ disable.** Disable keeps data (re-enableable); Delete wipes opt-in,

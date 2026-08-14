@@ -1,68 +1,70 @@
-# Phase 23: Brush rendering — fix sharp edges, add rainbow & unique colors, fix color picking [NOT STARTED]
+# Phase 23: Downloadable-plugin runtime — download, verify, load [NOT STARTED]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
-app with an AGSL GPU wet-mixing engine + vector fallback, and brush styles added
-in Phase 18 (charcoal, oil pastel, ink wash, gouache, dry brush, palette knife),
-plus a vibrant color system and palette from Phase 19.
+app with a hardened plugin framework (Phases 10–11), a plugin store UI (Phase 21),
+and a **hybrid plugin architecture skeleton** (Phase 22): `PluginEntry` (unified
+entry for built-in + downloadable), `PluginContext` capability facade
+(deny-by-default), `PluginRuntime` seams (`verify`/`load`/`update`/`rollback`
+stubbed), `PluginVersion` semver. **Read `docs/plugin-architecture.md` first** — you
+are implementing the skeleton's seams, not redesigning them.
 
-This phase fixes a visual defect and expands color expressiveness.
+**THE CORE GOAL:** heavy/native features (camera OCR/QR, large ML engines, LLM)
+must be loadable as **downloadable, signature-verified plugins** WITHOUT growing
+the base APK. This phase delivers the runtime that makes that safe.
 
-## 1. Fix sharp/aliased stroke edges
-- Some brush strokes render with **sharp, jagged edges** (visible at certain
-  sizes/zooms, especially in the vector fallback and at hard `uHardness`).
-- Find the exact cause (stroke tessellation, missing anti-aliasing on the
-  polyline joins/caps, shader step edges, `strokeContainsPoint`/dirty-rect
-  margins) and fix it so ALL brush types render smooth edges at all widths and
-  zoom levels.
-- Verify: line joins (`ROUND`), caps, alpha feathering at falloff edges, and the
-  vector-fallback antialiasing path (API < 33). Pure-JVM tests for any geometry
-  math you add (e.g. an edge-feather/falloff function; join/cap raster tests).
-- The fix must not regress performance (respect `WetBrushEngine.currentQuality`
-  degradation).
+## What to build (fills in the Phase-22 `PluginRuntime` seams)
 
-## 2. Rainbow & unique multi-color brushes
-- Add **rainbow brush** (and similar unique color effects): the stroke color
-  cycles through hues along the stroke path (per-point hue from position/elapsed,
-  seamless, vibrant). Implement as a real brush style (extend `StrokeTool` or a
-  color-mode flag on existing tools) working on BOTH AGSL and vector fallback.
-- Also add at least one more unique effect color mode, e.g. **gradient** (two
-  picked colors blended along the stroke) and **shimmer/iridescent** (hue varies
-  subtly per stroke-seed with metallic sheen). Each must be distinct, reachable
-  in the color picker, and unit-testable (pure-JVM hue-cycling/gradient math:
-  given progress [0..1] and seed → valid in-gamut color).
-- Ensure these color modes persist correctly (the per-point color is derived at
-  render time from the stroke's seed/mode — do NOT store a color per point;
-  store the mode + seed so persistence is unchanged and round-trips).
-
-## 3. Fix color picking (eyedropper + palette) to work properly
-- Audit the eyedropper (`sampleColorAt` + `onColorSampled`) and
-  `ColorPickerBottomSheet`: sampled color must exactly match the rendered pixel
-  (account for vibrancy boost and paper color), must appear in recent/palette,
-  and must be applied to the current brush. Fix sampling offsets under pan/zoom
-  (screen→canvas coordinate mapping), alpha handling, and dark-paper cases.
-- The HSV sliders must round-trip (drag → color → reopen shows the same value)
-  and never produce out-of-gamut colors.
-- Rainbow/gradient modes must appear as selectable options in the color picker,
-  not hidden.
+1. **`PluginDownloader`** — downloads a plugin artifact (a signed plugin APK/AAR
+   containing DEX) over HTTPS to app-private storage. TLS only. Only user-initiated
+   (from the Phase-21 store). Size + free-space guards. Resume/cancel. Never to
+   shared storage. Reports progress into the store's existing progress flow.
+2. **Signature verification (MANDATORY, security-critical)** — before ANY plugin
+   code is loaded, verify the downloaded artifact's signature against the pinned
+   certificate hash embedded in the host app (`PluginEntry.pinnedCertHash` /
+   compile-time constant, not user-editable). Reject with a clear error if the
+   signature does not match the pinned hash or the artifact is tampered. Also
+   verify `PluginEntry.sha256` matches the downloaded bytes. `file:line`-documented.
+3. **`RuntimePluginLoader`** — loads the VERIFIED DEX at runtime via
+   `DexClassLoader` + a plugin `ClassLoader`, instantiating plugins through the
+   existing `NoteflowPlugin` interface via reflection. Keep the Phase-10/11
+   registry API the same for compile-time plugins so existing plugins are
+   untouched; downloadable plugins join the same registry as installable entries.
+4. **Capability isolation** — plugin code NEVER receives direct handles to the
+   Room DB, keystore, `EncryptionService`, or decrypted note content. Wire the
+   Phase-22 `PluginContext` facade: per-capability whitelist grants only the
+   configured calls (`insertText`, `showResult`, `httpGet(httpsOnly)`,
+   `readSelection`, …); everything else stays `CapabilityDenied`. Test the
+   deny-by-default contract.
+5. **Consent + enablement** — first download requires explicit user consent with
+   clear wording ("this plugin adds features from a third party; it is
+   signature-verified"). Downloaded plugins are OFF by default and toggleable in
+   the Phase-21 store. Persist installed plugins + SHA-256 + pinned cert hash;
+   integrity re-checked on every load.
+6. **Store wiring** — extend the Phase-21 `PluginStoreDialog`/controller so remote
+   entries show download/install/delete/disable states using the unified
+   `PluginEntry` (built-ins stay "bundled"). Reuse the Phase-22 `PluginEntryStore`.
+7. **Tests (pure-JVM)** — signature-verify accept/reject (valid cert, wrong cert,
+   tampered bytes), sha256 mismatch rejection, download-to-install happy path
+   (fake transport), tamper rejection before load, capability-facade deny-by-default,
+   delete wipes downloaded artifact + settings.
 
 ## Definition of done
-- `gradle assembleDebug` succeeds; `gradle testDebugUnitTest` passes with new
-  tests: edge-feather/falloff math, hue-cycling + gradient + shimmer math
-  (in-gamut, deterministic per seed), eyedropper coordinate mapping, HSV
-  round-trip.
-- Sharp edges eliminated on all brush types (documented before/after).
-- Rainbow/gradient/shimmer render on AGSL AND vector fallback, persist, and are
-  selectable in the picker.
-- Eyedropper picks the exact rendered color (verified under zoom/pan) and applies
-  it correctly.
-- No performance regression at default quality.
+- `gradle testDebugUnitTest` passes (runtime pure-JVM tests above).
+- `gradle assembleDebug` succeeds WITHOUT adding ML Kit barcode / native OCR / LLM
+  to the base app. Base APK size delta this phase is minimal (report it).
+- End-to-end: download → verify → load → execute works with a small test plugin
+  artifact; tampered/wrong-signature artifacts are rejected before any code runs
+  (`file:line` evidence).
+- Store shows remote vs bundled, download/verify/install/delete/disable flows work.
+- REPORT.md records: pinned-cert hash handling, capability surface, base-APK size
+  before/after, and which plugins are still deferred (QR, LLM — later phases).
 
 ## Constraints
-- NO new third-party dependencies. NO new permissions. NO `INTERNET`.
-- Do NOT change the DB schema (color modes persist as mode+seed on the stroke —
-  extend the stroke model safely if needed, with a migration-safe note).
-- Do NOT edit `.github/workflows/`.
-- Respect API 26+ / low-end: derived color math is cheap; vector fallback must
-  show the same color modes as AGSL.
-- Be honest: if a mode cannot render correctly on both paths this phase, ship it
-  on the path that works and say exactly what is deferred.
+- Signature pinning is a compile-time constant — never user-editable, never
+  bypassable in release builds.
+- Never log keys, passwords, decrypted content, or downloaded artifact contents.
+- Do NOT change the DB schema. Do NOT edit `.github/workflows/`.
+- Do NOT bypass `ClipboardGuard` for copy actions.
+- No new permissions beyond what the Phase-22 design doc already allows.
+- Keep the plugin boundary clean: runtime lives in `plugins/runtime/`; plugin logic
+  in its plugin package.

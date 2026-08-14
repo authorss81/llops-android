@@ -1,62 +1,56 @@
-# Phase 28: APK attack — download the built APK and bombard it with hacking tools [NOT STARTED]
+# Phase 28: Sticker & emoji libraries + Glass (glassmorphism) theme [NOT STARTED]
+You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
+app. It already has a small sticker pack (Phase 13: `StickerCatalog`,
+`CanvasStickyNote`, stickers/rotation) and themed surfaces (Phase 19 palette).
+This phase enriches the sticker/emoji library and adds a new **Glass** theme.
 
-You are working on **InkFlow/Noteflow**. The owner has EXPLICITLY CONSENTED to a
-full offensive audit of the built APK. Phase 26 did source review; this phase
-attacks the actual APK artifact with real security tooling on the Linux CI
-runner, and appends every new finding to **`docs/security-report.md`** (create
-fresh if absent; APPEND findings; commit/push as you go).
+## 1. Sticker & emoji libraries
+- ENHANCE the existing sticker system with a much richer, meaningfully-curated
+  set for a note-taking app. Add **emoji stickers** (render the platform's emoji
+  as canvas stickers — offline, free, no assets) AND a larger curated sticker
+  catalog organized by category (e.g. Notes/Marks: stars, hearts, flags, arrows,
+  highlights; Moods; Symbols; Shapes).
+- Emoji rendering via the platform font (`Text` with an emoji char) — NO image
+  assets, NO network, NO new permission. Keep APK small.
+- New stickers must behave like existing ones: place on tap, drag, resize,
+  rotate (Phase 13 rotation), persist through save/load.
+- Provide a searchable/filterable sticker+emoji picker reachable in the canvas
+  UI (not dead).
+- Pure-JVM tests: catalog validity (unique ids, valid category names), emoji
+  glyph→sticker mapping, persistence round-trip of a sticker/emoji item.
 
-## Steps
-1. **Locate the APK.** Check workflow artifacts from recent runs
-   (`gh run list` + `gh run download` — look for `noteflow-apk` /
-   `noteflow-release-apk` / `release.yml` artifacts) OR build one:
-   `gradle assembleDebug` / `assembleRelease`. Download the newest
-   `release`/`debug` APK to a local dir.
-2. **Read the current report** `docs/security-report.md` first so you do not
-   re-report known findings — only NEW ones.
-3. **Install and run a battery of meaningful Linux/Android security tools.** Use
-   the tools that are meaningful for this APK (install via apt/pip where needed):
-   - **Static/structural**: `apktool` (decode; inspect manifest, smali,
-     resources), `jadx` (decompile to Java for review), `dex2jar` + `jd-cli`,
-     `androguard` (`androguard axml` / APKiD) — detect misconfig, exported
-     components, debug flags, weak API usage.
-   - **Fingerprinting**: `APKiD` — detect packers, weak crypto, suspicious
-     strings.
-   - **Dependency/vuln**: scan `libs.versions.toml` and bundled natives for
-     known CVEs (`osv-scanner` if installable, else manual CVE notes).
-   - **Strings/secrets**: `strings` on the dex/native libs — hunt hardcoded
-     keys, URLs, tokens, passwords, debug leftovers.
-   - **Cryptography**: search for weak primitives (MD5/SHA1/ECB/static IV),
-     custom crypto, insecure random.
-   - **Network surface**: extract URLs/endpoints; check TLS usage, cleartext
-     config (`network_security_config`), exported network services (LocalSend).
-   - **Native code**: `readelf`/`objdump` or `apktool` on `lib/` — check JNI
-     symbols, missing hardening (PIE, RELRO, canaries if applicable).
-   - **Manifest audit**: exported activities/services/receivers, intent
-     injection, backup settings, permissions, debuggable flag, minify/R8,
-     `allowBackup`, FLAG_SECURE.
-   Bombard it: run every tool that is meaningful; each must produce evidence.
-4. **Document new findings** in `docs/security-report.md` (append section
-   "Phase 28 — APK dynamic/static analysis"): severity, tool used, evidence
-   (command + output excerpt), exploit scenario, suggested fix. Note which
-   findings were confirmed-by-tool vs code-review.
+## 2. Glass (glassmorphism) theme
+- Add a new theme mode **GLASS** to `AppThemeMode` + `isAppDarkTheme` +
+  `Color.kt`: translucent "frosted glass" panels (blurred, semi-transparent
+  surfaces with soft borders/highlights) over a colorful ambient background.
+  Apply to the main surfaces/dialogs/sheets (modals, toolbars, sidebar) using
+  Compose `Modifier.blur` + translucent `Surface` colors — pure Compose, no new
+  deps.
+- It must look genuinely "glass": background content shows through panels with a
+  frosted blur; borders are subtle light lines; readable text contrast
+  guaranteed in both light/dark ambient.
+- Respect performance: `blur` is expensive — apply to static surfaces and
+  dialogs, NOT to the drawing canvas (the canvas must stay fully opaque for
+  accurate color). Gate blur usage behind a setting if low-end devices struggle
+  (respect `DeviceCompatibilityManager`).
+- Reachable via the existing theme selector. Persist selection. No dead UI.
 
 ## Definition of done
-- APK downloaded (or built) and artifact path documented.
-- Tools run: at least apktool, jadx, androguard/APKiD, strings (and any others
-  that install cleanly); each meaningful one captured output.
-- New findings appended to `docs/security-report.md` with tool evidence.
-- A summary of which prior findings were CONFIRMED on the APK and which NEW ones
-  were found.
-- Everything committed/pushed. `gradle` state of the repo unchanged (no code
-  edits this phase).
+- `gradle assembleDebug` succeeds; `gradle testDebugUnitTest` passes with new
+  tests: catalog validity, sticker/emoji round-trip, glass-theme color-role
+  generation (panel colors derive from ambient with valid contrast).
+- Rich sticker+emoji pack functional on canvas with drag/resize/rotate/persist.
+- GLASS theme selectable, persists, renders frosted panels on dialogs/sheets,
+  and does NOT blur the drawing canvas.
+- Low-end devices get an acceptable fallback (reduced/no blur) without breakage.
 
 ## Constraints
-- You are authorized to attack THIS app's APK only — do not touch any other
-  system/device/network. No network probing beyond the app's own endpoints if
-  present.
-- Do NOT fix findings here (later phases fix). Do NOT change code, DB schema, or
-  `.github/workflows/`.
-- Tool installs limited to the CI environment; if a tool cannot be installed,
-  note it and use the closest available equivalent — never fake tool output.
-- No new deps added to the project.
+- NO new third-party dependencies. NO new permissions. NO `INTERNET`. No image
+  assets added.
+- Do NOT change the DB schema (stickers/emoji persist via the existing canvas
+  item path).
+- Do NOT edit `.github/workflows/`.
+- Respect API 26+ (Compose blur works via RenderEffect; guard older API).
+- Be honest: if blur on some Android version is unreliable, fall back to a
+  semi-transparent non-blurred panel and document it — never claim glass where
+  it isn't rendered.
