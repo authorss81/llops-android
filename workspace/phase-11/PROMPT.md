@@ -1,4 +1,4 @@
-# Phase 11: Robust plugin infrastructure (hardening the Phase-10 foundation)
+# Phase 11: Robust plugin infrastructure (hardening the Phase-10 foundation) [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app. Phase 10 built the initial plugin framework (registry, capabilities,

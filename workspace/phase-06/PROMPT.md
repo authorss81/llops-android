@@ -1,4 +1,4 @@
-# Phase 6: WebDAV sync — make it real, safe, and honest (E2EE SYNC)
+# Phase 6: WebDAV sync — make it real, safe, and honest (E2EE SYNC) [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first encrypted notes + canvas
 Android app. The app has a WebDAV sync feature that is DANGEROUS and non-

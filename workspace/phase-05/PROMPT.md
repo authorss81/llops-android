@@ -1,4 +1,4 @@
-# Phase 5: UX & accessibility — data-loss, touch targets, feedback (QUICK WINS)
+# Phase 5: UX & accessibility — data-loss, touch targets, feedback (QUICK WINS) [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline notes + canvas Android app
 (Jetpack Compose, Material 3). This phase fixes the highest-impact UX and

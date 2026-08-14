@@ -1,4 +1,4 @@
-# Phase 14 — Production-Readiness Audit + LocalSend File Transfer (2026-08-13)
+# Phase 14 — Production-Readiness Audit + LocalSend File Transfer (2026-08-13) [DONE]
 
 Scope: verify EVERYTHING shipped by Phases 2–13 against the code, fix anything
 false, harden the security surface, run all three Gradle gates, and add a *real*

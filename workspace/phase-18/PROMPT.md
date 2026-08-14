@@ -1,4 +1,4 @@
-# Phase 18: Brush engine expansion — new brush types, painting styles, enhanced existing brushes
+# Phase 18: Brush engine expansion — new brush types, painting styles, enhanced existing brushes [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with a real paint engine: AGSL GPU wet-mixing (`AgslShaders.WET_MIXING_SHADER`

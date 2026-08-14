@@ -1,4 +1,4 @@
-# Phase 15: Plugin pack — productivity & knowledge (pure-JVM, high ROI)
+# Phase 15: Plugin pack — productivity & knowledge (pure-JVM, high ROI) [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with a hardened plugin framework (Phases 10–11) and real OCR + Web Search

@@ -1,4 +1,4 @@
-# Phase 4: Real AGSL watercolor & oil — fix wet-mixing math (HIGH-VALUE PAINTING)
+# Phase 4: Real AGSL watercolor & oil — fix wet-mixing math (HIGH-VALUE PAINTING) [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with a genuine AGSL (API 33+) wet-mixing paint engine. This phase makes the

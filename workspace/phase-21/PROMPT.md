@@ -1,4 +1,4 @@
-# Phase 21: Plugin architecture — verify & build the plugin store UI
+# Phase 21: Plugin architecture — verify & build the plugin store UI [NOT STARTED]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with a hardened plugin framework (Phases 10–11: `plugins/` package,

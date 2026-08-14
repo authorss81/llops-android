@@ -1,4 +1,4 @@
-# Phase 2: Security — fix restore/sync data-loss paths (CRITICAL)
+# Phase 2: Security — fix restore/sync data-loss paths (CRITICAL) [PARTIAL]
 
 You are working on **InkFlow/Noteflow**, an offline-first encrypted notes + canvas
 Android app. Kotlin 2.0.21, Compose, Room + SQLCipher. This is a strict security

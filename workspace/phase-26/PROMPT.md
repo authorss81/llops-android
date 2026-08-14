@@ -1,4 +1,4 @@
-# Phase 26: Full security audit (hacker mindset) — 2 batches × 5 parallel subagents
+# Phase 26: Full security audit (hacker mindset) — 2 batches × 5 parallel subagents [NOT STARTED]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app. The owner has EXPLICITLY CONSENTED to an adversarial security audit. This

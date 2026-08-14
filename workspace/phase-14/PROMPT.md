@@ -1,4 +1,4 @@
-# Phase 14: Production readiness — full audit, security, LocalSend file transfer
+# Phase 14: Production readiness — full audit, security, LocalSend file transfer [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app. This is the FINAL phase of the pipeline. It has two jobs: (1) a full

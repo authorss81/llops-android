@@ -1,4 +1,4 @@
-# Phase 9: Full regression + release readiness (THE CHECKPOINT)
+# Phase 9: Full regression + release readiness (THE CHECKPOINT) [PARTIAL]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app. This is the FINAL phase of the pipeline. Its job is NOT to add new features —

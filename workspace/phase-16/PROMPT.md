@@ -1,4 +1,4 @@
-# Phase 16: Plugin pack — privacy-first on-device AI & media (keyless)
+# Phase 16: Plugin pack — privacy-first on-device AI & media (keyless) [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with a hardened plugin framework (Phases 10–11), OCR + Web Search plugins

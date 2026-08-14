@@ -1,4 +1,4 @@
-# Phase 8 — Performance Optimization Report (honest edition)
+# Phase 8 — Performance Optimization Report (honest edition) [DONE]
 
 Applies to **InkFlow/Noteflow**, commit `018736c` (Phase 7 baseline).
 

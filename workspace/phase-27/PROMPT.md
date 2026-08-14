@@ -1,4 +1,4 @@
-# Phase 27: False-implementation audit & general audit (non-security)
+# Phase 27: False-implementation audit & general audit (non-security) [NOT STARTED]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app. Phase 26 audits SECURITY; this phase audits EVERYTHING ELSE: false/claimed

@@ -1,4 +1,4 @@
-# Phase 10: Plugin framework — a real, extensible capability system (THE FOUNDATION)
+# Phase 10: Plugin framework — a real, extensible capability system (THE FOUNDATION) [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app. Phases 2–9 made the app honest, correct, and fast. This phase introduces a

@@ -1,4 +1,4 @@
-# Phase 22: Plugin ecosystem — add more meaningful plugins
+# Phase 22: Plugin ecosystem — add more meaningful plugins [NOT STARTED]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with a working, hardened plugin framework (Phases 10–11) and an existing

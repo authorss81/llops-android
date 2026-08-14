@@ -1,4 +1,4 @@
-# Phase 8: Performance optimization (make it feel fast, keep it honest)
+# Phase 8: Performance optimization (make it feel fast, keep it honest) [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app. The app now WORKS and is honest (Phases 2–7). This phase is about

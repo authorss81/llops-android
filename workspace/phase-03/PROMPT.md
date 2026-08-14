@@ -1,4 +1,4 @@
-# Phase 3: Honesty — remove or wire dead/fake features (FALSE-FEATURE AUDIT)
+# Phase 3: Honesty — remove or wire dead/fake features (FALSE-FEATURE AUDIT) [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first encrypted notes + canvas
 Android app. This phase is about HONESTY: features that look real but are dead

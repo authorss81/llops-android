@@ -1,4 +1,4 @@
-# Phase 7: Free, CI-buildable painting features (HIGH VALUE, ZERO COST)
+# Phase 7: Free, CI-buildable painting features (HIGH VALUE, ZERO COST) [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with a real vector + AGSL paint engine. This phase adds **free, offline,

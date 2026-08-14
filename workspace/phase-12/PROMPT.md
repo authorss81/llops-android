@@ -1,4 +1,4 @@
-# Phase 12: Real high-level plugins — OCR + Web Search (NOT FAKE)
+# Phase 12: Real high-level plugins — OCR + Web Search (NOT FAKE) [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with a hardened plugin framework (Phase 10 + Phase 11 infrastructure). This phase implements TWO real,

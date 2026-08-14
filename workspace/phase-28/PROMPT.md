@@ -1,4 +1,4 @@
-# Phase 28: APK attack — download the built APK and bombard it with hacking tools
+# Phase 28: APK attack — download the built APK and bombard it with hacking tools [NOT STARTED]
 
 You are working on **InkFlow/Noteflow**. The owner has EXPLICITLY CONSENTED to a
 full offensive audit of the built APK. Phase 26 did source review; this phase

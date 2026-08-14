@@ -1,4 +1,4 @@
-# Phase 13: Rich canvas content — brush presets, stickers, styled & rotatable sticky notes
+# Phase 13: Rich canvas content — brush presets, stickers, styled & rotatable sticky notes [PARTIAL]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with a real AGSL paint engine (Phase 4), working painting features (Phase 7:

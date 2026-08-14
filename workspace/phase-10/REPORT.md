@@ -1,4 +1,4 @@
-# Phase 10 REPORT — Plugin framework (real capability system)
+# Phase 10 REPORT — Plugin framework (real capability system) [DONE]
 
 Status: **DONE** — builds, tests green, sample plugin live end-to-end.
 

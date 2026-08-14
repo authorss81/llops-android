@@ -1,4 +1,4 @@
-# Phase 1: Android project scaffold
+# Phase 1: Android project scaffold [DONE]
 
 Build the initial Android app skeleton in THIS repository.
 

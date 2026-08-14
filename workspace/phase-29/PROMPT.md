@@ -1,4 +1,4 @@
-# Phase 29: Generate security-fix phases from the audit report + final doc-fix phase
+# Phase 29: Generate security-fix phases from the audit report + final doc-fix phase [NOT STARTED]
 
 You are working on **InkFlow/Noteflow**. `docs/security-report.md` now contains
 the full security findings (Phase 26 source audit + Phase 28 APK attack). This

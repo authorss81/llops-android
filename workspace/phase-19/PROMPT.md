@@ -1,4 +1,4 @@
-# Phase 19: Dual erasers + vibrant colors & a beautiful palette
+# Phase 19: Dual erasers + vibrant colors & a beautiful palette [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app. Today the **Eraser** (`StrokeTool.ERASER`) has ONE behavior: it removes a
