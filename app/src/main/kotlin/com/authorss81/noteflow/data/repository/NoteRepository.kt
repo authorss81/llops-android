@@ -153,17 +153,6 @@ class NoteRepository(private var db: NoteflowDatabase) {
     }
 
     /**
-     * B2-CRYPTO-10 (phase-108): "is this field already encrypted?" is answered by
-     * payload structure + authenticated decrypt ([EncryptionService.isFieldEncrypted]),
-     * NEVER by content blank-ness. The old probe returned `true` for any blank
-     * value, so `reencryptPlaintextFields` treated raw `""` columns as "encrypted
-     * and fine" and never stamped them. Raw blanks are now swept and stored as
-     * real AES-GCM payloads carrying an integrity tag over the blank-ness.
-     */
-    private fun isFieldEncrypted(value: String, key: ByteArray, table: String, recordId: String, fieldName: String): Boolean =
-        EncryptionService.isFieldEncrypted(value, key, table, recordId, fieldName)
-
-    /**
      * B2-CRYPTO-09 (phase-107): one-time re-encryption of every existing field
      * ciphertext under its per-record AAD. Pre-phase-107 rows were authenticated
      * ONLY by the global FIELD_AAD constant (all four field tables), making them
@@ -254,20 +243,25 @@ class NoteRepository(private var db: NoteflowDatabase) {
      * B2-CRYPTO-10 (phase-108): blank rows are NOW swept too — an empty string is
      * stored as a real AEAD payload (`[1][12-byte IV][16-byte GCM tag]`, 29
      * bytes) so a blank column carries an authenticated tag over its blank-ness
-     * instead of sitting raw and tag-less in the vault. NULL columns are left
-     * NULL (there is no stored field content to stamp).
+     * instead of sitting raw and tag-less in the vault. NULL columns are stored
+     * as an encrypted `""` as well, so a legacy NULL blank is tagged exactly like
+     * a newer written row (phase-108 review fix, finding #4). Every candidate is
+     * gated by [EncryptionService.shouldReencryptField]: an already-encrypted
+     * value and a corrupt/transplanted ciphertext are both left untouched
+     * (never re-encrypted as if they were plaintext — review fix, finding #2).
+     * Idempotent: stamped rows are skipped on re-runs.
      */
     suspend fun reencryptPlaintextFields(dek: ByteArray) = withContext(Dispatchers.IO) {
         db.withTransaction {
             db.pageDao().getAllPagesForReencrypt().forEach { page ->
                 var title = page.title
-                var extracted = page.extractedText
+                var extracted = page.extractedText ?: ""
                 var dirty = false
-                if (!isFieldEncrypted(title, dek, "pages", page.id, "title")) {
+                if (EncryptionService.shouldReencryptField(title, dek, "pages", page.id, "title")) {
                     title = EncryptionService.encryptField(title.toByteArray(), dek, "pages", page.id, "title")
                     dirty = true
                 }
-                if (extracted != null && !isFieldEncrypted(extracted, dek, "pages", page.id, "extractedText")) {
+                if (EncryptionService.shouldReencryptField(extracted, dek, "pages", page.id, "extractedText")) {
                     extracted = EncryptionService.encryptField(extracted.toByteArray(), dek, "pages", page.id, "extractedText")
                     dirty = true
                 }
@@ -277,11 +271,11 @@ class NoteRepository(private var db: NoteflowDatabase) {
                 var text = stroke.textContent
                 var points = stroke.pointsJson
                 var dirty = false
-                if (!isFieldEncrypted(text, dek, "strokes", stroke.id, "textContent")) {
+                if (EncryptionService.shouldReencryptField(text, dek, "strokes", stroke.id, "textContent")) {
                     text = EncryptionService.encryptField(text.toByteArray(), dek, "strokes", stroke.id, "textContent")
                     dirty = true
                 }
-                if (!isFieldEncrypted(points, dek, "strokes", stroke.id, "pointsJson")) {
+                if (EncryptionService.shouldReencryptField(points, dek, "strokes", stroke.id, "pointsJson")) {
                     points = EncryptionService.encryptField(points.toByteArray(), dek, "strokes", stroke.id, "pointsJson")
                     dirty = true
                 }
@@ -290,8 +284,8 @@ class NoteRepository(private var db: NoteflowDatabase) {
                 }
             }
             db.mediaEmbedDao().getAllEmbedsForReencrypt().forEach { embed ->
-                val text = embed.textContent
-                if (text != null && !isFieldEncrypted(text, dek, "media_embeds", embed.id, "textContent")) {
+                val text = embed.textContent ?: ""
+                if (EncryptionService.shouldReencryptField(text, dek, "media_embeds", embed.id, "textContent")) {
                     val encrypted = EncryptionService.encryptField(text.toByteArray(), dek, "media_embeds", embed.id, "textContent")
                     db.mediaEmbedDao().updateTextContent(embed.id, encrypted)
                 }
@@ -302,21 +296,19 @@ class NoteRepository(private var db: NoteflowDatabase) {
             // them — any legacy plaintext version snapshot written before a master
             // password existed stayed in the clear at rest.
             db.noteVersionDao().getAllVersionsForReencrypt().forEach { version ->
-                val title = version.title
-                val extracted = version.extractedText
+                var title = version.title
+                var extracted = version.extractedText ?: ""
                 var dirty = false
-                var newTitle = title
-                var newExtracted = extracted
-                if (!isFieldEncrypted(title, dek, "note_versions", version.id, "title")) {
-                    newTitle = EncryptionService.encryptField(title.toByteArray(), dek, "note_versions", version.id, "title")
+                if (EncryptionService.shouldReencryptField(title, dek, "note_versions", version.id, "title")) {
+                    title = EncryptionService.encryptField(title.toByteArray(), dek, "note_versions", version.id, "title")
                     dirty = true
                 }
-                if (extracted != null && !isFieldEncrypted(extracted, dek, "note_versions", version.id, "extractedText")) {
-                    newExtracted = EncryptionService.encryptField(extracted.toByteArray(), dek, "note_versions", version.id, "extractedText")
+                if (EncryptionService.shouldReencryptField(extracted, dek, "note_versions", version.id, "extractedText")) {
+                    extracted = EncryptionService.encryptField(extracted.toByteArray(), dek, "note_versions", version.id, "extractedText")
                     dirty = true
                 }
                 if (dirty) {
-                    db.noteVersionDao().updateVersionFields(version.id, newTitle, newExtracted)
+                    db.noteVersionDao().updateVersionFields(version.id, title, extracted)
                 }
             }
         }

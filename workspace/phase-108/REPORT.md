@@ -101,12 +101,70 @@
 ### Pre-existing flaky test (proven unrelated)
 
 `PluginUpdateEngineTest > a hash mismatch on the downloaded artifact is never
-applied` (`PluginUpdateEngineTest.kt:215-228`) fails intermittently. It was
+applied` (`PluginUpdateEngineTest.kt:215`) fails intermittently. It was
 reproduced on a **clean checkout** (changes stashed with `-u`) — `CLEAN RUN 1 =
 FAILED`, `CLEAN RUN 2 = SUCCESS`, `CLEAN RUN 3 = FAILED` — and with my changes
-(`RUN 1 = FAILED, RUN 2 = FAILED, RUN 3 = SUCCESS`). The failure (assert at
-`PluginUpdateEngineTest.kt:224`) depends on the artifact-signing/hash fixture and
-is independent of the encryption changes in this phase (no shared code path).
+(`RUN 1 = FAILED, RUN 2 = FAILED, RUN 3 = SUCCESS`). The failure is the
+`java.lang.AssertionError` attributed to the test's declaration line
+(`PluginUpdateEngineTest.kt:215`, matching `[224]`@the `assertTrue(...)` inside
+it) and depends on the artifact-signing/hash fixture; it is independent of the
+encryption changes in this phase (no shared code path). Re-confirmed on
+re-run: 672 tests, 1 failure at that test.
+
+## Phase-108 review fixes (LLOPS review pass — committed on top of the phase)
+
+Independent review (this commit's parent) produced numbered FINDINGS; the
+following were fixed here:
+
+1. **Sweep gate never re-stamps a structurally-encrypted value as plaintext
+   (finding #2).** New `EncryptionService.shouldReencryptField(value, key,
+   table, recordId, fieldName)` (`EncryptionService.kt:314-330`): returns true
+   ONLY when the value is not structurally an encrypted payload, so
+   a) already-stamped AEAD rows are skipped (idempotence), and b) corrupt or
+   transplanted ciphertext is left byte-for-byte intact instead of being
+   double-encrypted as if the garbage were real content — the original
+   unreadable-bytes state is never buried. `reencryptPlaintextFields`
+   (`NoteRepository.kt:248-318`) routes every field through this gate.
+2. **Structural classifiers are `internal`, not public (finding #3).**
+   `isEncryptedPayload` / `isFieldEncrypted` (`EncryptionService.kt:279-312`)
+   are now `internal` so no external module can treat the cheap structural probe
+   as a standalone "is this plaintext?" gate the way the old `isBlank` check was
+   misused.
+3. **NULL columns are stamped too (finding #4).** The sweep now normalizes a
+   legacy `NULL` column to an encrypted `""` (`extractedText`/`textContent`
+   `?: ""` in `reencryptPlaintextFields`), so post-fix every blank — including
+   legacy NULL rows — carries a GCM tag; no untagged blank remains writable.
+   `decryptPageIfNeeded`, `getNoteVersions`, and the media-embed read path all
+   treat `""` the same as `NULL` for these fields (verified: no consumer
+   distinguishes them), so display/search/export behaviour is unchanged.
+4. **Sweep-gate tests added (finding #6).** `BlankFieldEncryptionTest` gains 4
+   cases (11 total) covering the full decision table: already-encrypted → skip,
+   transplanted ciphertext → skip, truncated payload → skip, zeroed `""` / long
+   plaintext → stamp, legacy global-AAD ciphertext → skip.
+5. **Report corrections (findings #5, #7):** the `saveStrokesForPage` `pointsJson`
+   `isNotBlank()` removal is behaviorally a no-op (`pointsJson` comes from
+   `serializeStrokes`, never blank) — kept as blanket-consistency, not a claimed
+   behaviour change; the flaky-test failure line is attributed to the declaration
+   line 215 (assert at 224).
+
+Noted but NOT changed here:
+
+- **Finding #1 (residual display gap):** a field-level zero still reads back as
+  `""` and renders as an empty note — no read path verifies a blank's tag, and
+  the blank-tag is only exercised by `reencryptPlaintextFields` /
+  `shouldReencryptField`. End-to-end detection of a zeroed field therefore still
+  relies on the whole-file HMAC (`DatabaseSecurityHelper` → `databaseTampered`
+  banner). Closing this fully means read-path tamper surfacing — that is
+  B1-DB-8 (a different phase) and is not touched here to keep the read paths
+  backwards compatible.
+
+## After this review pass
+
+- `gradle :app:testDebugUnitTest --rerun-tasks` — **672 tests, 671 pass / 1
+  pre-existing flaky failure** (`PluginUpdateEngineTest.kt:215`, unrelated).
+  `BlankFieldEncryptionTest` now 11/11 green; `FieldRecordAadTest` 12/12 green.
+- `gradle :app:assembleDebug` — **BUILD SUCCESSFUL** (Kotlin 2.0.21, no new
+  dependencies, no schema change).
 
 ## Out of scope / noted but NOT fixed here
 

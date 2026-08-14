@@ -267,6 +267,12 @@ object EncryptionService {
     /**
      * Structural "is this ciphertext?" check.
      *
+     * `internal` (phase-108 review): it decodes Base64 leniently and answerable
+     * ONLY from payload shape, so garbage input can classify as a "payload" (any
+     * ≥13-byte Base64 blob whose first byte is the version marker). It must never
+     * be used as a standalone public gate — pair it with an authenticated decrypt
+     * ([isFieldEncrypted]) which is what `shouldReencryptField` does.
+     *
      * Decided ONLY by payload structure — the Base64 decodes to at least
      * [GCM_IV_LENGTH] + 1 bytes (version byte + 12-byte IV is the minimum a
      * versioned payload can span) and carries the [PAYLOAD_VERSION] marker — and
@@ -276,7 +282,7 @@ object EncryptionService {
      * (a pre-B2-CRYPTO-10 write, or a column whose ciphertext was zeroed) is not
      * a payload at all and must classify as NOT encrypted.
      */
-    fun isEncryptedPayload(encryptedBase64: String): Boolean {
+    internal fun isEncryptedPayload(encryptedBase64: String): Boolean {
         if (encryptedBase64.isBlank()) return false
         val combined = try {
             base64Decode(encryptedBase64)
@@ -288,6 +294,11 @@ object EncryptionService {
 
     /**
      * Field-layer classifier (B2-CRYPTO-10 / phase-108).
+     *
+     * `internal` (phase-108 review): answers a real question (is this value a
+     * genuine authenticated field ciphertext, decryptable under its own record
+     * AAD?) and must not be consulted in isolation for the opposite question
+     * ("is this plaintext?") — a decrypt failure is NOT proof of plaintext.
      *
      * Replaces the old probe that returned `true` for any blank value ("nothing
      * to encrypt"), which let blank columns masquerade as already-encrypted and
@@ -301,7 +312,7 @@ object EncryptionService {
      *  - a malformed/transplanted/garbage value → false, so it is never treated
      *    as "encrypted and fine".
      */
-    fun isFieldEncrypted(value: String, key: ByteArray, table: String, recordId: String, fieldName: String): Boolean {
+    internal fun isFieldEncrypted(value: String, key: ByteArray, table: String, recordId: String, fieldName: String): Boolean {
         if (!isEncryptedPayload(value)) return false
         return try {
             decryptField(value, key, table, recordId, fieldName)
@@ -309,6 +320,32 @@ object EncryptionService {
         } catch (e: Exception) {
             false
         }
+    }
+
+    /**
+     * Re-encryption sweep gate (B2-CRYPTO-10 phase-108 review fix, finding #2).
+     *
+     * True ONLY for genuine plaintext the sweep should stamp as a tagged AEAD
+     * payload (including a raw blank `""`). False in both directions that would
+     * falsify data at rest:
+     *  - an already-encrypted value (decryptable under its own AAD) is skipped —
+     *    re-running the sweep must not double-encrypt (idempotence);
+     *  - a value that is STRUCTURALLY a payload but fails authentication —
+     *    corrupt or transplanted ciphertext — is skipped and left byte-for-byte
+     *    intact, so the original plaintext-bytes-are-gone state is never buried
+     *    under a second "encryption" that pretends the garbage is real content.
+     *
+     * Callers must pass the record context from the row being swept (never a
+     * value under a wrong record/field AAD) — the whole point of the AAD binding.
+     */
+    internal fun shouldReencryptField(value: String, key: ByteArray, table: String, recordId: String, fieldName: String): Boolean {
+        // Structurally-encrypted value: never treated as plaintext. Whether it
+        // decrypts under its own AAD (already stamped — skip for idempotence) or
+        // fails auth (corrupt/transplanted — never bury the original bytes by
+        // re-encrypting garbage as if it were content), it is NOT a value for the
+        // sweep to re-stamp. Anything that is not structurally a payload is
+        // genuine plaintext, including a raw blank "".
+        return !isEncryptedPayload(value)
     }
 
     fun serializeStrokes(strokes: List<Stroke>): String {

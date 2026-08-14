@@ -152,4 +152,58 @@ class BlankFieldEncryptionTest {
         // A legacy raw blank carries no AAD binding and no tag — not a payload.
         assertFalse(EncryptionService.isFieldBoundToRecord("", dek, "pages", "REC_A", "extractedText"))
     }
+
+    // ---- phase-108 review fixes: the re-encryption sweep's gate ----
+
+    @Test
+    fun `sweep never re-encrypts an already-encrypted value`() {
+        val encrypted = EncryptionService.encryptField("content".toByteArray(), dek, "pages", "P1", "title")
+        // Already stamped (decryptable under its own AAD) -> skip, no double-encrypt.
+        assertFalse(
+            EncryptionService.shouldReencryptField(encrypted, dek, "pages", "P1", "title")
+        )
+    }
+
+    @Test
+    fun `sweep never re-encrypts a transplanted ciphertext as plaintext`() {
+        val encrypted = EncryptionService.encryptField("content".toByteArray(), dek, "pages", "P1", "title")
+        // Same bytes in a different record slot: structurally a payload, auth fails.
+        assertFalse(EncryptionService.isFieldEncrypted(encrypted, dek, "pages", "P2", "title"))
+        assertTrue(EncryptionService.isEncryptedPayload(encrypted))
+        // Gate must NOT treat the relocation as plaintext to re-stamp.
+        assertFalse(
+            EncryptionService.shouldReencryptField(encrypted, dek, "pages", "P2", "title")
+        )
+    }
+
+    @Test
+    fun `sweep never re-encrypts a corrupt payload as plaintext`() {
+        // Truncated versioned payload: keeps the version marker but is not a real payload.
+        val truncated = b64(ByteArray(14) { 1 })
+        assertTrue(EncryptionService.isEncryptedPayload(truncated))
+        assertFalse(EncryptionService.isFieldEncrypted(truncated, dek, "pages", "P1", "title"))
+        assertFalse(
+            EncryptionService.shouldReencryptField(truncated, dek, "pages", "P1", "title")
+        )
+        // Bytes zeroed to "" are NOT a payload — they are freshly stamped.
+        assertTrue(EncryptionService.shouldReencryptField("", dek, "pages", "P1", "title"))
+    }
+
+    @Test
+    fun `sweep re-encrypts genuine plaintext including blanks and legacy instructions`() {
+        // Raw blank "" (a zeroed column or a pre-fix write) -> stamp it.
+        assertTrue(EncryptionService.shouldReencryptField("", dek, "pages", "P1", "extractedText"))
+        // Long plaintext -> stamp it.
+        assertTrue(
+            EncryptionService.shouldReencryptField(
+                "legacy plaintext that was written before a master password existed",
+                dek, "pages", "P1", "extractedText"
+            )
+        )
+        // Legacy global-FIELD_AAD ciphertext is still a structural payload -> left
+        // for the AAD-binding pass, never re-encrypted as if it were plaintext.
+        val legacy = EncryptionService.encrypt("legacy".toByteArray(Charsets.UTF_8), dek)
+        assertTrue(EncryptionService.isEncryptedPayload(legacy))
+        assertFalse(EncryptionService.shouldReencryptField(legacy, dek, "strokes", "S1", "textContent"))
+    }
 }
