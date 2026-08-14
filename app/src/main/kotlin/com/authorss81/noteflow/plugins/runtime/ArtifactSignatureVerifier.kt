@@ -1,5 +1,6 @@
 package com.authorss81.noteflow.plugins.runtime
 
+import com.authorss81.noteflow.utils.ConstantTime
 import java.io.File
 import java.io.OutputStream
 import java.security.cert.X509Certificate
@@ -54,7 +55,14 @@ class ArtifactSignatureVerifier {
         }
         val sha256 = PluginDigest.sha256Hex(file)
             ?: return Result.Invalid("the downloaded artifact could not be read.")
-        if (!sha256.equals(expectedSha256.trim(), ignoreCase = true)) {
+        // B2-CRYPTO-02 (CWE-650): digests MUST be compared via the shared
+        // constant-time helper (ConstantTime.hexEqual → MessageDigest.isEqual),
+        // never String.equals, which exits on the first mismatching nibble.
+        // Case is normalized once here at the expected-digest parse boundary —
+        // PluginDigest.sha256Hex always emits lowercase — so ignoreCase is
+        // neither needed nor allowed at compare time.
+        val expected = expectedSha256.trim().lowercase()
+        if (!ConstantTime.hexEqual(sha256, expected)) {
             return Result.Invalid(
                 "SHA-256 mismatch — the artifact is corrupted or has been tampered with " +
                     "(expected $expectedSha256, got $sha256). It will not be loaded."

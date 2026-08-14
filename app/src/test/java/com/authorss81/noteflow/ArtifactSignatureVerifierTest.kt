@@ -145,4 +145,49 @@ class ArtifactSignatureVerifierTest {
         assertTrue(corrupted is ArtifactSignatureVerifier.Result.Invalid)
         assertTrue((corrupted as ArtifactSignatureVerifier.Result.Invalid).reason.contains("SHA-256"))
     }
+
+    @Test
+    fun `an uppercase expected digest is normalized at parse time and still verifies`() {
+        // B2-CRYPTO-02: case-insensitivity must come from ONE normalization at
+        // the expected-digest parse boundary, never from ignoreCase at compare
+        // time (the constant-time helper is byte-wise and case-sensitive).
+        val ks = TestArtifactBuilder.newKeystore(tmp.root, "upper-signer")
+        val artifact = TestArtifactBuilder.build(tmp.root, ks)
+
+        val result = verifier.verify(artifact.file, artifact.sha256Hex.uppercase(), artifact.pinnedCertHash)
+
+        assertTrue(
+            "verify -> ${(result as? ArtifactSignatureVerifier.Result.Invalid)?.reason}",
+            result is ArtifactSignatureVerifier.Result.Verified
+        )
+    }
+
+    @Test
+    fun `whitespace around the expected digest is trimmed once before the constant-time compare`() {
+        val ks = TestArtifactBuilder.newKeystore(tmp.root, "trim-signer")
+        val artifact = TestArtifactBuilder.build(tmp.root, ks)
+
+        val result = verifier.verify(artifact.file, "  ${artifact.sha256Hex} \n", artifact.pinnedCertHash)
+
+        assertTrue(
+            "verify -> ${(result as? ArtifactSignatureVerifier.Result.Invalid)?.reason}",
+            result is ArtifactSignatureVerifier.Result.Verified
+        )
+    }
+
+    @Test
+    fun `a digest differing only in the very last nibble is rejected`() {
+        // Review-level pin of the full-length compare: a tail-only difference
+        // (the nibble a prefix-short-circuiting String.equals would touch last)
+        // is still a hard SHA-256 mismatch.
+        val ks = TestArtifactBuilder.newKeystore(tmp.root, "tail-signer")
+        val artifact = TestArtifactBuilder.build(tmp.root, ks)
+        val other = if (artifact.sha256Hex.last() == '0') '1' else '0'
+        val tailFlipped = artifact.sha256Hex.dropLast(1) + other
+
+        val result = verifier.verify(artifact.file, tailFlipped, artifact.pinnedCertHash)
+
+        assertTrue(result is ArtifactSignatureVerifier.Result.Invalid)
+        assertTrue((result as ArtifactSignatureVerifier.Result.Invalid).reason.contains("SHA-256"))
+    }
 }

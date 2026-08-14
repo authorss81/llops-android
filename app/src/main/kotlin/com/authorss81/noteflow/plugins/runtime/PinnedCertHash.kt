@@ -1,6 +1,6 @@
 package com.authorss81.noteflow.plugins.runtime
 
-import java.security.MessageDigest
+import com.authorss81.noteflow.utils.ConstantTime
 import java.security.cert.X509Certificate
 import java.util.Base64
 
@@ -18,7 +18,9 @@ import java.util.Base64
  *    the SAME pin ([ArtifactSignatureVerifier]).
  *
  * The pin comes from the compile-time [PluginEntry.pinnedCertHash] — never from
- * the network and never user-editable. All comparisons are constant-time.
+ * the network and never user-editable. All comparisons are constant-time via the
+ * app-wide [`com.authorss81.noteflow.utils.ConstantTime`] helper (the base64
+ * alphabet is plain ASCII, so the US-ASCII byte encoding is byte-identical).
  */
 object PinnedCertHash {
 
@@ -30,11 +32,11 @@ object PinnedCertHash {
 
     /** True when [cert]'s hash matches [pin] (accepts `sha256/<b64>` or bare b64). */
     fun matches(cert: X509Certificate, pin: String): Boolean =
-        constantTimeEquals(base64Sha256(cert), stripPrefix(pin))
+        ConstantTime.hexEqual(base64Sha256(cert), stripPrefix(pin))
 
     /** True when an already-computed base64 hash matches [pin]. */
     fun matchesBase64(actualBase64: String, pin: String): Boolean =
-        constantTimeEquals(actualBase64, stripPrefix(pin))
+        ConstantTime.hexEqual(actualBase64, stripPrefix(pin))
 
     /**
      * Parse a `sha256/<base64>` pin into its 32 raw bytes, or null when
@@ -50,10 +52,4 @@ object PinnedCertHash {
 
     private fun stripPrefix(pin: String): String =
         if (pin.startsWith(PREFIX)) pin.removePrefix(PREFIX) else pin
-
-    private fun constantTimeEquals(a: String, b: String): Boolean =
-        MessageDigest.isEqual(
-            a.toByteArray(Charsets.UTF_8),
-            b.toByteArray(Charsets.UTF_8)
-        )
 }
