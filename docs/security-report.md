@@ -27,6 +27,100 @@
 
 ---
 
+## Findings summary
+
+**80 findings total** (40 Batch 1 + 40 Batch 2), from 10 parallel subagents.
+
+| Severity | Count |
+|----------|-------|
+| CRITICAL | 1 |
+| HIGH     | 11 |
+| MEDIUM   | 35 |
+| LOW      | 24 |
+| INFO     | 9  |
+| **Total**| **80** |
+
+Per area:
+- Batch 1 — Cryptography & key management (`b1-crypto`): 8
+- Batch 1 — Data-at-rest & DB (`b1-datarest`): 8
+- Batch 1 — Data-in-transit & network (`b1-net`): 9
+- Batch 1 — Android platform surface (`b1-platform`): 8
+- Batch 1 — App logic & auth (`b1-applogic`): 7
+- Batch 2 — Compose/UI + concurrency/TOCTOU (`b2-ui`): 6
+- Batch 2 — Dependencies/CVE/supply-chain (`b2-deps`): 6
+- Batch 2 — Logging/telemetry/info disclosure (`b2-log`): 7
+- Batch 2 — Resource-exhaustion/DoS (`b2-dos`): 11
+- Batch 2 — Crypto side-channels (`b2-crypto`): 10
+
+### Top risks (read this first)
+
+1. **CRITICAL — Downloadable-plugin integrity pins are attacker-defined.** The
+   Phase-24 update manifest (unpinned, unsigned, redirect-following HTTPS)
+   supplies `downloadUrl` + `sha256` + `pinnedCertHash` — the values every
+   verifier then trusts — so a single DNS/CA/MITM compromise of
+   `plugin-updates.inkflow.app` yields self-consistent, user-approved **arbitrary
+   code execution** in the app process (`B1-CRYPTO-01`, `B1-NET-03`).
+2. **HIGH — The vault key is obtainable without the password.** A non-user-
+   authenticated AndroidKeyStore copy of the DEK persists in prefs
+   (`B1-CRYPTO-02`), and the DB factory silently re-derives it on any open
+   (`B1-AUTH-02`). Root/forensic access or an in-process plugin recovers the DEK
+   with no credential. The "5-fail lockout" is UI-only theater for offline and
+   keystore-access attackers (`B1-CRYPTO-04`, `B1-PLAT-8`, `B1-AUTH-07`).
+3. **HIGH — Note bodies live in plaintext on disk.** Markdown/text notes are
+   persisted verbatim to `filesDir/noteflow/imports` (`B1-DB-4`, `B1-AUTH-06`),
+   voice notes are unencrypted `.m4a` (`B1-DB-3`), and whole-vault exports land
+   decrypted in public `/Download` (`B1-PLAT-3`) — the "encrypted at rest"
+   claim is a no-op for these classes.
+4. **HIGH — The lock boundary does not reach the data layer.** `lock()` zeroizes
+   the in-memory key but leaves the keyed SQLCipher connection open and lets
+   saves continue writing plaintext into encrypted columns (`B1-AUTH-02`,
+   `B2-UI-1`); plugin lifecycle hooks run before unlock (`B1-AUTH-03`) and plugin
+   bytecode has full classloader access to the vault (`B1-AUTH-01`).
+5. **HIGH — Network/export trust gaps.** Server-controlled WebDAV `href`s steer
+   Basic credentials to arbitrary hosts (`B1-NET-01`); LocalSend streams
+   plaintext notes to a self-announced fake receiver (`B1-NET-02`); HTTPS→HTTP
+   redirect downgrades defeat every "HTTPS only" guard (`B1-NET-05`); backup
+   files with weak (6-char) passwords + cleartext KDF headers travel to public
+   Downloads/WebDAV for offline cracking (`B2-CRYPTO-04`).
+6. **MEDIUM — Data-loss traps.** An over-broad corruption classifier quarantines
+   healthy vaults (`B1-DB-1`), migration deletes the original DB on any failure
+   (`B1-DB-2`), non-atomic salt/DEK prefs can brick the vault (`B1-CRYPTO-03`),
+   `getOrCreateDek` silently mints a new key (`B1-CRYPTO-05`), and plain-zip
+   restore accepts attacker-crafted DBs (`B1-DB-7`).
+7. **MEDIUM — DoS / resource exhaustion.** Unbounded stroke geometry
+   (`B2-DOS-01`), unbounded import/attachment/backup buffering (`B2-DOS-04/05/07`),
+   multi-layer PSD OOM (`B2-DOS-06`), voice-note O(n²) waveform (`B2-DOS-03`),
+   and full-vault re-decrypts per search/panel (`B2-DOS-02/11`).
+8. **MEDIUM — Supply-chain.** No Gradle dependency verification, unpinned Gradle
+   distribution, jsoup 1.17.2 behind a CVE fix, and release builds signed with
+   the debug keystore when `KEYSTORE_FILE` is unset (`B2-DEPS-01/03`, `B1-PLAT-1`).
+
+### Reconciliation notes (dedupe/merge)
+
+- Cross-batch overlaps were kept as complementary findings where each adds a
+  distinct angle, and cross-referenced inline:
+  - Plugin trust anchor: `B1-CRYPTO-01` (crypto/pin angle) + `B1-NET-03`
+    (network/redirect angle) + `B1-CRYPTO-08` (signer-set angle) — same root
+    cause, three attack surfaces; both blocks note the others.
+  - Lock/data-layer gap: `B1-AUTH-02` (read side) + `B2-UI-1` (write side) are
+    explicitly complementary, not duplicates.
+  - HMAC fail-open: `B1-CRYPTO-06` (re-baseline) + `B1-DB-6` (WAL gap + one-tap
+    disable) + `B2-CRYPTO-01` (non-constant-time compare) — three distinct
+    integrity-check flaws.
+  - Offline password brute-force: `B1-CRYPTO-04` (master password) +
+    `B1-PLAT-8` (min-length policy) + `B2-CRYPTO-04` (backup password) +
+    `B1-AUTH-07` (in-app oracle) — related but each has a distinct attack path.
+  - Plaintext note bodies: `B1-DB-4` + `B1-AUTH-06` cover the same root issue
+    (at-rest plaintext `imports/`); both retained with cross-references.
+- **Process note:** during Batch 2 one agent (b2-log, resumed) overwrote the
+  report file with a whole-file Write, destroying 33 findings that had not yet
+  been committed. The four affected agents re-appended their blocks via
+  append-only Edit, and the full 80-finding set was verified present and
+  committed. Lesson for later phases: subagents must append, never rewrite, a
+  shared report file.
+
+---
+
 ## Findings
 
 <!-- Subagents append findings below this line. Format:
@@ -465,10 +559,6 @@
 - **Exploit scenario:** A multi-file import (Obsidian/HTML zip, several share URIs) or an export runs on the HomeScreen `rememberCoroutineScope`. Triggering a lock (background, auto-lock, manual) disposes HomeScreen and cancels the coroutine at the next suspension point: a multi-entry import stops partway, leaving the already-`persistFile`d **plaintext note files in `imports/` whose DB page rows were never created** (orphaned plaintext corpus in app-private storage — same exposure class as B1-DB-4, but introduced by the cancellation race rather than the import design), and any not-yet-renamed output in Downloads remains while the UI reports nothing (the `onComplete`/snackbar never runs because the scope is dead). Single-file artifacts usually complete because blocking `File` I/O is not cancellation-cooperative, making the failure look silent and intermittent. Distinct from B1-DB-5 (zip-bomb caps) — this is lifecycle-cancellation TOCTOU.
 - **Fix:** Run imports/exports/restore on `viewModelScope` (survives composition teardown) with an explicit completion path that posts a snackbar via the `snackbarMessages` pipeline; in the import loop, delete the just-persisted source file if the `createPage` step was cancelled, so no orphaned plaintext files accumulate on lock.
 
----
-
-## Batch 2 — Dependencies / CVE / supply chain (agent b2-deps)
-
 ### [B2-DEPS-01] jsoup 1.17.2 is vulnerable to CVE-2026-71497 (XSS via cleaner misparse, fixed in 1.23.1) — confirmed CVE on the pinned version; vulnerable path not exercised
 - **Severity:** LOW
 - **Area:** Batch 2 · Dependencies / CVE / supply chain
@@ -516,10 +606,6 @@
 - **Evidence:** `gradle/libs.versions.toml` pins — SQLCipher `4.9.0` (`:16`): confirmed by Zetetic release notes (2025-05-15) to be the *security-patch* release that fixes the SQLite `CREATE TABLE` memory-error/DoS introduced in 3.40.0 (SQLCipher 4.5.4–4.8.0) — already the fixed version, and SQLCipher does not use TLS/DH so OpenSSL CVEs (CVE-2023-3446, CVE-2024-2511/4741/5535) do not apply. Coil `2.7.0` (`:11`) resolves OkHttp `4.12.0` (Coil commit "Bump okhttp from 4.11.0 to 4.12.0") which is NOT affected by CVE-2021-0341 (fixed in 4.9.2). Gson `2.11.0` (`:13`): no direct CVEs (CVE-2022-25647 is `< 2.8.9`; the Sonatype "CVE-2025-53864" hit is `sigstore-java`, not gson). Room `2.6.1` (`:9`), sqlite-ktx `2.4.0` (`:17`), commonmark `0.29.0` (`:18`), coroutines `1.9.0` (`:29`), ML Kit text-recognition `16.0.1` (`:19`) / translate `17.0.3` (`:24`), MediaPipe tasks-genai `0.10.25` (`:25`), biometric `1.1.0` (`:14`), AGP `8.7.3` (`:2`), Kotlin `2.0.21` (`:3`), Compose BOM `2024.12.01` (`:8`), navigation `2.8.5` (`:10`), lifecycle `2.8.7` (`:6`), activity `1.9.3` (`:7`): no public advisories found for these pinned versions (searched OSV/NVD/GitHub advisories).
 - **Exploit scenario:** No CVE is confirmed against any pinned version beyond B2-DEPS-01 (jsoup), so this is not an exploit claim — it is a maintenance-risk flag. Multiple core libs are 12–24 months behind current stable (Room → 2.7.x, Compose BOM → 2025/2026 stables, biometric 1.1.0 is from 2021, AGP 8.7.3 / Kotlin 2.0.21 / Gradle 8.13 predate later security-patch lines), so future advisories will land against these exact pins; each needs a bump review. License audit: AndroidX/AGP/Kotlin (Apache-2.0), Coil (Apache-2.0), Gson (Apache-2.0), jsoup (MIT), commonmark (BSD-2), SQLCipher (BSD-style/community), Lingua (Apache-2.0), ML Kit & MediaPipe (Apache-2.0) — no AGPL/commercial/proprietary deps found, no license-policy supply-chain risk. Release R8 minify confirmed ON (`app/build.gradle.kts:64`) which strips unused dependency code.
 - **Fix:** Establish a dependency-bump cadence (e.g., quarterly) and a CI advisory scanner (OSV-Scanner or Gradle `dependency-analysis` + `blockOnUnknown`); specifically plan Room 2.7+, Compose BOM 2026.x, biometric/fingerprint API migration, and re-baseline the BOM on the next AGP/Kotlin upgrade; keep SQLCipher, Gson, OkHttp, Coil as-is (no action until new advisories appear).
-
----
-
-## Batch 2 — Resource-exhaustion / DoS (agent b2-dos)
 
 ### [B2-DOS-01] Unbounded stroke geometry: no caps on stroke count or points-per-stroke at write or load → OOM / permanent jank when a page with millions of points is opened
 - **Severity:** HIGH
@@ -609,12 +695,6 @@
 - **Exploit scenario:** On a vault of thousands of notes, opening the Backlinks inspector / Knowledge Graph triggers O(notes × avg-note-KB) file I/O + regex scanning on the main-ish path every time the panel is opened; with a few large imported notes (each read via `getFullTextForPage` again) this is a multi-second freeze on 2-core devices, and it recomputes from scratch on every panel visit.
 - **Fix:** Cache computed backlinks/tag-hierarchy per unlock epoch, cap the scanned set (LIMIT), cache `getFullTextForPage` results in-memory (bounded), and bound the tag-tree recursion depth; run the builds on `Dispatchers.Default` with cancellation when the panel closes.
 
--->
-
----
-
-## Batch 2 — Crypto side-channels & edge cases (agent b2-crypto)
-
 ### [B2-CRYPTO-01] Tamper HMAC is compared with non-constant-time `String.equals` — a byte-by-byte timing oracle on the 256-bit checksum
 - **Severity:** LOW
 - **Area:** Batch 2 · Crypto side-channels & edge cases
@@ -694,5 +774,3 @@
 - **Evidence:** `createPage` stores an empty `extractedText` as the raw `""` string, not GCM (`NoteRepository.kt:358-362`); `saveStrokesForPage` stores blank text/points unencrypted (`NoteRepository.kt:551-563`); `isFieldEncrypted` returns `true` for ANY blank value (`NoteRepository.kt:150-151`), so `reencryptPlaintextFields` (`NoteRepository.kt:165-230`) permanently treats blank columns as already-encrypted and never touches them; all decrypt paths skip blanks (`NoteRepository.kt:449,460,609,800-802`). Malformed short inputs (< 12 bytes) throw `IllegalArgumentException` at `EncryptionService.kt:79` before any tag check.
 - **Exploit scenario:** An attacker who can zero a field's ciphertext column (the same write primitives as B2-CRYPTO-09) silently erases a note's title/body to "" — at the field layer this is indistinguishable from a legitimately-blank record (there is no tag for blanks), and it is displayed as an empty note rather than flagged as tampered. The `isBlank`-based classification also means an empty plaintext value is asserted to be "encrypted and fine", so any integrity-checking logic that relies on `isFieldEncrypted` gives a false pass for emptied fields. Combined with the WAL/un-checkpointed-file gap (B1-DB-6) and the fail-open HMAC (B1-CRYPTO-06), this removes field-granularity detection for blanking attacks. No confidentiality impact — integrity/hardening.
 - **Fix:** Encrypt empty strings as a real AEAD payload (AES-GCM of empty plaintext is a valid 28-byte ciphertext) so blanks carry a tag; replace the `isBlank` "encrypted?" probe with a structural format check (payload length ≥ 13 and version marker), never content-blankness; on any store, authenticate the full field row including its blank-ness.
-
--->
