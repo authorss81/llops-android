@@ -213,6 +213,17 @@ class LocalSendProtocolTest {
         assertTrue(LocalSendHashing.fingerprintsMatch(upper, lower))
     }
 
+    @Test
+    fun fingerprintsMatch_rejectsDifferencesBeyondTheFirstNibble() {
+        // Phase 102 (B2-CRYPTO-01): the fingerprint compare must not short-
+        // circuit on the first matching prefix — a flip deep in the hash is
+        // still a mismatch (constant-time full-pair compare).
+        val good = "AB:CD:EF01:2345:6789:ABCD:EF01:2345"
+        val nearLast = "AB:CD:EF01:2345:6789:ABCD:EF01:2344"
+        assertTrue(LocalSendHashing.fingerprintsMatch(good, good.replace(":", "").lowercase()))
+        assertFalse(LocalSendHashing.fingerprintsMatch(good, nearLast))
+    }
+
     // ---- Mime / base URL ----
 
     @Test

@@ -3,6 +3,7 @@ package com.authorss81.noteflow.services
 import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
+import com.authorss81.noteflow.utils.ConstantTime
 import java.io.File
 import java.security.KeyStore
 import javax.crypto.KeyGenerator
@@ -150,6 +151,10 @@ object DatabaseSecurityHelper {
             return true
         }
         val current = computeDatabaseHmac(context, getOrCreateHmacKey()) ?: return true
-        return stored == current
+        // B2-CRYPTO-01 (Phase 102): `==`/String.equals is an early-exit comparison
+        // that leaks the stored checksum via timing (CWE-650). Both sides are
+        // fixed-length lowercase hex, so ConstantTime.hexEqual runs a full-length
+        // MessageDigest.isEqual loop instead.
+        return ConstantTime.hexEqual(stored, current)
     }
 }

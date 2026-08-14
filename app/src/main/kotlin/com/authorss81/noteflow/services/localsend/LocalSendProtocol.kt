@@ -1,5 +1,6 @@
 package com.authorss81.noteflow.services.localsend
 
+import com.authorss81.noteflow.utils.ConstantTime
 import com.google.gson.Gson
 import com.google.gson.JsonSyntaxException
 import com.google.gson.annotations.SerializedName
@@ -250,7 +251,10 @@ object LocalSendHashing {
         if (announced.isNullOrBlank() || certSha256Hex.isNullOrBlank()) return false
         val a = announced.replace(":", "").lowercase()
         val b = certSha256Hex.replace(":", "").lowercase()
-        return a == b
+        // B2-CRYPTO-01 (Phase 102): certificate fingerprints are a pin-class
+        // secret — `==` leaks the value through the first-mismatch early exit
+        // (CWE-650). Both sides are normalized hex, so compare in constant time.
+        return ConstantTime.hexEqual(a, b)
     }
 }
 
