@@ -221,6 +221,36 @@ class SettingsManager(context: Context) {
         prefs.edit().putBoolean("plugin_ever_enabled_$pluginId", true).apply()
     }
 
+    fun clearPluginEverEnabled(pluginId: String) {
+        prefs.edit().remove("plugin_ever_enabled_$pluginId").apply()
+    }
+
+    // Phase 21: plugin store install state. A plugin that is NOT installed is
+    // "not downloaded" — its definition is bundled, but it is excluded from the
+    // active registry until the user installs it. Default (no key) = installed,
+    // so existing installs keep every bundled plugin (no migration needed).
+    fun isPluginUninstalled(pluginId: String): Boolean =
+        prefs.getBoolean("plugin_uninstalled_$pluginId", false)
+
+    fun setPluginUninstalled(pluginId: String, uninstalled: Boolean) {
+        prefs.edit().putBoolean("plugin_uninstalled_$pluginId", uninstalled).apply()
+    }
+
+    // Phase 21: COMPLETE removal of a plugin's persisted state. Removes the
+    // opt-in flag, the ever-enabled flag, the uninstalled flag and every
+    // namespaced `plugins.<id>.*` setting. Used by the store's Delete action
+    // (delete = gone + settings wiped; disable = off but re-enableable).
+    fun wipePluginState(pluginId: String) {
+        val prefix = "plugins.$pluginId."
+        val keys = prefs.all.keys.filter { key ->
+            key == "plugin_enabled_$pluginId" ||
+                key == "plugin_ever_enabled_$pluginId" ||
+                key == "plugin_uninstalled_$pluginId" ||
+                key.startsWith(prefix)
+        }
+        prefs.edit().apply { keys.forEach { remove(it) } }.apply()
+    }
+
     // Phase 11: per-plugin namespaced settings. Every key lives under
     // plugins.<id>.<key> (see PluginSettingKey) so two plugins never collide.
     fun getPluginSetting(pluginId: String, key: String): String? =

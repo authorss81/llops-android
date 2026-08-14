@@ -26,6 +26,12 @@ internal class InMemoryEnableStore : PluginEnableStore {
 
     override fun hasEverBeenEnabled(pluginId: String): Boolean = pluginId in ever
 
+    /** Matches production [PluginEnableStore.wipe]: off AND ever-enabled reset. */
+    override fun wipe(pluginId: String) {
+        state[pluginId] = false
+        ever.remove(pluginId)
+    }
+
     /** Simulate a previous session that left the plugin enabled in the store. */
     fun forceEnabled(pluginId: String) {
         state[pluginId] = true

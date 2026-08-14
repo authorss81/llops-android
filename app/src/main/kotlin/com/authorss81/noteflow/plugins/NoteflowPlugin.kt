@@ -95,6 +95,15 @@ interface NoteflowPlugin {
 
     /** Deep self-check for diagnostics; defaults to the availability gate. */
     fun selfCheck(context: Context?): PluginAvailability = availability(context)
+
+    /**
+     * Delete any downloaded assets/models this plugin keeps in app-private
+     * files (Phase 21 store "Delete" — delete = gone, assets wiped). Default
+     * no-op; plugins that download models (e.g. the assistant's GGUF) override
+     * to remove them so a deleted plugin truly leaves nothing behind. Runs on
+     * the caller's thread; keep it cheap and never throw into the store.
+     */
+    fun deleteDownloadedAssets(context: Context?) {}
 }
 
 /**

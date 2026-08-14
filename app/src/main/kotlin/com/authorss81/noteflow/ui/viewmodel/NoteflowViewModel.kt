@@ -52,7 +52,10 @@ import com.authorss81.noteflow.services.ImportExportService
 import com.authorss81.noteflow.services.SecurityService
 import com.authorss81.noteflow.services.SettingsManager
 import com.authorss81.noteflow.services.SettingsPluginEnableStore
+import com.authorss81.noteflow.services.SettingsPluginInstallStore
 import com.authorss81.noteflow.services.SettingsPluginSettingsStore
+import com.authorss81.noteflow.plugins.store.PluginStoreCatalog
+import com.authorss81.noteflow.plugins.store.PluginStoreController
 import com.authorss81.noteflow.theme.AppThemeMode
 import com.authorss81.noteflow.ui.components.WorkspaceTemplate
 import com.authorss81.noteflow.plugins.AndroidPluginLogger
@@ -80,13 +83,19 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     // and exception classes only — never content).
     private val pluginEnableStore = SettingsPluginEnableStore(settings)
     private val pluginSettingsStore = SettingsPluginSettingsStore(settings)
+    private val pluginInstallStore = SettingsPluginInstallStore(settings)
     val pluginRegistry = PluginRegistry(
         pluginEnableStore,
         pluginSettingsStore,
+        installStore = pluginInstallStore,
         logger = AndroidPluginLogger()
     )
     val pluginManager = PluginManager(pluginRegistry, AndroidPluginLogger())
     val pluginDiagnostics = PluginDiagnostics(pluginRegistry, pluginManager)
+
+    // Phase 21: plugin store — bundled catalog + install/uninstall lifecycle.
+    val pluginStoreCatalog = PluginStoreCatalog(pluginRegistry)
+    val pluginStoreController = PluginStoreController(pluginRegistry, pluginStoreCatalog, AndroidPluginLogger())
 
     init {
         // Fire onEnable once per process for plugins already enabled in a
@@ -104,10 +113,24 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     private val _pluginDiagnostics = MutableStateFlow<List<PluginDiagnostics.Entry>>(emptyList())
     val pluginDiagnosticsEntries: StateFlow<List<PluginDiagnostics.Entry>> = _pluginDiagnostics.asStateFlow()
 
+    // Phase 21: plugin store UI state (rows + per-plugin download progress/busy/messages).
+    private val _storeRows = MutableStateFlow<List<PluginStoreController.StoreRow>>(emptyList())
+    val storeRows: StateFlow<List<PluginStoreController.StoreRow>> = _storeRows.asStateFlow()
+
+    private val _storeProgress = MutableStateFlow<Map<String, Float>>(emptyMap())
+    val storeProgress: StateFlow<Map<String, Float>> = _storeProgress.asStateFlow()
+
+    private val _storeBusy = MutableStateFlow<Set<String>>(emptySet())
+    val storeBusy: StateFlow<Set<String>> = _storeBusy.asStateFlow()
+
+    private val _storeMessages = MutableStateFlow<Map<String, String>>(emptyMap())
+    val storeMessages: StateFlow<Map<String, String>> = _storeMessages.asStateFlow()
+
     private fun refreshPluginStates() {
         _pluginEnabledIds.value = pluginRegistry.allPlugins.associate { it.id to pluginRegistry.isEnabled(it.id) }
         _pluginStates.value = pluginRegistry.resolve(appContext)
         _pluginDiagnostics.value = pluginDiagnostics.snapshot(appContext)
+        _storeRows.value = pluginStoreController.rows(appContext)
     }
 
     /**
@@ -127,6 +150,66 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
             pluginDiagnostics.testNow(pluginId, appContext)
             withContext(Dispatchers.Main) { refreshPluginStates() }
         }
+    }
+
+    // ---- Phase 21: plugin store actions --------------------------------------
+
+    /**
+     * Store "Download": install the bundled plugin definition for [pluginId].
+     * Reports per-plugin progress; the plugin becomes available + registered on
+     * success (see PluginStoreController for the honest bundled-install
+     * semantics — no network, no APK loading).
+     */
+    fun storeDownload(pluginId: String) {
+        if (pluginId in _storeBusy.value) return
+        viewModelScope.launch {
+            _storeBusy.update { it + pluginId }
+            _storeProgress.update { it + (pluginId to 0f) }
+            _storeMessages.update { it - pluginId }
+            val outcome = pluginStoreController.download(pluginId, appContext) { progress ->
+                _storeProgress.update { it + (pluginId to progress) }
+            }
+            _storeBusy.update { it - pluginId }
+            when (outcome) {
+                is PluginStoreController.DownloadOutcome.Installed ->
+                    _storeMessages.update { it + (pluginId to "Downloaded — this plugin is now available.") }
+                is PluginStoreController.DownloadOutcome.Failed ->
+                    _storeMessages.update { it + (pluginId to outcome.message) }
+            }
+            refreshPluginStates()
+        }
+    }
+
+    /**
+     * Store "Delete": completely remove the plugin — its opt-in + namespaced
+     * settings are wiped and it is gone from the registry (distinct from
+     * disable, which keeps everything re-enableable). Destructive; the caller
+     * confirms first.
+     */
+    fun storeDelete(pluginId: String, onResult: (Boolean) -> Unit = {}) {
+        if (pluginId in _storeBusy.value) return
+        viewModelScope.launch(Dispatchers.Default) {
+            _storeBusy.update { it + pluginId }
+            _storeMessages.update { it - pluginId }
+            val outcome = pluginStoreController.delete(pluginId, appContext)
+            _storeBusy.update { it - pluginId }
+            when (outcome) {
+                is PluginStoreController.DeleteOutcome.Deleted ->
+                    _storeMessages.update { it + (pluginId to "Deleted — plugin and its settings were removed.") }
+                is PluginStoreController.DeleteOutcome.Failed ->
+                    _storeMessages.update { it + (pluginId to outcome.message) }
+            }
+            withContext(Dispatchers.Main) {
+                refreshPluginStates()
+                onResult(outcome is PluginStoreController.DeleteOutcome.Deleted)
+            }
+        }
+    }
+
+    /** Dismiss a store result/error message shown for [pluginId]. */
+    fun clearStoreMessage(pluginId: String) {
+        _storeMessages.update { it - pluginId }
+        _storeProgress.update { it - pluginId }
     }
 
     /**

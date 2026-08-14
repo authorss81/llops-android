@@ -79,12 +79,17 @@ object PaletteMath {
         // Brown = low-value warm hues (red/orange/yellow family with dark value).
         if (v < 0.38f && (h < 62f || h >= 335f)) return ColorFamily.BROWNS
         return when {
-            h < 10f || h >= 335f -> ColorFamily.REDS
-            h < 42f -> ColorFamily.ORANGES
+            h < 12f -> ColorFamily.REDS
+            h < 39f -> ColorFamily.ORANGES
             h < 62f -> ColorFamily.YELLOWS
             h < 180f -> ColorFamily.GREENS
             h < 255f -> ColorFamily.BLUES
             h < 290f -> ColorFamily.PURPLES
+            h < 340f -> ColorFamily.PINKS
+            // Deep roses (low-value, saturated) read as REDS; light roses
+            // (very high value) read as PINKS — matches the curated palette's
+            // own assignments for the ambiguous 340°–360° band.
+            v < 0.97f -> ColorFamily.REDS
             else -> ColorFamily.PINKS
         }
     }

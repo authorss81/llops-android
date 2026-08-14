@@ -78,3 +78,26 @@ sealed class PluginOrderResolution {
     /** A dependency cycle exists; no valid order exists for the listed plugins. */
     data class Cyclic(val pluginIds: List<String>) : PluginOrderResolution()
 }
+
+/**
+ * Result of installing a plugin at runtime — the plugin store's "Download"
+ * action (Phase 21). Download = install a COMPILED, bundled plugin definition
+ * (never runtime-loaded bytecode); on success the plugin becomes part of the
+ * active registry and can be enabled.
+ */
+sealed class PluginInstallResult {
+    /** The plugin is now installed and appears in the registry. */
+    data class Installed(val pluginId: String) : PluginInstallResult()
+
+    /** The install was refused; [reason] is user-facing. */
+    data class Refused(val pluginId: String, val reason: String) : PluginInstallResult()
+}
+
+/** Result of uninstalling a plugin — the plugin store's "Delete" action. */
+sealed class PluginUninstallResult {
+    /** The plugin is gone from the registry and its persisted state was wiped. */
+    data class Uninstalled(val pluginId: String) : PluginUninstallResult()
+
+    /** The uninstall was refused; [reason] is user-facing. */
+    data class Refused(val pluginId: String, val reason: String) : PluginUninstallResult()
+}

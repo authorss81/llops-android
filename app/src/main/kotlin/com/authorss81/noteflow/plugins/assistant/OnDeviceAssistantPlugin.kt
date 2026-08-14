@@ -164,6 +164,19 @@ class OnDeviceAssistantPlugin(
         platformEngine = null
     }
 
+    override fun deleteDownloadedAssets(context: Context?) {
+        val ctx = context ?: return
+        try {
+            modelFile(ctx)?.delete()
+            File(
+                ctx.filesDir,
+                "noteflow/assistant/${AssistantStoragePolicy.DEFAULT_MODEL_FILE_NAME}.part"
+            ).delete()
+        } catch (_: Throwable) {
+            // Never throw into the store; leftover bytes are harmless.
+        }
+    }
+
     // ---- internals ---------------------------------------------------------
 
     /** Shared generation path: model present? → load → generate → typed outcome. */

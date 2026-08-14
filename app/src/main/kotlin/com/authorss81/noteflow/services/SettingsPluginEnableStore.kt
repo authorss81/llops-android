@@ -19,4 +19,9 @@ class SettingsPluginEnableStore(
 
     override fun hasEverBeenEnabled(pluginId: String): Boolean =
         settings.hasPluginEverBeenEnabled(pluginId)
+
+    override fun wipe(pluginId: String) {
+        settings.setPluginEnabled(pluginId, false)
+        settings.clearPluginEverEnabled(pluginId)
+    }
 }

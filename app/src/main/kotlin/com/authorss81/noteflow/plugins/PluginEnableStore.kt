@@ -19,4 +19,14 @@ interface PluginEnableStore {
      * become true the first time [setEnabled] is called with `enabled = true`.
      */
     fun hasEverBeenEnabled(pluginId: String): Boolean
+
+    /**
+     * Completely remove this plugin's opt-in history (used by the store's
+     * Delete action — delete is "gone + settings wiped", unlike disable which
+     * keeps everything re-enableable). The plugin is left disabled AND its
+     * ever-enabled flag is reset, so a later re-install starts from REGISTERED.
+     */
+    fun wipe(pluginId: String) {
+        setEnabled(pluginId, false)
+    }
 }

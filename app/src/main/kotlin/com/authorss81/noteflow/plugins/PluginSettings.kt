@@ -16,6 +16,14 @@ interface PluginSettingsStore {
     fun getBoolean(pluginId: String, key: String, default: Boolean): Boolean
     fun setBoolean(pluginId: String, key: String, value: Boolean)
     fun containsKey(pluginId: String, key: String): Boolean
+
+    /**
+     * Remove EVERY namespaced setting a plugin owns (used by the store's Delete
+     * action). Implementations must clear all keys under `plugins.<id>.*`.
+     * Default no-op keeps existing implementations working; the in-memory and
+     * SharedPreferences stores implement it for real.
+     */
+    fun removeAll(pluginId: String) {}
 }
 
 /**
@@ -43,6 +51,11 @@ class InMemoryPluginSettingsStore : PluginSettingsStore {
     }
     override fun containsKey(pluginId: String, key: String): Boolean =
         values.containsKey(PluginSettingKey.key(pluginId, key))
+
+    override fun removeAll(pluginId: String) {
+        val prefix = PluginSettingKey.key(pluginId, "")
+        values.keys.filter { it.startsWith(prefix) }.forEach { values.remove(it) }
+    }
 }
 
 /**

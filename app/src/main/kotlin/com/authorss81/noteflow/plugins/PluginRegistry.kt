@@ -10,6 +10,7 @@ import com.authorss81.noteflow.plugins.langdetect.LanguageDetectionEngine
 import com.authorss81.noteflow.plugins.ocr.OnDeviceOcrPlugin
 import com.authorss81.noteflow.plugins.readaloud.OnDeviceReadAloudPlugin
 import com.authorss81.noteflow.plugins.screenshot.ScreenshotNotePluginImpl
+import com.authorss81.noteflow.plugins.store.PluginInstallStore
 import com.authorss81.noteflow.plugins.texttools.TextToolsEngine
 import com.authorss81.noteflow.plugins.translation.OnDeviceTranslationPlugin
 import com.authorss81.noteflow.plugins.webcapture.WebCaptureEngine
@@ -50,6 +51,11 @@ import com.authorss81.noteflow.plugins.websearch.DuckDuckGoWebSearchPlugin
  *
  * @param enableStore persistence for per-plugin opt-in.
  * @param settingsStore persistence for per-plugin (namespaced) settings.
+ * @param installStore persistence for the plugin store's install state (Phase 21).
+ *   A plugin whose install state is false is "not downloaded": it is excluded
+ *   from [allPlugins], enabling and capability routing until it is re-installed
+ *   via [installPlugin]. Defaults to a store where EVERY plugin is installed
+ *   (backward compatible — existing tests/callers keep every plugin active).
  * @param plugins the installed plugins (defaults to the built-in set).
  * @param currentApiLevel device API level used for manifest validation
  *   (injected for JVM testability; production passes Build.VERSION.SDK_INT).
@@ -59,19 +65,39 @@ class PluginRegistry(
     private val enableStore: PluginEnableStore,
     private val settingsStore: PluginSettingsStore = InMemoryPluginSettingsStore(),
     private val plugins: List<NoteflowPlugin> = defaultPlugins(),
+    private val installStore: PluginInstallStore = AllInstalledInstallStore,
     private val currentApiLevel: Int = Build.VERSION.SDK_INT,
     private val logger: PluginLogger = PluginLogger.NoOp
 ) {
 
-    private val byId: Map<String, NoteflowPlugin> = plugins.associateBy { it.id }
+    private val basePlugins = plugins
+
+    /** Plugins added at runtime via [installPlugin] (compiled, but not default). */
+    private val extraPlugins = mutableListOf<NoteflowPlugin>()
+
+    /** Every compiled plugin the app ships with, installed or not (Phase 21). */
+    val compiledPlugins: List<NoteflowPlugin> get() = basePlugins + extraPlugins
+
+    /** Plugins currently installed ("downloaded") — the active registry set. */
+    private fun activePlugins(): List<NoteflowPlugin> =
+        (basePlugins + extraPlugins).filter { installStore.isInstalled(it.id) }
+
+    private fun pluginById(id: String): NoteflowPlugin? =
+        activePlugins().firstOrNull { it.id == id }
 
     private val registrationOrder: Map<String, Int> = run {
         val seen = mutableSetOf<String>()
         val out = mutableMapOf<String, Int>()
-        plugins.forEachIndexed { index, p ->
+        basePlugins.forEachIndexed { index, p ->
             if (p.id !in seen) {
                 seen.add(p.id)
                 out[p.id] = index
+            }
+        }
+        extraPlugins.forEachIndexed { index, p ->
+            if (p.id !in seen) {
+                seen.add(p.id)
+                out[p.id] = basePlugins.size + index
             }
         }
         out
@@ -87,10 +113,10 @@ class PluginRegistry(
 
     init {
         val occurrences = mutableMapOf<String, MutableList<Int>>()
-        plugins.forEachIndexed { i, p -> occurrences.getOrPut(p.id) { mutableListOf() }.add(i) }
+        basePlugins.forEachIndexed { i, p -> occurrences.getOrPut(p.id) { mutableListOf() }.add(i) }
         val rejected = mutableSetOf<String>()
         val errors = mutableMapOf<String, List<String>>()
-        plugins.forEachIndexed { i, p ->
+        basePlugins.forEachIndexed { i, p ->
             val firstIndex = occurrences.getValue(p.id).first()
             if (firstIndex != i) {
                 rejected.add(p.id)
@@ -125,7 +151,7 @@ class PluginRegistry(
         val states = resolve(context)
         when (val resolution = resolveEnableOrder()) {
             is PluginOrderResolution.Success -> resolution.order.forEach { id ->
-                val plugin = byId[id] ?: return@forEach
+                val plugin = pluginById(id) ?: return@forEach
                 if (!enableStore.isEnabled(id)) return@forEach
                 val state = states[id]?.state
                 val canInit = state == PluginLifecycleState.AVAILABLE ||
@@ -151,7 +177,7 @@ class PluginRegistry(
     @Synchronized
     fun refreshAvailability(context: Context?) {
         availabilityCache.clear()
-        plugins.forEach { p ->
+        activePlugins().forEach { p ->
             availabilityCache[p.id] = containedAvailability(p, context)
         }
     }
@@ -167,7 +193,7 @@ class PluginRegistry(
      */
     @Synchronized
     fun setEnabled(pluginId: String, enabled: Boolean, context: Context? = null): PluginEnableResult {
-        val plugin = byId[pluginId]
+        val plugin = pluginById(pluginId)
         if (enabled) {
             val refusal = refusalReasonForEnable(pluginId, context)
             if (refusal != null) {
@@ -199,7 +225,7 @@ class PluginRegistry(
 
     /** Notify a plugin that one of its `plugins.<id>.<key>` settings changed. */
     fun notifyConfigChanged(pluginId: String, context: Context? = null) {
-        val plugin = byId[pluginId] ?: return
+        val plugin = pluginById(pluginId) ?: return
         try {
             plugin.onConfigChanged(context, pluginSettingsFor(plugin))
             logger.lifecycle("config-changed", pluginId, plugin.name)
@@ -208,10 +234,83 @@ class PluginRegistry(
         }
     }
 
+    // ---- store lifecycle (Phase 21) -----------------------------------------
+
+    /**
+     * Install a bundled plugin definition at runtime — the store's "Download".
+     *
+     * Honest semantics under the compile-time rule: this NEVER loads bytecode.
+     * For a plugin already in [basePlugins] (built-in, previously deleted by
+     * the user) it simply flips the persisted install state back on. For an
+     * OPTIONAL bundled plugin ([compiledPlugins] only) it validates the manifest
+     * (identical rules to [init] rejection) and activates the compiled instance.
+     * On success the plugin appears in [allPlugins], can be enabled, and is
+     * routable. No state surprises: a re-installed plugin starts REGISTERED
+     * (off), because Delete wiped its enable + settings.
+     */
+    @Synchronized
+    fun installPlugin(plugin: NoteflowPlugin, context: Context? = null): PluginInstallResult {
+        if (installStore.isInstalled(plugin.id)) {
+            return PluginInstallResult.Refused(plugin.id, "This plugin is already installed.")
+        }
+        if (plugin.id in rejectedIds || plugin.id in validationErrors) {
+            val errors = validationErrors[plugin.id]?.joinToString("; ") ?: "rejected"
+            return PluginInstallResult.Refused(plugin.id, "Cannot install: invalid manifest ($errors).")
+        }
+        if (plugin.id !in basePlugins.map { it.id }) {
+            val validation = PluginManifestValidator.validate(plugin.manifest, currentApiLevel)
+            if (validation is ManifestValidation.Invalid) {
+                return PluginInstallResult.Refused(
+                    plugin.id, "Cannot install: ${validation.errors.joinToString("; ")}."
+                )
+            }
+            extraPlugins.add(plugin)
+        }
+        installStore.setInstalled(plugin.id, true)
+        refreshAvailability(context)
+        logger.lifecycle("installed", plugin.id, plugin.name)
+        return PluginInstallResult.Installed(plugin.id)
+    }
+
+    /**
+     * Uninstall a plugin — the store's "Delete". Completely removes the plugin:
+     * its opt-in flag, ever-enabled flag and every namespaced `plugins.<id>.*`
+     * setting are wiped, runtime caches are dropped, any running resources are
+     * torn down (guarded onDisable), and the plugin becomes absent from
+     * [allPlugins] and capability routing until [installPlugin] re-installs it.
+     */
+    @Synchronized
+    fun uninstallPlugin(pluginId: String, context: Context? = null): PluginUninstallResult {
+        val plugin = pluginById(pluginId)
+            ?: return PluginUninstallResult.Refused(pluginId, "This plugin is not installed.")
+        if (enableStore.isEnabled(pluginId)) {
+            guardedOnDisable(plugin, context)
+        }
+        // Wipe opt-in history + every namespaced setting (delete, not disable).
+        enableStore.wipe(pluginId)
+        settingsStore.removeAll(pluginId)
+        // Drop per-process caches so a later re-install starts clean.
+        enabledNotified.remove(pluginId)
+        arbitrationDisabledNotified.remove(pluginId)
+        availabilityCache.remove(pluginId)
+        extraPlugins.removeAll { it.id == pluginId }
+        // Mark not installed AFTER the settings wipe (which also resets the
+        // shared store's uninstalled flag) so the two stay consistent.
+        installStore.setInstalled(pluginId, false)
+        refreshAvailability(context)
+        logger.lifecycle("uninstalled", pluginId, plugin.name)
+        return PluginUninstallResult.Uninstalled(pluginId)
+    }
+
     // ---- queries -----------------------------------------------------------
 
-    /** Every installed plugin, in registration order (including rejected). */
-    val allPlugins: List<NoteflowPlugin> get() = plugins
+    /** Every INSTALLED plugin, in registration order (including rejected ones).
+     *  Plugins the user deleted from the store are absent — they are bundled but
+     *  not installed (see [compiledPlugins] for the full compiled set). */
+    val allPlugins: List<NoteflowPlugin> get() = activePlugins()
+
+    /** Whether [pluginId] is currently installed ("downloaded") via the store. */
+    fun isInstalled(pluginId: String): Boolean = installStore.isInstalled(pluginId)
 
     /** Whether [pluginId] was rejected (invalid manifest / duplicate id). */
     fun isRejected(pluginId: String): Boolean = pluginId in rejectedIds
@@ -230,11 +329,11 @@ class PluginRegistry(
      * (regardless of enabled/available state).
      */
     fun pluginsForCapability(capability: PluginCapability): List<NoteflowPlugin> =
-        plugins.filter { it.id !in rejectedIds && capability in it.capabilities }
+        activePlugins().filter { it.id !in rejectedIds && capability in it.capabilities }
 
     /** Opted-in plugins that can run on this device/context (valid ones). */
     fun enabledPlugins(context: Context? = null): List<NoteflowPlugin> =
-        plugins.filter { it.id !in rejectedIds && enableStore.isEnabled(it.id) && containedAvailable(it, context) }
+        activePlugins().filter { it.id !in rejectedIds && enableStore.isEnabled(it.id) && containedAvailable(it, context) }
 
     /** Opted-in, device-available plugins that serve [capability]. */
     fun availablePlugins(capability: PluginCapability, context: Context? = null): List<NoteflowPlugin> =
@@ -268,7 +367,7 @@ class PluginRegistry(
         order.forEach { id ->
             states[id] = deriveState(id, context, conflicts, states, id in cyclic)
         }
-        plugins.forEach { p ->
+        activePlugins().forEach { p ->
             if (p.id !in states) states[p.id] = deriveState(p.id, context, conflicts, states, inCycle = false)
         }
         return states
@@ -321,7 +420,7 @@ class PluginRegistry(
      *  deterministic arbitration has just disabled as losers. */
     private fun disableNewlyArbitratedLosers(context: Context?) {
         computeConflictLosers(context).forEach { (loserId, _) ->
-            val loser = byId[loserId] ?: return@forEach
+            val loser = pluginById(loserId) ?: return@forEach
             if (enabledNotified.contains(loserId) && arbitrationDisabledNotified.add(loserId)) {
                 guardedOnDisable(loser, context)
                 logger.lifecycle("disabled-by-arbitration", loserId, loser.name)
@@ -338,11 +437,12 @@ class PluginRegistry(
 
     /** (full topo order incl. cycle members appended, set of cycle ids). */
     private fun computeOrdering(): Pair<List<String>, Set<String>> {
-        val valid = plugins.map { it.id }.filter { it !in rejectedIds }.toSet()
+        val active = activePlugins()
+        val valid = active.map { it.id }.filter { it !in rejectedIds }.toSet()
         val edges = mutableMapOf<String, MutableSet<String>>()
 
         // Plugin-dependency edges: `dep` must be derived before `dependent`.
-        plugins.forEach { p ->
+        active.forEach { p ->
             if (p.id !in valid) return@forEach
             p.manifest.dependencies.filter { it in valid }.forEach { d ->
                 edges.getOrPut(d) { mutableSetOf() }.add(p.id)
@@ -352,10 +452,10 @@ class PluginRegistry(
         // capability must be derived before the plugin requiring it, so the
         // serving plugin's derived state is available when we evaluate the
         // requirement. (Cycles introduced here are caught below.)
-        plugins.forEach { p ->
+        active.forEach { p ->
             if (p.id !in valid) return@forEach
             p.manifest.requiresCapabilities.forEach { cap ->
-                plugins.forEach { o ->
+                active.forEach { o ->
                     if (o.id != p.id && o.id in valid && cap in o.capabilities) {
                         edges.getOrPut(o.id) { mutableSetOf() }.add(p.id)
                     }
@@ -388,10 +488,11 @@ class PluginRegistry(
      * registration). Returns `loserId → winnerId`.
      */
     private fun computeConflictLosers(context: Context?): Map<String, String> {
+        val active = activePlugins()
         val losers = mutableMapOf<String, String>()
-        val caps = plugins.flatMap { it.capabilities }.toSet().filter { it.exclusive }
+        val caps = active.flatMap { it.capabilities }.toSet().filter { it.exclusive }
         caps.forEach { cap ->
-            val candidates = plugins.filter { p ->
+            val candidates = active.filter { p ->
                 p.id !in rejectedIds &&
                     cap in p.capabilities &&
                     enableStore.isEnabled(p.id) &&
@@ -419,7 +520,7 @@ class PluginRegistry(
         states: Map<String, PluginStateInfo>,
         inCycle: Boolean
     ): PluginStateInfo {
-        val plugin = byId[id] ?: return PluginStateInfo(
+        val plugin = pluginById(id) ?: return PluginStateInfo(
             id, id, PluginLifecycleState.REJECTED, "unknown plugin id", SemanticVersion(0, 0, 0),
             enabled = false, availableOnDevice = false, depsResolved = false, conflictWinnerId = null
         )
@@ -436,7 +537,7 @@ class PluginRegistry(
         }
         val conflictWinner = conflicts[id]
         if (conflictWinner != null) {
-            val winnerName = byId[conflictWinner]?.name ?: conflictWinner
+            val winnerName = pluginById(conflictWinner)?.name ?: conflictWinner
             return PluginStateInfo(
                 id, plugin.name, PluginLifecycleState.DISABLED,
                 "Disabled by arbitration: conflicts with '$winnerName' for a shared exclusive capability.",
@@ -499,7 +600,7 @@ class PluginRegistry(
      */
     private fun firstDependencyIssue(plugin: NoteflowPlugin, states: Map<String, PluginStateInfo>): String? {
         for (depId in plugin.manifest.dependencies) {
-            val dep = byId[depId]
+            val dep = pluginById(depId)
             if (dep == null) return "Requires plugin '$depId' which is not installed."
             if (depId in rejectedIds) return "Requires plugin '${dep.name}' which was rejected."
             val depState = states[depId]
@@ -511,7 +612,7 @@ class PluginRegistry(
         for (cap in plugin.manifest.requiresCapabilities) {
             val served = states.any { (otherId, st) ->
                 otherId != plugin.id && st.state == PluginLifecycleState.AVAILABLE &&
-                    cap in (byId[otherId]?.capabilities ?: emptySet())
+                    cap in (pluginById(otherId)?.capabilities ?: emptySet())
             }
             if (!served) return "Requires an available plugin serving '${cap.label}'."
         }
@@ -520,18 +621,18 @@ class PluginRegistry(
 
     /** Reason to refuse enabling [pluginId], or null when it can be enabled. */
     private fun refusalReasonForEnable(pluginId: String, context: Context?): String? {
-        val plugin = byId[pluginId] ?: return "Unknown plugin '$pluginId'."
+        val plugin = pluginById(pluginId) ?: return "Unknown plugin '$pluginId'."
         if (pluginId in rejectedIds) {
             return "Cannot enable: invalid manifest (${validationErrors[pluginId]?.joinToString("; ") ?: "rejected"})."
         }
         for (depId in plugin.manifest.dependencies) {
-            val dep = byId[depId]
+            val dep = pluginById(depId)
             if (dep == null) return "Cannot enable: requires plugin '$depId' which is not installed."
             if (depId in rejectedIds) return "Cannot enable: requires plugin '${dep.name}' which was rejected."
             if (!enableStore.isEnabled(depId)) return "Cannot enable: requires plugin '${dep.name}' — enable it first."
         }
         for (cap in plugin.manifest.requiresCapabilities) {
-            val serving = plugins.any { other ->
+            val serving = activePlugins().any { other ->
                 other.id != pluginId && other.id !in rejectedIds && enableStore.isEnabled(other.id) &&
                     cap in other.capabilities && containedAvailable(other, context)
             }
@@ -539,7 +640,7 @@ class PluginRegistry(
         }
         for (cap in plugin.capabilities) {
             if (!cap.exclusive) continue
-            val rivals = plugins.filter { other ->
+            val rivals = activePlugins().filter { other ->
                 other.id != pluginId && other.id !in rejectedIds && enableStore.isEnabled(other.id) &&
                     cap in other.capabilities && containedAvailable(other, context)
             }
@@ -585,4 +686,15 @@ class PluginRegistry(
             ScreenshotNotePluginImpl()
         )
     }
+}
+
+/**
+ * Default [PluginInstallStore] used when a registry is constructed without one:
+ * every plugin counts as installed, preserving the pre-store behaviour
+ * (Phase 21 backward compatibility — existing callers/tests keep every plugin
+ * active without opting into the store lifecycle).
+ */
+private object AllInstalledInstallStore : PluginInstallStore {
+    override fun isInstalled(pluginId: String): Boolean = true
+    override fun setInstalled(pluginId: String, installed: Boolean) {}
 }

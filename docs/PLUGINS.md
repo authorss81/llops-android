@@ -57,6 +57,8 @@ Everything lives in `com.authorss81.noteflow.plugins`:
 | `readaloud/…` | Read Aloud (Phase 16) — platform TTS + pure `TtsChunkSplitter` (fenced code verbatim, prose sentence-packed) + `ReadAloudPolicy` (quiet-mode refusal). Serves `ReadAloud`. |
 | `translation/…` | Translation (Phase 16) — ML Kit `translate` (keyless, API 26+) + pure `TranslationCatalog` (28 targets, source auto-detection via Lingua). Serves `Translation` (exclusive). |
 | `assistant/…` | On-Device Assistant (Phase 16) — MediaPipe `tasks-genai` (Qwen2-0.5B GGUF, user-downloaded) + pure `AssistantPrompts`/`AssistantStoragePolicy` + `AssistantModelDownloader`. Serves `Assistant` (exclusive). |
+| `store/…` | The Plugin Store (Phase 21) — `PluginInstallStore`, `PluginStoreCatalog`, `PluginStoreController` (bundled-definition install/uninstall lifecycle; no network catalog, no APK loading). |
+| `CaseChangePlugin.kt` | The store's OPTIONAL plugin (Phase 21) — UPPER/lower/Title Case TextTransform; NOT in `defaultPlugins()`, downloaded from the store. |
 | `screenshot/…` | Screenshot→Note (Phase 16) — reuses the existing annotated-page renderer + persist + OCR route; pure `ScreenshotFlowPlanner`. Serves `ScreenshotNote`. |
 
 Supporting pieces outside the framework package:
@@ -393,6 +395,57 @@ default, and individually toggleable in Settings → Plugins.
   OCR"); success opens the new note via the existing page-open path.
 - **Tests:** `ScreenshotFlowTest` (7 tests — mode + OCR-decision logic).
 
+## Plugin Store — install/uninstall lifecycle (Phase 21)
+
+The **Plugin Store** (HomeScreen ⋮ menu → **Plugin Store**) adds a full
+install/uninstall lifecycle ON TOP of the compile-time registry. It is honest
+about the "no dynamic APK loading" rule:
+
+- Every catalog entry is a **bundled definition already inside the APK** —
+  there is no network catalog and Download never fetches an APK or needs the
+  network. The store degrades gracefully offline by construction.
+- **Download** installs a bundled *definition*: for a previously-deleted
+  built-in it flips the persisted install state back on; for an *optional*
+  plugin (e.g. **Case Converter**, `CaseChangePlugin`) it activates a compiled
+  instance. Progress is reported (0f → 1f) and the install runs off the main
+  thread, but nothing is ever loaded from outside the app.
+- **Delete** removes a plugin **completely**: downloaded assets are deleted
+  (e.g. the assistant's 398 MB on-device GGUF via `deleteDownloadedAssets`),
+  the opt-in flag, ever-enabled history and every `plugins.<id>.*` setting are
+  wiped, and the plugin disappears from the registry, enabling and capability
+  routing until re-downloaded. Re-download starts fresh from `REGISTERED` (off).
+- **Disable / Enable** are the ordinary opt-in lifecycle and **keep all data** —
+  re-enabling restores the plugin's settings.
+
+State machine per catalog entry: `Not downloaded → Download → REGISTERED (off)
+→ Enable → ENABLED/AVAILABLE → Disable → DISABLED (data kept) → … → Delete →
+Not downloaded (wiped)`.
+
+Where the pieces live:
+
+| File | Purpose |
+|------|---------|
+| `plugins/store/PluginInstallStore.kt` | Install-state persistence seam (`isInstalled`/`setInstalled`) + in-memory impl for tests. |
+| `plugins/store/PluginStoreCatalog.kt` | Bundled catalog: every compiled plugin + the optional store-only `CaseChangePlugin` entry (with category, capability, permission, install-size metadata). |
+| `plugins/store/PluginStoreController.kt` | Pure-JVM lifecycle: `rows()`, `download()` (bundled-definition install, progress, never throws), `delete()` (assets + settings + registry). |
+| `services/SettingsPluginInstallStore.kt` | Production install store over `SettingsManager` (`plugin_uninstalled_<id>`, default installed → backward compatible). |
+| `PluginRegistry.installPlugin/uninstallPlugin` | The registry-level install/uninstall (guarded `onDisable`, cache drop, `compiledPlugins` vs `activePlugins()`). |
+| `ui/components/PluginStoreDialog.kt` | The store UI (status line, Download progress, Enable/Disable/Delete, delete confirmation). |
+| `NoteflowViewModel` | Store rows/progress/busy/messages `StateFlow`s + `storeDownload`/`storeDelete`/`clearStoreMessage`. |
+
+Default behaviour is unchanged for anything that does not opt in: a `PluginRegistry`
+constructed without an install store uses `AllInstalledInstallStore`, so every
+plugin counts as installed (pre-store behaviour). The production ViewModel passes
+`SettingsPluginInstallStore`, and the store's optional plugins only appear when
+the user downloads them.
+
+**Tests:** `PluginStoreLifecycleTest` (pure JVM) covers the full lifecycle —
+built-ins installed by default, download → available + routable, disable keeps
+data, deleted plugin wiped + skipped by routing, re-download starts `REGISTERED`,
+refused double-download / unknown-delete. `PluginExecutionSimulationTest` proves
+the end-to-end execution path (ROT13 round-trip, OCR via injected engine,
+export routing, disabled-skip).
+
 ## Adding a NEW plugin
 
 1. Read `docs/PLUGIN_SDK.md` (the authoring contract) **first**.
@@ -400,7 +453,11 @@ default, and individually toggleable in Settings → Plugins.
    `com.authorss81.noteflow.plugins`, with a valid manifest and honest
    `availability()`.
 3. Add it to `PluginRegistry.defaultPlugins()` — that single list is the whole
-   discovery mechanism (compile-time only; no dynamic APK loading, ever).
+   discovery mechanism (compile-time only; no dynamic APK loading, ever). For a
+   plugin the user must explicitly download, instead add it to the store as an
+   OPTIONAL bundled definition (`PluginStoreCatalog` optional entry +
+   `createInstance`) and — if it downloads model/assets on install — implement
+   `NoteflowPlugin.deleteDownloadedAssets` so Delete frees them.
 4. It is now visible in Settings → Plugins (with its derived state, reason,
    version and "Test now"), off by default, and automatically reachable from
    every feature wired to its capability.
@@ -424,6 +481,11 @@ default, and individually toggleable in Settings → Plugins.
 
 - **Compile-time registration only.** No runtime-loaded APK plugins. No
   `ServiceLoader`/reflection surprises — the `defaultPlugins()` list is the API.
+  The Plugin Store installs bundled *definitions*, never bytecode.
+- **Delete ≠ disable.** Disable keeps data (re-enableable); Delete wipes opt-in,
+  ever-enabled history and all `plugins.<id>.*` settings, deletes downloaded
+  assets, and removes the plugin from the registry until re-download (which
+  starts fresh, off).
 - **No new third-party dependencies** in the framework package.
 - **Opt-in by default.** `SettingsManager.isPluginEnabled` defaults to `false`.
 - **Derived state is never stale.** `resolve()` recomputes availability, deps and

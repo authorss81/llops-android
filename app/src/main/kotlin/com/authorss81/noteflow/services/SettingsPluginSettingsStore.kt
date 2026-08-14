@@ -35,4 +35,8 @@ class SettingsPluginSettingsStore(
 
     override fun containsKey(pluginId: String, key: String): Boolean =
         settings.hasPluginSetting(pluginId, key)
+
+    override fun removeAll(pluginId: String) {
+        settings.wipePluginState(pluginId)
+    }
 }

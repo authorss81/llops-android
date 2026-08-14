@@ -73,6 +73,7 @@ fun HomeScreen(
     var showSecurityDialog by remember { mutableStateOf(false) }
     var showUpdateDialog by remember { mutableStateOf(false) }
     var showPluginsDialog by remember { mutableStateOf(false) }
+    var showPluginStoreDialog by remember { mutableStateOf(false) }
     var showBackupPasswordDialog by remember { mutableStateOf(false) }
     var showLegacyRestoreConfirmDialog by remember { mutableStateOf(false) }
     var pendingRestoreBytes by remember { mutableStateOf<ByteArray?>(null) }
@@ -443,6 +444,7 @@ fun HomeScreen(
                             onOpenSecurity = { showSecurityDialog = true },
                             onOpenUpdate = { showUpdateDialog = true },
                             onOpenPlugins = { showPluginsDialog = true },
+                            onOpenPluginStore = { showPluginStoreDialog = true },
                             onOpenLocalSend = { showLocalSendDialog = true },
                             onOpenWebCapture = { showWebCaptureDialog = true },
                             onOpenWebDavSync = { showWebDavDialog = true },
@@ -1079,6 +1081,13 @@ fun HomeScreen(
             PluginSettingsDialog(
                 viewModel = viewModel,
                 onDismiss = { showPluginsDialog = false }
+            )
+        }
+
+        if (showPluginStoreDialog) {
+            PluginStoreDialog(
+                viewModel = viewModel,
+                onDismiss = { showPluginStoreDialog = false }
             )
         }
 
@@ -2316,6 +2325,7 @@ private fun MaintenanceMenu(
     onOpenSecurity: () -> Unit,
     onOpenUpdate: () -> Unit,
     onOpenPlugins: () -> Unit = {},
+    onOpenPluginStore: () -> Unit = {},
     onBackup: () -> Unit,
     onRestore: () -> Unit,
     onExportObsidianVault: () -> Unit = {},
@@ -2385,6 +2395,11 @@ private fun MaintenanceMenu(
                 text = { Text("Plugins") },
                 leadingIcon = { Icon(Icons.Outlined.Extension, contentDescription = null) },
                 onClick = { expanded = false; onOpenPlugins() }
+            )
+            DropdownMenuItem(
+                text = { Text("Plugin Store") },
+                leadingIcon = { Icon(Icons.Outlined.Storefront, contentDescription = null) },
+                onClick = { expanded = false; onOpenPluginStore() }
             )
             DropdownMenuItem(
                 text = { Text("App Version & Updates") },
