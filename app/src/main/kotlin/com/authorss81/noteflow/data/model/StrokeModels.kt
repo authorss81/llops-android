@@ -110,6 +110,34 @@ data class PointF(
     }
 }
 
+/**
+ * Phase 27: render-time color effect modes for strokes. The per-point color of a
+ * non-SOLID stroke is DERIVED at render time from the stroke's stored mode + seed
+ * (see [BrushColorModeMath]) — never stored per point — so existing persistence
+ * (mode + seed round-trip through the stroke's serialized payload) is unchanged.
+ */
+enum class StrokeColorMode(val persistenceKey: String) {
+    SOLID("SOLID"),
+    RAINBOW("RAINBOW"),
+    GRADIENT("GRADIENT"),
+    SHIMMER("SHIMMER");
+
+    val label: String
+        get() = when (this) {
+            SOLID -> "Solid"
+            RAINBOW -> "Rainbow"
+            GRADIENT -> "Gradient"
+            SHIMMER -> "Shimmer"
+        }
+
+    val isMultiColor: Boolean
+        get() = this != SOLID
+
+    companion object {
+        fun fromKey(key: String?): StrokeColorMode = entries.firstOrNull { it.persistenceKey == key } ?: SOLID
+    }
+}
+
 data class Stroke(
     val id: String,
     val tool: StrokeTool = StrokeTool.PEN,
@@ -123,7 +151,12 @@ data class Stroke(
     val pdfPage: Int = 0,
     val timestampMs: Long? = null,
     val isAdvanced: Boolean = false,
-    val layerId: String? = null
+    val layerId: String? = null,
+    // Phase 27: render-time color mode + seed (see StrokeColorMode). Defaults keep
+    // every pre-phase-27 stroke (and every call site that does not opt in) identical.
+    val colorMode: StrokeColorMode = StrokeColorMode.SOLID,
+    val colorSeed: Int = 0,
+    val gradientToColorInt: Int? = null
 ) {
     val color: Color
         get() = Color(colorInt)

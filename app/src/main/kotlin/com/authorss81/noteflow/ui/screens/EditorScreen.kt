@@ -109,6 +109,13 @@ fun EditorScreen(
     }
     var currentColor by remember { mutableStateOf(Color(0xFF1B365D)) }
     var currentWidth by remember { mutableFloatStateOf(4f) }
+    // Phase 27: multi-color brush modes (RAINBOW / GRADIENT / SHIMMER). The mode +
+    // seed + optional gradient end color persist ON each stroke and the per-point
+    // color is re-derived at render time. The seed is refreshed per stroke at draw
+    // start (onDrawingStart) so every multi-color stroke begins at a different hue.
+    var currentColorMode by remember { mutableStateOf(StrokeColorMode.SOLID) }
+    var currentColorSeed by remember { mutableIntStateOf(0) }
+    var currentGradientToColor by remember { mutableStateOf(Color(0xFF1B365D)) }
     var template by remember { mutableStateOf(page.template ?: "blank") }
     var strokes by remember { mutableStateOf<List<Stroke>>(emptyList()) }
     var stickyNotes by remember { mutableStateOf<List<CanvasStickyNote>>(emptyList()) }
@@ -1418,11 +1425,20 @@ fun EditorScreen(
                 },
                 onColorSampled = { sampledColor ->
                     currentColor = sampledColor
+                    // Eyedropper returns a concrete pixel color → back to SOLID (a
+                    // reasonable default the user can re-override with a mode chip).
+                    if (currentColorMode.isMultiColor) {
+                        currentColorMode = StrokeColorMode.SOLID
+                        viewModel.showSnackbar("Eyedropper sampled a solid color")
+                    }
                     if (sampledColor !in customPalette) {
                         customPalette = customPalette + sampledColor
                     }
                 },
                 onDrawingStart = {
+                    if (currentColorMode.isMultiColor) {
+                        currentColorSeed = (Math.random() * 360).toInt()
+                    }
                     toolbarState = FloatingToolbarState.HIDDEN_DRAWING
                 },
                 onDrawingEnd = {
@@ -1448,7 +1464,10 @@ fun EditorScreen(
                 activeBrushPresetId = activeBrushPresetId,
                 eraserMode = eraserMode,
                 vibrancyEnabled = vibrancyEnabled,
-                vibrancyBoostLevel = vibrancyBoostLevel
+                vibrancyBoostLevel = vibrancyBoostLevel,
+                currentColorMode = currentColorMode,
+                currentColorSeed = currentColorSeed,
+                currentGradientToColor = currentGradientToColor
             )
 
             // Voice note failure banner (real recorder/playback errors — no silent fakes)
@@ -1608,10 +1627,33 @@ fun EditorScreen(
                 palette = customPalette,
                 advancedBrushesEnabled = advancedBrushesEnabled,
                 savedSwatches = paletteItems.filter { it.type == "SWATCH" },
+                currentColorMode = currentColorMode,
+                currentGradientToColor = currentGradientToColor,
                 onColorSelect = { color ->
+                    // Picking a concrete solid color → SOLID mode (multi-color modes
+                    // are re-engaged explicitly via the mode chips).
                     currentColor = color
+                    currentColorMode = StrokeColorMode.SOLID
                     activePresetId = null
                     activeCustomPresetId = null
+                },
+                onColorModeChange = { mode, baseColor, gradientTo ->
+                    currentColorMode = mode
+                    when (mode) {
+                        StrokeColorMode.SOLID -> currentColor = baseColor
+                        StrokeColorMode.RAINBOW, StrokeColorMode.SHIMMER -> {
+                            currentColor = baseColor
+                            currentColorSeed = (Math.random() * 360).toInt()
+                        }
+                        StrokeColorMode.GRADIENT -> {
+                            currentColor = baseColor
+                            currentGradientToColor = gradientTo ?: baseColor
+                        }
+                    }
+                },
+                onGradientToColorSelect = { gradientTo ->
+                    currentGradientToColor = gradientTo
+                    currentColorMode = StrokeColorMode.GRADIENT
                 },
                 onSaveSwatch = { color ->
                     viewModel.insertPaletteItem(
@@ -2414,7 +2456,11 @@ private fun ColorPickerBottomSheet(
     palette: List<Color>,
     advancedBrushesEnabled: Boolean,
     savedSwatches: List<PaletteItemEntity>,
+    currentColorMode: StrokeColorMode = StrokeColorMode.SOLID,
+    currentGradientToColor: Color = currentColor,
     onColorSelect: (Color) -> Unit,
+    onColorModeChange: (StrokeColorMode, Color, Color?) -> Unit = { _, _, _ -> },
+    onGradientToColorSelect: (Color) -> Unit = {},
     onSaveSwatch: (Color) -> Unit,
     onDeleteSwatch: (String) -> Unit,
     onDismiss: () -> Unit
@@ -2603,7 +2649,99 @@ private fun ColorPickerBottomSheet(
                             )
                         }
                     }
-                    Spacer(modifier = Modifier.height(16.dp))
+Spacer(modifier = Modifier.height(16.dp))
+
+            // Phase 27: multi-color brush mode chips. Selecting RAINBOW/SHIMMER keeps
+            // the current base color (rainbow/shimmer re-derive hue/value from it),
+            // GRADIENT additionally shows a second-color row below.
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                StrokeColorMode.entries.forEach { mode ->
+                    val selected = currentColorMode == mode
+                    FilterChip(
+                        selected = selected,
+                        onClick = {
+                            if (selected) {
+                                onColorModeChange(StrokeColorMode.SOLID, currentColor, currentGradientToColor)
+                            } else {
+                                onColorModeChange(mode, currentColor, currentGradientToColor)
+                            }
+                        },
+                        label = {
+                            Text(
+                                text = mode.label,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = when {
+                                    mode == StrokeColorMode.RAINBOW -> Color(0xFFE91E5A)
+                                    mode == StrokeColorMode.GRADIENT -> Color(0xFF2F80ED)
+                                    mode == StrokeColorMode.SHIMMER -> Color(0xFF9C27B0)
+                                    else -> LocalContentColor.current
+                                }
+                            )
+                        },
+                        leadingIcon = if (mode.isMultiColor) {
+                            {
+                                Box(
+                                    modifier = Modifier
+                                        .size(14.dp)
+                                        .clip(CircleShape)
+                                        .background(
+                                            when (mode) {
+                                                StrokeColorMode.RAINBOW -> Brush.sweepGradient(
+                                                    listOf(Color.Red, Color.Yellow, Color.Green, Color.Cyan, Color.Blue, Color.Magenta, Color.Red)
+                                                )
+                                                StrokeColorMode.GRADIENT -> Brush.linearGradient(listOf(currentColor, currentGradientToColor))
+                                                StrokeColorMode.SHIMMER -> Brush.linearGradient(listOf(Color.White, currentColor, Color.White))
+                                                else -> androidx.compose.ui.graphics.SolidColor(currentColor)
+                                            }
+                                        )
+                                )
+                            }
+                        } else null
+                    )
+                }
+            }
+
+            if (currentColorMode == StrokeColorMode.GRADIENT) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = "Gradient end",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.weight(1f))
+                    // Gradient end swatch opens the mini recent-color row pick.
+                    val gradientCandidates = remember(currentColor) {
+                        listOf(currentColor) +
+                            com.authorss81.noteflow.services.PaletteCatalog.curated
+                            .map { Color(it.argb) }
+                            .filter { it != currentColor }
+                            .distinctBy { it.toArgb() }
+                            .take(10)
+                    }
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        items(gradientCandidates, key = { it.toArgb() }) { candidate ->
+                            ColorSwatch(
+                                color = candidate,
+                                isSelected = candidate.toArgb() == currentGradientToColor.toArgb(),
+                                size = 34.dp,
+                                onClick = { onGradientToColorSelect(candidate) }
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
                 }
 
                 if (savedSwatches.isNotEmpty()) {

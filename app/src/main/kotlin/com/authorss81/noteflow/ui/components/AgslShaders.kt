@@ -102,8 +102,16 @@ object AgslShaders {
                 }
             }
             
-            // Hardness uniform applied to falloff transition
-            float falloff = smoothstep(1.0, uHardness, normDist);
+            // Hardness uniform applied to falloff transition. Phase 27: the band is
+            // guaranteed at least ~1.5px wide in PIXEL space (capped at half the
+            // radius) so hard brushes (high uHardness) never alias into a sub-pixel
+            // ring at small widths. `min(uHardness, …)` keeps the soft-brush look
+            // unchanged (wide band) while forcing a real penumbra for hard brushes.
+            // Mirrors BrushColorModeMath.edgeFeather — the two MUST stay in sync.
+            float minFeatherPx = 1.5;
+            float bandWidth = min(minFeatherPx, uBrushRadius * 0.5);
+            float bandStart = min(uHardness, 1.0 - bandWidth / uBrushRadius);
+            float falloff = smoothstep(1.0, bandStart, normDist);
             
             // Cold press paper grain granulation modifier (stable value noise, seeded per stroke
             // via uSeed in hash21 plus a per-stroke field offset from uStrokeSeed so the grain

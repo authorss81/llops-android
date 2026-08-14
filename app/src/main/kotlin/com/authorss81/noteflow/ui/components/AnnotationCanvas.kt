@@ -141,7 +141,13 @@ fun AnnotationCanvas(
     // surviving segments) + render-time vibrancy/saturation boost (0 = off).
     eraserMode: com.authorss81.noteflow.services.EraserMode = com.authorss81.noteflow.services.EraserMode.STROKE,
     vibrancyEnabled: Boolean = false,
-    vibrancyBoostLevel: Float = 0f
+    vibrancyBoostLevel: Float = 0f,
+    // Phase 27: multi-color brush effects. The CURRENT mode/seed/end-color flow
+    // into new strokes (preview + commit); committed strokes re-derive their
+    // color from the mode + seed stored ON the stroke itself.
+    currentColorMode: com.authorss81.noteflow.data.model.StrokeColorMode = com.authorss81.noteflow.data.model.StrokeColorMode.SOLID,
+    currentColorSeed: Int = 0,
+    currentGradientToColor: Color = Color(0xFF1B365D)
 ) {
     val vibrancyBoost = if (vibrancyEnabled) vibrancyBoostLevel.coerceIn(0f, 1f) else 0f
     var internalZoomScale by remember { mutableFloatStateOf(zoomScale) }
@@ -364,25 +370,67 @@ fun AnnotationCanvas(
     }
 
     // Color sampling helper for Eyedropper tool
+    // Phase 27: samples the ACTUAL rendered pixel (stroked ink composited over the
+    // page background) instead of guessing via a loose point-in-+18px radius. The
+    // inverse screen->canvas transform (divide by zoom) lives in
+    // EyedropperSamplingMath so tests can prove it round-trips exactly.
     fun sampleColorAt(canvasOffset: Offset, targetPage: Int): Color {
+        val pageTopY = calculatePageYOffset(targetPage)
         val rawBmp = activeRawBitmapMap[targetPage]
+
+        var baseArgb: Int? = null
         if (rawBmp != null && !rawBmp.isRecycled) {
-            val scale = pageWidthPx / rawBmp.width.toFloat()
-            val bx = (canvasOffset.x / scale).toInt().coerceIn(0, rawBmp.width - 1)
-            val py = canvasOffset.y - calculatePageYOffset(targetPage)
-            val by = (py / scale).toInt().coerceIn(0, rawBmp.height - 1)
-            try {
-                val pixel = rawBmp.getPixel(bx, by)
-                return Color(pixel)
-            } catch (e: Exception) {
-                // Ignore safe bounds fallback
+            val px = com.authorss81.noteflow.services.EyedropperSamplingMath.canvasToPagePixel(
+                canvasX = canvasOffset.x,
+                canvasY = canvasOffset.y,
+                pageTopY = pageTopY,
+                pageWidthPx = pageWidthPx,
+                pageHeightPx = pageHeightPx,
+                bitmapWidth = rawBmp.width,
+                bitmapHeight = rawBmp.height
+            )
+            if (px != null) {
+                try {
+                    baseArgb = rawBmp.getPixel(px.first, px.second)
+                } catch (e: Exception) {
+                    // ignore and fall back to paper
+                }
             }
         }
-        val hitStroke = activeStrokeList.lastOrNull { strokeContainsPoint(it, canvasOffset) }
-        if (hitStroke != null) {
-            return hitStroke.color
+        if (baseArgb == null) {
+            baseArgb = try {
+                android.graphics.Color.parseColor(paperColorHex)
+            } catch (e: Exception) {
+                0xFF1B365D.toInt()
+            }
         }
-        return Color(0xFF1B365D)
+
+        val threshold = 6f
+        val hit = activeStrokeList.lastOrNull { stroke ->
+            if (stroke.pdfPage != targetPage) return@lastOrNull false
+            val samplePoints = stroke.points + listOfNotNull(stroke.start, stroke.end)
+            com.authorss81.noteflow.services.EyedropperSamplingMath.distanceToPolyline(
+                samplePoints, canvasOffset.x, canvasOffset.y
+            ) <= (stroke.width / 2f + threshold)
+        }
+
+        if (hit != null && hit.points.isNotEmpty()) {
+            val idx = com.authorss81.noteflow.services.EyedropperSamplingMath.nearestIndex(
+                hit.points, canvasOffset.x, canvasOffset.y
+            )
+            val progress = com.authorss81.noteflow.services.BrushColorModeMath.strokeProgress(hit.points, idx)
+            val derivedArgb = com.authorss81.noteflow.services.BrushColorModeMath.colorForProgress(
+                hit.colorMode,
+                hit.colorInt,
+                progress,
+                hit.colorSeed,
+                hit.gradientToColorInt ?: com.authorss81.noteflow.services.BrushColorModeMath.complementaryArgb(hit.colorInt)
+            )
+            val effAlpha = com.authorss81.noteflow.services.EyedropperSamplingMath.approximateStrokeAlpha(hit.tool.name, 1f)
+            val overWithAlpha = (effAlpha * 255).toInt().coerceIn(0, 255) shl 24 or (derivedArgb and 0xFFFFFF)
+            return Color(com.authorss81.noteflow.services.EyedropperSamplingMath.composite(baseArgb, overWithAlpha))
+        }
+        return Color(baseArgb)
     }
 
     val surfaceColor = MaterialTheme.colorScheme.surface
@@ -807,6 +855,11 @@ fun AnnotationCanvas(
                                     val tool = currentTool
                                     val colorInt = currentColor.toArgb()
                                     val width = currentWidth
+                                    // Phase 27: capture the current color mode/seed/end so the
+                                    // committed stroke carries them (render-time re-derivation).
+                                    val commitColorMode = currentColorMode
+                                    val commitColorSeed = currentColorSeed
+                                    val commitGradientTo = currentGradientToColor.toArgb()
 
                                     coroutineScope.launch(kotlinx.coroutines.Dispatchers.Default) {
                                         val candidateStroke = Stroke(
@@ -820,7 +873,10 @@ fun AnnotationCanvas(
                                             pdfPage = targetPage,
                                             timestampMs = if (tool == StrokeTool.LASER) System.currentTimeMillis() else if (isVoiceRec) elapsedMs else null,
                                             isAdvanced = advBrushes,
-                                            layerId = actLayerId ?: "layer_default"
+                                            layerId = actLayerId ?: "layer_default",
+                                            colorMode = commitColorMode,
+                                            colorSeed = commitColorSeed,
+                                            gradientToColorInt = commitGradientTo
                                         )
                                         val isWetOrFleeting = tool == StrokeTool.LASER || com.authorss81.noteflow.services.BrushStrokeMath.isWetRenderedTool(tool)
                                         val stylePreservingTool = tool == StrokeTool.DOTTED || tool == StrokeTool.NEON ||
@@ -1196,6 +1252,23 @@ fun AnnotationCanvas(
             ) {
                 val activeInkRenderer = if (advancedBrushesEnabled) inkRenderer else null
 
+                // Phase 27: the AGSL wet-mixing shader takes a single color uniform, so
+                // for multi-color modes we feed it the color derived at the CURRENT brush
+                // position — the live preview sweeps the rainbow/gradient as it draws,
+                // and the committed stroke re-derives its own per-point colors.
+                val wetEffectColor = if (currentColorMode.isMultiColor && activePoints.isNotEmpty()) {
+                    val progress = com.authorss81.noteflow.services.BrushColorModeMath.strokeProgress(activePoints, activePoints.size - 1)
+                    Color(
+                        com.authorss81.noteflow.services.BrushColorModeMath.colorForProgress(
+                            currentColorMode,
+                            currentColor.toArgb(),
+                            progress,
+                            currentColorSeed,
+                            currentGradientToColor.toArgb()
+                        )
+                    )
+                } else currentColor
+
                 if (!isContinuousMode) {
                     // Single Page Canvas
                     drawPaperCard(0f, 0f, size.width, size.height, paperColor = parsedPaperColor, isDarkPaper = isDarkPaper)
@@ -1229,7 +1302,10 @@ fun AnnotationCanvas(
                             start = activeStart,
                             end = activeEnd,
                             pdfPage = pdfPageFilter,
-                            isAdvanced = advancedBrushesEnabled
+                            isAdvanced = advancedBrushesEnabled,
+                            colorMode = currentColorMode,
+                            colorSeed = currentColorSeed,
+                            gradientToColorInt = currentGradientToColor.toArgb()
                         )
                     } else null
                     drawCompositedLayersStrokes(
@@ -1251,7 +1327,7 @@ fun AnnotationCanvas(
                         graphicsLayer = graphicsLayer,
                         wetMixingEffect = wetMixingEffect,
                         currentTool = currentTool,
-                        currentColor = currentColor,
+                        currentColor = wetEffectColor,
                         currentWidth = currentWidth,
                         activePoints = activePoints,
                         activeStart = activeStart,
@@ -1282,7 +1358,10 @@ fun AnnotationCanvas(
                             start = activeStart,
                             end = activeEnd,
                             pdfPage = activeTargetPage,
-                            isAdvanced = advancedBrushesEnabled
+                            isAdvanced = advancedBrushesEnabled,
+                            colorMode = currentColorMode,
+                            colorSeed = currentColorSeed,
+                            gradientToColorInt = currentGradientToColor.toArgb()
                         )
                     } else null
                     drawCompositedLayersStrokes(
@@ -1304,7 +1383,7 @@ fun AnnotationCanvas(
                         graphicsLayer = graphicsLayer,
                         wetMixingEffect = wetMixingEffect,
                         currentTool = currentTool,
-                        currentColor = currentColor,
+                        currentColor = wetEffectColor,
                         currentWidth = currentWidth,
                         activePoints = activePoints,
                         activeStart = activeStart,
@@ -1371,18 +1450,21 @@ fun AnnotationCanvas(
                         // 3. Render Strokes belonging to this page
                         val pageStrokes = activeStrokeList.filter { it.pdfPage == pageIdx }
                         val previewStroke = if (activeTargetPage == pageIdx && (activePoints.isNotEmpty() || (activeStart != null && activeEnd != null))) {
-                            Stroke(
-                                id = "preview",
-                                tool = currentTool,
-                                colorInt = currentColor.toArgb(),
-                                width = currentWidth,
-                                points = activePoints,
-                                start = activeStart,
-                                end = activeEnd,
-                                pdfPage = pageIdx,
-                                isAdvanced = advancedBrushesEnabled
-                            )
-                        } else null
+Stroke(
+                            id = "preview",
+                            tool = currentTool,
+                            colorInt = currentColor.toArgb(),
+                            width = currentWidth,
+                            points = activePoints,
+                            start = activeStart,
+                            end = activeEnd,
+                            pdfPage = pageIdx,
+                            isAdvanced = advancedBrushesEnabled,
+                            colorMode = currentColorMode,
+                            colorSeed = currentColorSeed,
+                            gradientToColorInt = currentGradientToColor.toArgb()
+                        )
+                    } else null
                         drawCompositedLayersStrokes(
                             strokes = pageStrokes,
                             previewStroke = previewStroke,
@@ -1402,7 +1484,7 @@ fun AnnotationCanvas(
                             graphicsLayer = graphicsLayer,
                             wetMixingEffect = wetMixingEffect,
                             currentTool = currentTool,
-                            currentColor = currentColor,
+                            currentColor = wetEffectColor,
                             currentWidth = currentWidth,
                             activePoints = activePoints,
                             activeStart = activeStart,
@@ -2470,6 +2552,61 @@ private fun DrawScope.drawWetLayerPass(
     }
 }
 
+/**
+ * Phase 27: smooth nib-style ribbon rendering for CALLIGRAPHIC / CHISEL_MARKER.
+ * Each segment quad is extended [RibbonJoinMath.QUAD_OVERLAP] of the nib half-width
+ * PAST every interior vertex, a cap circle of [RibbonJoinMath.VERTEX_CAP_FACTOR] *
+ * half-width is stamped at each interior vertex, and round caps (half-width circles)
+ * close both ends. Together these eliminate the concave inside-notch and needle
+ * outside-corner that adjacent nib quads used to pinch at sharp turns (the coverage
+ * invariant is unit-tested in RibbonJoinMathTest). [perPointColor] supplies a
+ * per-segment color for the multi-color modes; when null every quad uses [color].
+ */
+private fun DrawScope.drawRibbonStroke(
+    pts: List<PointF>,
+    offsetY: Float,
+    nibHalfX: Float,
+    nibHalfY: Float,
+    color: Color,
+    perPointColor: ((Int) -> Color)? = null
+) {
+    if (pts.isEmpty()) return
+    if (pts.size == 1) {
+        drawCircle(
+            perPointColor?.invoke(0) ?: color,
+            radius = sqrt(nibHalfX * nibHalfX + nibHalfY * nibHalfY),
+            center = Offset(pts.first().x, pts.first().y + offsetY)
+        )
+        return
+    }
+    val hw = sqrt(nibHalfX * nibHalfX + nibHalfY * nibHalfY)
+    if (hw < 1e-3f) return
+    val overlap = com.authorss81.noteflow.services.RibbonJoinMath.QUAD_OVERLAP * hw
+    val capR = com.authorss81.noteflow.services.RibbonJoinMath.VERTEX_CAP_FACTOR * hw
+    val colFor: (Int) -> Color = { i ->
+        perPointColor?.invoke(i) ?: color
+    }
+    for (i in 1 until pts.size) {
+        val p0 = pts[i - 1]
+        val p1 = pts[i]
+        val start = com.authorss81.noteflow.services.RibbonJoinMath.extendBeyond(p1.x, p1.y, p0.x, p0.y, overlap)
+        val end = com.authorss81.noteflow.services.RibbonJoinMath.extendBeyond(p0.x, p0.y, p1.x, p1.y, overlap)
+        val path = Path().apply {
+            moveTo(start.first - nibHalfX, start.second - nibHalfY + offsetY)
+            lineTo(end.first - nibHalfX, end.second - nibHalfY + offsetY)
+            lineTo(end.first + nibHalfX, end.second + nibHalfY + offsetY)
+            lineTo(start.first + nibHalfX, start.second + nibHalfY + offsetY)
+            close()
+        }
+        drawPath(path = path, color = colFor(i))
+    }
+    for (i in 1 until pts.size - 1) {
+        drawCircle(colFor(i), radius = capR, center = Offset(pts[i].x, pts[i].y + offsetY))
+    }
+    drawCircle(colFor(0), radius = hw, center = Offset(pts[0].x, pts[0].y + offsetY))
+    drawCircle(colFor(pts.size - 1), radius = hw, center = Offset(pts.last().x, pts.last().y + offsetY))
+}
+
 private fun DrawScope.drawSingleStroke(
     stroke: Stroke,
     offsetY: Float,
@@ -2526,6 +2663,36 @@ private fun DrawScope.drawSingleStroke(
     }
     val strokeWidth = stroke.width
 
+    // Phase 27: multi-color render-time color effects. The per-point color is
+    // DERIVED from the stroke's stored colorMode + seed (+ optional gradient end
+    // color) via BrushColorModeMath — never stored per point. The derivations
+    // below share the same helpers the AGSL wet path uses so both render paths
+    // agree. Textured tools (pencil, airbrush, watercolor, …) cannot carry a
+    // per-point sweep through a single-color BitmapShader today; for those the
+    // derived color is sampled at the stroke's mid-progress (honest limitation —
+    // see docs/phase-27.md). Vibrancy boosts the base/end colors only; the
+    // per-point sweep is never re-boosted.
+    val isMultiColor = stroke.colorMode.isMultiColor
+    val gradientEndArgb = stroke.gradientToColorInt
+        ?: com.authorss81.noteflow.services.BrushColorModeMath.complementaryArgb(baseColor.toArgb())
+    val colorAlphaMul = when (stroke.tool) {
+        StrokeTool.HIGHLIGHTER -> 0.35f
+        StrokeTool.MARKER -> 0.42f
+        StrokeTool.PENCIL -> 0.82f
+        StrokeTool.AIRBRUSH -> 0.35f
+        StrokeTool.SPLATTER, StrokeTool.SMUDGE -> 0.65f
+        else -> 1f
+    }
+    fun derivedColorAt(progress: Float): Color {
+        val argb = com.authorss81.noteflow.services.BrushColorModeMath.colorForProgress(
+            stroke.colorMode, baseColor.toArgb(), progress, stroke.colorSeed, gradientEndArgb
+        )
+        val c = Color(argb)
+        return if (colorAlphaMul < 1f) c.copy(alpha = c.alpha * colorAlphaMul) else c
+    }
+    fun derivedColorAtPoint(points: List<PointF>, i: Int): Color =
+        derivedColorAt(com.authorss81.noteflow.services.BrushColorModeMath.strokeProgress(points, i))
+
     when (stroke.tool) {
         StrokeTool.PEN, StrokeTool.HIGHLIGHTER -> {
             if (renderOpts.velocityModulated && stroke.tool == StrokeTool.PEN && stroke.points.size > 1) {
@@ -2538,7 +2705,7 @@ private fun DrawScope.drawSingleStroke(
                     val vel = com.authorss81.noteflow.services.BrushStrokeMath.segmentVelocity(p1, p2)
                     val dynamicWidth = (strokeWidth * com.authorss81.noteflow.services.BrushStrokeMath.velocityWidthFactor(vel, renderOpts.velocityIntensity)).coerceAtLeast(0.75f)
                     drawLine(
-                        color = color,
+                        color = if (isMultiColor) derivedColorAtPoint(pts, i + 1) else color,
                         start = Offset(p1.x, p1.y + offsetY),
                         end = Offset(p2.x, p2.y + offsetY),
                         strokeWidth = dynamicWidth,
@@ -2547,32 +2714,48 @@ private fun DrawScope.drawSingleStroke(
                 }
             } else if (stroke.points.size > 1) {
                 // Quadratic Bezier Curve Path Smoothing for silky smooth pen ink
-                val path = Path().apply {
+                if (isMultiColor) {
+                    // Phase 27: a per-point sweep needs segment-level color, so the
+                    // multi-color modes render as dense round-capped segments instead
+                    // of a single smoothed path. Round caps keep it visually smooth.
                     val pts = stroke.points
-                    moveTo(pts[0].x, pts[0].y + offsetY)
-                    if (pts.size == 2) {
-                        lineTo(pts[1].x, pts[1].y + offsetY)
-                    } else {
-                        val firstMidX = (pts[0].x + pts[1].x) / 2f
-                        val firstMidY = (pts[0].y + pts[1].y) / 2f + offsetY
-                        lineTo(firstMidX, firstMidY)
-                        for (i in 1 until pts.size - 1) {
-                            val p1 = pts[i]
-                            val p2 = pts[i + 1]
-                            val midX = (p1.x + p2.x) / 2f
-                            val midY = (p1.y + p2.y) / 2f + offsetY
-                            quadraticTo(p1.x, p1.y + offsetY, midX, midY)
-                        }
-                        lineTo(pts.last().x, pts.last().y + offsetY)
+                    for (i in 0 until pts.size - 1) {
+                        drawLine(
+                            color = derivedColorAtPoint(pts, i + 1),
+                            start = Offset(pts[i].x, pts[i].y + offsetY),
+                            end = Offset(pts[i + 1].x, pts[i + 1].y + offsetY),
+                            strokeWidth = strokeWidth,
+                            cap = StrokeCap.Round
+                        )
                     }
+                } else {
+                    val path = Path().apply {
+                        val pts = stroke.points
+                        moveTo(pts[0].x, pts[0].y + offsetY)
+                        if (pts.size == 2) {
+                            lineTo(pts[1].x, pts[1].y + offsetY)
+                        } else {
+                            val firstMidX = (pts[0].x + pts[1].x) / 2f
+                            val firstMidY = (pts[0].y + pts[1].y) / 2f + offsetY
+                            lineTo(firstMidX, firstMidY)
+                            for (i in 1 until pts.size - 1) {
+                                val p1 = pts[i]
+                                val p2 = pts[i + 1]
+                                val midX = (p1.x + p2.x) / 2f
+                                val midY = (p1.y + p2.y) / 2f + offsetY
+                                quadraticTo(p1.x, p1.y + offsetY, midX, midY)
+                            }
+                            lineTo(pts.last().x, pts.last().y + offsetY)
+                        }
+                    }
+                    drawPath(
+                        path = path,
+                        color = color,
+                        style = DrawStrokeStyle(width = strokeWidth, cap = StrokeCap.Round, join = StrokeJoin.Round)
+                    )
                 }
-                drawPath(
-                    path = path,
-                    color = color,
-                    style = DrawStrokeStyle(width = strokeWidth, cap = StrokeCap.Round, join = StrokeJoin.Round)
-                )
             } else if (stroke.points.size == 1) {
-                drawCircle(color, radius = strokeWidth / 2f, center = Offset(stroke.points.first().x, stroke.points.first().y + offsetY))
+                drawCircle(if (isMultiColor) derivedColorAt(1f) else color, radius = strokeWidth / 2f, center = Offset(stroke.points.first().x, stroke.points.first().y + offsetY))
             }
         }
         StrokeTool.FOUNTAIN_PEN -> {
@@ -2596,7 +2779,7 @@ private fun DrawScope.drawSingleStroke(
                         (strokeWidth * (1.7f - (dist / 14f).coerceIn(0f, 1.1f))).coerceAtLeast(1f)
                     }
                     drawLine(
-                        color = color,
+                        color = if (isMultiColor) derivedColorAtPoint(pts, i) else color,
                         start = Offset(p1.x, p1.y + offsetY),
                         end = Offset(p2.x, p2.y + offsetY),
                         strokeWidth = dynamicWidth,
@@ -2604,11 +2787,11 @@ private fun DrawScope.drawSingleStroke(
                     )
                 }
             } else if (stroke.points.size == 1) {
-                drawCircle(color, radius = strokeWidth / 2f, center = Offset(stroke.points.first().x, stroke.points.first().y + offsetY))
+                drawCircle(if (isMultiColor) derivedColorAt(1f) else color, radius = strokeWidth / 2f, center = Offset(stroke.points.first().x, stroke.points.first().y + offsetY))
             }
         }
         StrokeTool.PENCIL -> {
-            val pencilColor = color.copy(alpha = 0.82f)
+            val pencilColor = if (isMultiColor) derivedColorAt(0.5f) else color.copy(alpha = 0.82f)
             val nativeCanvas = drawContext.canvas.nativeCanvas
             BrushTextureEngine.drawTexturedStrokePath(
                 nativeCanvas = nativeCanvas,
@@ -2638,7 +2821,7 @@ private fun DrawScope.drawSingleStroke(
                 points = stampPoints,
                 offsetY = offsetY,
                 baseSize = strokeWidth * 2.5f,
-                color = color.copy(alpha = 0.35f),
+                color = if (isMultiColor) derivedColorAt(0.5f) else color.copy(alpha = 0.35f),
                 textureType = BrushTextureEngine.TextureType.AIRBRUSH_SPRAY,
                 spacingFactor = 0.2f,
                 scatterFactor = 0.35f,
@@ -2652,12 +2835,13 @@ private fun DrawScope.drawSingleStroke(
             val oPressure = meanPointPressure(stroke.points)
             val oSpread = com.authorss81.noteflow.services.BrushStrokeMath.bristleSpreadFactor(oPressure, 1f)
             val oPigment = com.authorss81.noteflow.services.BrushStrokeMath.pigmentFromPressure(oPressure)
+            val oColor = if (isMultiColor) derivedColorAt(0.5f) else color
             BrushTextureEngine.drawTexturedStrokePath(
                 nativeCanvas = nativeCanvas,
                 points = stroke.points,
                 offsetY = offsetY,
                 strokeWidth = strokeWidth * 1.3f * oSpread,
-                color = color.copy(alpha = (color.alpha * 0.9f * oPigment).coerceIn(0.6f, 1.0f)),
+                color = oColor.copy(alpha = (oColor.alpha * 0.9f * oPigment).coerceIn(0.6f, 1.0f)),
                 textureType = BrushTextureEngine.TextureType.CANVAS_WEAVE,
                 seed = com.authorss81.noteflow.services.BrushStrokeMath.strokeSeedFromId(stroke.id)
             )
@@ -2668,12 +2852,13 @@ private fun DrawScope.drawSingleStroke(
             val wPressure = meanPointPressure(stroke.points)
             val wSpread = com.authorss81.noteflow.services.BrushStrokeMath.bristleSpreadFactor(wPressure, 1f)
             val wPigment = com.authorss81.noteflow.services.BrushStrokeMath.pigmentFromPressure(wPressure)
+            val wColor = if (isMultiColor) derivedColorAt(0.5f) else color
             BrushTextureEngine.drawTexturedStrokePath(
                 nativeCanvas = nativeCanvas,
                 points = stroke.points,
                 offsetY = offsetY,
                 strokeWidth = strokeWidth * 1.5f * wSpread,
-                color = color.copy(alpha = (color.alpha * 0.60f * (0.75f + 0.25f * wPigment)).coerceIn(0.2f, 0.85f)),
+                color = wColor.copy(alpha = (wColor.alpha * 0.60f * (0.75f + 0.25f * wPigment)).coerceIn(0.2f, 0.85f)),
                 textureType = BrushTextureEngine.TextureType.WATERCOLOR_PAPER,
                 seed = com.authorss81.noteflow.services.BrushStrokeMath.strokeSeedFromId(stroke.id)
             )
@@ -2685,7 +2870,7 @@ private fun DrawScope.drawSingleStroke(
                 points = stroke.points,
                 offsetY = offsetY,
                 baseSize = strokeWidth * 3.0f,
-                color = color.copy(alpha = 0.65f),
+                color = if (isMultiColor) derivedColorAt(0.5f) else color.copy(alpha = 0.65f),
                 textureType = BrushTextureEngine.TextureType.SPLATTER_DROPS,
                 spacingFactor = 0.45f,
                 scatterFactor = 0.55f
@@ -2700,23 +2885,24 @@ private fun DrawScope.drawSingleStroke(
                 points = stroke.points,
                 offsetY = offsetY,
                 strokeWidth = strokeWidth,
-                color = color,
+                color = if (isMultiColor) derivedColorAt(0.5f) else color,
                 seed = com.authorss81.noteflow.services.BrushStrokeMath.strokeSeedFromId(stroke.id)
             )
         }
         StrokeTool.OIL_PASTEL -> {
             val nativeCanvas = drawContext.canvas.nativeCanvas
+            val pastelColor = if (isMultiColor) derivedColorAt(0.5f) else color
             BrushTextureEngine.drawTexturedStrokePath(
                 nativeCanvas = nativeCanvas,
                 points = stroke.points,
                 offsetY = offsetY,
                 strokeWidth = strokeWidth * 1.1f,
-                color = color.copy(alpha = (color.alpha * 0.92f).coerceIn(0f, 1f)),
+                color = pastelColor.copy(alpha = (pastelColor.alpha * 0.92f).coerceIn(0f, 1f)),
                 textureType = BrushTextureEngine.TextureType.OIL_PASTEL_STREAK,
                 seed = com.authorss81.noteflow.services.BrushStrokeMath.strokeSeedFromId(stroke.id)
             )
             if (stroke.points.size == 1) {
-                drawCircle(color, radius = strokeWidth / 2f, center = Offset(stroke.points.first().x, stroke.points.first().y + offsetY))
+                drawCircle(pastelColor, radius = strokeWidth / 2f, center = Offset(stroke.points.first().x, stroke.points.first().y + offsetY))
             }
         }
         StrokeTool.INK_WASH -> {
@@ -2726,23 +2912,24 @@ private fun DrawScope.drawSingleStroke(
                 points = stroke.points,
                 offsetY = offsetY,
                 strokeWidth = strokeWidth,
-                color = color,
+                color = if (isMultiColor) derivedColorAt(0.5f) else color,
                 seed = com.authorss81.noteflow.services.BrushStrokeMath.strokeSeedFromId(stroke.id)
             )
         }
         StrokeTool.GOUACHE -> {
             val nativeCanvas = drawContext.canvas.nativeCanvas
+            val gouacheColor = if (isMultiColor) derivedColorAt(0.5f) else color
             BrushTextureEngine.drawTexturedStrokePath(
                 nativeCanvas = nativeCanvas,
                 points = stroke.points,
                 offsetY = offsetY,
                 strokeWidth = strokeWidth,
-                color = color.copy(alpha = (color.alpha * 0.98f).coerceIn(0f, 1f)),
+                color = gouacheColor.copy(alpha = (gouacheColor.alpha * 0.98f).coerceIn(0f, 1f)),
                 textureType = BrushTextureEngine.TextureType.GOUACHE_MATTE,
                 seed = com.authorss81.noteflow.services.BrushStrokeMath.strokeSeedFromId(stroke.id)
             )
             if (stroke.points.size == 1) {
-                drawCircle(color, radius = strokeWidth / 2f, center = Offset(stroke.points.first().x, stroke.points.first().y + offsetY))
+                drawCircle(gouacheColor, radius = strokeWidth / 2f, center = Offset(stroke.points.first().x, stroke.points.first().y + offsetY))
             }
         }
         StrokeTool.DRY_BRUSH -> {
@@ -2752,7 +2939,7 @@ private fun DrawScope.drawSingleStroke(
                 points = stroke.points,
                 offsetY = offsetY,
                 strokeWidth = strokeWidth,
-                color = color,
+                color = if (isMultiColor) derivedColorAt(0.5f) else color,
                 seed = com.authorss81.noteflow.services.BrushStrokeMath.strokeSeedFromId(stroke.id)
             )
         }
@@ -2763,25 +2950,37 @@ private fun DrawScope.drawSingleStroke(
                 points = stroke.points,
                 offsetY = offsetY,
                 strokeWidth = strokeWidth,
-                color = color,
+                color = if (isMultiColor) derivedColorAt(0.5f) else color,
                 seed = com.authorss81.noteflow.services.BrushStrokeMath.strokeSeedFromId(stroke.id)
             )
         }
         StrokeTool.MARKER -> {
-            val markerColor = color.copy(alpha = 0.42f)
+            val markerColor = if (isMultiColor) derivedColorAt(0.5f) else color.copy(alpha = 0.42f)
             if (stroke.points.size > 1) {
                 val pts = stroke.points
-                val path = Path().apply {
-                    moveTo(pts[0].x, pts[0].y + offsetY)
-                    for (i in 1 until pts.size) {
-                        lineTo(pts[i].x, pts[i].y + offsetY)
+                if (isMultiColor) {
+                    for (i in 0 until pts.size - 1) {
+                        drawLine(
+                            color = derivedColorAtPoint(pts, i + 1),
+                            start = Offset(pts[i].x, pts[i].y + offsetY),
+                            end = Offset(pts[i + 1].x, pts[i + 1].y + offsetY),
+                            strokeWidth = strokeWidth * 1.5f,
+                            cap = StrokeCap.Round
+                        )
                     }
+                } else {
+                    val path = Path().apply {
+                        moveTo(pts[0].x, pts[0].y + offsetY)
+                        for (i in 1 until pts.size) {
+                            lineTo(pts[i].x, pts[i].y + offsetY)
+                        }
+                    }
+                    drawPath(
+                        path = path,
+                        color = markerColor,
+                        style = DrawStrokeStyle(width = strokeWidth * 1.5f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+                    )
                 }
-                drawPath(
-                    path = path,
-                    color = markerColor,
-                    style = DrawStrokeStyle(width = strokeWidth * 1.5f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-                )
             } else if (stroke.points.size == 1) {
                 drawCircle(markerColor, radius = strokeWidth, center = Offset(stroke.points.first().x, stroke.points.first().y + offsetY))
             }
@@ -2803,20 +3002,17 @@ private fun DrawScope.drawSingleStroke(
                 } else 1f
                 val dx = (cos(angle) * strokeWidth / 1.5f * nibScale).toFloat()
                 val dy = (sin(angle) * strokeWidth / 1.5f * nibScale).toFloat()
-                val path = Path().apply {
-                    fillType = PathFillType.NonZero
-                }
-
-                for (i in 1 until pts.size) {
-                    val p0 = pts[i - 1]
-                    val p1 = pts[i]
-                    path.moveTo(p0.x - dx, p0.y - dy + offsetY)
-                    path.lineTo(p1.x - dx, p1.y - dy + offsetY)
-                    path.lineTo(p1.x + dx, p1.y + dy + offsetY)
-                    path.lineTo(p0.x + dx, p0.y + dy + offsetY)
-                    path.close()
-                }
-                drawPath(path = path, color = color)
+                // Phase 27: overlapping quads + interior vertex caps + round end caps
+                // (RibbonJoinMath) remove the concave notch / needle corner that sharp
+                // turns used to produce between adjacent nib quads.
+                drawRibbonStroke(
+                    pts = pts,
+                    offsetY = offsetY,
+                    nibHalfX = dx,
+                    nibHalfY = dy,
+                    color = color,
+                    perPointColor = if (isMultiColor) { i -> derivedColorAtPoint(pts, i) } else null
+                )
             } else if (stroke.points.size == 1) {
                 drawCircle(color, radius = strokeWidth / 2f, center = Offset(stroke.points.first().x, stroke.points.first().y + offsetY))
             }
@@ -2824,28 +3020,42 @@ private fun DrawScope.drawSingleStroke(
         StrokeTool.DOTTED -> {
             if (stroke.points.size > 1) {
                 val pts = stroke.points
-                val path = Path().apply {
-                    moveTo(pts[0].x, pts[0].y + offsetY)
-                    for (i in 1 until pts.size) {
-                        lineTo(pts[i].x, pts[i].y + offsetY)
-                    }
-                }
                 val dashIntervals = floatArrayOf(strokeWidth * 2f, strokeWidth * 2.5f)
-                drawPath(
-                    path = path,
-                    color = color,
-                    style = DrawStrokeStyle(
-                        width = strokeWidth,
-                        cap = StrokeCap.Round,
-                        join = StrokeJoin.Round,
-                        pathEffect = PathEffect.dashPathEffect(dashIntervals, 0f)
+                if (isMultiColor) {
+                    for (i in 0 until pts.size - 1) {
+                        drawLine(
+                            color = derivedColorAtPoint(pts, i + 1),
+                            start = Offset(pts[i].x, pts[i].y + offsetY),
+                            end = Offset(pts[i + 1].x, pts[i + 1].y + offsetY),
+                            strokeWidth = strokeWidth,
+                            cap = StrokeCap.Round,
+                            pathEffect = PathEffect.dashPathEffect(dashIntervals, 0f)
+                        )
+                    }
+                } else {
+                    val path = Path().apply {
+                        moveTo(pts[0].x, pts[0].y + offsetY)
+                        for (i in 1 until pts.size) {
+                            lineTo(pts[i].x, pts[i].y + offsetY)
+                        }
+                    }
+                    drawPath(
+                        path = path,
+                        color = color,
+                        style = DrawStrokeStyle(
+                            width = strokeWidth,
+                            cap = StrokeCap.Round,
+                            join = StrokeJoin.Round,
+                            pathEffect = PathEffect.dashPathEffect(dashIntervals, 0f)
+                        )
                     )
-                )
+                }
             } else if (stroke.points.size == 1) {
                 drawCircle(color, radius = strokeWidth / 2f, center = Offset(stroke.points.first().x, stroke.points.first().y + offsetY))
             }
         }
         StrokeTool.NEON -> {
+            val neonColor = if (isMultiColor) derivedColorAt(0.5f) else color
             if (stroke.points.size > 1) {
                 val pts = stroke.points
                 val path = Path().apply {
@@ -2861,12 +3071,12 @@ private fun DrawScope.drawSingleStroke(
                 }
                 drawPath(
                     path = path,
-                    color = color.copy(alpha = 0.25f),
+                    color = neonColor.copy(alpha = 0.25f),
                     style = DrawStrokeStyle(width = strokeWidth * 3.2f, cap = StrokeCap.Round, join = StrokeJoin.Round)
                 )
                 drawPath(
                     path = path,
-                    color = color.copy(alpha = 0.85f),
+                    color = neonColor.copy(alpha = 0.85f),
                     style = DrawStrokeStyle(width = strokeWidth * 1.6f, cap = StrokeCap.Round, join = StrokeJoin.Round)
                 )
                 drawPath(
@@ -2876,8 +3086,8 @@ private fun DrawScope.drawSingleStroke(
                 )
             } else if (stroke.points.size == 1) {
                 val center = Offset(stroke.points.first().x, stroke.points.first().y + offsetY)
-                drawCircle(color.copy(alpha = 0.25f), radius = strokeWidth * 1.6f, center = center)
-                drawCircle(color.copy(alpha = 0.85f), radius = strokeWidth * 0.8f, center = center)
+                drawCircle(neonColor.copy(alpha = 0.25f), radius = strokeWidth * 1.6f, center = center)
+                drawCircle(neonColor.copy(alpha = 0.85f), radius = strokeWidth * 0.8f, center = center)
                 drawCircle(Color.White, radius = strokeWidth * 0.3f, center = center)
             }
         }
@@ -2891,7 +3101,7 @@ private fun DrawScope.drawSingleStroke(
                     val vel = com.authorss81.noteflow.services.BrushStrokeMath.segmentVelocity(p1, p2)
                     val dynamicWidth = (strokeWidth.coerceAtLeast(1.2f) * com.authorss81.noteflow.services.BrushStrokeMath.velocityWidthFactor(vel, renderOpts.velocityIntensity)).coerceAtLeast(0.8f)
                     drawLine(
-                        color = color.copy(alpha = 0.95f),
+                        color = if (isMultiColor) derivedColorAtPoint(pts, i + 1).copy(alpha = 0.95f) else color.copy(alpha = 0.95f),
                         start = Offset(p1.x, p1.y + offsetY),
                         end = Offset(p2.x, p2.y + offsetY),
                         strokeWidth = dynamicWidth,
@@ -2900,20 +3110,32 @@ private fun DrawScope.drawSingleStroke(
                 }
             } else if (stroke.points.size > 1) {
                 val pts = stroke.points
-                val path = Path().apply {
-                    moveTo(pts[0].x, pts[0].y + offsetY)
-                    for (i in 1 until pts.size) {
-                        lineTo(pts[i].x, pts[i].y + offsetY)
+                if (isMultiColor) {
+                    for (i in 0 until pts.size - 1) {
+                        drawLine(
+                            color = derivedColorAtPoint(pts, i + 1).copy(alpha = 0.95f),
+                            start = Offset(pts[i].x, pts[i].y + offsetY),
+                            end = Offset(pts[i + 1].x, pts[i + 1].y + offsetY),
+                            strokeWidth = strokeWidth.coerceAtLeast(1.2f),
+                            cap = StrokeCap.Round
+                        )
                     }
+                } else {
+                    val path = Path().apply {
+                        moveTo(pts[0].x, pts[0].y + offsetY)
+                        for (i in 1 until pts.size) {
+                            lineTo(pts[i].x, pts[i].y + offsetY)
+                        }
+                    }
+                    drawPath(
+                        path = path,
+                        color = color.copy(alpha = 0.95f),
+                        style = DrawStrokeStyle(width = strokeWidth.coerceAtLeast(1.2f), cap = StrokeCap.Round, join = StrokeJoin.Round)
+                    )
                 }
-                drawPath(
-                    path = path,
-                    color = color.copy(alpha = 0.95f),
-                    style = DrawStrokeStyle(width = strokeWidth.coerceAtLeast(1.2f), cap = StrokeCap.Round, join = StrokeJoin.Round)
-                )
             } else if (stroke.points.size == 1) {
                 drawCircle(
-                    color = color,
+                    color = if (isMultiColor) derivedColorAt(1f) else color,
                     radius = strokeWidth / 2f,
                     center = Offset(stroke.points.first().x, stroke.points.first().y + offsetY)
                 )
@@ -2926,19 +3148,17 @@ private fun DrawScope.drawSingleStroke(
                 val angle = Math.toRadians(renderOpts.chiselNibAngleDeg.toDouble())
                 val dx = (cos(angle) * strokeWidth * 0.9f).toFloat()
                 val dy = (sin(angle) * strokeWidth * 0.9f).toFloat()
-                val path = Path().apply {
-                    fillType = PathFillType.NonZero
-                }
-                for (i in 1 until pts.size) {
-                    val p0 = pts[i - 1]
-                    val p1 = pts[i]
-                    path.moveTo(p0.x - dx, p0.y - dy + offsetY)
-                    path.lineTo(p1.x - dx, p1.y - dy + offsetY)
-                    path.lineTo(p1.x + dx, p1.y + dy + offsetY)
-                    path.lineTo(p0.x + dx, p0.y + dy + offsetY)
-                    path.close()
-                }
-                drawPath(path = path, color = color.copy(alpha = 0.88f))
+                // Phase 27: overlapping quads + interior vertex caps + round end caps
+                // (RibbonJoinMath) remove the concave notch / needle corner that sharp
+                // turns used to produce between adjacent chisel nib quads.
+                drawRibbonStroke(
+                    pts = pts,
+                    offsetY = offsetY,
+                    nibHalfX = dx,
+                    nibHalfY = dy,
+                    color = color.copy(alpha = 0.88f),
+                    perPointColor = if (isMultiColor) { i -> derivedColorAtPoint(pts, i).copy(alpha = 0.88f) } else null
+                )
             } else if (stroke.points.size == 1) {
                 val pt = stroke.points.first()
                 drawCircle(color, radius = strokeWidth, center = Offset(pt.x, pt.y + offsetY))
@@ -2989,21 +3209,39 @@ private fun DrawScope.drawSingleStroke(
         }
         StrokeTool.LINE -> {
             if (stroke.start != null && stroke.end != null) {
-                drawLine(color, Offset(stroke.start.x, stroke.start.y + offsetY), Offset(stroke.end.x, stroke.end.y + offsetY), strokeWidth = strokeWidth, cap = StrokeCap.Round)
+                val start = Offset(stroke.start.x, stroke.start.y + offsetY)
+                val end = Offset(stroke.end.x, stroke.end.y + offsetY)
+                if (isMultiColor) {
+                    // Phase 27: LINE carries a full along-the-line sweep via a linear
+                    // gradient brush from the derived start color to the derived end color.
+                    drawLine(
+                        brush = Brush.linearGradient(
+                            colors = listOf(derivedColorAt(0f), derivedColorAt(1f)),
+                            start = start,
+                            end = end
+                        ),
+                        start = start,
+                        end = end,
+                        strokeWidth = strokeWidth,
+                        cap = StrokeCap.Round
+                    )
+                } else {
+                    drawLine(color, start, end, strokeWidth = strokeWidth, cap = StrokeCap.Round)
+                }
             }
         }
         StrokeTool.RECTANGLE -> {
             if (stroke.start != null && stroke.end != null) {
                 val topLeft = Offset(minOf(stroke.start.x, stroke.end.x), minOf(stroke.start.y + offsetY, stroke.end.y + offsetY))
                 val rectSize = Size(abs(stroke.end.x - stroke.start.x), abs(stroke.end.y - stroke.start.y))
-                drawRect(color, topLeft, rectSize, style = DrawStrokeStyle(width = strokeWidth, join = StrokeJoin.Round))
+                drawRect(if (isMultiColor) derivedColorAt(0.5f) else color, topLeft, rectSize, style = DrawStrokeStyle(width = strokeWidth, join = StrokeJoin.Round))
             }
         }
         StrokeTool.ELLIPSE -> {
             if (stroke.start != null && stroke.end != null) {
                 val topLeft = Offset(minOf(stroke.start.x, stroke.end.x), minOf(stroke.start.y + offsetY, stroke.end.y + offsetY))
                 val ovalSize = Size(abs(stroke.end.x - stroke.start.x), abs(stroke.end.y - stroke.start.y))
-                drawOval(color, topLeft, ovalSize, style = DrawStrokeStyle(width = strokeWidth))
+                drawOval(if (isMultiColor) derivedColorAt(0.5f) else color, topLeft, ovalSize, style = DrawStrokeStyle(width = strokeWidth))
             }
         }
         StrokeTool.TRIANGLE -> {
@@ -3017,7 +3255,7 @@ private fun DrawScope.drawSingleStroke(
                     lineTo(p3.x, p3.y)
                     close()
                 }
-                drawPath(path = path, color = color, style = DrawStrokeStyle(width = strokeWidth, join = StrokeJoin.Round))
+                drawPath(path = path, color = if (isMultiColor) derivedColorAt(0.5f) else color, style = DrawStrokeStyle(width = strokeWidth, join = StrokeJoin.Round))
             }
         }
         StrokeTool.STAR -> {
@@ -3039,7 +3277,7 @@ private fun DrawScope.drawSingleStroke(
                     }
                 }
                 path.close()
-                drawPath(path = path, color = color, style = DrawStrokeStyle(width = strokeWidth, join = StrokeJoin.Round))
+                drawPath(path = path, color = if (isMultiColor) derivedColorAt(0.5f) else color, style = DrawStrokeStyle(width = strokeWidth, join = StrokeJoin.Round))
             }
         }
         StrokeTool.PENTAGON -> {
@@ -3060,7 +3298,7 @@ private fun DrawScope.drawSingleStroke(
                     }
                 }
                 path.close()
-                drawPath(path = path, color = color, style = DrawStrokeStyle(width = strokeWidth, join = StrokeJoin.Round))
+                drawPath(path = path, color = if (isMultiColor) derivedColorAt(0.5f) else color, style = DrawStrokeStyle(width = strokeWidth, join = StrokeJoin.Round))
             }
         }
         StrokeTool.HEXAGON -> {
@@ -3081,7 +3319,7 @@ private fun DrawScope.drawSingleStroke(
                     }
                 }
                 path.close()
-                drawPath(path = path, color = color, style = DrawStrokeStyle(width = strokeWidth, join = StrokeJoin.Round))
+                drawPath(path = path, color = if (isMultiColor) derivedColorAt(0.5f) else color, style = DrawStrokeStyle(width = strokeWidth, join = StrokeJoin.Round))
             }
         }
         StrokeTool.ARROW -> {

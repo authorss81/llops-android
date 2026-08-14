@@ -472,6 +472,12 @@ class NoteRepository(private var db: NoteflowDatabase) {
             val start = if (entity.startX != null && entity.startY != null) PointF(entity.startX, entity.startY) else null
             val end = if (entity.endX != null && entity.endY != null) PointF(entity.endX, entity.endY) else null
             val isAdvanced = firstDeserialized?.isAdvanced ?: false
+            // Phase 27: color-mode fields round-trip through the stroke's serialized
+            // payload (pointsJson). Missing on old strokes => SOLID / seed 0, which is
+            // bit-identical to the pre-phase-27 behaviour.
+            val colorMode = com.authorss81.noteflow.data.model.StrokeColorMode.fromKey(firstDeserialized?.colorMode?.persistenceKey)
+            val colorSeed = firstDeserialized?.colorSeed ?: 0
+            val gradientToColorInt = firstDeserialized?.gradientToColorInt
 
             Stroke(
                 id = entity.id,
@@ -486,7 +492,10 @@ class NoteRepository(private var db: NoteflowDatabase) {
                 pdfPage = entity.pdfPage,
                 timestampMs = entity.timestampMs,
                 isAdvanced = isAdvanced,
-                layerId = entity.layerId
+                layerId = entity.layerId,
+                colorMode = colorMode,
+                colorSeed = colorSeed,
+                gradientToColorInt = gradientToColorInt
             )
         }
         loaded.forEach { lastSavedStrokeHash[it.id] = strokeContentHash(it) }
@@ -513,6 +522,11 @@ class NoteRepository(private var db: NoteflowDatabase) {
         h = 31 * h + s.pdfPage
         h = 31 * h + (s.timestampMs?.hashCode() ?: 0)
         h = 31 * h + (s.layerId?.hashCode() ?: 0)
+        // Phase 27: color mode + seed + gradient end color are content — a mode
+        // change must dirty the row so it gets re-encrypted/rewritten.
+        h = 31 * h + s.colorMode.name.hashCode()
+        h = 31 * h + s.colorSeed
+        h = 31 * h + (s.gradientToColorInt ?: 0)
         return h
     }
 
