@@ -14,7 +14,7 @@
   inherits the weakness.
 - Positive controls verified and preserved: `PluginDigest.sha256Hex(file)` streams the whole
   file (`PluginDigest.kt:42-55`), `PinnedCertHash.parse` rejects non-32-byte digests
-  (`PinnedCertHash.kt:44-49`), and the download transport caps bytes at `MAX_BYTES` before
+  (`PinnedCertHash.kt:46-51`), and the download transport caps bytes at `MAX_BYTES` before
   hashing — neither touched here.
 
 ## What changed
@@ -29,7 +29,8 @@
   `ConstantTime.hexEqual` (`ArtifactSignatureVerifier.kt:64-65`), which delegates to
   `MessageDigest.isEqual` over the byte arrays. `ignoreCase` is gone from the compare entirely;
   case-insensitivity now comes only from the parse-time normalization. The user-facing mismatch
-  message still shows the raw expected/got strings for diagnosis.
+  message still shows the expected (normalized at the parse boundary) and got (computed)
+  digests for diagnosis.
 
 ### 2. Single-helper enforcement — `plugins/runtime/PinnedCertHash.kt`
 
@@ -46,8 +47,8 @@ Every digest/pin compare in the app now funnels through the single `ConstantTime
 - DB tamper HMAC (`services/DatabaseSecurityHelper.kt`, phase-102)
 - LocalSend TLS fingerprint pin (`services/localsend/LocalSendProtocol.kt`, phase-102)
 - plugin artifact SHA-256 digest gate (**this phase**, `ArtifactSignatureVerifier.kt:65`)
-- plugin cert pin (`PinnedCertHash.matches`, and `HttpsPluginDownloadTransport.kt:149` via the
-  same function)
+- plugin cert pin (`PinnedCertHash.matches`, and `plugins/runtime/HttpsPluginDownloadTransport.kt:149`
+  via the same function)
 
 ## Security / checksum / secrets handling
 
@@ -94,6 +95,10 @@ Every digest/pin compare in the app now funnels through the single `ConstantTime
    `java.util.Base64` fallback never fires) — it also reproduces in isolation on this tree and
    touches code byte-identical to HEAD (this phase only changed `ArtifactSignatureVerifier`,
    `PinnedCertHash` and their tests). Proven unrelated.
+   Note: `WikiLinkParserCacheUnitTest.a cancelled scan propagates cancellation and does not cache
+   a partial result` is a known coroutine/timing flake on the shared runner (documented in the
+   phase-102 report): it passed during this phase's full run, but failed once during the review's
+   post-phase re-run and passes in isolation. It is untouched by this phase and unrelated.
 3. `gradle assembleDebug` → first run hit the low-RAM runner's transient
    `:app:mergeExtDexDebug` dex-merging OOM (same characteristic documented in phase-102,
    retry recovered); retry with `--no-daemon` → **BUILD SUCCESSFUL**.
@@ -101,6 +106,8 @@ Every digest/pin compare in the app now funnels through the single `ConstantTime
 ## Out of scope (documented, not fixed)
 
 - `EncryptionAndServiceTest.testEncryptDecryptCycle` pre-existing failure (see above).
+- `WikiLinkParserCacheUnitTest` cancellation test — known shared-runner scheduling flake
+  (phase-102 documented), passes in isolation, untouched here (see Verification above).
 - Case normalization is applied at the verifier's expected-digest intake, which is the single
   parse boundary every call site passes through. Persisting-catalog sources
   (`HostedPluginManifest`, `PluginEntryStore`, `PluginUpdateChecker`) were reviewed and left

@@ -13,7 +13,7 @@ import java.util.Base64
  *
  * 1. **TLS session** — the download host's leaf certificate must hash to the
  *    pin before a single artifact byte is trusted
- *    (`services/HttpsPluginDownloadTransport`).
+ *    (`plugins/runtime/HttpsPluginDownloadTransport`).
  * 2. **Artifact signature** — the plugin APK's signing certificate must hash to
  *    the SAME pin ([ArtifactSignatureVerifier]).
  *

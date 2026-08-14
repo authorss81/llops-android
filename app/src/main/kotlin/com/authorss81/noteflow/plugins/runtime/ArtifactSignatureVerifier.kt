@@ -65,7 +65,7 @@ class ArtifactSignatureVerifier {
         if (!ConstantTime.hexEqual(sha256, expected)) {
             return Result.Invalid(
                 "SHA-256 mismatch — the artifact is corrupted or has been tampered with " +
-                    "(expected $expectedSha256, got $sha256). It will not be loaded."
+                    "(expected $expected, got $sha256). It will not be loaded."
             )
         }
         val signerCert = findSignerCertificate(file)
