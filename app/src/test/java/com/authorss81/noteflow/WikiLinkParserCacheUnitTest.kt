@@ -5,6 +5,7 @@ import com.authorss81.noteflow.services.TagNode
 import com.authorss81.noteflow.services.WikiLinkParser
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -13,6 +14,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Phase 101 (B2-DOS-11): the backlink/tag-hierarchy/knowledge-graph builders
@@ -39,6 +41,7 @@ class WikiLinkParserCacheUnitTest {
 
     @After
     fun tearDown() {
+        WikiLinkParser.onPageScanned = null
         WikiLinkParser.invalidateCaches()
     }
 
@@ -221,41 +224,52 @@ class WikiLinkParserCacheUnitTest {
     // --- 6. cancellation is propagated and never caches a partial scan ---
 
     @Test
-    fun `a cancelled scan propagates cancellation and does not serve partial results`() = runBlocking {
+    fun `a cancelled scan propagates cancellation and does not cache a partial result`() = runBlocking {
         val cap = WikiLinkParser.MAX_SCAN_PAGES
 
-        // Many pages with big bodies so the scan actually does work.
         val pages = (0 until cap).map { i ->
             page("p$i", "Page $i", text = "some content mentioning [[Target]] here " + "x".repeat(400))
         } + page("target", "Target", text = "target body")
 
-        var cancelled = false
-        val worker = launch(Dispatchers.Default) {
+        var worker: Job? = null
+        val sawPage = AtomicBoolean(false)
+        val cancelled = AtomicBoolean(false)
+
+        // Test seam: cancel the scan deterministically — AFTER the build has
+        // started processing pages, but BEFORE it can reach the end and cache.
+        WikiLinkParser.onPageScanned = {
+            if (sawPage.compareAndSet(false, true)) {
+                worker?.cancel()
+            }
+        }
+        worker = launch(Dispatchers.Default) {
             try {
                 WikiLinkParser.findBacklinks(pages.last(), pages)
             } catch (e: CancellationException) {
-                cancelled = true
+                cancelled.set(true)
                 throw e
             }
         }
-
-        worker.cancel()
         worker.join()
+        WikiLinkParser.onPageScanned = null
 
-        // Whether the scan won the race or was cancelled, the invariant holds:
-        // either the full scan was cached (recomputed once) or nothing was
-        // cached at all — never a partial/duplicate entry.
-        val recomputed = WikiLinkParser.cacheMetrics().backlinkRecomputes
-        if (cancelled) {
-            assertTrue("a cancelled scan must not cache anything", recomputed == 0L)
-        } else {
-            assertEquals("a completed scan is cached exactly once", 1L, recomputed)
-        }
+        assertTrue("the scan must have started before cancellation", sawPage.get())
+        assertTrue("a cancelled scan must propagate CancellationException", cancelled.get())
+        assertEquals(
+            "a cancelled scan must never cache a partial/duplicate result",
+            0L,
+            WikiLinkParser.cacheMetrics().backlinkRecomputes
+        )
 
         // A follow-up full scan still works correctly afterwards.
         WikiLinkParser.invalidateCaches()
         val after = WikiLinkParser.findBacklinks(pages.last(), pages)
         assertTrue(after.first.size > 0)
+        assertEquals(
+            "the follow-up scan must be cached exactly once",
+            1L,
+            WikiLinkParser.cacheMetrics().backlinkRecomputes
+        )
     }
 
     // --- helpers ---

@@ -135,3 +135,39 @@ New `app/src/test/java/com/authorss81/noteflow/WikiLinkParserCacheUnitTest.kt` (
 - `plugins/llm/LocalLlmPlugin.kt:150,242` "Condition is always 'true'" compiler warnings —
   pre-existing, outside Batch-2 DoS scope.
 - Other B2 batch findings remain in their own phases.
+
+## Review fix pass (applied after the phase-101 review)
+
+Review findings against commit `99de2d3` and their fixes (all in
+`app/src/main/kotlin/com/authorss81/noteflow/services/WikiLinkParser.kt` unless noted):
+
+1. **Single-slot caches not keyed by input.** `tagHierarchyEntry`/`edgesEntry` are now
+   validated against `pagesFingerprint(allPages)` (`:354-359`, `:423-429`), and
+   `backlinksCache` is keyed by `BacklinkCacheKey(fingerprint, targetPageId)` (`:276-287`).
+   `pagesFingerprint` (`:98-105`) = page id + `updatedAt` — collision-free and cheap, so a
+   result computed for one page list is never served for a different list in the same epoch.
+2. **External-edit staleness.** Documented in the class KDoc (`:58-63`): changes made through
+   the repository always refresh (epoch bump); source files edited outside the repository are
+   only picked up after the next epoch bump and must call `invalidateCaches()`/`invalidateTextCache()`
+   after a bypass write.
+3. **`invalidateTextCache` re-add race.** It now bumps the whole cache epoch
+   (`fun invalidateTextCache(pageId) = invalidateCaches()`, `:179`) so an in-flight
+   `getFullTextForPage` finishing after the invalidation stores nothing (epoch mismatch).
+4. **`MAX_TAGS` only enforced post-materialization.** New `extractTagsBounded` caps per-page
+   distinct-tag collection *during* extraction (`:205-217`); `computeTagHierarchy` uses it with
+   `MAX_TAGS` (`:382`). Public `extractTags` delegates with `Int.MAX_VALUE` — behavior unchanged
+   for existing callers.
+5. **Per-link O(N) target lookup in `buildWikiLinkEdges`.** Replaced with a prebuilt O(1)
+   title→page map preserving first-match semantics (`:434-438`).
+6. **Dead API surface.** Removed `currentEpoch()` and the unused `forceFresh` parameter of
+   `getFullTextForPage` (internal callers updated).
+7. **Vacuity-prone cancellation test.** Now deterministic via an internal `onPageScanned` test
+   seam (`:308-310`, null in release) that cancels the scan after page 1 and asserts both that
+   `CancellationException` propagates and that `backlinkRecomputes==0` (no partial cache),
+   then a follow-up scan caches once.
+8. **Trailing newline** added to `WikiLinkParser.kt`.
+
+Re-verification after the fixes: `WikiLinkParserCacheUnitTest` 9/9 pass; full suite 620 tests,
+1 pre-existing failure (`EncryptionAndServiceTest.testEncryptDecryptCycle`, unchanged); `gradle
+assembleDebug` BUILD SUCCESSFUL. No DB schema change, no new dependencies, `.github/`
+untouched.
