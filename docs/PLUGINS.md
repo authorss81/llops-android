@@ -453,11 +453,12 @@ export routing, disabled-skip).
    `com.authorss81.noteflow.plugins`, with a valid manifest and honest
    `availability()`.
 3. Add it to `PluginRegistry.defaultPlugins()` — that single list is the whole
-   discovery mechanism (compile-time only; no dynamic APK loading, ever). For a
-   plugin the user must explicitly download, instead add it to the store as an
-   OPTIONAL bundled definition (`PluginStoreCatalog` optional entry +
-   `createInstance`) and — if it downloads model/assets on install — implement
-   `NoteflowPlugin.deleteDownloadedAssets` so Delete frees them.
+   discovery mechanism for compile-time plugins. For a plugin the user must
+   explicitly download, instead add it to the store as an OPTIONAL bundled
+   definition (`PluginStoreCatalog` optional entry + `createInstance`) and — if it
+   downloads model/assets on install — implement `NoteflowPlugin.deleteDownloadedAssets`
+   so Delete frees them. Heavy native features should additionally be structured as
+   a Phase-22 downloadable module so the base APK stays lean.
 4. It is now visible in Settings → Plugins (with its derived state, reason,
    version and "Test now"), off by default, and automatically reachable from
    every feature wired to its capability.
@@ -479,9 +480,17 @@ export routing, disabled-skip).
 
 ## Design rules (non-negotiable)
 
-- **Compile-time registration only.** No runtime-loaded APK plugins. No
-  `ServiceLoader`/reflection surprises — the `defaultPlugins()` list is the API.
-  The Plugin Store installs bundled *definitions*, never bytecode.
+- **Base-APK size is a first-class constraint.** Heavy/native features (camera
+  OCR/QR, large ML engines, the local LLM) are NOT baked into the base APK — they
+  ship as **downloadable, signature-verified plugins** fetched over HTTPS only on
+  explicit user consent (Phase 22 runtime: download → pinned-cert verify → load).
+  Lightweight pure-JVM / small-keyless-HTTP plugins ship compile-time because they
+  cost a few KB. Never add a large native dependency to the base app.
+- **Compile-time registration for built-ins.** The `defaultPlugins()` list is the
+  API for compile-time plugins. No `ServiceLoader` surprises. The Plugin Store
+  today installs bundled *definitions*; the Phase-22 runtime adds verified
+  downloadable DEX for heavy features (downloadable code never receives direct
+  DB/keystore/decrypted-content handles — only a whitelisted capability facade).
 - **Delete ≠ disable.** Disable keeps data (re-enableable); Delete wipes opt-in,
   ever-enabled history and all `plugins.<id>.*` settings, deletes downloaded
   assets, and removes the plugin from the registry until re-download (which
