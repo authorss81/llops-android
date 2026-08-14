@@ -18,3 +18,9 @@
 }
 
 # Coroutines rules are handled automatically by kotlinx-coroutines-core R8 rules
+
+# MediaPipe tasks-genai (on-device LLM) references protobuf classes that R8
+# would otherwise strip during release minify, causing:
+#   Missing class com.google.protobuf.Internal$ProtoMethodMayReturnNull
+-keep class com.google.protobuf.** { *; }
+-dontwarn com.google.protobuf.**
