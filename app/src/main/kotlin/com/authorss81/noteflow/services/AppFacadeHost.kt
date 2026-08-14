@@ -3,6 +3,7 @@ package com.authorss81.noteflow.services
 import com.authorss81.noteflow.plugins.runtime.FacadeHost
 import com.authorss81.noteflow.plugins.runtime.FacadeResult
 import com.authorss81.noteflow.plugins.runtime.PluginContext
+import com.authorss81.noteflow.utils.HttpUserAgent
 import java.net.HttpURLConnection
 import java.net.URL
 
@@ -50,6 +51,7 @@ class AppFacadeHost : FacadeHost {
                 connection.connectTimeout = 15_000
                 connection.readTimeout = 30_000
                 connection.instanceFollowRedirects = true
+                connection.setRequestProperty("User-Agent", HttpUserAgent.GENERIC)
                 val code = connection.responseCode
                 if (code !in 200..299) {
                     return FacadeResult.Failed("HTTP GET failed (HTTP $code).")

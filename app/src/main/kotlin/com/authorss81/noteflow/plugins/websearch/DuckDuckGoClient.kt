@@ -1,6 +1,7 @@
 package com.authorss81.noteflow.plugins.websearch
 
 import com.authorss81.noteflow.plugins.WebSearchResult
+import com.authorss81.noteflow.utils.HttpUserAgent
 import com.google.gson.Gson
 import com.google.gson.JsonSyntaxException
 import java.io.IOException
@@ -142,6 +143,7 @@ class DuckDuckGoClient(
             conn.connectTimeout = connectTimeoutMs
             conn.readTimeout = readTimeoutMs
             conn.setRequestProperty("Accept", "application/json")
+            conn.setRequestProperty("User-Agent", HttpUserAgent.GENERIC)
             val code = conn.responseCode
             if (code != 200) {
                 // Drain a little of the error body for a useful-but-safe message.

@@ -26,6 +26,16 @@ handset, then serve version-specific payloads (see B1-NET-01).
   `Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) InkFlow/1.0`
   (private `USER_AGENT` const, lines 85-86); the old const was deleted and the
   header now uses `HttpUserAgent.GENERIC`.
+- **Review sweep (same finding, same leak via the implicit default UA):** the
+  remaining outbound transports that called `URL.openConnection()` with NO
+  User-Agent sent Android's default `Dalvik/2.1.0 (Linux; U; Android <ver>;
+  <MODEL> Build/...)`, leaking OS+model exactly like the named sites. All now
+  send `HttpUserAgent.GENERIC`:
+  - `plugins/citation/HttpsTitleFetcher.kt:43` (arbitrary user-supplied URLs)
+  - `services/AppFacadeHost.kt:52` (facade `httpGet`, arbitrary HTTPS)
+  - `plugins/weather/WeatherClient.kt:86`
+  - `plugins/websearch/DuckDuckGoClient.kt:145`
+  - `plugins/dictionary/DictionaryClient.kt:51`
 
 ### LocalSend — remove `Build.MODEL` + generic UA on LAN HTTP
 - `services/localsend/LocalSendProtocol.kt:93-114` — new pure-JVM
@@ -47,9 +57,11 @@ handset, then serve version-specific payloads (see B1-NET-01).
   a well-formed HTTP header value (no CR/LF/NUL). Regression tripwire against
   the old `Noteflow-*`/`InkFlow/1.0` values.
 - `app/src/test/java/com/authorss81/noteflow/LocalSendProtocolTest.kt` (+5 tests,
-  18→23): `senderIdentity` exposes no device model / version; the announce JSON,
-  register body, and prepare-upload body built from it carry neither a
-  `deviceModel` marker nor a model string.
+  18→23): `senderIdentity` exposes no device model; the announce JSON, register
+  body, and prepare-upload body built from it carry neither a `deviceModel`
+  marker nor a model string. (Test renamed `senderIdentity_exposesNoDeviceModel`
+  in review fixes — the wire bodies still carry the LocalSend *protocol*
+  version `2.0` by design, so the old name "…OrVersion" overclaimed.)
 
 ## Before/after evidence
 
@@ -64,7 +76,13 @@ handset, then serve version-specific payloads (see B1-NET-01).
 Grep-verification across `app/src/main/**/*.kt`: no `Build.MODEL`,
 `Noteflow-Android-WebDAV-Sync`, `Noteflow-Plugin-Runtime`, or `InkFlow/1.0`
 remain (only doc comments in the new test + the `senderIdentity` KDoc mention
-them as "must not regress to").
+them as "must not regress to"). Every `URL.openConnection()` / `HttpURLConnection`
+site either sets `User-Agent: HttpUserAgent.GENERIC` or is the WebDAV
+`createConnection` factory that applies it — a fresh
+`rg "openConnection"` sweep (11 sites) confirms none is left with the implicit
+Dalvik UA. The two connections inside `WebDavSyncService` that carry
+`Depth`/`Content-Type` headers only (`WebDavSyncService.kt:167,174,213,257`)
+all come from `createConnection`, so they inherit the generic UA.
 
 ## OS/API floor (AGENTS.md hardware reality)
 

@@ -1,6 +1,7 @@
 package com.authorss81.noteflow.plugins.dictionary
 
 import com.authorss81.noteflow.plugins.DictionaryLookup
+import com.authorss81.noteflow.utils.HttpUserAgent
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
@@ -48,6 +49,7 @@ class DictionaryClient(
             conn.connectTimeout = connectTimeoutMs
             conn.readTimeout = readTimeoutMs
             conn.setRequestProperty("Accept", "application/json")
+            conn.setRequestProperty("User-Agent", HttpUserAgent.GENERIC)
             val code = conn.responseCode
             when {
                 code == 404 -> return null

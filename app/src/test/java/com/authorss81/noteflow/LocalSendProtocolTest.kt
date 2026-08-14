@@ -51,7 +51,7 @@ class LocalSendProtocolTest {
     // ---- Sender identity (B1-NET-09 / phase-110): no device-model leak ----
 
     @Test
-    fun senderIdentity_exposesNoDeviceModelOrVersion() {
+    fun senderIdentity_exposesNoDeviceModel() {
         val info = LocalSendMessages.senderIdentity(fingerprint = "inkflow-abc123")
         assertEquals("InkFlow", info.alias)
         assertEquals(null, info.deviceModel)

@@ -2,6 +2,7 @@ package com.authorss81.noteflow.plugins.weather
 
 import com.authorss81.noteflow.plugins.WeatherSnapshot
 import com.authorss81.noteflow.plugins.weather.OpenMeteoGeocoderParser.Place
+import com.authorss81.noteflow.utils.HttpUserAgent
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
@@ -83,6 +84,7 @@ class OpenMeteoClient(
             conn.connectTimeout = connectTimeoutMs
             conn.readTimeout = readTimeoutMs
             conn.setRequestProperty("Accept", "application/json")
+            conn.setRequestProperty("User-Agent", HttpUserAgent.GENERIC)
             val code = conn.responseCode
             if (code == 404 && notFoundMeansNull) return null
             if (code != 200) {

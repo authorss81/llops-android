@@ -1,5 +1,6 @@
 package com.authorss81.noteflow.plugins.citation
 
+import com.authorss81.noteflow.utils.HttpUserAgent
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
@@ -40,6 +41,7 @@ class HttpsTitleFetcher(
             conn.connectTimeout = connectTimeoutMs
             conn.readTimeout = readTimeoutMs
             conn.setRequestProperty("Accept", "text/html")
+            conn.setRequestProperty("User-Agent", HttpUserAgent.GENERIC)
             val code = conn.responseCode
             if (code != 200) {
                 throw TitleFetchException("The page returned HTTP $code and no title is known.")
