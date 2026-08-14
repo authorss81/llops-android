@@ -703,7 +703,7 @@ data class WeatherSnapshot(
     val weatherCode: Int,
     val weatherDescription: String,
     val windSpeedKmh: Double,
-    /** When false, [date]/conditions were derived from the fixed default city. */
+    /** Provenance of the location, e.g. "Default city" or "Configured location". */
     val sourceNote: String
 )
 

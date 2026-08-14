@@ -152,9 +152,12 @@ object UnitConverterCore {
         else -> kelvin
     }
 
-    /** Format a result value with sensible precision (no trailing zeros). */
+    /** Format a result value with sensible precision (no trailing zeros).
+     *  Values too small to survive 6-dp rounding are NOT silently turned into
+     *  "0" — they are shown at full precision instead. */
     fun formatResult(value: Double): String {
         val rounded = Math.round(value * 1_000_000.0) / 1_000_000.0
+        if (rounded == 0.0 && value != 0.0) return value.toString()
         if (rounded == rounded.toLong().toDouble()) return rounded.toLong().toString()
         return rounded.toString()
     }

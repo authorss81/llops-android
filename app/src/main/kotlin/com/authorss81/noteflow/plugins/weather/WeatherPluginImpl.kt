@@ -79,6 +79,17 @@ class WeatherPluginImpl(
         val explicitLat = settings?.getString(SETTING_LATITUDE)?.toDoubleOrNull()
         val explicitLon = settings?.getString(SETTING_LONGITUDE)?.toDoubleOrNull()
         val customCity = settings?.getString(SETTING_CITY)?.takeIf { it.isNotBlank() }
+        // Half-configured coordinates are a config error, never silently ignored.
+        if ((explicitLat == null) != (explicitLon == null)) {
+            return WeatherOutcome.Error(
+                "Configure both a latitude AND a longitude (or clear them) to use a custom location."
+            )
+        }
+        val provenance = when {
+            explicitLat != null && explicitLon != null -> PROVENANCE_CONFIGURED
+            customCity != null -> PROVENANCE_CONFIGURED
+            else -> PROVENANCE_DEFAULT
+        }
         return try {
             val snapshot: WeatherSnapshot = withContext(Dispatchers.IO) {
                 when {
@@ -108,7 +119,9 @@ class WeatherPluginImpl(
                     )
                 }
             }
-            WeatherOutcome.Success(snapshot)
+            // Provenance reflects the config path actually taken — never guessed
+            // from the display-name string (a custom city could be named "London").
+            WeatherOutcome.Success(snapshot.copy(sourceNote = provenance))
         } catch (e: CancellationException) {
             throw e
         } catch (e: WeatherServiceException) {
@@ -140,6 +153,10 @@ class WeatherPluginImpl(
         const val SETTING_LATITUDE = "latitude"
         const val SETTING_LONGITUDE = "longitude"
         const val SETTING_LOCATION_NAME = "locationName"
+
+        /** Provenance labels surfaced in [WeatherSnapshot.sourceNote]. */
+        const val PROVENANCE_DEFAULT = "Default city"
+        const val PROVENANCE_CONFIGURED = "Configured location"
     }
 }
 

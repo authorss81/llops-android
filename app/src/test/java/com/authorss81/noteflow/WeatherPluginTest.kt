@@ -6,6 +6,8 @@ import com.authorss81.noteflow.plugins.PluginPermission
 import com.authorss81.noteflow.plugins.PluginManager
 import com.authorss81.noteflow.plugins.PluginRegistry
 import com.authorss81.noteflow.plugins.PluginResult
+import com.authorss81.noteflow.plugins.PluginSettings
+import com.authorss81.noteflow.plugins.InMemoryPluginSettingsStore
 import com.authorss81.noteflow.plugins.WeatherOutcome
 import com.authorss81.noteflow.plugins.WeatherPlugin
 import com.authorss81.noteflow.plugins.WeatherSnapshot
@@ -192,6 +194,68 @@ class WeatherPluginTest {
         val snapshot = (outcome as WeatherOutcome.Success).snapshot
         assertEquals("2026-08-14", snapshot.date)
         assertEquals(WeatherDefaults.DEFAULT_CITY, snapshot.city)
+        assertEquals("Default city", snapshot.sourceNote)
+    }
+
+    @Test
+    fun `plugin labels the default path honestly even when no settings exist`() = runBlocking {
+        val plugin = WeatherPluginImpl(network = fakeBackend)
+        val snapshot = (plugin.currentWeather() as WeatherOutcome.Success).snapshot
+        assertEquals("Default city", snapshot.sourceNote)
+    }
+
+    @Test
+    fun `plugin labels a custom city as configured - not by its name`() = runBlocking {
+        val store = InMemoryPluginSettingsStore()
+        val plugin = WeatherPluginImpl(network = fakeBackend)
+        plugin.onEnable(null, PluginSettings(store, plugin.id).apply { setString(WeatherPluginImpl.SETTING_CITY, "London") })
+        val outcome = plugin.currentWeather()
+        assertTrue(outcome is WeatherOutcome.Success)
+        val snapshot = (outcome as WeatherOutcome.Success).snapshot
+        // The custom city happens to be named "London" too — provenance must come
+        // from the config path (custom), never from the city-name string.
+        assertEquals("Configured location", snapshot.sourceNote)
+        assertEquals("London", snapshot.city)
+    }
+
+    @Test
+    fun `plugin labels explicit coordinates as configured`() = runBlocking {
+        val store = InMemoryPluginSettingsStore()
+        val plugin = WeatherPluginImpl(network = fakeBackend)
+        plugin.onEnable(
+            null,
+            PluginSettings(store, plugin.id).apply {
+                setString(WeatherPluginImpl.SETTING_LATITUDE, "48.8566")
+                setString(WeatherPluginImpl.SETTING_LONGITUDE, "2.3522")
+                setString(WeatherPluginImpl.SETTING_LOCATION_NAME, "Paris")
+            }
+        )
+        val snapshot = (plugin.currentWeather() as WeatherOutcome.Success).snapshot
+        assertEquals("Configured location", snapshot.sourceNote)
+        assertEquals("Paris", snapshot.city)
+    }
+
+    @Test
+    fun `plugin errors loudly when only one coordinate is configured`() = runBlocking {
+        val store = InMemoryPluginSettingsStore()
+        val plugin = WeatherPluginImpl(network = fakeBackend)
+        plugin.onEnable(
+            null,
+            PluginSettings(store, plugin.id).apply {
+                setString(WeatherPluginImpl.SETTING_LATITUDE, "48.8566")
+            }
+        )
+        val outcome = plugin.currentWeather()
+        assertTrue(outcome is WeatherOutcome.Error)
+        assertTrue((outcome as WeatherOutcome.Error).message.contains("latitude"))
+    }
+
+    @Test
+    fun `parser uses the supplied location provenance`() {
+        val snapshot = OpenMeteoForecastParser.parse(forecastJson, "Paris", "Configured location")!!
+        assertEquals("Configured location", snapshot.sourceNote)
+        val default = OpenMeteoForecastParser.parse(forecastJson, "London", "Default city")!!
+        assertEquals("Default city", default.sourceNote)
     }
 
     @Test

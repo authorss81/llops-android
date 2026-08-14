@@ -701,6 +701,26 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     fun isPluginUsable(pluginId: String): Boolean =
         pluginRegistry.stateOf(pluginId, appContext)?.state == PluginLifecycleState.AVAILABLE
 
+    /**
+     * A short menu label for [pluginId], disambiguating the three visible
+     * states so "off" never mislabels an offline plugin: AVAILABLE shows the
+     * active label, UNAVAILABLE gets an "offline" suffix (device/network
+     * gate — the plugin is ON but cannot serve right now), and anything else
+     * is genuinely off/not-enabled.
+     */
+    fun pluginMenuLabel(pluginId: String, activeLabel: String): String {
+        val state = pluginRegistry.stateOf(pluginId, appContext)?.state
+        return if (state == PluginLifecycleState.AVAILABLE) {
+            activeLabel
+        } else {
+            when (state) {
+                PluginLifecycleState.UNAVAILABLE -> "$activeLabel (offline)"
+                PluginLifecycleState.ENABLED -> "$activeLabel (checking…)"
+                else -> "$activeLabel (off)"
+            }
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Phase 16 — privacy-first on-device AI & media plugin routes.
     // Everything is routed through PluginManager (guarded, typed, never throws)

@@ -35,7 +35,7 @@ Everything lives in `com.authorss81.noteflow.plugins`:
 
 | File | Purpose |
 |------|---------|
-| `PluginCapability.kt` | The sealed extension points (`TextTransform`, `OCR`, `WebSearch`, `Export`, `TextTools`, `LanguageDetection`, `WebCapture`, `ClipShare`, `FileTransfer`, `Assistant`, `Dictation`, `ReadAloud`, `Translation`, `ScreenshotNote`, `ShapeFromInk`) — each with an `exclusive` flag. |
+| `PluginCapability.kt` | The sealed extension points (`TextTransform`, `OCR`, `WebSearch`, `Export`, `TextTools`, `LanguageDetection`, `WebCapture`, `ClipShare`, `FileTransfer`, `Assistant`, `Dictation`, `ReadAloud`, `Translation`, `ScreenshotNote`, `ShapeFromInk`, plus the Phase 26 `Dictionary`, `Weather`, `UnitConversion`, `OutlineGenerator`, `CitationFormatter`) — each with an `exclusive` flag. |
 | `PluginManifest.kt` | `PluginManifest`, `SemanticVersion` (`Major.Minor.Patch`), `PluginPermission`, and the manifest validator. |
 | `NoteflowPlugin.kt` | The plugin interface (manifest-derived identity, tri-state `availability`, lifecycle hooks) + per-capability *serving interfaces* (`TextTransformPlugin`, …). |
 | `PluginLifecycle.kt` | `PluginLifecycleState` (REGISTERED/ENABLED/AVAILABLE/UNAVAILABLE/DISABLED/REJECTED), derived `PluginStateInfo`, enable result + enable-order resolution types. |
@@ -62,6 +62,11 @@ Everything lives in `com.authorss81.noteflow.plugins`:
 | `CaseChangePlugin.kt` | The store's OPTIONAL plugin (Phase 21) — UPPER/lower/Title Case TextTransform; NOT in `defaultPlugins()`, downloaded from the store. |
 | `screenshot/…` | Screenshot→Note (Phase 16) — reuses the existing annotated-page renderer + persist + OCR route; pure `ScreenshotFlowPlanner`. Serves `ScreenshotNote`. |
 | `inktos/…` | Ink→Shape (Phase 25) — free, lightweight, compile-time plugin that converts freehand ink strokes into crisp shapes (line / rectangle / rounded-rect / ellipse / arrow) on explicit user command. Pure JVM `InkToShapeGeometry` core + thin `InkToShapePlugin` wrapper. Serves `ShapeFromInk`. |
+| `dictionary/…` | Dictionary (Phase 26) — keyless `dictionaryapi.dev` lookup with an honest bundled OFFLINE word list fallback; result is labelled with its source. Pure-JVM `DictionaryCore` + thin `DictionaryClient`. Serves `Dictionary`. |
+| `weather/…` | Weather (Phase 26) — keyless Open-Meteo dated snapshot, no GPS; fixed default city or coarse lat/lon from the plugin's namespaced settings. Pure-JVM `WeatherCore` + `WeatherClient` + `WeatherAvailability`. Serves `Weather`. |
+| `unitconverter/…` | Unit Converter (Phase 26) — PURE JVM "2 km to mi" conversion (length/mass/temperature/currency-basic reference rates), fully offline, zero deps. Serves `UnitConversion`. |
+| `outline/…` | Outline & Checklist (Phase 26) — PURE Kotlin generator producing a Markdown outline or checkbox list from the note text. Serves `OutlineGenerator`. |
+| `citation/…` | Citation Formatter (Phase 26) — formats a pasted URL into `[title](url)`, fetching the `<title>` over HTTPS or honestly falling back to a host-derived label. Serves `CitationFormatter`. |
 
 Supporting pieces outside the framework package:
 
@@ -91,9 +96,11 @@ Today `TextTransform` (ROT13 proof), `OCR` (on-device ML Kit), `WebSearch`
 `Dictation`, `ReadAloud`, `Translation` and `ScreenshotNote`, and turned
 `Assistant` from a declared extension point into a real, user-downloaded local
 LLM. Phase 25 added `ShapeFromInk` — converting freehand ink into crisp shapes on
-demand. The only remaining capability with no serving plugin is `FileTransfer` —
-requests for it fail loudly with `NO_PLUGIN_INSTALLED`. See the phase-12 and
-phase-16 implementation notes below.
+demand. Phase 26 added five lightweight compile-time plugins — `Dictionary`,
+`Weather`, `UnitConversion`, `OutlineGenerator` and `CitationFormatter` (see the
+Phase 26 section below). The only remaining capability with no serving plugin is
+`FileTransfer` — requests for it fail loudly with `NO_PLUGIN_INSTALLED`. See the
+phase-12 and phase-16 implementation notes below.
 
 ### `PluginManifest` & `NoteflowPlugin` — what a plugin is
 
@@ -449,6 +456,94 @@ user-triggered action.
   detection, wrong-shape rejection, plugin conversion, the keep-original toggle,
   capability routing (`NO_PLUGIN_INSTALLED` / `NONE_ENABLED` / `AVAILABLE`) and
   the store listing.
+
+## Lightweight compile-time plugin pack (Phase 26)
+
+Phase 26 adds **five** more real, individually toggleable plugins. Under the
+hybrid model (`docs/plugin-architecture.md`) they are **compile-time** because
+each is pure-JVM or tiny-keyless-HTTP and adds only a few KB to the base APK — no
+ML Kit, no native engines (those stay downloadable). All five are registered in
+`PluginRegistry.defaultPlugins()`, are non-optional in the store (installed by
+default, like every built-in), are **off by default** (opt-in via Settings →
+Plugins or the Plugin Store), and are reachable from the Markdown editor's
+**Plugins** menu. Network runs strictly on `Dispatchers.IO`, is always
+user-initiated, and every one has a graceful offline path or a clear error.
+
+### Dictionary (`dictionary/`, capability `Dictionary`)
+
+- **Core:** pure-JVM `DictionaryResponseParser` parses the real `dictionaryapi.dev`
+  payload (array of entries → word, phonetic, up to 5 definitions) and
+  `OfflineWordList` holds a small bundled word list.
+- **Honest offline path:** on any network failure, a blank result, or a
+  non-200 the plugin falls back to the bundled list and labels the result
+  `source = offline` — the UI always shows which source served it. A word found
+  in neither honestly returns `NotFound`, never a fake definition.
+- **UI:** Plugins menu → "Look up a word…" (`DictionaryDialog`) inserts
+  `**word** — definition` (plus `- ` extra definitions) into the note.
+- **Tests:** `DictionaryPluginTest` (pure JVM, no network) — real JSON parse,
+  malformed/empty payloads, the URL builder, offline fallback + case-insensitive
+  lookup, honest not-found, and manager routing with an injected backend.
+
+### Weather (`weather/`, capability `Weather`)
+
+- **No GPS, keyless:** the plugin reads location ONLY from its namespaced
+  settings (`plugins.<id>.city` / `.latitude` / `.longitude` / `.locationName`),
+  never from the device. Default: fixed London coordinates (no geocoding).
+- **Availability is honest:** `WeatherAvailability.evaluate` derives
+  `Unavailable("Offline — check your connection.")` the moment the device loses
+  INTERNET capability, so the menu item flips to "(offline)" rather than
+  pretending to work.
+- **Config:** `WeatherDialog` has a "Configure location" panel (city, or explicit
+  lat/lon + label) that persists via the plugin's namespaced settings and calls
+  `notifyConfigChanged`; half-configured coordinates are refused loudly.
+- **Snapshot provenance:** `sourceNote` ("Default city" / "Configured location")
+  is decided by the config path actually taken — never guessed from the city
+  name.
+- **Tests:** `WeatherPluginTest` (pure JVM, no network) — real forecast +
+  geocoding JSON parsing, WMO-code mapping, dated formatting, URL building, the
+  offline availability gate, default vs configured provenance, and manager
+  routing with an injected backend.
+
+### Unit Converter (`unitconverter/`, capability `UnitConversion`)
+
+- **PURE JVM, fully offline, zero deps.** Grammar: `2 km to mi`, `2km in mi`,
+  `2 km → mi`, `2 km -> mi`. Length (mm…mi), mass (mg…oz), temperature
+  (C/F/K, non-linear via Kelvin) and **currency-basic** (USD/EUR/GBP/JPY/INR at
+  fixed, clearly-labelled reference rates — no live FX).
+- **Honest:** unparseable or cross-category queries return a typed error with an
+  example; tiny results never silently become "0".
+- **UI:** Plugins menu → "Unit Converter…" (`UnitConverterDialog`); "Insert into
+  note" writes the result inline.
+- **Tests:** `UnitConverterTest` (conversion-matrix correctness against
+  hand-computed references, aliases, parsing variants, error paths, routing).
+
+### Outline & Checklist (`outline/`, capability `OutlineGenerator`)
+
+- **PURE Kotlin.** `OutlineGeneratorCore` groups the note's lines into sections
+  (`## heading` + `- ` bullets) or converts them to `- [ ]` checkboxes, keeping
+  existing checkbox lines and stripping list/heading decoration. Deterministic,
+  no ML, no network.
+- **Scope is explicit:** it operates on the note's FULL current text (there is no
+  selection model), the result is **previewed** in the dialog, and it is only
+  written into the note when the user taps Insert — never silently.
+- **Tests:** `OutlineGeneratorTest` (grouping/indent, decoration normalisation,
+  blank-input handling, plugin + manager routing).
+
+### Citation Formatter (`citation/`, capability `CitationFormatter`)
+
+- **Payload building:** `CitationFormatterCore` validates the URL (bare hostnames
+  upgraded to https, non-http(s) rejected) and builds `[title](url)`; title text
+  is escaped backslash-first so fetched/typed titles cannot break the Markdown,
+  and destinations containing spaces/parentheses are angle-bracket wrapped.
+- **HTTPS title fetch:** `HttpsTitleFetcher` GETs the page `<title>` (HTTPS only,
+  10s timeouts, 512 KB cap) and a pure `extractHtmlTitle` decodes common
+  entities. On ANY failure the plugin honestly falls back to a host-derived
+  label — it never fabricates a title.
+- **UI:** Plugins menu → "Cite a URL…" (`CitationFormatterDialog`) with an
+  optional manual title (no network needed then).
+- **Tests:** `CitationFormatterTest` (payload building, URL validation, title
+  extraction + entity decoding, escaping, injected-fetcher plugin behaviour,
+  routing).
 
 ## Plugin Store — install/uninstall lifecycle (Phase 21)
 

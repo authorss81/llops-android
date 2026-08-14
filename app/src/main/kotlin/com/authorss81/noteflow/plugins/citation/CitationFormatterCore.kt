@@ -40,14 +40,38 @@ object CitationFormatterCore {
     /**
      * Build the `[title](url)` link.
      *
+     * The title is rendered as Markdown link text, so any `[ ] ( )` or `\`
+     * characters are escaped backslash-first so a fetched/typed title can never
+     * break or inject into the generated link. A destination that would confuse
+     * the `(url)` grammar (spaces or unbalanced parentheses) is wrapped in
+     * angle brackets — the CommonMark form `[title](<url>)`.
+     *
      * @param title title to use; when blank, falls back to [hostLabel].
      */
     fun buildCitation(url: String, title: String?): String {
-        val label = title?.trim()?.takeIf { it.isNotEmpty() }
-            ?.replace(Regex("\\s+"), " ")?.take(200)?.trim()
-            ?: hostLabel(url)
-        return "[$label]($url)"
+        val label = escapeLinkLabel(
+            title?.trim()?.takeIf { it.isNotEmpty() }
+                ?.replace(Regex("\\s+"), " ")?.take(200)?.trim()
+                ?: hostLabel(url)
+        )
+        return "[$label](${citationDestination(url)})"
     }
+
+    /**
+     * Escape Markdown link-text syntax so a fetched/typed title renders as
+     * intended and cannot break out of the `[...]` span.
+     */
+    fun escapeLinkLabel(text: String): String = text
+        .replace("\\", "\\\\")
+        .replace("[", "\\[")
+        .replace("]", "\\]")
+        .replace("(", "\\(")
+        .replace(")", "\\)")
+
+    /** A safe `(url)` destination: angle-bracket-wrapped when it has whitespace
+     *  or parentheses that would otherwise terminate the link span early. */
+    fun citationDestination(url: String): String =
+        if (url.any { it.isWhitespace() || it == '(' || it == ')' }) "<$url>" else url
 
     /** A readable host-based label, e.g. `example.com` from the URL. */
     fun hostLabel(url: String): String {

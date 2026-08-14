@@ -57,6 +57,22 @@ class CitationFormatterTest {
         )
     }
 
+    @Test
+    fun `markdown syntax in a title is escaped so it cannot break the link`() {
+        assertEquals(
+            "[A \\[B\\] \\(C\\) \\\\ D](https://x.test)",
+            CitationFormatterCore.buildCitation("https://x.test", "A [B] (C) \\ D")
+        )
+    }
+
+    @Test
+    fun `a destination with whitespace or parens is angle-bracket wrapped`() {
+        assertEquals(
+            "[example.com](<https://example.com/a (1).html>)",
+            CitationFormatterCore.buildCitation("https://example.com/a (1).html", null)
+        )
+    }
+
     // ---- URL validation -------------------------------------------------------
 
     @Test

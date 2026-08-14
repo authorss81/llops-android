@@ -419,7 +419,7 @@ fun MarkdownPreviewScreen(
                                 dictionaryPlugins.forEach { plugin ->
                                     val runnable = viewModel.isPluginUsable(plugin.id)
                                     DropdownMenuItem(
-                                        text = { Text(if (runnable) "Look up a word…" else "Dictionary (off)") },
+                                        text = { Text(viewModel.pluginMenuLabel(plugin.id, "Look up a word…")) },
                                         leadingIcon = { Icon(Icons.Outlined.Book, contentDescription = null) },
                                         enabled = runnable,
                                         onClick = {
@@ -434,7 +434,7 @@ fun MarkdownPreviewScreen(
                                 weatherPlugins.forEach { plugin ->
                                     val runnable = viewModel.isPluginUsable(plugin.id)
                                     DropdownMenuItem(
-                                        text = { Text(if (runnable) "Weather snapshot…" else "Weather (off)") },
+                                        text = { Text(viewModel.pluginMenuLabel(plugin.id, "Weather snapshot…")) },
                                         leadingIcon = { Icon(Icons.Outlined.WbSunny, contentDescription = null) },
                                         enabled = runnable,
                                         onClick = {
@@ -450,7 +450,7 @@ fun MarkdownPreviewScreen(
                                 unitConverterPlugins.forEach { plugin ->
                                     val runnable = viewModel.isPluginUsable(plugin.id)
                                     DropdownMenuItem(
-                                        text = { Text(if (runnable) "Unit Converter…" else "Unit Converter (off)") },
+                                        text = { Text(viewModel.pluginMenuLabel(plugin.id, "Unit Converter…")) },
                                         leadingIcon = { Icon(Icons.Outlined.Calculate, contentDescription = null) },
                                         enabled = runnable,
                                         onClick = {
@@ -465,7 +465,7 @@ fun MarkdownPreviewScreen(
                                 outlinePlugins.forEach { plugin ->
                                     val runnable = viewModel.isPluginUsable(plugin.id)
                                     DropdownMenuItem(
-                                        text = { Text(if (runnable) "Outline / checklist…" else "Outline & Checklist (off)") },
+                                        text = { Text(viewModel.pluginMenuLabel(plugin.id, "Outline / checklist…")) },
                                         leadingIcon = { Icon(Icons.Outlined.ListAlt, contentDescription = null) },
                                         enabled = runnable,
                                         onClick = {
@@ -480,7 +480,7 @@ fun MarkdownPreviewScreen(
                                 citationPlugins.forEach { plugin ->
                                     val runnable = viewModel.isPluginUsable(plugin.id)
                                     DropdownMenuItem(
-                                        text = { Text(if (runnable) "Cite a URL…" else "Citation Formatter (off)") },
+                                        text = { Text(viewModel.pluginMenuLabel(plugin.id, "Cite a URL…")) },
                                         leadingIcon = { Icon(Icons.Outlined.Link, contentDescription = null) },
                                         enabled = runnable,
                                         onClick = {
@@ -827,15 +827,21 @@ fun MarkdownPreviewScreen(
             }
 
             if (showWeather) {
-                WeatherDialog(
-                    viewModel = viewModel,
-                    onInsert = { text ->
-                        contentText = if (contentText.isBlank()) text else contentText.trimEnd() + "\n\n$text\n"
-                        flushSave()
-                        viewModel.showSnackbar("Weather snapshot inserted into note")
-                    },
-                    onDismiss = { showWeather = false }
-                )
+                val weatherPluginId = viewModel.pluginRegistry
+                    .pluginsForCapability(PluginCapability.Weather)
+                    .firstOrNull()?.id
+                if (weatherPluginId != null) {
+                    WeatherDialog(
+                        viewModel = viewModel,
+                        pluginId = weatherPluginId,
+                        onInsert = { text ->
+                            contentText = if (contentText.isBlank()) text else contentText.trimEnd() + "\n\n$text\n"
+                            flushSave()
+                            viewModel.showSnackbar("Weather snapshot inserted into note")
+                        },
+                        onDismiss = { showWeather = false }
+                    )
+                }
             }
 
             if (showUnitConverter) {

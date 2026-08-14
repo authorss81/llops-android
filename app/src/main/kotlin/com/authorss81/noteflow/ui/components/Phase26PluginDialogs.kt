@@ -44,6 +44,8 @@ import com.authorss81.noteflow.plugins.PluginResult
 import com.authorss81.noteflow.plugins.UnitConversionOutcome
 import com.authorss81.noteflow.plugins.WeatherOutcome
 import com.authorss81.noteflow.plugins.weather.WeatherSnapshotFormatter
+import com.authorss81.noteflow.plugins.weather.WeatherPluginImpl
+import com.authorss81.noteflow.plugins.weather.WeatherDefaults
 import com.authorss81.noteflow.ui.viewmodel.NoteflowViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive
@@ -197,12 +199,19 @@ private sealed interface WeatherStage {
 @Composable
 fun WeatherDialog(
     viewModel: NoteflowViewModel,
+    pluginId: String,
     onInsert: (String) -> Unit,
     onDismiss: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
     var stage by remember { mutableStateOf<WeatherStage>(WeatherStage.Idle) }
     var job by remember { mutableStateOf<Job?>(null) }
+    var showConfig by remember { mutableStateOf(false) }
+    var city by remember { mutableStateOf("") }
+    var latitude by remember { mutableStateOf("") }
+    var longitude by remember { mutableStateOf("") }
+    var locationName by remember { mutableStateOf("") }
+    var configMessage by remember { mutableStateOf<String?>(null) }
 
     fun fetch() {
         job?.cancel()
@@ -221,6 +230,41 @@ fun WeatherDialog(
             }
         }
     }
+
+    fun openConfig() {
+        // Pre-fill the fields from the persisted namespaced settings.
+        val s = viewModel.pluginRegistry.settingsFor(pluginId)
+        city = s.getString(WeatherPluginImpl.SETTING_CITY).orEmpty()
+        latitude = s.getString(WeatherPluginImpl.SETTING_LATITUDE).orEmpty()
+        longitude = s.getString(WeatherPluginImpl.SETTING_LONGITUDE).orEmpty()
+        locationName = s.getString(WeatherPluginImpl.SETTING_LOCATION_NAME).orEmpty()
+        configMessage = null
+        showConfig = true
+    }
+
+    fun saveConfig() {
+        val lat = latitude.trim()
+        val lon = longitude.trim()
+        val cityTrimmed = city.trim()
+        val onlyLat = lat.isNotEmpty() && lon.isEmpty()
+        val onlyLon = lon.isNotEmpty() && lat.isEmpty()
+        if (lat.isNotEmpty() && lat.toDoubleOrNull() == null ||
+            lon.isNotEmpty() && lon.toDoubleOrNull() == null ||
+            onlyLat || onlyLon
+        ) {
+            configMessage = "Enter both latitude and longitude as numbers (e.g. 48.8566 and 2.3522), or leave both empty."
+            return
+        }
+        val s = viewModel.pluginRegistry.settingsFor(pluginId)
+        s.setString(WeatherPluginImpl.SETTING_CITY, cityTrimmed.ifEmpty { null })
+        s.setString(WeatherPluginImpl.SETTING_LATITUDE, lat.ifEmpty { null })
+        s.setString(WeatherPluginImpl.SETTING_LONGITUDE, lon.ifEmpty { null })
+        s.setString(WeatherPluginImpl.SETTING_LOCATION_NAME, locationName.trim().ifEmpty { null })
+        // Refresh the plugin's cached settings handle so the next fetch uses them.
+        viewModel.pluginRegistry.notifyConfigChanged(pluginId)
+        configMessage = "Location saved — fetch again to use it."
+    }
+
     DisposableEffect(Unit) { onDispose { job?.cancel() } }
 
     AlertDialog(
@@ -231,8 +275,8 @@ fun WeatherDialog(
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 when (val s = stage) {
                     WeatherStage.Idle -> Text(
-                        "Fetched from the keyless Open-Meteo API for the default city " +
-                            "(no GPS). Configure the city or latitude/longitude in the plugin's settings.",
+                        "Fetched from the keyless Open-Meteo API (no GPS). " +
+                            currentWeatherLocation(viewModel, pluginId) + ".",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -257,6 +301,51 @@ fun WeatherDialog(
                         color = MaterialTheme.colorScheme.error
                     )
                 }
+
+                if (showConfig) {
+                    HorizontalDivider()
+                    OutlinedTextField(
+                        value = city,
+                        onValueChange = { city = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("City (geocoded)") },
+                        singleLine = true
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = latitude,
+                            onValueChange = { latitude = it },
+                            modifier = Modifier.weight(1f),
+                            label = { Text("Latitude") },
+                            singleLine = true
+                        )
+                        OutlinedTextField(
+                            value = longitude,
+                            onValueChange = { longitude = it },
+                            modifier = Modifier.weight(1f),
+                            label = { Text("Longitude") },
+                            singleLine = true
+                        )
+                    }
+                    OutlinedTextField(
+                        value = locationName,
+                        onValueChange = { locationName = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Location name (for coordinates)") },
+                        singleLine = true
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TextButton(onClick = ::saveConfig) { Text("Save location") }
+                        TextButton(onClick = { showConfig = false }) { Text("Done") }
+                    }
+                    configMessage?.let {
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
             }
         },
         confirmButton = {
@@ -269,11 +358,32 @@ fun WeatherDialog(
                     }) { Text("Insert into note") }
                     TextButton(onClick = { job?.cancel(); onDismiss() }) { Text("Close") }
                 }
-                WeatherStage.Idle -> TextButton(onClick = ::fetch) { Text("Fetch weather") }
+                WeatherStage.Idle -> {
+                    if (!showConfig) {
+                        TextButton(onClick = ::fetch) { Text("Fetch weather") }
+                    }
+                    TextButton(onClick = { if (showConfig) showConfig = false else openConfig() }) {
+                        Text(if (showConfig) "Done" else "Configure location")
+                    }
+                }
                 else -> TextButton(onClick = { job?.cancel(); onDismiss() }) { Text("Close") }
             }
         }
     )
+}
+
+/** Human-readable summary of the persisted weather location, for the dialog. */
+private fun currentWeatherLocation(viewModel: NoteflowViewModel, pluginId: String): String {
+    val s = viewModel.pluginRegistry.settingsFor(pluginId)
+    val lat = s.getString(WeatherPluginImpl.SETTING_LATITUDE)
+    val lon = s.getString(WeatherPluginImpl.SETTING_LONGITUDE)
+    val name = s.getString(WeatherPluginImpl.SETTING_LOCATION_NAME)
+    val city = s.getString(WeatherPluginImpl.SETTING_CITY)
+    return when {
+        lat != null && lon != null -> "Using custom coordinates" + (name?.let { " ($it)" }.orEmpty())
+        city != null -> "Using city \"$city\""
+        else -> "Using the default city (${WeatherDefaults.DEFAULT_CITY})"
+    }
 }
 
 private sealed interface ConvertStage {
@@ -419,7 +529,8 @@ fun OutlineGeneratorDialog(
                 when (val s = stage) {
                     OutlineStage.Idle -> Text(
                         "Generates a structured outline or a checkbox checklist from the " +
-                            "note's current text. Previewed here before insertion.",
+                            "note's FULL current text (not just a selection). Previewed here " +
+                            "before insertion — it is only written into the note when you tap Insert.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -441,7 +552,7 @@ fun OutlineGeneratorDialog(
         confirmButton = {
             when (val s = stage) {
                 is OutlineStage.Result -> {
-                    TextButton(onClick = { onInsert("\n\n${s.text}\n"); onDismiss() }) { Text("Insert into note") }
+                    TextButton(onClick = { onInsert(s.text); onDismiss() }) { Text("Insert into note") }
                     TextButton(onClick = onDismiss) { Text("Close") }
                 }
                 OutlineStage.Idle, is OutlineStage.Error -> TextButton(onClick = ::generate) { Text("Generate") }

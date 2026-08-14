@@ -140,6 +140,15 @@ class UnitConverterTest {
         assertTrue(UnitConverterCore.formatResult(1.242742).startsWith("1.242"))
     }
 
+    @Test
+    fun `format never turns a tiny non-zero result into zero`() {
+        assertTrue(UnitConverterCore.formatResult(1e-9) != "0")
+        // 1 mg → t is 1e-9 t: it must not read as "0 t".
+        val text = UnitConverterCore.convertQuery("1 mg to t")
+        assertNotNull(text)
+        assertTrue(text!!.contains("E-"))
+    }
+
     // ---- plugin --------------------------------------------------------------
 
     @Test

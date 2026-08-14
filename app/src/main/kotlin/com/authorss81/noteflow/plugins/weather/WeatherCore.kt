@@ -59,10 +59,13 @@ object OpenMeteoForecastParser {
     /**
      * @param json the forecast JSON (daily time/weather_code/temperature/wind arrays).
      * @param city display name for the snapshot.
+     * @param locationProvenance provenance of the location ("Default city" vs
+     *   "Configured location") — supplied by the caller, which knows the config
+     *   path actually used. NEVER derived from the city name.
      * @return the FIRST forecast day, or null for a blank/empty payload.
      * @throws WeatherServiceException on malformed JSON.
      */
-    fun parse(json: String, city: String): WeatherSnapshot? {
+    fun parse(json: String, city: String, locationProvenance: String = "Configured location"): WeatherSnapshot? {
         if (json.isBlank()) return null
         val forecast: RawForecast = try {
             gson.fromJson(json, RawForecast::class.java)
@@ -86,8 +89,8 @@ object OpenMeteoForecastParser {
             tempMaxC = max.first(),
             weatherCode = code,
             weatherDescription = WmoWeatherCode.description(code),
-            windSpeedKmh = wind.firstOrNull() ?: 0.0,
-            sourceNote = if (city == WeatherDefaults.DEFAULT_CITY) "Default city" else "Configured location"
+windSpeedKmh = wind.firstOrNull() ?: 0.0,
+            sourceNote = locationProvenance
         )
     }
 

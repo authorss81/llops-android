@@ -1,4 +1,11 @@
-# Phase 26: Lightweight plugin ecosystem — 5 safe compile-time plugins [NOT STARTED]
+# Phase 26: Lightweight plugin ecosystem — 5 safe compile-time plugins [DONE — 2026-08-14]
+
+> Review + fix pass applied (see review findings): every finding addressed.
+> **Base-APK size delta:** no new dependencies were added (all five plugins are
+> pure Kotlin + the already-present Gson), so the delta is only the compiled
+> class overhead. Measured: debug APK grew **≈ 112 KB** (parent 294,389,834 →
+> phase-26 294,504,581 bytes) — comfortably inside the "few hundred KB max"
+> DoD bound.
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with a hardened hybrid plugin framework (Phases 10–11, 22), a downloadable
