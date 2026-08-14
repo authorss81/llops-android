@@ -1130,6 +1130,24 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         if (dataInitialized) return
         dataInitialized = true
         viewModelScope.launch {
+            if (!settings.fieldAadMigrated) {
+                // B2-CRYPTO-09 (phase-107): bind pre-phase-107 field ciphertexts to
+                // their record context before any page/stroke/version is served.
+                // Runs on the DEK (never plaintext), is idempotent, and leaves
+                // plaintext rows untouched (that is reencryptPlaintextFields' job).
+                val dek = repository.encryptionKey
+                if (dek != null) {
+                    try {
+                        repository.migrateFieldRecordAad(dek)
+                        // Success: no legacy rows remain for the fallback to read.
+                        // On failure the flag stays unset and the pass re-runs on
+                        // the next unlock (reads stay safe via the legacy AAD fallback).
+                        settings.fieldAadMigrated = true
+                    } catch (e: Exception) {
+                        // Keep the flag unset and retry on the next unlock.
+                    }
+                }
+            }
             val lastNbId = settings.activeNotebookId
             val lastSecId = settings.activeSectionId
             var restoredNb: NotebookEntity? = null
@@ -1636,6 +1654,11 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
                 DatabaseSecurityHelper.clearRestoreBlock(getApplication())
                 _restoreBlocked.value = false
                 _databaseTampered.value = false
+                // B2-CRYPTO-09 (phase-107): a restored backup may carry legacy
+                // global-AAD field ciphertexts (even on this device the DEK is
+                // unchanged, so the restore re-key skips them). Force re-migration
+                // on the next launch so every restored row is record-bound.
+                settings.fieldAadMigrated = false
                 delay(500)
                 kotlin.system.exitProcess(0)
             } catch (e: Exception) {
@@ -2045,6 +2068,9 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
                 val bytes = withContext(Dispatchers.IO) { sourceZip.readBytes() }
                 repository.closeDatabase()
                 ImportExportService.importBackup(getApplication(), bytes, repository.encryptionKey)
+                // B2-CRYPTO-09 (phase-107): re-migrate restored rows to per-record
+                // AAD on next launch (see attemptRecoveryFromBackup comment).
+                settings.fieldAadMigrated = false
                 onComplete(true)
             } catch (e: Exception) {
                 // H1 (phase-09): a failed WebDAV restore leaves the live DB closed —

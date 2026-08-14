@@ -152,13 +152,97 @@ class NoteRepository(private var db: NoteflowDatabase) {
         DatabaseSecurityHelper.updateStoredChecksum(context)
     }
 
-    private fun isFieldEncrypted(value: String, key: ByteArray): Boolean {
+    private fun isFieldEncrypted(value: String, key: ByteArray, table: String, recordId: String, fieldName: String): Boolean {
         if (value.isBlank()) return true // nothing to encrypt
         return try {
-            EncryptionService.decrypt(value, key)
+            EncryptionService.decryptField(value, key, table, recordId, fieldName)
             true
         } catch (e: Exception) {
             false
+        }
+    }
+
+    /**
+     * B2-CRYPTO-09 (phase-107): one-time re-encryption of every existing field
+     * ciphertext under its per-record AAD. Pre-phase-107 rows were authenticated
+     * ONLY by the global FIELD_AAD constant (all four field tables), making them
+     * transplantable between records. Reading them is still possible via
+     * [EncryptionService.decryptField]'s legacy fallback, but this pass binds
+     * them to `table|recordId|fieldName` so a relocated ciphertext fails its tag.
+     * Plaintext/blank rows are left untouched (that is the reencryptPlaintextFields
+     * concern, B2-CRYPTO-10 phase-108). Idempotent: bound rows are skipped.
+     */
+    suspend fun migrateFieldRecordAad(dek: ByteArray) = withContext(Dispatchers.IO) {
+        db.withTransaction {
+            db.pageDao().getAllPagesForReencrypt().forEach { page ->
+                var title = page.title
+                var extracted = page.extractedText
+                var dirty = false
+                if (title.isNotBlank() && !EncryptionService.isFieldBoundToRecord(title, dek, "pages", page.id, "title")) {
+                    val plain = try { EncryptionService.decrypt(title, dek) } catch (e: Exception) { null }
+                    if (plain != null) {
+                        title = EncryptionService.encryptField(plain, dek, "pages", page.id, "title")
+                        dirty = true
+                    }
+                }
+                if (!extracted.isNullOrBlank() && !EncryptionService.isFieldBoundToRecord(extracted, dek, "pages", page.id, "extractedText")) {
+                    val plain = try { EncryptionService.decrypt(extracted, dek) } catch (e: Exception) { null }
+                    if (plain != null) {
+                        extracted = EncryptionService.encryptField(plain, dek, "pages", page.id, "extractedText")
+                        dirty = true
+                    }
+                }
+                if (dirty) db.pageDao().updateEncryptedFields(page.id, title, extracted)
+            }
+            db.strokeDao().getAllStrokesForReencrypt().forEach { stroke ->
+                var text = stroke.textContent
+                var points = stroke.pointsJson
+                var dirty = false
+                if (text?.isNotBlank() == true && !EncryptionService.isFieldBoundToRecord(text, dek, "strokes", stroke.id, "textContent")) {
+                    val plain = try { EncryptionService.decrypt(text, dek) } catch (e: Exception) { null }
+                    if (plain != null) {
+                        text = EncryptionService.encryptField(plain, dek, "strokes", stroke.id, "textContent")
+                        dirty = true
+                    }
+                }
+                if (points.isNotBlank() && !EncryptionService.isFieldBoundToRecord(points, dek, "strokes", stroke.id, "pointsJson")) {
+                    val plain = try { EncryptionService.decrypt(points, dek) } catch (e: Exception) { null }
+                    if (plain != null) {
+                        points = EncryptionService.encryptField(plain, dek, "strokes", stroke.id, "pointsJson")
+                        dirty = true
+                    }
+                }
+                if (dirty) db.strokeDao().updateStrokeFields(stroke.id, text, points)
+            }
+            db.mediaEmbedDao().getAllEmbedsForReencrypt().forEach { embed ->
+                val text = embed.textContent
+                if (text?.isNotBlank() == true && !EncryptionService.isFieldBoundToRecord(text, dek, "media_embeds", embed.id, "textContent")) {
+                    val plain = try { EncryptionService.decrypt(text, dek) } catch (e: Exception) { null }
+                    if (plain != null) {
+                        db.mediaEmbedDao().updateTextContent(embed.id, EncryptionService.encryptField(plain, dek, "media_embeds", embed.id, "textContent"))
+                    }
+                }
+            }
+            db.noteVersionDao().getAllVersionsForReencrypt().forEach { version ->
+                var title = version.title
+                var extracted = version.extractedText
+                var dirty = false
+                if (title.isNotBlank() && !EncryptionService.isFieldBoundToRecord(title, dek, "note_versions", version.id, "title")) {
+                    val plain = try { EncryptionService.decrypt(title, dek) } catch (e: Exception) { null }
+                    if (plain != null) {
+                        title = EncryptionService.encryptField(plain, dek, "note_versions", version.id, "title")
+                        dirty = true
+                    }
+                }
+                if (!extracted.isNullOrBlank() && !EncryptionService.isFieldBoundToRecord(extracted, dek, "note_versions", version.id, "extractedText")) {
+                    val plain = try { EncryptionService.decrypt(extracted, dek) } catch (e: Exception) { null }
+                    if (plain != null) {
+                        extracted = EncryptionService.encryptField(plain, dek, "note_versions", version.id, "extractedText")
+                        dirty = true
+                    }
+                }
+                if (dirty) db.noteVersionDao().updateVersionFields(version.id, title, extracted)
+            }
         }
     }
 
@@ -173,12 +257,12 @@ class NoteRepository(private var db: NoteflowDatabase) {
                 var title = page.title
                 var extracted = page.extractedText
                 var dirty = false
-                if (title.isNotBlank() && !isFieldEncrypted(title, dek)) {
-                    title = EncryptionService.encrypt(title.toByteArray(), dek)
+                if (title.isNotBlank() && !isFieldEncrypted(title, dek, "pages", page.id, "title")) {
+                    title = EncryptionService.encryptField(title.toByteArray(), dek, "pages", page.id, "title")
                     dirty = true
                 }
-                if (!extracted.isNullOrBlank() && !isFieldEncrypted(extracted, dek)) {
-                    extracted = EncryptionService.encrypt(extracted.toByteArray(), dek)
+                if (!extracted.isNullOrBlank() && !isFieldEncrypted(extracted, dek, "pages", page.id, "extractedText")) {
+                    extracted = EncryptionService.encryptField(extracted.toByteArray(), dek, "pages", page.id, "extractedText")
                     dirty = true
                 }
                 if (dirty) db.pageDao().updateEncryptedFields(page.id, title, extracted)
@@ -189,12 +273,12 @@ class NoteRepository(private var db: NoteflowDatabase) {
                 var dirty = false
                 var newText = text
                 var newPoints = points
-                if (!text.isNullOrBlank() && !isFieldEncrypted(text, dek)) {
-                    newText = EncryptionService.encrypt(text.toByteArray(), dek)
+                if (!text.isNullOrBlank() && !isFieldEncrypted(text, dek, "strokes", stroke.id, "textContent")) {
+                    newText = EncryptionService.encryptField(text.toByteArray(), dek, "strokes", stroke.id, "textContent")
                     dirty = true
                 }
-                if (!points.isNullOrBlank() && !isFieldEncrypted(points, dek)) {
-                    newPoints = EncryptionService.encrypt(points.toByteArray(), dek)
+                if (!points.isNullOrBlank() && !isFieldEncrypted(points, dek, "strokes", stroke.id, "pointsJson")) {
+                    newPoints = EncryptionService.encryptField(points.toByteArray(), dek, "strokes", stroke.id, "pointsJson")
                     dirty = true
                 }
                 if (dirty) {
@@ -203,8 +287,8 @@ class NoteRepository(private var db: NoteflowDatabase) {
             }
             db.mediaEmbedDao().getAllEmbedsForReencrypt().forEach { embed ->
                 val text = embed.textContent
-                if (!text.isNullOrBlank() && !isFieldEncrypted(text, dek)) {
-                    val encrypted = EncryptionService.encrypt(text.toByteArray(), dek)
+                if (!text.isNullOrBlank() && !isFieldEncrypted(text, dek, "media_embeds", embed.id, "textContent")) {
+                    val encrypted = EncryptionService.encryptField(text.toByteArray(), dek, "media_embeds", embed.id, "textContent")
                     db.mediaEmbedDao().updateTextContent(embed.id, encrypted)
                 }
             }
@@ -219,12 +303,12 @@ class NoteRepository(private var db: NoteflowDatabase) {
                 var dirty = false
                 var newTitle = title
                 var newExtracted = extracted
-                if (title.isNotBlank() && !isFieldEncrypted(title, dek)) {
-                    newTitle = EncryptionService.encrypt(title.toByteArray(), dek)
+                if (title.isNotBlank() && !isFieldEncrypted(title, dek, "note_versions", version.id, "title")) {
+                    newTitle = EncryptionService.encryptField(title.toByteArray(), dek, "note_versions", version.id, "title")
                     dirty = true
                 }
-                if (!extracted.isNullOrBlank() && !isFieldEncrypted(extracted, dek)) {
-                    newExtracted = EncryptionService.encrypt(extracted.toByteArray(), dek)
+                if (!extracted.isNullOrBlank() && !isFieldEncrypted(extracted, dek, "note_versions", version.id, "extractedText")) {
+                    newExtracted = EncryptionService.encryptField(extracted.toByteArray(), dek, "note_versions", version.id, "extractedText")
                     dirty = true
                 }
                 if (dirty) {
@@ -358,15 +442,16 @@ class NoteRepository(private var db: NoteflowDatabase) {
         tags: String = ""
     ): NotePageEntity = withContext(Dispatchers.Default) {
         val rawTitle = title.trim()
-        val storedTitle = encryptionKey?.let { EncryptionService.encrypt(rawTitle.toByteArray(), it) } ?: rawTitle
+        val pageId = UUID.randomUUID().toString()
+        val storedTitle = encryptionKey?.let { EncryptionService.encryptField(rawTitle.toByteArray(), it, "pages", pageId, "title") } ?: rawTitle
         val rawExtracted = extractedText ?: ""
         val storedExtracted = if (encryptionKey != null && rawExtracted.isNotBlank()) {
-            EncryptionService.encrypt(rawExtracted.toByteArray(), encryptionKey!!)
+            EncryptionService.encryptField(rawExtracted.toByteArray(), encryptionKey!!, "pages", pageId, "extractedText")
         } else {
             rawExtracted
         }
         val page = NotePageEntity(
-            id = UUID.randomUUID().toString(),
+            id = pageId,
             sectionId = sectionId,
             title = storedTitle,
             sourceFilePath = sourceFilePath,
@@ -384,7 +469,7 @@ class NoteRepository(private var db: NoteflowDatabase) {
 
     suspend fun renamePage(id: String, title: String) = withContext(Dispatchers.Default) {
         val rawTitle = title.trim()
-        val storedTitle = encryptionKey?.let { EncryptionService.encrypt(rawTitle.toByteArray(), it) } ?: rawTitle
+        val storedTitle = encryptionKey?.let { EncryptionService.encryptField(rawTitle.toByteArray(), it, "pages", id, "title") } ?: rawTitle
         db.pageDao().renamePage(id, storedTitle)
         invalidateSearchCorpus()
     }
@@ -396,7 +481,7 @@ class NoteRepository(private var db: NoteflowDatabase) {
 
     suspend fun updatePageTitleAndTags(id: String, title: String, tags: String) = withContext(Dispatchers.Default) {
         val rawTitle = title.trim()
-        val storedTitle = encryptionKey?.let { EncryptionService.encrypt(rawTitle.toByteArray(), it) } ?: rawTitle
+        val storedTitle = encryptionKey?.let { EncryptionService.encryptField(rawTitle.toByteArray(), it, "pages", id, "title") } ?: rawTitle
         db.pageDao().updatePageTitleAndTags(id, storedTitle, tags.trim())
         invalidateSearchCorpus()
     }
@@ -453,7 +538,7 @@ class NoteRepository(private var db: NoteflowDatabase) {
             val rawText = entity.textContent
             val decryptedText = if (encryptionKey != null && rawText.isNotBlank()) {
                 try {
-                    String(EncryptionService.decrypt(rawText, encryptionKey!!))
+                    String(EncryptionService.decryptField(rawText, encryptionKey!!, "strokes", entity.id, "textContent"))
                 } catch (e: Exception) {
                     rawText
                 }
@@ -464,7 +549,7 @@ class NoteRepository(private var db: NoteflowDatabase) {
             val rawPointsJson = entity.pointsJson
             val decryptedPointsJson = if (encryptionKey != null && rawPointsJson.isNotBlank()) {
                 try {
-                    String(EncryptionService.decrypt(rawPointsJson, encryptionKey!!))
+                    String(EncryptionService.decryptField(rawPointsJson, encryptionKey!!, "strokes", entity.id, "pointsJson"))
                 } catch (e: Exception) {
                     rawPointsJson
                 }
@@ -568,7 +653,7 @@ class NoteRepository(private var db: NoteflowDatabase) {
             val entities = changed.map { stroke ->
                 val rawText = stroke.text
                 val storedText = if (encryptionKey != null && rawText.isNotBlank()) {
-                    EncryptionService.encrypt(rawText.toByteArray(), encryptionKey!!)
+                    EncryptionService.encryptField(rawText.toByteArray(), encryptionKey!!, "strokes", stroke.id, "textContent")
                 } else {
                     rawText
                 }
@@ -576,7 +661,7 @@ class NoteRepository(private var db: NoteflowDatabase) {
                 val dummyStroke = stroke.copy(text = "")
                 val pointsJson = EncryptionService.serializeStrokes(listOf(dummyStroke))
                 val storedPointsJson = if (encryptionKey != null && pointsJson.isNotBlank()) {
-                    EncryptionService.encrypt(pointsJson.toByteArray(), encryptionKey!!)
+                    EncryptionService.encryptField(pointsJson.toByteArray(), encryptionKey!!, "strokes", stroke.id, "pointsJson")
                 } else {
                     pointsJson
                 }
@@ -627,7 +712,7 @@ class NoteRepository(private var db: NoteflowDatabase) {
             val text = entity.textContent ?: ""
             val decryptedText = if (encryptionKey != null && text.isNotBlank()) {
                 try {
-                    String(EncryptionService.decrypt(text, encryptionKey!!))
+                    String(EncryptionService.decryptField(text, encryptionKey!!, "media_embeds", entity.id, "textContent"))
                 } catch (e: Exception) { text }
             } else text
 
@@ -716,7 +801,7 @@ class NoteRepository(private var db: NoteflowDatabase) {
             val entities = embeds.map { embed ->
                 val rawText = embed.textContent ?: ""
                 val storedText = if (encryptionKey != null && rawText.isNotBlank()) {
-                    EncryptionService.encrypt(rawText.toByteArray(), encryptionKey!!)
+                    EncryptionService.encryptField(rawText.toByteArray(), encryptionKey!!, "media_embeds", embed.id, "textContent")
                 } else {
                     rawText
                 }
@@ -795,15 +880,16 @@ class NoteRepository(private var db: NoteflowDatabase) {
     }
 
     suspend fun createNoteVersion(pageId: String, title: String, extractedText: String?, versionNote: String = "Saved version") = withContext(Dispatchers.IO) {
-        val storedTitle = encryptionKey?.let { EncryptionService.encrypt(title.toByteArray(), it) } ?: title
+        val versionId = UUID.randomUUID().toString()
+        val storedTitle = encryptionKey?.let { EncryptionService.encryptField(title.toByteArray(), it, "note_versions", versionId, "title") } ?: title
         val rawExtracted = extractedText ?: ""
         val storedExtracted = if (encryptionKey != null && rawExtracted.isNotBlank()) {
-            EncryptionService.encrypt(rawExtracted.toByteArray(), encryptionKey!!)
+            EncryptionService.encryptField(rawExtracted.toByteArray(), encryptionKey!!, "note_versions", versionId, "extractedText")
         } else {
             rawExtracted
         }
         val version = NoteVersionEntity(
-            id = UUID.randomUUID().toString(),
+            id = versionId,
             pageId = pageId,
             title = storedTitle,
             extractedText = storedExtracted,
@@ -816,9 +902,9 @@ class NoteRepository(private var db: NoteflowDatabase) {
     suspend fun getNoteVersions(pageId: String): List<NoteVersionEntity> = withContext(Dispatchers.IO) {
         val versions = db.noteVersionDao().getVersionsForPage(pageId)
         versions.map { v ->
-            val decTitle = encryptionKey?.let { key -> EncryptionService.decryptOrNull(v.title, key) } ?: v.title
+            val decTitle = encryptionKey?.let { key -> EncryptionService.decryptFieldOrNull(v.title, key, "note_versions", v.id, "title") } ?: v.title
             val decText = if (encryptionKey != null && !v.extractedText.isNullOrBlank()) {
-                EncryptionService.decryptOrNull(v.extractedText, encryptionKey!!) ?: v.extractedText
+                EncryptionService.decryptFieldOrNull(v.extractedText, encryptionKey!!, "note_versions", v.id, "extractedText") ?: v.extractedText
             } else {
                 v.extractedText
             }
@@ -830,10 +916,10 @@ class NoteRepository(private var db: NoteflowDatabase) {
 
         if (encryptionKey == null) return page
         return try {
-            val decryptedTitle = String(EncryptionService.decrypt(page.title, encryptionKey!!))
+            val decryptedTitle = String(EncryptionService.decryptField(page.title, encryptionKey!!, "pages", page.id, "title"))
             val decryptedExtracted = if (!page.extractedText.isNullOrBlank()) {
                 try {
-                    String(EncryptionService.decrypt(page.extractedText, encryptionKey!!))
+                    String(EncryptionService.decryptField(page.extractedText, encryptionKey!!, "pages", page.id, "extractedText"))
                 } catch (e: Exception) {
                     page.extractedText
                 }

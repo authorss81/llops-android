@@ -19,6 +19,12 @@ object EncryptionService {
     private const val PAYLOAD_VERSION: Byte = 1
     // Domain separation AAD: binds ciphertext to this app's field-encryption context.
     private val FIELD_AAD = "Noteflow-Vault-Field-Encryption-v1".toByteArray(Charsets.UTF_8)
+    // B2-CRYPTO-09 (phase-107): per-record AAD prefix. Every field ciphertext now
+    // authenticates under `v2|<table>|<recordId>|<fieldName>` instead of the single
+    // global FIELD_AAD, so a ciphertext can never be relocated (transplanted) into a
+    // different record or column. The v1 constant above is retained ONLY as the
+    // migration fallback reader for rows written before this phase.
+    private const val FIELD_AAD_V2_PREFIX = "Noteflow-Vault-Field-Encryption-v2|"
     private val gson = Gson()
 
     fun generateSalt(): ByteArray {
@@ -177,6 +183,82 @@ object EncryptionService {
             String(decrypt(encryptedBase64, key), Charsets.UTF_8)
         } catch (e: Exception) {
             null
+        }
+    }
+
+    // ---------- B2-CRYPTO-09 (phase-107): per-record field AAD binding ----------
+
+    /**
+     * Binds the ciphertext to its exact storage context: table + record id +
+     * field name (e.g. `pages|41f6…|title`). Two ciphertexts from different
+     * records (or different columns) can never authenticate in each other's
+     * slot, so a transplant attack fails the GCM tag instead of rendering.
+     */
+    fun fieldAad(table: String, recordId: String, fieldName: String): ByteArray =
+        (FIELD_AAD_V2_PREFIX + table + "|" + recordId + "|" + fieldName).toByteArray(Charsets.UTF_8)
+
+    /**
+     * Encrypts a field payload under its per-record AAD. Same wire format as
+     * [encrypt] ([PAYLOAD_VERSION] + 12-byte IV + GCM ciphertext+tag), so the
+     * deterministic format checks in [decryptField] apply unchanged.
+     */
+    fun encryptField(data: ByteArray, key: ByteArray, table: String, recordId: String, fieldName: String): String {
+        return base64Encode(encryptAad(data, key, fieldAad(table, recordId, fieldName)))
+    }
+
+    /**
+     * Decrypts a field payload produced by [encryptField].
+     *
+     * The per-record AAD is tried first. On an [javax.crypto.AEADBadTagException]
+     * ONLY, the pre-phase-107 global [FIELD_AAD] is retried so rows encrypted
+     * before this phase (and their ciphertext is legally in its own record) still
+     * decrypt — the migration reader for `migrateFieldRecordAad`. A transplanted
+     * NEW-format ciphertext fails both attempts (its tag covers the per-record
+     * AAD), so the fallback never rescues a relocation; and after the migration
+     * pass completes no legacy rows remain for it to read. Malformed/unversioned
+     * payloads are rejected before any decrypt (same policy as [decrypt]).
+     */
+    fun decryptField(encryptedBase64: String, key: ByteArray, table: String, recordId: String, fieldName: String): ByteArray {
+        val combined = base64Decode(encryptedBase64)
+        if (combined.size < GCM_IV_LENGTH + 1) throw IllegalArgumentException("Invalid encrypted payload")
+        if (combined[0] != PAYLOAD_VERSION) {
+            throw IllegalArgumentException("Unsupported payload format: missing version marker")
+        }
+        return try {
+            decryptCoreAad(combined, key, fieldAad(table, recordId, fieldName), offset = 1)
+        } catch (e: javax.crypto.AEADBadTagException) {
+            decryptCoreAad(combined, key, FIELD_AAD, offset = 1)
+        }
+    }
+
+    /**
+     * Like [decryptField] but returns null on any decrypt failure instead of
+     * throwing — the per-record analogue of [decryptOrNull].
+     */
+    fun decryptFieldOrNull(encryptedBase64: String, key: ByteArray, table: String, recordId: String, fieldName: String): String? {
+        return try {
+            String(decryptField(encryptedBase64, key, table, recordId, fieldName), Charsets.UTF_8)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /**
+     * True iff the payload decrypts under its OWN per-record AAD (i.e. it is not
+     * a legacy global-[FIELD_AAD] row). Used by [com.authorss81.noteflow.data.repository.NoteRepository.migrateFieldRecordAad]
+     * to decide whether a row still needs re-encryption; does NOT consult the
+     * legacy fallback, so a legacy row returns false even though [decryptField]
+     * can read it.
+     */
+    fun isFieldBoundToRecord(encryptedBase64: String, key: ByteArray, table: String, recordId: String, fieldName: String): Boolean {
+        return try {
+            val combined = base64Decode(encryptedBase64)
+            if (combined.size < GCM_IV_LENGTH + 1) return false
+            if (combined[0] != PAYLOAD_VERSION) return false
+            decryptCoreAad(combined, key, fieldAad(table, recordId, fieldName), offset = 1)
+            true
+        } catch (e: Exception) {
+            false
         }
     }
 

@@ -1191,15 +1191,19 @@ object ImportExportService {
     )
 
     /**
-     * C1: re-keys a single field-ciphertext value from the backup DEK to the
-     * current DEK. Returns null (leave the value alone) when the value is
-     * plaintext, blank, or already keyed with the new DEK.
+     * C1/B2-CRYPTO-09 (phase-107): re-keys a single field-ciphertext value from
+     * the backup DEK to the current DEK and re-binds it to its per-record AAD
+     * (`table|recordId|fieldName`). The source may be a legacy global-AAD row
+     * or an already-record-bound row — [EncryptionService.decryptField]'s
+     * fallback reads both under the backup DEK — and the result is always a
+     * per-record-bound ciphertext under the new DEK. Returns null (leave the
+     * value alone) when the value is plaintext, blank, or not decryptable.
      */
-    internal fun reencryptFieldValue(value: String?, oldDek: ByteArray, newDek: ByteArray): String? {
+    internal fun reencryptFieldValue(value: String?, oldDek: ByteArray, newDek: ByteArray, table: String, recordId: String, fieldName: String): String? {
         if (value.isNullOrBlank()) return null
         return try {
-            val plain = EncryptionService.decrypt(value, oldDek)
-            EncryptionService.encrypt(plain, newDek)
+            val plain = EncryptionService.decryptField(value, oldDek, table, recordId, fieldName)
+            EncryptionService.encryptField(plain, newDek, table, recordId, fieldName)
         } catch (e: Exception) {
             null
         }
@@ -1659,7 +1663,7 @@ object ImportExportService {
             while (cursor.moveToNext()) {
                 val id = cursor.getString(idIdx)
                 val value = cursor.getString(colIdx)
-                val reencrypted = reencryptFieldValue(value, oldDek, newDek)
+                val reencrypted = reencryptFieldValue(value, oldDek, newDek, table, id, column)
                 if (reencrypted != null) updates.add(id to reencrypted)
             }
             cursor.close()

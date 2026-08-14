@@ -197,13 +197,13 @@ class WebDavSyncServiceTest {
         // A field that is plaintext (not DEK-ciphertext) must be left untouched
         // by the cross-device re-key pass, not garbled.
         assertNull(
-            ImportExportService.reencryptFieldValue("plain title", oldDek = ByteArray(32) { 1 }, newDek = ByteArray(32) { 2 })
+            ImportExportService.reencryptFieldValue("plain title", oldDek = ByteArray(32) { 1 }, newDek = ByteArray(32) { 2 }, table = "pages", recordId = "r1", fieldName = "title")
         )
         assertNull(
-            ImportExportService.reencryptFieldValue("", oldDek = ByteArray(32) { 1 }, newDek = ByteArray(32) { 2 })
+            ImportExportService.reencryptFieldValue("", oldDek = ByteArray(32) { 1 }, newDek = ByteArray(32) { 2 }, table = "pages", recordId = "r1", fieldName = "title")
         )
         assertNull(
-            ImportExportService.reencryptFieldValue(null, oldDek = ByteArray(32) { 1 }, newDek = ByteArray(32) { 2 })
+            ImportExportService.reencryptFieldValue(null, oldDek = ByteArray(32) { 1 }, newDek = ByteArray(32) { 2 }, table = "pages", recordId = "r1", fieldName = "title")
         )
     }
 }

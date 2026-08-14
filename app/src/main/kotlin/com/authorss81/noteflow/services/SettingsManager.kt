@@ -30,6 +30,14 @@ class SettingsManager(context: Context) {
         get() = prefs.getBoolean("tutorial_completed", false)
         set(value) = prefs.edit().putBoolean("tutorial_completed", value).apply()
 
+    // B2-CRYPTO-09 (phase-107): one-time per-record field AAD migration flag.
+    // Set after NoteRepository.migrateFieldRecordAad has bound every pre-phase-107
+    // ciphertext to its table|recordId|fieldName context, so the (O-rows) pass is
+    // not re-run on every unlock.
+    var fieldAadMigrated: Boolean
+        get() = prefs.getBoolean("field_aad_migrated", false)
+        set(value) = prefs.edit().putBoolean("field_aad_migrated", value).apply()
+
     var activeNotebookId: String?
         get() = prefs.getString("active_notebook_id", null)
         set(value) = prefs.edit().putString("active_notebook_id", value).apply()
