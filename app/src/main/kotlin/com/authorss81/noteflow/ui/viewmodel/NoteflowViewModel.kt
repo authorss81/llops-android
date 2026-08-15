@@ -962,6 +962,12 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         }
         _corruptionBlocked.value = false
         _databaseTampered.value = false
+        // B1-DB-1 (phase-43): initializeData() bails with the corruption flag on a
+        // failed open, so a fresh empty vault never got its default notebook/section.
+        // Re-run it now that the flag is cleared (guard re-armed) so "start fresh"
+        // yields a usable empty vault instead of a blank, uninitialized home screen.
+        dataInitialized = false
+        initializeData()
     }
 
     init {
@@ -1033,6 +1039,15 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     private val _authenticated = MutableStateFlow(!settings.hasMasterPassword)
     val authenticated: StateFlow<Boolean> = _authenticated.asStateFlow()
 
+    // B1-DB-1 (phase-43): the note-data flows gate on BOTH auth and the corruption
+    // flag. While the vault is quarantined the corruption-recovery screen is shown
+    // and no flow may open the DB — the quarantined helper guard makes any open
+    // fail (never auto-create an empty DB behind the user's back). Restore success
+    // and "start fresh" clear the flag and re-arm these flows.
+    private val dbGate: Flow<Boolean> = combine(_authenticated, _corruptionBlocked) { isAuth, blocked ->
+        isAuth && !blocked
+    }.distinctUntilChanged()
+
     private val _hasMasterPassword = MutableStateFlow(settings.hasMasterPassword)
     val hasMasterPassword: StateFlow<Boolean> = _hasMasterPassword.asStateFlow()
 
@@ -1066,31 +1081,35 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     val p2pNotification: StateFlow<String?> = _p2pNotification.asStateFlow()
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-    val notebooks: StateFlow<List<NotebookEntity>> = _authenticated
-        .flatMapLatest { isAuth ->
-            if (isAuth) repository.notebooks else flowOf(emptyList())
+    val notebooks: StateFlow<List<NotebookEntity>> = dbGate
+        .flatMapLatest { enabled ->
+            if (enabled) repository.notebooks else flowOf(emptyList())
         }
+        .catch { emit(emptyList()) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-    val allSections: StateFlow<List<SectionEntity>> = _authenticated
-        .flatMapLatest { isAuth ->
-            if (isAuth) repository.getAllSections() else flowOf(emptyList())
+    val allSections: StateFlow<List<SectionEntity>> = dbGate
+        .flatMapLatest { enabled ->
+            if (enabled) repository.getAllSections() else flowOf(emptyList())
         }
+        .catch { emit(emptyList()) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-    val allActivePages: StateFlow<List<NotePageEntity>> = _authenticated
-        .flatMapLatest { isAuth ->
-            if (isAuth) repository.getAllActivePagesFlow() else flowOf(emptyList())
+    val allActivePages: StateFlow<List<NotePageEntity>> = dbGate
+        .flatMapLatest { enabled ->
+            if (enabled) repository.getAllActivePagesFlow() else flowOf(emptyList())
         }
+        .catch { emit(emptyList()) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-    val paletteItems: StateFlow<List<PaletteItemEntity>> = _authenticated
-        .flatMapLatest { isAuth ->
-            if (isAuth) repository.allPaletteItems else flowOf(emptyList())
+    val paletteItems: StateFlow<List<PaletteItemEntity>> = dbGate
+        .flatMapLatest { enabled ->
+            if (enabled) repository.allPaletteItems else flowOf(emptyList())
         }
+        .catch { emit(emptyList()) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private val _selectedNotebook = MutableStateFlow<NotebookEntity?>(null)
@@ -1109,17 +1128,19 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     val selectedPage: StateFlow<NotePageEntity?> = _selectedPage.asStateFlow()
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-    val recentPages: StateFlow<List<NotePageEntity>> = _authenticated
-        .flatMapLatest { isAuth ->
-            if (isAuth) repository.getRecentPages() else flowOf(emptyList())
+    val recentPages: StateFlow<List<NotePageEntity>> = dbGate
+        .flatMapLatest { enabled ->
+            if (enabled) repository.getRecentPages() else flowOf(emptyList())
         }
+        .catch { emit(emptyList()) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-    val trashedPages: StateFlow<List<NotePageEntity>> = _authenticated
-        .flatMapLatest { isAuth ->
-            if (isAuth) repository.getTrashedPages() else flowOf(emptyList())
+    val trashedPages: StateFlow<List<NotePageEntity>> = dbGate
+        .flatMapLatest { enabled ->
+            if (enabled) repository.getTrashedPages() else flowOf(emptyList())
         }
+        .catch { emit(emptyList()) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private var sectionsJob: Job? = null
@@ -1132,6 +1153,24 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         if (dataInitialized) return
         dataInitialized = true
         viewModelScope.launch {
+            try {
+                initializeDataCore()
+            } catch (e: Exception) {
+                // B1-DB-1 (phase-43): the vault open failed and the quarantined-helper
+                // already set the persistent corruption flag before rethrowing. Surface
+                // the corruption-recovery screen IN THIS SESSION instead of crashing a
+                // dead DB. Any OTHER exception is rethrown (data corruption must never
+                // be silently swallowed).
+                if (DatabaseSecurityHelper.hasCorruptionDetected(appContext)) {
+                    _corruptionBlocked.value = true
+                } else {
+                    throw e
+                }
+            }
+        }
+    }
+
+    private suspend fun initializeDataCore() {
             if (!settings.fieldAadMigrated) {
                 // B2-CRYPTO-09 (phase-107): bind pre-phase-107 field ciphertexts to
                 // their record context before any page/stroke/version is served.
@@ -1174,7 +1213,6 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
                 observeSections(defaultNb.id)
                 observePages(defaultSec.id)
             }
-        }
     }
 
     init {
@@ -1654,7 +1692,13 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
                 repository.closeDatabase()
                 ImportExportService.importBackup(getApplication(), bytes, repository.encryptionKey, backupPassword)
                 DatabaseSecurityHelper.clearRestoreBlock(getApplication())
+                // B1-DB-1 (phase-43): the corruption flag was set when the vault open
+                // was quarantined; a successful restore must clear it too, otherwise the
+                // quarantined-open guard keeps every open failing behind the recovery
+                // screen after the post-restore process restart.
+                DatabaseSecurityHelper.clearCorruptionDetected(getApplication())
                 _restoreBlocked.value = false
+                _corruptionBlocked.value = false
                 _databaseTampered.value = false
                 // B2-CRYPTO-09 (phase-107): a restored backup may carry legacy
                 // global-AAD field ciphertexts (even on this device the DEK is

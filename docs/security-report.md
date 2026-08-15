@@ -815,7 +815,7 @@ No DB schema, workflow, or dependency changes were made.
 | B1-NET-01 | HIGH | phase-40 | `FIXED` 2026-08-15 (commit `4165931`, see `workspace/phase-40/REPORT.md`) |
 | B1-NET-02 | HIGH | phase-41 | `FIXED` 2026-08-15 (commit `f1020a1`, see `workspace/phase-41/REPORT.md`) |
 | B1-NET-03 | HIGH | phase-42 | `NOT STARTED` (planned) |
-| B1-DB-1 | HIGH | phase-43 | `NOT STARTED` (planned) |
+| B1-DB-1 | HIGH | phase-43 | `FIXED` 2026-08-15 (commit `TODO-COMMIT`, see `workspace/phase-43/REPORT.md`) |
 | B1-DB-4 | HIGH | phase-44 | `NOT STARTED` (planned) |
 | B1-AUTH-06 | MEDIUM | phase-44 (grouped with B1-DB-4, same root cause) | `NOT STARTED` (planned) |
 | B1-CRYPTO-02 | HIGH | phase-45 | `NOT STARTED` (planned) |

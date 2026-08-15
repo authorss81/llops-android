@@ -33,6 +33,18 @@
   `services/DatabaseSecurityHelper.kt:21` (HMAC tamper checksum over `noteflow.sqlite`);
   `data/db/NoteflowDatabase.kt:43` (schema v9, quarantine);
   `services/VaultKeyHolder.kt:11` (in-memory DEK, zeroized on lock).
+  - **Implemented in phase-43** (B1-DB-1, see `workspace/phase-43/REPORT.md`): the corrupt-open
+    classifier `NoteflowDatabase.kt` `isDatabaseCorruptException` now matches ONLY genuine
+    corruption (`android.database.sqlite.SQLiteDatabaseCorruptException`,
+    `net.zetetic.database.sqlcipher.SQLiteNotADatabaseException`, messages "file is not a
+    database"/"malformed"/"database disk image is malformed") — transient open failures
+    (locked, disk I/O, ENOSPC, can't-open) are NEVER treated as corruption. Quarantine no
+    longer auto-creates an empty replacement DB: `SafeSupportSQLiteOpenHelper` rethrows after
+    quarantine + a `throwIfVaultQuarantined` guard fails any further open while the flag is
+    set, so the empty vault is created only after the user's explicit "start fresh".
+    `NoteflowViewModel` surfaces the `CorruptionRecoveryScreen` in-session, gates the six
+    Room-backed note flows on `authenticated && !corruptionBlocked`, re-initializes after
+    start-fresh, and clears the flag after a successful restore.
 - **Canvas**: `ui/components/AnnotationCanvas.kt:83` (ink canvas, gestures, layers, `pointerInteropFilter`);
   `services/WetBrushEngine.kt:13` (AGSL wet-mixing gating); `ui/components/ShaderCapabilityHelper.kt:5`
   (`isAgslSupported` = SDK ≥ 33); `services/ShapeRecognitionHelper.kt:13` (`trySnapShape()` :27).

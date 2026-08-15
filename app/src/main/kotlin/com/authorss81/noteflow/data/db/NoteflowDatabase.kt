@@ -234,8 +234,7 @@ abstract class NoteflowDatabase : RoomDatabase() {
         private class SafeSupportSQLiteOpenHelper(
             private val context: Context,
             private var delegate: SupportSQLiteOpenHelper,
-            private val configuration: SupportSQLiteOpenHelper.Configuration,
-            private val passphrase: String
+            private val configuration: SupportSQLiteOpenHelper.Configuration
         ) : SupportSQLiteOpenHelper {
 
             override val databaseName: String? get() = delegate.databaseName
@@ -246,37 +245,41 @@ abstract class NoteflowDatabase : RoomDatabase() {
 
             override val writableDatabase: SupportSQLiteDatabase
                 get() {
+                    throwIfVaultQuarantined()
                     return try {
                         delegate.writableDatabase
                     } catch (e: Exception) {
+                        // B1-DB-1 (phase-43): only GENUINE corruption drives the
+                        // quarantine path. Transient open failures ("database is
+                        // locked", disk I/O, ENOSPC…) are rethrown untouched — they
+                        // must never displace a healthy vault (the old classifier
+                        // treated the whole SQLiteException family as corruption and
+                        // auto-created an EMPTY replacement DB here).
                         if (isDatabaseCorruptException(e)) {
                             // H2 (phase-09): NEVER delete the user's vault on an open
                             // failure. The corrupt files are quarantined (renamed to
-                            // *.corrupt-<timestamp> so bytes survive for recovery),
-                            // a persistent flag routes the user to a recovery screen,
-                            // and only the user's explicit "start fresh" choice lets a
-                            // brand-new empty vault take over.
+                            // *.corrupt-<timestamp> so bytes survive for recovery) and a
+                            // persistent flag routes the user to a recovery screen.
+                            // Phase-43: NO replacement DB is created here — the original
+                            // exception propagates so the open FAILS. The recovery screen
+                            // surfaces (same-session + across restart via the flag) and only
+                            // the user's explicit "start fresh" choice creates an empty vault.
                             quarantineCorruptDatabase(context, configuration.name ?: "noteflow.sqlite")
-                            delegate = net.zetetic.database.sqlcipher.SupportOpenHelperFactory(passphrase.toByteArray(Charsets.UTF_8)).create(configuration)
-                            delegate.writableDatabase
-                        } else {
-                            throw e
                         }
+                        throw e
                     }
                 }
 
             override val readableDatabase: SupportSQLiteDatabase
                 get() {
+                    throwIfVaultQuarantined()
                     return try {
                         delegate.readableDatabase
                     } catch (e: Exception) {
                         if (isDatabaseCorruptException(e)) {
                             quarantineCorruptDatabase(context, configuration.name ?: "noteflow.sqlite")
-                            delegate = net.zetetic.database.sqlcipher.SupportOpenHelperFactory(passphrase.toByteArray(Charsets.UTF_8)).create(configuration)
-                            delegate.readableDatabase
-                        } else {
-                            throw e
                         }
+                        throw e
                     }
                 }
 
@@ -284,15 +287,20 @@ abstract class NoteflowDatabase : RoomDatabase() {
                 delegate.close()
             }
 
-            private fun isDatabaseCorruptException(e: Exception): Boolean {
-                val className = e.javaClass.name
-                val msg = e.message ?: ""
-                return e is android.database.sqlite.SQLiteException ||
-                       e is android.database.SQLException ||
-                       className.contains("SQLiteException", ignoreCase = true) ||
-                       msg.contains("file is not a database", ignoreCase = true) ||
-                       msg.contains("corrupt", ignoreCase = true) ||
-                       msg.contains("malformed", ignoreCase = true)
+            /**
+             * B1-DB-1 (phase-43): once the vault has been quarantined (persistent
+             * flag), ANY further open must FAIL instead of silently creating a
+             * fresh empty database behind the user's back (Room openByName and
+             * SQLCipher would happily mmap/create a missing file). The recovery
+             * screen is shown while the flag is set; clearing it (restore success
+             * or explicit "start fresh") re-arms normal opens.
+             */
+            private fun throwIfVaultQuarantined() {
+                if (com.authorss81.noteflow.services.DatabaseSecurityHelper.hasCorruptionDetected(context)) {
+                    throw IllegalStateException(
+                        "Vault database is quarantined — restore from a backup or start fresh."
+                    )
+                }
             }
 
             /**
@@ -344,7 +352,7 @@ abstract class NoteflowDatabase : RoomDatabase() {
                 migratePlaintextIfNeeded(context, passphrase)
                 val factory = net.zetetic.database.sqlcipher.SupportOpenHelperFactory(passphrase.toByteArray(Charsets.UTF_8))
                 val delegate = factory.create(configuration)
-                return SafeSupportSQLiteOpenHelper(context, delegate, configuration, passphrase)
+                return SafeSupportSQLiteOpenHelper(context, delegate, configuration)
             }
         }
 
@@ -378,4 +386,34 @@ abstract class NoteflowDatabase : RoomDatabase() {
             }
         }
     }
+}
+
+/**
+ * B1-DB-1 (phase-43): the single source of truth for "is this an open failure we
+ * should quarantine as genuine corruption?"
+ *
+ * Matches ONLY:
+ *  - the platform `SQLiteDatabaseCorruptException` (raised for malformed page /
+ *    header states),
+ *  - SQLCipher's own `SQLiteNotADatabaseException` (raised when SQLCipher cannot
+ *    recognize the file as a database — i.e. a wrong passphrase or a genuinely
+ *    corrupt/crypted-over file),
+ *  - the specific diagnostic messages "file is not a database", "malformed" and
+ *    "database disk image is malformed".
+ *
+ * NEVER matches the transient, recoverable open failures that are ALSO
+ * `SQLiteException` subclasses: "database is locked" (SQLiteDatabaseLockedException),
+ * "disk I/O error" (SQLiteDiskIOException), "database or disk is full" (ENOSPC,
+ * SQLiteFullException), "unable to open database file" (SQLiteCantOpenDatabaseException).
+ * Under the old classifier those healthy-vault failures were quarantined and silently
+ * replaced with an empty database — permanent data loss on a routine hiccup.
+ */
+internal fun isDatabaseCorruptException(e: Throwable?): Boolean {
+    if (e == null) return false
+    val msg = e.message ?: ""
+    return e is android.database.sqlite.SQLiteDatabaseCorruptException ||
+        e is net.zetetic.database.sqlcipher.SQLiteNotADatabaseException ||
+        msg.contains("file is not a database", ignoreCase = true) ||
+        msg.contains("database disk image is malformed", ignoreCase = true) ||
+        msg.contains("malformed", ignoreCase = true)
 }
