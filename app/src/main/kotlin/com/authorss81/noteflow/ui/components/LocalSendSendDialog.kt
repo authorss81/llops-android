@@ -91,6 +91,12 @@ fun LocalSendSendDialog(
     var pairingDevice by remember { mutableStateOf<LocalSendDevice?>(null) }
     var pairingError by remember { mutableStateOf<String?>(null) }
     var confirmDevice by remember { mutableStateOf<LocalSendDevice?>(null) }
+    // Out-of-band verification input: either a code entered from the receiving
+    // device, or an explicit acknowledgement that the displayed fingerprint was
+    // compared against the receiver's own identity screen. Pairing refuses to
+    // persist unless exactly one of the two is supplied (no silent self-match).
+    var pairingCodeInput by remember { mutableStateOf("") }
+    var comparedFingerprintChecked by remember { mutableStateOf(false) }
     // Bumped after every successful pair so the device list re-evaluates gates.
     var pairedRevision by remember { mutableIntStateOf(0) }
     val pairingRequest = pairingDevice?.let { LocalSendPairing.startPairing(it) }
@@ -152,19 +158,44 @@ fun LocalSendSendDialog(
     fun confirmPairing() {
         val device = pairingDevice ?: return
         val request = pairingRequest ?: return
-        if (LocalSendPairing.pair(pairedDevices, request, request.code)) {
+        val entered = pairingCodeInput.trim()
+        val ok = when {
+            entered.isNotBlank() -> {
+                // The user typed a code from the receiving device: it must equal
+                // the code derived from the announced fingerprint (constant-time
+                // compare). A mismatch here refuses pairing — no silent self-match.
+                LocalSendPairing.pair(pairedDevices, request, entered)
+            }
+            comparedFingerprintChecked -> {
+                // No code available (most receivers display only their TLS
+                // fingerprint): pairing is authorized by the user's affirmative
+                // "fingerprints match" acknowledgement after out-of-band comparison.
+                LocalSendPairing.pair(pairedDevices, request, request.code)
+            }
+            else -> {
+                pairingError = "Compare the TLS fingerprint below with the receiving device's " +
+                    "identity screen, or enter its verification code, then confirm."
+                return
+            }
+        }
+        if (ok) {
             confirmDevice = device
             pairingDevice = null
             pairingError = null
+            pairingCodeInput = ""
+            comparedFingerprintChecked = false
             pairedRevision++
         } else {
-            pairingError = "Could not verify this device's pairing code. Please try again."
+            pairingError = "The verification code does not match this device. Check the fingerprint " +
+                "or code on the receiving device and try again."
         }
     }
 
     fun dismissPairing() {
         pairingDevice = null
         pairingError = null
+        pairingCodeInput = ""
+        comparedFingerprintChecked = false
     }
 
     fun doSend(device: LocalSendDevice) {
@@ -341,7 +372,10 @@ fun LocalSendSendDialog(
                         },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable(enabled = sendable && phase == "Idle") { startSend(device) }
+                            // All devices are tappable: a tap routes a sendable device to the per-send
+                            // confirmation, an unpaired HTTPS device into the pairing sub-view, and an
+                            // http/no-fingerprint device to an explicit "cannot send" message via startSend.
+                            .clickable(enabled = phase == "Idle") { startSend(device) }
                     ) {
                         Row(
                             modifier = Modifier.padding(12.dp),
@@ -410,7 +444,11 @@ fun LocalSendSendDialog(
     fun PairingBody(
         device: LocalSendDevice,
         request: LocalSendPairingRequest?,
-        error: String?
+        error: String?,
+        codeInput: String,
+        onCodeChange: (String) -> Unit,
+        acknowledged: Boolean,
+        onAcknowledgeChange: (Boolean) -> Unit
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(
@@ -431,8 +469,31 @@ fun LocalSendSendDialog(
                     fontFamily = FontFamily.Monospace,
                     style = MaterialTheme.typography.bodyMedium
                 )
+                OutlinedTextField(
+                    value = codeInput,
+                    onValueChange = { onCodeChange(it.trim().take(64)) },
+                    label = { Text("Verification code from the receiving device") },
+                    supportingText = {
+                        Text("If the receiving device shows a 6-digit code, enter it here. " +
+                            "It is verified against this device (mismatch refuses pairing).")
+                    },
+                    singleLine = true,
+                    isError = codeInput.isNotBlank() && error != null,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(
+                        checked = acknowledged,
+                        onCheckedChange = onAcknowledgeChange
+                    )
+                    Text(
+                        "I compared the TLS fingerprint on this screen with the receiving device and they match",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
                 Text(
-                    "Short pairing code: ${req.code}",
+                    "Short code derived from this fingerprint: ${req.code}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -491,7 +552,15 @@ fun LocalSendSendDialog(
             ) {
                 when {
                     pairingTarget != null && phase == "Idle" -> {
-                        PairingBody(pairingTarget, pairingRequest, pairingError)
+                        PairingBody(
+                            device = pairingTarget,
+                            request = pairingRequest,
+                            error = pairingError,
+                            codeInput = pairingCodeInput,
+                            onCodeChange = { pairingCodeInput = it },
+                            acknowledged = comparedFingerprintChecked,
+                            onAcknowledgeChange = { comparedFingerprintChecked = it }
+                        )
                     }
                     confirmTarget != null && phase == "Idle" -> {
                         ConfirmSendBody(confirmTarget, payloadType.label)

@@ -131,20 +131,23 @@ object LocalSendPairing {
      * were never paired.
      */
     fun gate(device: LocalSendDevice, store: LocalSendPairedDeviceStore): LocalSendGate {
+        // NOTE: denial messages deliberately do NOT embed `device.alias` — the
+        // alias arrives on the wire from the receiver and is attacker-controlled
+        // (a forged announce can set it); the device row already shows it.
         if (!device.protocol.equals("https", ignoreCase = true)) {
             return LocalSendGate.Denied(
-                "Refusing to send: ${device.alias} does not announce a secure (HTTPS) connection."
+                "Refusing to send: the receiving device does not announce a secure (HTTPS) connection."
             )
         }
         val fingerprint = device.fingerprint
         if (fingerprint.isNullOrBlank()) {
             return LocalSendGate.Denied(
-                "Refusing to send: ${device.alias} did not announce a TLS certificate fingerprint."
+                "Refusing to send: the receiving device did not announce a TLS certificate fingerprint."
             )
         }
         val paired = store.find(fingerprint)
             ?: return LocalSendGate.Denied(
-                "Refusing to send: ${device.alias} is not paired yet. Verify it and pair it first."
+                "Refusing to send: the receiving device is not paired yet. Verify its fingerprint and pair it first."
             )
         return LocalSendGate.Allowed(paired)
     }

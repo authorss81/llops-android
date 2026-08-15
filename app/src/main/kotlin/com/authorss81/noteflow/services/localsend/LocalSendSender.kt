@@ -314,9 +314,15 @@ class LocalSendSender(
         if (gate is LocalSendGate.Denied) {
             return@withContext SendResult(false, gate.reason)
         }
+        val allowed = gate as LocalSendGate.Allowed
         // The alias the user PAIRED — not the wire-supplied announce alias an
         // attacker could forge ("Galaxy S24") — is what we display going forward.
-        val pairedAlias = (gate as LocalSendGate.Allowed).paired.alias.ifBlank { device.alias }
+        val pairedAlias = allowed.paired.alias.ifBlank { device.alias }
+        // Pin every payload connection to the STORED paired fingerprint (verified
+        // out-of-band at pairing time), never to a value fetched from the wire
+        // announce: a fingerprint from a later forged announce is refused by the
+        // gate above, but this keeps the pin itself attacker-independent.
+        val trustedFingerprint = allowed.paired.normalizedFingerprint
 
         val info = senderInfo()
         val fileId = UUID.randomUUID().toString()
@@ -344,7 +350,7 @@ class LocalSendSender(
         val prepareUrl = device.baseUrl() + LocalSendProtocol.PATH_PREPARE_UPLOAD
 
         val prepareResp = try {
-            httpPost(prepareUrl, prepareBody, "application/json", PREPARE_READ_TIMEOUT_MS, device.fingerprint)
+            httpPost(prepareUrl, prepareBody, "application/json", PREPARE_READ_TIMEOUT_MS, trustedFingerprint)
         } catch (e: CancellationException) {
             return@withContext SendResult(false, "Transfer cancelled.")
         } catch (e: SocketTimeoutException) {
@@ -372,7 +378,7 @@ class LocalSendSender(
             LocalSendMessages.buildUploadUrl(device.baseUrl(), prepared.sessionId, fileId, token)
 
         val uploadResp = try {
-            streamUpload(uploadUrl, file, total, onProgress, device.fingerprint)
+            streamUpload(uploadUrl, file, total, onProgress, trustedFingerprint)
         } catch (e: CancellationException) {
             // Best-effort: tell the receiver we are done so it can clean up.
             runCatching {
@@ -381,7 +387,7 @@ class LocalSendSender(
                     "",
                     "application/json",
                     CONNECT_TIMEOUT_MS,
-                    device.fingerprint
+                    trustedFingerprint
                 )
             }
             return@withContext SendResult(false, "Transfer cancelled.")

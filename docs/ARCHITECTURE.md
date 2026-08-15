@@ -91,9 +91,14 @@
     verified TOFU anchor), stores `InMemoryLocalSendPairedDeviceStore` (tests) +
     `SettingsLocalSendPairedDeviceStore` (SharedPreferences `localsend_paired_<fp>`).
     `LocalSendSender.sendFile` refuses unpaired/http receivers before any I/O
-    (`:306-319`); `openConnection` refuses non-https payload URLs; the announce
-    never says `protocol:"http"`. `LocalSendSendDialog` shows a pairing +
-    per-send confirmation; `200` to `/prepare-upload` is zero evidence of consent.
+    (`:313-326`) and pins every payload connection to the STORED paired
+    fingerprint (`trustedFingerprint` `:325`), never the wire-announced one;
+    `openConnection` refuses non-https payload URLs; the announce never says
+    `protocol:"http"`. `LocalSendSendDialog` shows a pairing sub-view that
+    requires either a verification code typed from the receiving device
+    (constant-time checked, mismatch refuses) or an explicit "fingerprints match"
+    acknowledgement, plus a per-send confirmation; `200` to `/prepare-upload` is
+    zero evidence of consent.
 - **Palette**: `services/PaletteCatalog.kt:131` (swatches + `familyFor`), `PaletteMath` :24.
 - **Brush preview**: `ui/components/PenNibVisualPreview.kt:50` (driven by `services/NibPreviewMath.kt`).
 - **Glass theme**: `theme/GlassSurfaces.kt:44` (`GlassBlurGate`), :80 (`GlassSurfaceMath`), :140

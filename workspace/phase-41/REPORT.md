@@ -33,13 +33,15 @@ same-LAN attacker's fake receiver obtain PLAINTEXT note/vault content; the
 - Constructor now takes a `LocalSendPairedDeviceStore` (defaults to the
   fail-closed `InMemoryLocalSendPairedDeviceStore`).
 - `sendFile` gates through `LocalSendPairing.gate` **before any network I/O**
-  (`LocalSendSender.kt:306-319`) and refuses with the gate's clear message;
-  the success description uses the *paired* alias (`:364`), not the
+  (`LocalSendSender.kt:313-326`) and refuses with the gate's clear message;
+  the success description uses the *paired* alias (`:399`), not the
   attacker-forgeable wire alias.
+- Every payload connection is pinned to the STORED paired fingerprint
+  (`trustedFingerprint`, `:325`), never to the wire-announced one.
 - `/prepare-upload` 200 is documented as ZERO evidence of human consent
-  (`:331-335`) — consent is the pairing + the dialog's per-send confirmation.
+  (`:337-341`) — consent is the pairing + the dialog's per-send confirmation.
 - `openConnection` now refuses any non-`https` URL outright (was: allowed the
-  `http` branch): TLS is required for any payload (`:455-464`), defense-in-depth
+  `http` branch): TLS is required for any payload (`:492-503`), defense-in-depth
   behind the gate so a downgrade/bug can never fall back to cleartext.
 - `LocalSendTrustManager` doc updated: the pinned fingerprint is now the
   *paired* fingerprint, so the pin authenticates the receiver (a fake receiver
@@ -152,15 +154,52 @@ Independent verification (this run, clean tree, Gradle 8.13 / JDK 21 as in CI):
 - `gradle assembleDebug` — **BUILD SUCCESSFUL** (90 actionable tasks).
 
 Design note recorded for honesty: `confirmPairing(request, code)` uses a
-constant-time compare and refuses a mismatched entered code, but the current
-`LocalSendSendDialog.confirmPairing()` UI calls it with the code derived from
-the receiver's announced fingerprint (`enteredCode = request.code`); a
-receiver's announced fingerprint therefore always produces a "matching" code.
-That is intentional: the sending user performs the actual out-of-band check by
-comparing the displayed fingerprint + short pairing code against the receiving
-device's own identity screen (an attacker's forged certificate yields a
-different code/fingerprint the user will not recognise), and pairing is only
-persisted after that explicit "Pair & Send" confirmation. The mismatch-reject
-path is real and tested (`confirmPairing_requiresMatchingCode`) and is the
-guard a future typed-code flow would use; the current UI relies on the
-human-comparable identity display instead.
+constant-time compare and refuses a mismatched entered code. **Phase-41 review
+fixes (below) now make that mismatch path REACHABLE from the UI** — pairing no
+longer auto-passes the self-derived code for every user.
+
+## Review fixes applied (2026-08-15, post-review)
+
+Follow-up review of phase-41 surfaced one blocker + several hardening items;
+all were applied in working-tree commits after `0c70974`:
+
+1. **BLOCKER FIXED — pairing flow was unreachable.** The device list bound
+   `.clickable(enabled = sendable && phase == "Idle")`, where `sendable` is only
+   true for an already-paired receiver. Unpaired HTTPS receivers (the one device
+   class that can ever go through pairing) were rendered disabled, so
+   `startSend` never fired, `pairingDevice` was never set, and the pairing /
+   `Pair & Send` sub-views were dead code — LocalSend could never send to any
+   device. Rows are now `clickable(enabled = phase == "Idle")`
+   (`LocalSendSendDialog.kt:378`) and `startSend` routes every state: paired
+   → per-send confirm, unpaired HTTPS → pairing sub-view, http/no-fingerprint →
+   explicit "cannot send" message.
+2. **Typed-code verification is now real.** `LocalSendSendDialog.confirmPairing`
+   (`LocalSendSendDialog.kt:158-199`) no longer always calls
+   `pair(store, request, request.code)`. It requires ONE of: (a) a verification
+   code typed from the receiving device, verified against the fingerprint-derived
+   code (constant-time; a mismatch refuses pairing and surfaces `pairingError`),
+   or (b) an explicit "fingerprints match" acknowledgement after the user
+   compares the displayed TLS fingerprint with the receiver's identity screen
+   out-of-band (`PairingBody` at `:444` gains the code field + acknowledgement
+   checkbox). The previously-dead `confirmPairing_requiresMatchingCode` path is
+   now a real UI rejection path.
+3. **Pin source hardened.** `LocalSendSender.sendFile` now extracts the STORED
+   paired device and uses its `normalizedFingerprint` as
+   `trustedFingerprint` (`LocalSendSender.kt:317-325`), and every payload
+   connection (`/prepare-upload`, `/upload`, `/cancel`) pins to that stored
+   value (`:353,381,390`) instead of the wire-supplied `device.fingerprint` — so
+   a later forged announce with a different fingerprint can never influence the
+   pin even if some future path bypassed the pre-send gate.
+4. **Wire alias no longer embedded in denial messages.** `LocalSendPairing.gate`
+   denial reasons no longer interpolate the attacker-controllable `device.alias`
+   (`LocalSendPairing.kt:133-162`) — the untrusted value was surfaced verbatim
+   in `SendResult.description`. Messages now describe the refusal without naming
+   the receiver (the device row already shows the alias).
+5. `.editorconfig` `insert_final_newline` conformance: final newlines added to
+   `LocalSendPairingTest.kt`, and to the pre-existing `LocalSendSender.kt` /
+   `LocalSendProtocol.kt`.
+
+Out of scope (unchanged): the legacy `/24` cleartext discovery sweep
+(`includeLegacyHttpScan` / `httpRegisterProbe`) is B1-NET-06 and remains in a
+separate phase; the pre-existing flaky `PluginUpdateEngineTest` rollback timing
+failure is untouched and unrelated.
