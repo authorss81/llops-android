@@ -59,3 +59,4 @@ Guidance for AI agents (opencode, Antigravity, etc.) working on this repo. Read 
 ## Docs
 - `docs/pentest-plan.md` — Kali Linux pentest plan for the built APK (jadx/apktool/frida/objection/MobSF). Run findings into `docs/pentest-report.md`.
 - `README.md` — user-facing overview (may contain stale claims; ROADMAP truth table supersedes).
+- `docs/ARCHITECTURE.md` — **living architecture map** (package layout, core subsystem `file:line` anchors, build/CI essentials, gotchas). It is auto-injected at the start of every pipeline phase by `scripts/phase_runner.sh`. After implementing something, append a short "Implemented in <phase>:" note to the relevant section and update `docs/phase-status.md`.

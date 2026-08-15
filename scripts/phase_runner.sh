@@ -120,16 +120,44 @@ if [ -f "${SESSION_FILE}" ]; then
   fi
 fi
 
+# Build the injected context header so every phase starts oriented (no cold start):
+# AGENTS.md rules + docs/ARCHITECTURE.md map + docs/phase-status.md truth table.
+build_context_header() {
+  {
+    echo "# PIPELINE CONTEXT (injected by phase_runner.sh — do not delete)"
+    echo ""
+    echo "## Hard rules (AGENTS.md)"
+    if [ -f AGENTS.md ]; then
+      sed -n '/^## Hard rules/,/^## /p' AGENTS.md | head -n 120
+    fi
+    echo ""
+    echo "## Architecture map (docs/ARCHITECTURE.md — living doc, read + update)"
+    if [ -f docs/ARCHITECTURE.md ]; then cat docs/ARCHITECTURE.md; fi
+    echo ""
+    echo "## Phase status truth table (docs/phase-status.md — read + update your row)"
+    if [ -f docs/phase-status.md ]; then cat docs/phase-status.md; fi
+    echo ""
+    echo "## Current phase PROMPT"
+    echo ""
+  } > "${LOG_DIR}/${PHASE}.ctx" 2>/dev/null
+  echo "== [phase] context header built: ${LOG_DIR}/${PHASE}.ctx =="
+}
+
 run_phase() {
   echo "== [phase] Running: ${PHASE} =="
+  build_context_header
   set +e
   # opencode CLI >=1.15: the prompt is a POSITIONAL argument, not --prompt.
+  {
+    cat "${LOG_DIR}/${PHASE}.ctx"
+    cat "${PROMPT_FILE}"
+  } > "${LOG_DIR}/${PHASE}.prompt"
   opencode run \
     --model "${MODEL}" \
     --agent build \
     "${SESSION_ARGS[@]}" \
     --title "llops-${PHASE}" \
-    "$(cat "${PROMPT_FILE}")" \
+    "$(cat "${LOG_DIR}/${PHASE}.prompt")" \
     > "${LOG_DIR}/${PHASE}.log" 2>&1
   local code=$?
   set -e
