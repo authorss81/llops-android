@@ -83,7 +83,11 @@ object WebDavHrefResolver {
      *   [requestUrl] (the URL the PROPFIND was issued against), then the final
      *   origin is re-checked so a network-path reference (`//evil.example/…`),
      *   a `../` escape or a scheme swap can never reach outside the configured
-     *   origin
+     *   origin. RFC 3986 resolution normalizes dot-segments of relative hrefs,
+     *   and absolute hrefs keep their raw path — either way the same-origin
+     *   gate below is what bounds the downloadable target to the configured
+     *   server, so dot-segments are not separately rejected (rejecting them
+     *   would false-break legitimate absolute hrefs that still stay in-origin).
      *
      * @param serverBaseUrl the user's configured server URL (origin is used)
      * @param requestUrl    the absolute URL the PROPFIND request was sent to
@@ -124,10 +128,6 @@ object WebDavHrefResolver {
         val protocol = resolvedUrl.protocol.lowercase()
         if (protocol != "http" && protocol != "https") {
             throw IllegalArgumentException("Refusing non-HTTP(S) href from WebDAV server: $raw")
-        }
-        val rawPath = resolved.rawPath ?: ""
-        if (rawPath.split('/').any { it == "." || it == ".." }) {
-            throw IllegalArgumentException("Refusing WebDAV href with dot-path segments: $raw")
         }
         if (!sameOrigin(originOf(resolvedUrl.toString()), origin)) {
             throw IllegalArgumentException(

@@ -117,8 +117,26 @@ class WebDavHrefResolverTest {
     }
 
     @Test
-    fun backslashPathEscapesAreRejected() {
-        expectRejected(server, folder, "$folder$backup/../../..")
+    fun sameOriginDotSegmentHrefResolvesWithinConfiguredOrigin() {
+        // RFC 3986 resolution normalizes dot-segments of relative hrefs; an
+        // absolute href keeps its raw path. Neither case can escape the
+        // configured host because the same-origin gate bounds the download to
+        // the configured server (scheme+host+port), so in-origin dot-segment
+        // paths must NOT be falsely rejected (that would break legitimate
+        // servers that emit `..` paths while staying under the configured host).
+        val resolved = WebDavHrefResolver.resolveDownloadHref(
+            server, folder, "$folder$backup/../$backup"
+        )
+        assertTrue(
+            "expected in-origin resolution, got: $resolved",
+            resolved.startsWith("https://cloud.example.com/")
+        )
+    }
+
+    @Test
+    fun offOriginHrefWithDotSegmentsIsStillRejected() {
+        val msg = expectRejected(server, folder, "https://attacker.example/../../steal/$backup")
+        assertTrue("expected 'outside the configured server', got: $msg", msg.contains("outside the configured server"))
     }
 
     @Test

@@ -303,7 +303,18 @@ class WebDavSyncService(private val context: Context) {
                 )
             }
 
-            val downloadConn = createConnection(downloadUrl, config, "GET")
+            // B1-NET-01 (phase-40): createConnection re-checks the origin as a
+            // connection-time backstop (same logical failure as the resolver, so
+            // surface it through the same friendly "Sync refused" channel).
+            val downloadConn = try {
+                createConnection(downloadUrl, config, "GET")
+            } catch (e: IllegalStateException) {
+                return@withContext SyncResult(
+                    false,
+                    "Sync refused: the app will not connect to a host other than your " +
+                        "configured WebDAV server. ${e.message}"
+                )
+            }
             val downCode = downloadConn.responseCode
 
             if (downCode in 200..299) {
@@ -318,6 +329,14 @@ class WebDavSyncService(private val context: Context) {
                     message = "Downloaded remote encrypted backup archive (${targetLocalFile.length()} bytes)!",
                     bytesTransferred = targetLocalFile.length(),
                     filesSyncedCount = 1
+                )
+            } else if (downCode in 300..399) {
+                downloadConn.disconnect()
+                SyncResult(
+                    false,
+                    "Sync refused: the server responded with a redirect (HTTP $downCode). " +
+                        "For your security the app never follows redirects, so your credentials " +
+                        "are never forwarded anywhere. Use the direct WebDAV URL of your server."
                 )
             } else {
                 downloadConn.disconnect()

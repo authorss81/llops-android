@@ -811,7 +811,7 @@ No DB schema, workflow, or dependency changes were made.
 | Finding id | Severity | Fix phase | Status |
 |-----------|----------|-----------|--------|
 | B1-CRYPTO-01 | CRITICAL | phase-39 | `FIXED` 2026-08-15 (commit `4d72a6a`, see `workspace/phase-39/REPORT.md`) |
-| B1-NET-01 | HIGH | phase-40 | `NOT STARTED` (planned) |
+| B1-NET-01 | HIGH | phase-40 | `FIXED` 2026-08-15 (commit `4165931`, see `workspace/phase-40/REPORT.md`) |
 | B1-NET-02 | HIGH | phase-41 | `NOT STARTED` (planned) |
 | B1-NET-03 | HIGH | phase-42 | `NOT STARTED` (planned) |
 | B1-DB-1 | HIGH | phase-43 | `NOT STARTED` (planned) |

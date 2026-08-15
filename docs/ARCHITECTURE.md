@@ -76,6 +76,13 @@
   `runPaletteAction` over the cached decrypted corpus
   (`NoteRepository.cachedCorpus`, generation `currentSearchCorpusGeneration`).
 - **WebDAV sync**: `services/WebDavSyncService.kt:28` (encrypted vault archives, HTTPS enforced).
+  - **Implemented in phase-40**: server-supplied PROPFIND hrefs are re-resolved against the
+    configured server origin by the new pure-JVM `services/WebDavHrefResolver.kt`
+    (`resolveDownloadHref`), and EVERY connection is origin-gated in `createConnection`
+    (`WebDavSyncService.kt:147`) before the `Authorization: Basic` header is attached
+    (`:164`), with `instanceFollowRedirects=false` (`:158`). Off-origin/private-IP hrefs
+    and 3xx redirects are refused with a clear `SyncResult(false, "Sync refused: ...")` —
+    closes B1-NET-01 + the WebDAV slice of B1-NET-05 (see `workspace/phase-40/REPORT.md`).
 - **LocalSend**: `services/localsend/LocalSendProtocol.kt:29`, `LocalSendSender.kt:48`.
 - **Palette**: `services/PaletteCatalog.kt:131` (swatches + `familyFor`), `PaletteMath` :24.
 - **Brush preview**: `ui/components/PenNibVisualPreview.kt:50` (driven by `services/NibPreviewMath.kt`).
