@@ -161,7 +161,6 @@ dependencies {
 
     // Coil & Utilities
     implementation(libs.coil.compose)
-    implementation(libs.security.crypto)
     implementation(libs.androidx.biometric)
     implementation(libs.gson)
 

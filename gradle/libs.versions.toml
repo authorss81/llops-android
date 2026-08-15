@@ -9,7 +9,6 @@ composeBom = "2024.12.01"
 room = "2.6.1"
 navigationCompose = "2.8.5"
 coil = "2.7.0"
-securityCrypto = "1.1.0-alpha06"
 gson = "2.11.0"
 biometric = "1.1.0"
 ink = "1.0.0"
@@ -53,7 +52,6 @@ androidx-room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = 
 androidx-room-compiler = { group = "androidx.room", name = "room-compiler", version.ref = "room" }
 
 coil-compose = { group = "io.coil-kt", name = "coil-compose", version.ref = "coil" }
-security-crypto = { group = "androidx.security", name = "security-crypto", version.ref = "securityCrypto" }
 gson = { group = "com.google.code.gson", name = "gson", version.ref = "gson" }
 sqlcipher = { group = "net.zetetic", name = "sqlcipher-android", version.ref = "sqlcipher" }
 androidx-sqlite-ktx = { group = "androidx.sqlite", name = "sqlite-ktx", version.ref = "sqliteKtx" }
