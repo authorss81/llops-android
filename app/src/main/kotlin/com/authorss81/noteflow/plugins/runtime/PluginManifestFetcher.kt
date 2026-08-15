@@ -2,6 +2,8 @@ package com.authorss81.noteflow.plugins.runtime
 
 import java.net.URL
 import javax.net.ssl.HttpsURLConnection
+import javax.net.ssl.SSLHandshakeException
+import javax.net.ssl.X509TrustManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import com.authorss81.noteflow.utils.HttpUserAgent
@@ -22,7 +24,7 @@ sealed class ManifestFetchResult {
 /**
  * The transport seam for [PluginManifestFetcher] — keeps the fetcher core PURE
  * JVM so the URL guard and parse wiring are unit-tested with a fake transport.
- * The production implementation ([HttpsManifestTransport]) performs an
+ * The production implementation ([HttpsManifestTransport]) performs a PINNED,
  * HTTPS-only, chain-validated fetch with a hard size cap.
  */
 fun interface ManifestTransport {
@@ -67,21 +69,48 @@ class PluginManifestFetcher(
 }
 
 /**
- * Production [ManifestTransport] (Phase 24): an HTTPS-only fetch of the version
- * manifest with standard system-chain TLS validation.
+ * Production [ManifestTransport]: an HTTPS-only fetch of the version manifest
+ * that is AUTHENTICATED by a COMPILE-TIME certificate pin.
  *
- * Unlike the per-plugin artifact transport ([HttpsPluginDownloadTransport]),
- * the manifest is NOT pinned to a single certificate — it is a small, keyless,
- * user-initiated document whose only purpose is to point at the pinned+hashed
- * artifacts; the artifacts themselves are individually verified before any
- * code runs. The manifest's impact is bounded by a hard size cap and by the
- * fact that NOTHING in it is trusted at face value.
+ * This transport is the fix for **B1-CRYPTO-01**: the update manifest carries
+ * `downloadUrl` + `sha256` + `pinnedCertHash`, and every later verifier
+ * ([HttpsPluginDownloadTransport], [ArtifactSignatureVerifier],
+ * [SignatureVerifiedPluginRuntime]) trusts those values. A chain-validation-only
+ * manifest fetch therefore let an attacker DEFINE the trust anchor. Here the
+ * manifest itself is bound to the compile-time [PLUGIN_MANIFEST_CERT_PIN] plus
+ * the compile-time [DEFAULT_MANIFEST_HOST] allow-list, so an update offer can
+ * never come from an unauthenticated source and the artifact pins it carries
+ * are as trustworthy as the pinned transport itself.
  *
- * Enforced regardless of caller: `https` scheme only (a cleartext URL is
- * refused before a connection opens), 2xx responses only, and a [MAX_BYTES]
- * cap on the response body. Never logs manifest contents.
+ * Enforced regardless of caller:
+ * - **Pinned TLS.** The connection reuses the [PinnedTlsConnector] machinery of
+ *   the artifact transport: chain validation against the system trust store AND
+ *   a leaf-certificate pin against [PLUGIN_MANIFEST_CERT_PIN] for [expectedHost].
+ *   A mismatching certificate is refused before any manifest byte is trusted.
+ * - **Host allow-list.** The fetch only ever talks to [expectedHost] (compile
+ *   time [DEFAULT_MANIFEST_HOST]); a URL for any other host is refused before a
+ *   connection opens.
+ * - **Fail closed on a missing/malformed pin.** If [PLUGIN_MANIFEST_CERT_PIN]
+ *   is not a well-formed 32-byte pin, the check is disabled with a clear
+ *   user-facing message — it never degrades to chain-validation-only HTTPS.
+ * - **No redirects.** `instanceFollowRedirects` is off; a 3xx (including an
+ *   HTTPS→HTTP downgrade) is surfaced as a failed check — never followed.
+ * - **HTTPS only**, a hard size-cap ([MAX_BYTES]), 2xx responses only.
+ *
+ * Never logs manifest contents.
+ *
+ * @param expectedCertPin the compile-time `sha256/<base64>` leaf pin for the
+ *   manifest host (default [PLUGIN_MANIFEST_CERT_PIN]).
+ * @param expectedHost the only host this transport talks to (default
+ *   [DEFAULT_MANIFEST_HOST]).
+ * @param trustManagerOverride for deterministic unit tests only (pin over a
+ *   test trust anchor); production leaves it null (system trust store).
  */
-class HttpsManifestTransport : ManifestTransport {
+class HttpsManifestTransport(
+    private val expectedCertPin: String = PLUGIN_MANIFEST_CERT_PIN,
+    private val expectedHost: String = DEFAULT_MANIFEST_HOST,
+    private val trustManagerOverride: X509TrustManager? = null
+) : ManifestTransport {
 
     override suspend fun fetch(url: String): ManifestFetchResult =
         withContext(Dispatchers.IO) {
@@ -93,15 +122,32 @@ class HttpsManifestTransport : ManifestTransport {
                         "Refusing a non-TLS update-manifest fetch (got '${parsed.protocol}://'). HTTPS only."
                     )
                 }
-                val connection = parsed.openConnection() as HttpsURLConnection
+                if (!parsed.host.equals(expectedHost, ignoreCase = true)) {
+                    return@withContext ManifestFetchResult.Failed(
+                        "Refusing an update-manifest fetch to '${parsed.host}' — only '$expectedHost' is a trusted manifest host."
+                    )
+                }
+                if (PinnedCertHash.parse(expectedCertPin) == null) {
+                    return@withContext ManifestFetchResult.Failed(
+                        "This build does not carry a valid pinned certificate for '$expectedHost', so plugin update checks are disabled."
+                    )
+                }
+                val connection = PinnedTlsConnector.open(
+                    parsed,
+                    expectedCertPin,
+                    trustManagerOverride ?: PinnedTlsConnector.systemTrustManager()
+                )
                 connection.connectTimeout = CONNECT_TIMEOUT_MS
                 connection.readTimeout = READ_TIMEOUT_MS
-                connection.instanceFollowRedirects = true
                 connection.setRequestProperty("Accept", "application/json")
                 connection.setRequestProperty("User-Agent", HttpUserAgent.GENERIC)
-                connection.useCaches = false
 
                 val responseCode = connection.responseCode
+                if (responseCode in 300..399) {
+                    return@withContext ManifestFetchResult.Failed(
+                        "The update manifest endpoint answered with an HTTP redirect ($responseCode), which is never followed."
+                    )
+                }
                 if (responseCode !in 200..299) {
                     return@withContext ManifestFetchResult.Failed(
                         "Could not check for plugin updates (HTTP $responseCode)."
@@ -136,6 +182,22 @@ class HttpsManifestTransport : ManifestTransport {
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
+            } catch (e: SSLHandshakeException) {
+                // The pin gate throws CertificateException inside the handshake,
+                // which surfaces wrapped as SSLHandshakeException by the JRE.
+                if (isPinnedCertFailure(e)) {
+                    ManifestFetchResult.Failed(
+                        "Could not check for plugin updates: the manifest host's certificate does not match the pinned hash."
+                    )
+                } else {
+                    ManifestFetchResult.Failed(
+                        "Could not check for plugin updates (${e::class.java.simpleName}). Check your connection and try again."
+                    )
+                }
+            } catch (e: java.security.cert.CertificateException) {
+                ManifestFetchResult.Failed(
+                    "Could not check for plugin updates: the manifest host's certificate does not match the pinned hash."
+                )
             } catch (e: Throwable) {
                 ManifestFetchResult.Failed(
                     "Could not check for plugin updates (${e::class.java.simpleName}). Check your connection and try again."
@@ -144,6 +206,17 @@ class HttpsManifestTransport : ManifestTransport {
                 connection?.disconnect()
             }
         }
+
+    /** True when [throwable]'s cause chain contains a [CertificateException] —
+     *  i.e. the TLS handshake was refused by the pinned-certificate gate. */
+    private fun isPinnedCertFailure(throwable: Throwable): Boolean {
+        var cause: Throwable? = throwable
+        while (cause != null) {
+            if (cause is java.security.cert.CertificateException) return true
+            cause = cause.cause
+        }
+        return false
+    }
 
     private companion object {
         const val CONNECT_TIMEOUT_MS = 20_000

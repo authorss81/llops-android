@@ -18,8 +18,13 @@ import java.util.Base64
  *    the SAME pin ([ArtifactSignatureVerifier]).
  *
  * The pin comes from the compile-time [PluginEntry.pinnedCertHash] — never from
- * the network and never user-editable. All comparisons are constant-time via the
- * app-wide [`com.authorss81.noteflow.utils.ConstantTime`] helper (the base64
+ * the network and never user-editable. For the Phase-24 update path the
+ * artifact pins are carried by the hosted manifest, but that manifest is itself
+ * fetched through a transport pinned to the compile-time
+ * [PLUGIN_MANIFEST_CERT_PIN] ([HttpsManifestTransport]), so a network MITM can
+ * never substitute its own pin or offer (B1-CRYPTO-01). All comparisons are
+ * constant-time via the app-wide
+ * [`com.authorss81.noteflow.utils.ConstantTime`] helper (the base64
  * alphabet is plain ASCII, so the US-ASCII byte encoding is byte-identical).
  */
 object PinnedCertHash {

@@ -15,7 +15,8 @@ import com.google.gson.GsonBuilder
  *   offered when [version] is strictly newer than what is installed).
  * - [downloadUrl] is the HTTPS artifact URL; the pinned-cert + SHA-256 gate
  *   below is the trust anchor, so the URL host itself never needs to be a
- *   fixed allow-list.
+ *   fixed allow-list (the manifest itself is authenticated by the
+ *   compile-time-pinned [HttpsManifestTransport] — B1-CRYPTO-01).
  * - [sha256] is the hex SHA-256 of the NEW artifact (re-verified on download).
  * - [pinnedCertHash] is the `sha256/<base64>` pin of the NEW artifact's signing
  *   certificate AND of the TLS session that serves [downloadUrl].
@@ -185,7 +186,36 @@ class PluginManifestParser {
  * path ([PluginManifestFetcher] / [HttpsManifestTransport]) refuses any other
  * scheme. Keyless: the app makes no authenticated request; verification of
  * everything that actually executes happens per-artifact via the compile-time
- * pinned cert + SHA-256 (see `docs/plugin-architecture.md` § Security model).
+ * pinned cert + SHA-256, and **the manifest transport itself is pinned to a
+ * compile-time certificate** ([PLUGIN_MANIFEST_CERT_PIN]) so the update offer
+ * (which carries `downloadUrl`/`sha256`/`pinnedCertHash`) can never be forged
+ * by a network MITM (B1-CRYPTO-01).
+ *
+ * @see DEFAULT_MANIFEST_HOST
+ * @see PLUGIN_MANIFEST_CERT_PIN
  */
+const val DEFAULT_MANIFEST_HOST: String = "plugin-updates.inkflow.app"
+
 const val DEFAULT_PLUGIN_MANIFEST_URL: String =
-    "https://plugin-updates.inkflow.app/v1/manifest.json"
+    "https://$DEFAULT_MANIFEST_HOST/v1/manifest.json"
+
+/**
+ * The COMPILE-TIME certificate pin the manifest transport authenticates against
+ * — `sha256/<base64>` of the SHA-256 of `DEFAULT_MANIFEST_HOST`'s leaf
+ * certificate DER encoding (format enforced by [PinnedCertHash.parse]).
+ *
+ * **This is the trust anchor for the whole Phase-23/24 update chain**
+ * (B1-CRYPTO-01): [HttpsManifestTransport] refuses any fetch whose server leaf
+ * does not hash to this pin, so the manifest (and therefore the `sha256` /
+ * `pinnedCertHash` / `downloadUrl` it offers) can never be replaced by an
+ * unauthenticated source. It is compiled in and must NEVER come from the
+ * network or user settings.
+ *
+ * The value below is a well-formed-but-REPLACEMENT placeholder: it must be set
+ * to the real hash of the production manifest host's serving certificate before
+ * the hosted update channel goes live. Until then the app FAILS CLOSED —
+ * "Check for updates" answers a clear non-alarming "disabled" message and no
+ * manifest is ever accepted. Do not dilute this into a warning.
+ */
+const val PLUGIN_MANIFEST_CERT_PIN: String =
+    "sha256/AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="

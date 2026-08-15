@@ -18,9 +18,12 @@ fun interface PluginArtifactResolver {
  *
  * - **[verify]** — REAL: [ArtifactSignatureVerifier] checks the artifact's
  *   SHA-256 against [PluginEntry.sha256] AND its signing certificate against
- *   the compile-time [PluginEntry.pinnedCertHash]. ANY mismatch is a hard
- *   [RuntimeOutcome.Failed] — the artifact is never loaded, never partially
- *   executed.
+ *   [PluginEntry.pinnedCertHash]. For a freshly-updated entry those fields came
+ *   from the hosted manifest, which itself reached the device ONLY through the
+ *   compile-time-pinned [HttpsManifestTransport] (B1-CRYPTO-01) — so the
+ *   re-verification here always runs against publisher-committed values, never
+ *   attacker-supplied ones. ANY mismatch is a hard [RuntimeOutcome.Failed] —
+ *   the artifact is never loaded, never partially executed.
  * - **[load]** — REAL: [RuntimePluginLoader] re-verifies integrity on EVERY
  *   load (a bit-rotted or replaced file is refused), then materializes the
  *   verified artifact through a plugin [ClassLoader] that implements

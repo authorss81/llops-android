@@ -53,6 +53,12 @@ data class PluginUpdateInfo(
  *   they are updated by the normal app release, never by this mechanism.
  *
  * Deterministic output, ordered by plugin id. Pure JVM, unit-tested.
+ *
+ * Trust note (B1-CRYPTO-01): [PluginUpdateInfo] copies the offer's
+ * `downloadUrl`/`sha256`/`pinnedCertHash` verbatim into the target entry, and
+ * that is safe ONLY because the [HostedPluginManifest] arrived through the
+ * compile-time-pinned [HttpsManifestTransport] — an unauthenticated manifest
+ * can never reach this comparator.
  */
 object PluginUpdateChecker {
 

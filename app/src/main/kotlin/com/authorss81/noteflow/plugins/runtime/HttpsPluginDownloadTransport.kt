@@ -2,15 +2,10 @@ package com.authorss81.noteflow.plugins.runtime
 
 import java.io.FileOutputStream
 import java.io.InputStream
-import java.net.HttpURLConnection
 import java.net.URL
 import java.security.cert.CertificateException
-import java.security.cert.X509Certificate
 import javax.net.ssl.HttpsURLConnection
-import javax.net.ssl.SSLContext
-import javax.net.ssl.TrustManager
-import javax.net.ssl.TrustManagerFactory
-import javax.net.ssl.X509TrustManager
+import javax.net.ssl.SSLHandshakeException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import com.authorss81.noteflow.utils.HttpUserAgent
@@ -28,6 +23,9 @@ import com.authorss81.noteflow.utils.HttpUserAgent
  *   The chain is first validated against the system trust store (standard
  *   [X509TrustManager] behaviour) and THEN pinned to the expected hash — an
  *   unpinned host is refused before any artifact byte is trusted.
+ * - **No redirects.** `instanceFollowRedirects` is off (via
+ *   [PinnedTlsConnector]); a 3xx (including an HTTPS→HTTP downgrade) answers
+ *   with its redirect code and is refused — never followed.
  * - **Resume.** When [DownloadRequest.resumeFromBytes] > 0 a `Range: bytes=<n>-`
  *   header is sent and the response is appended to the partial file.
  * - **Cancel.** [DownloadRequest.isActive] is polled while streaming; when it
@@ -54,15 +52,21 @@ class HttpsPluginDownloadTransport : DownloadTransport {
                         "Refusing a non-TLS plugin download (got '${url.protocol}://'). TLS only."
                     )
                 }
-                val connection = createPinnedConnection(url, request.pinnedCertHash)
+                val connection = PinnedTlsConnector.open(url, request.pinnedCertHash)
+                connection.setRequestProperty("Accept", "application/octet-stream")
+                connection.setRequestProperty("User-Agent", HttpUserAgent.GENERIC)
                 if (request.resumeFromBytes > 0) {
                     connection.setRequestProperty("Range", "bytes=${request.resumeFromBytes}-")
                 }
                 connection.connectTimeout = CONNECT_TIMEOUT_MS
                 connection.readTimeout = READ_TIMEOUT_MS
-                connection.instanceFollowRedirects = true
 
                 val responseCode = connection.responseCode
+                if (responseCode in 300..399) {
+                    return@withContext DownloadTransportResult.Failed(
+                        "Plugin download refused: the server answered with an HTTP redirect ($responseCode), which is never followed."
+                    )
+                }
                 if (responseCode !in 200..299) {
                     return@withContext DownloadTransportResult.Failed(
                         "Plugin download failed (HTTP $responseCode). The artifact may not be available yet."
@@ -110,6 +114,18 @@ class HttpsPluginDownloadTransport : DownloadTransport {
                 DownloadTransportResult.Completed(total)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
+            } catch (e: SSLHandshakeException) {
+                // The pin gate throws CertificateException inside the handshake,
+                // which surfaces wrapped as SSLHandshakeException by the JRE.
+                if (isPinnedCertFailure(e)) {
+                    DownloadTransportResult.Failed(
+                        "Plugin download refused: the download host's certificate does not match the pinned hash."
+                    )
+                } else {
+                    DownloadTransportResult.Failed(
+                        "Plugin download failed (${e::class.java.simpleName}). Check your connection and try again."
+                    )
+                }
             } catch (e: CertificateException) {
                 DownloadTransportResult.Failed(
                     "Plugin download refused: the download host's certificate does not match the pinned hash."
@@ -124,51 +140,15 @@ class HttpsPluginDownloadTransport : DownloadTransport {
             }
         }
 
-    /**
-     * Open an HTTPS connection whose server certificate is chain-validated
-     * against the system trust store AND then pinned to [pinnedCertHash].
-     * A mismatching host certificate throws [CertificateException] before any
-     * request/response bytes are exchanged.
-     */
-    private fun createPinnedConnection(
-        url: URL,
-        pinnedCertHash: String
-    ): HttpsURLConnection {
-        val defaultTrust = defaultTrustManager()
-        val sslContext = SSLContext.getInstance("TLS")
-        sslContext.init(
-            null,
-            arrayOf<TrustManager>(object : X509TrustManager {
-                override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
-                override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
-                override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {
-                    // Standard chain validation against the system trust store...
-                    defaultTrust.checkServerTrusted(chain, authType)
-                    // ...then pin the leaf to the compile-time expected hash.
-                    val leaf = chain.firstOrNull()
-                        ?: throw CertificateException("no server certificate presented")
-                    if (!PinnedCertHash.matches(leaf, pinnedCertHash)) {
-                        throw CertificateException(
-                            "server certificate does not match the pinned certificate hash"
-                        )
-                    }
-                }
-            }),
-            null
-        )
-        return (url.openConnection() as HttpsURLConnection).apply {
-            sslSocketFactory = sslContext.socketFactory
-            hostnameVerifier = HttpsURLConnection.getDefaultHostnameVerifier()
-            setRequestProperty("Accept", "application/octet-stream")
-            setRequestProperty("User-Agent", HttpUserAgent.GENERIC)
-            useCaches = false
+    /** True when [throwable]'s cause chain contains a [CertificateException] —
+     *  i.e. the TLS handshake was refused by the pinned-certificate gate. */
+    private fun isPinnedCertFailure(throwable: Throwable): Boolean {
+        var cause: Throwable? = throwable
+        while (cause != null) {
+            if (cause is CertificateException) return true
+            cause = cause.cause
         }
-    }
-
-    private fun defaultTrustManager(): X509TrustManager {
-        val factory = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm())
-        factory.init(null as java.security.KeyStore?)
-        return factory.trustManagers.filterIsInstance<X509TrustManager>().first()
+        return false
     }
 
     private companion object {
