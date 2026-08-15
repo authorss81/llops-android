@@ -51,6 +51,23 @@ ROADMAP heading against actual code/commits/tests).
   claims, etc.). Fix every stale doc claim found.
 - Confirm no fixing-phase finding remained "open" without a status row.
 
+## Step 4 - Build the release APK (target for phase-117 Kali pentest)
+
+The next phases (116 = round-2 source audit, 117 = Kali full-environment
+dynamic pentest) need a FRESH release APK to attack. Trigger it here so it is
+ready:
+
+- Verify the release build works: run `gradle assembleRelease` is CI-only, so
+  trigger the existing `Release APK` workflow instead:
+  `gh workflow run release.yml` (workflow_dispatch, `.github/workflows/release.yml`).
+- Watch the run until it completes and record its run id + the artifact name
+  (`noteflow-release-apk` / `noteflow-apk`) and APK SHA256 if available into
+  `docs/security-report-round2.md` "APK target" section (see phase-116/117 for
+  the shared file) so phase-117 knows exactly what to download.
+- If the workflow cannot be triggered from this phase (no `gh` token), document
+  the exact `gh workflow run release.yml` command + expected artifact names in
+  `workspace/phase-115/REPORT.md` so a human or the next phase can run it.
+
 ## Definition of done
 
 - Every workspace phase heading (1-115) carries an accurate,
@@ -61,12 +78,15 @@ ROADMAP heading against actual code/commits/tests).
   (as applicable) contain no contradictory stale claims.
 - `gradle testDebugUnitTest` + `gradle assembleDebug` still pass (doc-only
   changes must not affect the build; re-run to prove it).
+- The `Release APK` workflow was triggered (or the trigger command + artifact
+  names documented in REPORT.md) so phase-117 has a fresh release APK target.
 - `workspace/phase-115/REPORT.md` documents the per-phase verification matrix.
 - Commit + push.
 
 ## Constraints
 
-- Documentation only - NO application code changes.
+- Documentation only - NO application code changes. (Triggering the release
+  workflow via `gh` is allowed - it is not an app code change.)
 - Do NOT edit `.github/workflows/`. No new deps. No build config changes.
 - Never write real paths/secrets/content into docs beyond what the code already
   documents. Keep the honest-claims discipline from Phase 20 (no rubber-stamping
