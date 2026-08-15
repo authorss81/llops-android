@@ -140,11 +140,22 @@ class WebDavSyncService(private val context: Context) {
     private fun createConnection(urlString: String, config: SyncConfig, method: String): HttpURLConnection {
         val url = URL(urlString)
         requireSecureUrl(url, config.allowInsecureHttp)
+        // B1-NET-01 (phase-40): the Basic Authorization header may be attached to
+        // — and a connection opened to — ONLY the user's configured server origin
+        // (scheme+host+port). This closes the server-supplied-href SSRF where a
+        // PROPFIND body steered the download to an attacker/private-IP host.
+        WebDavHrefResolver.requireConfiguredServerOrigin(urlString, config.serverUrl)
         val conn = url.openConnection() as HttpURLConnection
         conn.requestMethod = method
         conn.connectTimeout = CONNECT_TIMEOUT_MS
         conn.readTimeout = READ_TIMEOUT_MS
         conn.useCaches = false
+
+        // B1-NET-01/B1-NET-05 (phase-40): never follow server-driven redirects.
+        // 3xx responses surface as their HTTP status and fail the sync, so the
+        // credentials and the backup bytes can never be forwarded to a hop that
+        // the server re-hosts elsewhere.
+        conn.instanceFollowRedirects = false
 
         // On Android the default HttpsURLConnection negotiates TLS 1.2+ and
         // validates the certificate chain against the system trust store; the
@@ -274,9 +285,22 @@ class WebDavSyncService(private val context: Context) {
             }
 
             val latestRemotePath = matches.last()
-            val downloadUrl = if (latestRemotePath.startsWith("http")) latestRemotePath else {
-                val base = URL(config.serverUrl)
-                "${base.protocol}://${base.host}${if (base.port != -1) ":${base.port}" else ""}$latestRemotePath"
+            // B1-NET-01 (phase-40): never trust a server-supplied href. Every
+            // href is re-resolved against the configured server origin
+            // (scheme+host+port); anything that escapes it is rejected here
+            // before any connection or credential is ever involved.
+            val downloadUrl = try {
+                WebDavHrefResolver.resolveDownloadHref(
+                    serverBaseUrl = config.serverUrl,
+                    requestUrl = folderUrl,
+                    href = latestRemotePath
+                )
+            } catch (e: IllegalArgumentException) {
+                return@withContext SyncResult(
+                    false,
+                    "Sync refused: the server returned a link that points outside your " +
+                        "configured WebDAV server. ${e.message}"
+                )
             }
 
             val downloadConn = createConnection(downloadUrl, config, "GET")
