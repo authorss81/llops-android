@@ -3,7 +3,9 @@
     <!-- A4/34.6: narrowed from "." to "apk/" — UpdateService stages APKs here before sharing.
          The rest of filesDir (encrypted DB, imports/, voice notes) is no longer URI-grantable. -->
     <files-path name="internal_apk" path="apk/" />
-    <external-path name="download_apk" path="Download" />
+    <!-- B1-PLAT-7: the public-Downloads shared-storage root was REMOVED (phase-61
+         review fix). Public storage is never a trusted update source, so the app
+         must not hold a URI-grantable window onto it. -->
     <!-- Phase 15 (Export Engine): transient, user-requested exports live here;
          only exported documents, never vault data. -->
     <cache-path name="exports" path="exports/" />

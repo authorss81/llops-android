@@ -170,7 +170,9 @@ object UpdateService {
      * B1-PLAT-7: install is gated by [UpdateTrustPolicy.mayInstall]. An
      * [UpdateSourceTrust.UNTRUSTED_LOCAL] file installs ONLY when the user explicitly
      * confirmed the "not from a trusted source" warning; otherwise this returns false
-     * and nothing is staged or launched.
+     * and nothing is staged or launched. The signer is ALWAYS re-verified at install
+     * time (not just at offer time) and staging failure refuses outright — no fallback
+     * to the original, possibly non-grantable or public path.
      */
     fun installApk(
         context: Context,
@@ -184,7 +186,19 @@ object UpdateService {
         }
         if (!apkFile.exists()) return false
 
+        // B1-PLAT-7 TOCTOU guard: the trust/version classification happened at OFFER
+        // time; re-verify the signer of the CURRENT bytes so a same-path swap between
+        // confirmation and staging can never install an APK signed by a different key.
+        if (!verifyApkSignature(context, apkFile)) {
+            Log.e("UpdateService", "Install refused: APK no longer matches the installed signer (B1-PLAT-7)")
+            return false
+        }
+
         return try {
+            // The FileProvider only grants filesDir/apk/, so staging a copy here is the
+            // ONLY way to hand the platform installer a grantable URI. If staging fails
+            // we refuse outright — never fall back to the original path (which may sit
+            // outside the provider's roots or in a public directory).
             val stagedApk = try {
                 val apkDir = File(context.filesDir, "apk").apply { mkdirs() }
                 val staged = File(apkDir, apkFile.name)
@@ -193,7 +207,8 @@ object UpdateService {
                 }
                 staged
             } catch (e: Exception) {
-                apkFile // fall back to the original path (e.g. external Download dir)
+                Log.e("UpdateService", "Install refused: could not stage APK into private storage (${e::class.java.simpleName})")
+                return false
             }
 
             val authority = "${context.packageName}.fileprovider"

@@ -380,7 +380,7 @@
     structurally refuses `/sdcard`·`/storage/emulated`·`…/Android/data/…` mounts, and `mayInstall` fail-closed-gates
     UNTRUSTED installs behind explicit user confirmation. The old scan of `getExternalFilesDir` + `/sdcard/Download`
     + `/storage/emulated/0/Download` and the "New update detected in local storage" conditioning wording are gone.
-    Tests: `B1Plat07UpdateTrustTest` (8).
+    Tests: `B1Plat07UpdateTrustTest` (11 test methods; review fix 2026-08-15 — see `workspace/phase-61/REPORT.md` "Addendum").
 
 ## Build / CI essentials
 

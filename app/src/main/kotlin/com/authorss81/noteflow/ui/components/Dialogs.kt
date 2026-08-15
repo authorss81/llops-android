@@ -18,9 +18,12 @@ import com.authorss81.noteflow.services.EncryptionService
 import com.authorss81.noteflow.services.ImportExportService
 import com.authorss81.noteflow.services.UpdateInfo
 import com.authorss81.noteflow.services.UpdateService
+import com.authorss81.noteflow.services.UpdateSourceTrust
 import com.authorss81.noteflow.services.UpdateTrustPolicy
 import com.authorss81.noteflow.ui.viewmodel.NoteflowViewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 
 @Composable
@@ -95,17 +98,24 @@ fun AppUpdateDialog(
         if (uri != null) {
             scope.launch {
                 try {
-                    val bytes = ImportExportService.readUriBytes(
-                        context,
-                        uri,
-                        ImportExportService.MAX_BACKUP_INPUT_BYTES
-                    )
+                    val bytes = withContext(Dispatchers.IO) {
+                        ImportExportService.readUriBytes(
+                            context,
+                            uri,
+                            ImportExportService.MAX_BACKUP_INPUT_BYTES
+                        )
+                    }
                     val fileName = uri.lastPathSegment?.substringAfterLast('/') ?: "downloaded_update.apk"
                     if (bytes != null) {
-                        val destFile = File(context.cacheDir, if (fileName.endsWith(".apk")) fileName else "$fileName.apk")
-                        destFile.writeBytes(bytes)
+                        val destFile = withContext(Dispatchers.IO) {
+                            val file = File(context.cacheDir, if (fileName.endsWith(".apk")) fileName else "$fileName.apk")
+                            file.writeBytes(bytes)
+                            file
+                        }
 
-                        val inspected = UpdateService.inspectApkFile(context, destFile)
+                        val inspected = withContext(Dispatchers.IO) {
+                            UpdateService.inspectApkFile(context, destFile)
+                        }
                         if (inspected != null) {
                             updateInfo = inspected
                             statusMessage = if (inspected.hasUpdate) {
@@ -198,13 +208,17 @@ fun AppUpdateDialog(
                 Button(
                     onClick = {
                         isChecking = true
-                        val found = UpdateService.checkForDownloadedUpdates(context)
-                        updateInfo = found
-                        isChecking = false
-                        statusMessage = if (found.hasUpdate) {
-                            "Found a local APK in the app's private storage."
-                        } else {
-                            "No newer APK found in the app's private storage (public Downloads are never scanned)."
+                        scope.launch {
+                            val found = withContext(Dispatchers.IO) {
+                                UpdateService.checkForDownloadedUpdates(context)
+                            }
+                            updateInfo = found
+                            isChecking = false
+                            statusMessage = if (found.hasUpdate) {
+                                "Found a local APK in the app's private storage."
+                            } else {
+                                "No newer APK found in the app's private storage (public Downloads are never scanned)."
+                            }
                         }
                     },
                     modifier = Modifier.fillMaxWidth()
@@ -230,9 +244,22 @@ fun AppUpdateDialog(
             if (updateInfo != null && updateInfo!!.hasUpdate && updateInfo!!.apkFile != null) {
                 Button(
                     onClick = {
-                        // B1-PLAT-7: every local APK is UNTRUSTED (no official channel
-                        // exists), so install is gated behind the strong confirmation below.
-                        showUntrustedConfirm = true
+                        // B1-PLAT-7: the strong confirmation gate applies ONLY to
+                        // UNTRUSTED files. An OFFICIAL (channel-verified) file installs
+                        // directly — nothing in this app produces one today.
+                        if (updateInfo!!.trust == UpdateSourceTrust.UNTRUSTED_LOCAL) {
+                            showUntrustedConfirm = true
+                        } else {
+                            val success = UpdateService.installApk(
+                                context,
+                                updateInfo!!.apkFile!!,
+                                updateInfo!!.trust,
+                                userConfirmedUntrusted = false
+                            )
+                            if (!success) {
+                                onSnackbar("Could not launch package installer.", false)
+                            }
+                        }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
                 ) {
@@ -287,6 +314,8 @@ fun AppUpdateDialog(
                             context,
                             confirmed.apkFile!!,
                             confirmed.trust,
+                            // the confirmation gate is only reachable for UNTRUSTED files,
+                            // so by showing this dialog the user has already confirmed.
                             userConfirmedUntrusted = true
                         )
                         if (!success) {

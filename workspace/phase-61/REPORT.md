@@ -71,7 +71,7 @@ primitives. No fallback needed beyond what exists.
 
 ## Verification output
 
-- `gradle :app:testDebugUnitTest --tests "…B1Plat07UpdateTrustTest"` — **8 tests, PASS**.
+- `gradle :app:testDebugUnitTest --tests "…B1Plat07UpdateTrustTest"` — **11 tests, PASS**.
 - `gradle testDebugUnitTest` — **1217 tests completed, 2 failed**:
   - `B1Plat01ReleaseSigningTest > debug buildType keeps AGP auto generated debug keystore`
   - `B1Plat01ReleaseSigningTest > release guide forbids distributing debug-signed builds`
@@ -81,7 +81,7 @@ primitives. No fallback needed beyond what exists.
     and fail identically on a clean tree; this diff touches neither file. Unrelated.
 - `gradle assembleDebug` — **BUILD SUCCESSFUL** (2m 39s).
 
-## Tests added — `B1Plat07UpdateTrustTest.kt` (8)
+## Tests added — `B1Plat07UpdateTrustTest.kt` (11 test methods)
 
 1. `no local APK is ever official - only a remote key-verified channel would be`
 2. `public Downloads mounts are never scan-safe`
@@ -112,5 +112,37 @@ added; no new permissions; `allowBackup=false`, `ClipboardGuard`, and FLAG_SECUR
   key itself is not rotated in this phase.
 - No official (network) update channel is implemented in this app today; when one ships it
   must arrive with a remote-verified pin (B1-CRYPTO-01 pattern), not another local APK feed.
-- Known residual: `installApk`'s catch still falls back to the original `apkFile` path when
-  staging fails — the gate already ran, so the fallback never bypasses trust.
+
+## Addendum — review fixes (2026-08-15)
+
+Six review findings were applied on top of the original diff (`UpdateService.kt`,
+`ui/components/Dialogs.kt`, `res/xml/file_paths.xml`):
+
+1. **Install-time re-verify (TOCTOU).** `installApk` now re-runs `verifyApkSignature` on the
+   CURRENT bytes (`UpdateService.kt:~189`) after the `mayInstall` gate and before any staging —
+   a same-path swap between offer/confirmation and copy can no longer install an APK signed by a
+   different key. Trust classification is unchanged (offer-time) but the signer integrity hint is
+   now enforced at install time too.
+2. **Staging fails closed.** The old `catch (…) { apkFile }` fallback to the original path is
+   gone (`UpdateService.kt:~199-203`); a staging failure logs and returns `false`. The dead
+   fallback could only succeed for files already inside the FileProvider's roots, and it kept a
+   public-path grant reachable; deleting it removes the dependency on finding 3.
+3. **FileProvider no longer exposes public Downloads.** The `<external-path name="download_apk"
+   path="Download" />` entry was removed from `res/xml/file_paths.xml` — the app holds no
+   URI-grantable window onto `/sdcard`-style shared storage (the B1-PLAT-7 surface). Only
+   `filesDir/apk/` and `cacheDir/exports/` remain grantable.
+4. **Confirmation gate is trust-scoped.** "Install Update" shows the strong untrusted warning
+   ONLY when `updateInfo!!.trust == UNTRUSTED_LOCAL`; an OFFICIAL file would install directly
+   (nothing produces one today). Inside the (now UNTRUSTED-only) dialog, `userConfirmedUntrusted =
+   true` is the honest value.
+5. **Test-count correction.** The phase claimed "8 tests"; `B1Plat07UpdateTrustTest` actually has
+   **11 test methods** (the source-pin group was an invented grouping). Docs corrected
+   (this REPORT, `docs/security-report.md`, `docs/ARCHITECTURE.md`, `docs/phase-status.md`).
+6. **Off-main-thread update I/O.** "Scan App Storage" now runs `checkForDownloadedUpdates`, and
+   the picker path runs `readUriBytes`/`writeBytes`/`inspectApkFile`, on `Dispatchers.IO`
+   (`Dialogs.kt`), updating Compose state back on the main dispatcher — no more blocking parse on
+   the UI thread (2-core-device ANR risk), and `isChecking` genuinely disables the button during
+   the scan.
+
+Re-verification: `B1Plat07UpdateTrustTest` 11/11 PASS; `gradle testDebugUnitTest` 1217 total with
+the same 2 pre-existing `B1Plat01ReleaseSigningTest` failures; `gradle assembleDebug` green.
