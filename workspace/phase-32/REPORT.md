@@ -5,7 +5,7 @@
 - **Targets:** local builds (no CI artifacts / `gh` token on this runner)
   - `app/build/outputs/apk/debug/app-debug.apk` — 173,608,246 B — SHA-256 `056c3a6729d031deb22afc418772bc15756929128782265be9620afc0f4bc966`
   - `app/build/outputs/apk/release/app-release.apk` — 142,159,171 B (shipping artifact, R8-minified)
-- **No code / schema / workflow changes this phase.** `git status` after the run = only `logs/` touched; gradle outputs are git-ignored. New findings appended to `docs/security-report.md` as the PROMPT requires.
+- **No code / schema / workflow changes this phase.** Working-tree changes produced by this phase = `workspace/phase-32/REPORT.md`, this appended `docs/security-report.md` section, and `docs/phase-status.md`/`docs/ARCHITECTURE.md` (committed in `44a7210`); gradle outputs are git-ignored, and the APKs were built locally so the gradle repo state is otherwise unchanged. New findings appended to `docs/security-report.md` as the PROMPT requires.
 
 ## 1. APK acquisition
 
@@ -43,13 +43,13 @@ release: APK_size = 142.0 MB, 906 entries
 debug:   APK_size = 173.5 MB, 919 entries (same LM pack + 4-ABI natives + unminified 23 dex)
 ```
 
-- Root dir `language-models/` = ML Kit **translation** bundled packs for 75 languages (`af..zu`, each `bigrams.json` / `fivegrams.json` / `quadrigrams.json`) — 199 MB raw, 80.2 MB packed.
-- `lib/` ships all four ABIs (`arm64-v8a`, `armeabi-v7a`, `x86`, `x86_64`) of every native lib: `libmlkit_google_ocr_pipeline.so` (11 MB aarch64), `libtranslate_jni.so` (16 MB aarch64), `libsqlcipher.so` (5 MB aarch64), `libink.so`, `libandroidx.graphics.path.so`, `libgraphics-core.so`.
+- Root dir `language-models/` = the **lingua** language-detection library's bundled n-gram corpus (`com.github.pemistahl:lingua:1.2.2`, `app/build.gradle.kts:185`, used by `plugins/langdetect/LanguageDetectionCore.kt`): 75 languages (`af..zu`), each `bigrams.json` / `fivegrams.json` / `quadrigrams.json` / `trigrams.json` / `unigrams.json` — 199 MB raw (207,608,234 B), 80.2 MB packed. Byte-for-byte identical to the lingua JAR in the gradle cache (`language-models/en/unigrams.json` = 1708 B in both). **This is NOT ML Kit translation data** — ML Kit translate models are runtime-downloaded on explicit user action (`MlKitTranslatorEngine.kt:22-24`). Corrected 2026-08-15 review: the initial run mis-attributed this pack to "ML Kit translation models".
+- `lib/` ships all four ABIs (`arm64-v8a`, `armeabi-v7a`, `x86`, `x86_64`) of every native lib: `libmlkit_google_ocr_pipeline.so` (11 MB aarch64), `libtranslate_jni.so` (16 MB aarch64, the ML Kit translate native that IS baked in), `libsqlcipher.so` (5 MB aarch64), `libink.so`, `libandroidx.graphics.path.so`, `libgraphics-core.so`.
 - NO `.gguf`, NO `tasks-genai`, NO `com/google/mediapipe` classes in either APK — the on-device LLM stayed out of the base (positive).
 
-**Phase-32-NEW-01 (MEDIUM, packaging/policy):** the hard rule "heavy/native features MUST NOT be baked into the base APK; ship as downloadable signature-verified plugins" is unmet at binary level for ML Kit **translation** (80.2 MB packed models = 56% of the shipping APK) and ML Kit **OCR** (13–16 MB natives per ABI), with `plugins/translation/*` and `plugins/ocr/*` compiled straight in. Shipping APK = 142 MB release / 173 MB debug.
+**Phase-32-NEW-01 (MEDIUM, packaging/policy):** the base-APK-size hard rule is unmet at binary level — the `language-models/` n-gram pack (80.2 MB packed = 56% of the shipping APK) ships via the compile-time **lingua** "pure-JVM" plugin (which contradicts the "lightweight pure-JVM plugins stay compile-time" carve-out — only 24 of its 75 bundled languages are ever referenced, `LanguageDetectionCore.kt:25-50`), and ML Kit **OCR** + **translate natives** (13–16 MB per ABI) are also baked in, with `plugins/translation/*` and `plugins/ocr/*` compiled straight in. Shipping APK = 142 MB release / 173 MB debug.
 
-**Phase-32-NEW-02 (LOW):** no ABI splits — every device downloads all four ABIs of every native lib (~55.4 MB packed) on top of the 80 MB translation pack it likely never uses. Split-per-ABI (or Play `bundle`) would cut installed/download payload dramatically.
+**Phase-32-NEW-02 (LOW):** no ABI splits — every device downloads all four ABIs of every native lib (~55.4 MB packed) on top of the 80 MB lingua n-gram pack it may never use. Split-per-ABI (or Play `bundle`) would cut installed/download payload dramatically.
 
 ## 4. Manifest audit (release + debug)
 
@@ -107,7 +107,7 @@ All 23 dex files `compiler: r8`; debug multidex shows `r8 without marker` (R8 ma
 
 ## 10. Summary
 
-- **NEW findings (4):** Phase-32-NEW-01 (MEDIUM — 199 MB translation model pack + ML Kit OCR natives baked into base, 56% of APK, violating the downloadable-plugin hard rule), Phase-32-NEW-02 (LOW — no ABI splits, all-4-ABI download), Phase-32-NEW-03 (INFO — v2-only signing scheme, no key-rotation), Phase-32-NEW-04 (INFO — placeholder pin ⇒ plugin-update channel dead until operator substitution; fail-closed by design).
+- **NEW findings (4):** Phase-32-NEW-01 (MEDIUM — language-detection n-gram pack (80.2 MB packed = ~199 MB raw, lingua library) + ML Kit OCR/translate natives baked into base, 56% of APK, violating the downloadable-plugin hard rule; attribution corrected 2026-08-15 — the pack is lingua's, not ML Kit translation models), Phase-32-NEW-02 (LOW — no ABI splits, all-4-ABI download), Phase-32-NEW-03 (INFO — v2-only signing scheme, no key-rotation), Phase-32-NEW-04 (INFO — placeholder pin ⇒ plugin-update channel dead until operator substitution; fail-closed by design).
 - **Prior findings CONFIRMED on the APK:** B1-PLAT-1 (debug-keystore release signing — apksigner), B1-PLAT-2 (exported singleTask MainActivity), B1-PLAT-6 (applicationId vs namespace), B1-PLAT-7 (UpdateService), B1-NET-02/06 (LocalSend trust-all-hostname + LAN discovery; cert-pin mitigation noted), B1-NET-03/B1-CRYPTO-01 chain + phase-39 fix wiring, B1-AUTH-01 (DexClassLoader plugin runtime), B2-CRYPTO-06 (timestamped backup filenames).
 - **Positives confirmed (not findings):** release not debuggable, `allowBackup=false`, FLAG_SECURE applied (`if (!BuildConfig.DEBUG) addFlags(8192)` in decompiled MainActivity), R8 minify ON (single 7.9 MB `classes.dex` in release), minimal permission set, cleartext platform-denied, no MediaPipe/tasks-genai/GGUF in base, no hardcoded secrets in 1M+ extracted strings, strong native hardening, constant-time pin compare, CCT telemetry dormant (no FirebaseApp init).
 - **Not possible on this runner:** dynamic instrumented checks (no AVD/device) — left for PHASE 34.9.

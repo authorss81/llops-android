@@ -920,19 +920,21 @@ No DB schema, workflow, or dependency changes were made.
 
 ## NEW findings (confirmed-by-tool, not previously reported)
 
-### [Phase-32-NEW-01] Base APK violates the "heavy/native features MUST be downloadable plugins" hard rule: 199 MB of bundled ML Kit translation models (80.2 MB packed = 56% of the shipping APK) plus ML Kit OCR natives are compiled in
+### [Phase-32-NEW-01] Base APK bundles the `language-models/` n-gram pack (80.2 MB packed = 56% of the shipping APK) plus ML Kit OCR/translate natives, violating the base-APK-size / downloadable-plugin hard rule
+> **Correction (2026-08-15 review):** the initial run mis-attributed the `language-models/` pack to "ML Kit translation models". Decompilation + gradle-cache comparison proves it is the compile-time **lingua** (language-detection) library's bundled corpus, not ML Kit translate data — ML Kit translate models are NOT shipped in the APK (they download on the user's explicit action, `MlKitTranslatorEngine.kt:22-24`). The size/policy violation is real; only the attribution and the remediation path changed.
 - **Severity:** MEDIUM
 - **Area:** Packaging / base-APK-size policy (AGENTS.md hard constraint)
-- **Agent/tool:** python3 `zipfile` size accounting on both APKs (`unzip -l`)
+- **Agent/tool:** python3 `zipfile` size accounting on both APKs (`unzip -l`) + byte-for-byte comparison against the `com.github.pemistahl:lingua:1.2.2` JAR in the gradle cache
 - **Evidence:**
   - `release APK_size = 142.0 MB, 906 entries`; `language-models/ raw=207.6 MB packed=80.2 MB (56% of APK)`; `native .so raw=128.5 MB packed=55.4 MB`; debug APK 173.5 MB (same LM pack + 4-ABI natives + unminified x23 dex).
-  - Root directory `language-models/` = ML Kit **translation** packs for 75 languages (`af`..`zu`, each `bigrams.json`/`fivegrams.json`/`quadrigrams.json`).
-  - `lib/*/libmlkit_google_ocr_pipeline.so` (11 MB aarch64), `libtranslate_jni.so` (16 MB aarch64) present per ABI; `plugins/translation/MlKitTranslatorEngine*` and `plugins/ocr/*` classes confirmed in dex via `strings`.
+  - Root directory `language-models/` = the **lingua** library's bundled n-gram corpus (`com.github.pemistahl:lingua:1.2.2`, `app/build.gradle.kts:185`, used by `plugins/langdetect/LanguageDetectionCore.kt`) — per-language `{unigrams,bigrams,trigrams,quadrigrams,fivegrams}.json`, `af`..`zu`. Verified identical to the lingua JAR: raw bytes **207,608,234** in both, and `language-models/en/unigrams.json` = **1708 B** in both. NOT ML Kit translation packs.
+  - The app's 75-language claim is misleading at the source level too: `LanguageDetectionCore.SUPPORTED` only compiles a 24-language subset (`LanguageDetectionCore.kt:25-50`), yet the base APK ships all 75 languages' data.
+  - `lib/*/libmlkit_google_ocr_pipeline.so` (11 MB aarch64), `libtranslate_jni.so` (16 MB aarch64) present per ABI; `plugins/translation/MlKitTranslatorEngine*` and `plugins/ocr/*` classes confirmed in dex via `strings`. ML Kit translate/OCR **natives** are genuinely baked in even though their models aren't.
   - NO `.gguf`, NO `tasks-genai`, NO `com/google/mediapipe` classes — the LLM correctly stayed downloadable-only (positive).
-- **Exploit scenario:** Not a confidentiality/integrity bug — a download/install-size and storage problem. Every install carries ~80 MB of translation models (uncompressed ~199 MB on disk) the user may never use, plus 4-ABI OCROCE natives; on a 16 GB low-end device this is material wasted storage, and it directly contradicts the agreed downloadable-plugin architecture (AGENTS.md, docs/plugin-architecture.md) that moved LLM/OCR off the base APK. Side effect: because the translation plugin is present and enabled by default, the models load eagerly at first TranslatePlugin use regardless of opt-in intent.
-- **Fix:** Move the ML Kit translation pack(s) and the OCR native dependency out of the base APK into the downloadable-plugin flow (per-language packs fetched+verified on demand, Phase 22-26 model), or at minimum make the translation models runtime-downloadable (ML Kit already supports remote model download — the app actively battles it by bundling 75 packs). Cap the base APK to a size budget and gate on it in CI.
+- **Exploit scenario:** Not a confidentiality/integrity bug — a download/install-size and storage problem. Every install carries ~80 MB packed (~199 MB on disk) of lingua n-gram JSON the user may never use (and only 24 of the 75 bundled languages are ever referenced), plus 4-ABI OCR/translate natives; on a 16 GB low-end device this is material wasted storage, and it contradicts both the downloadable-plugin hard rule (AGENTS.md, docs/plugin-architecture.md) and the "lightweight pure-JVM plugins stay compile-time" carve-out — lingua's data payload is anything but lightweight.
+- **Fix:** (1) Trim lingua to the 24 languages actually used (build a reduced corpus / filter `language-models/` during packaging), or move language detection to a downloadable plugin; (2) move the ML Kit OCR/translate **natives** into the downloadable-plugin flow (Phase 22-26 model) since only their JNI is baked in — ML Kit already keeps its translate models runtime-downloaded, so only the `.so`s need to move; (3) cap the base APK at a size budget and gate on it in CI.
 
-### [Phase-32-NEW-02] No ABI splits: every device downloads all four native ABIs (~55.4 MB packed) on top of the translation pack
+### [Phase-32-NEW-02] No ABI splits: every device downloads all four native ABIs (~55.4 MB packed) on top of the n-gram/data pack
 - **Severity:** LOW
 - **Area:** Packaging / efficiency
 - **Agent/tool:** `unzip -l` / `aapt dump badging` / python3 `zipfile`

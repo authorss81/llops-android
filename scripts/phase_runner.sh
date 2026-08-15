@@ -241,6 +241,17 @@ if [ "${DO_REVIEW}" = "--review-only" ]; then
   exit 0
 fi
 
+# --- Already-done guard (review finding fix): a completed phase must never be
+#     re-run in normal mode, even if a stale/deferred re-selection picked it
+#     (phase-32 was re-run after .done at commit 27b93fd, adding contradictory
+#     .no_work/.deferred/.session/.deferred_attempts alongside .done). Exit
+#     clean and clear those stale markers so select-phase stops re-selecting it.
+if [ -f "${DONE_FILE}" ]; then
+  echo "== [phase] ${PHASE} already DONE — skipping re-run, clearing stale failure markers =="
+  rm -f "${DEFERRED_FILE}" "${SESSION_FILE}" "${BLOCKED_FILE}" "${ATTEMPTS_FILE}" "${DEFERRED_ATTEMPTS_FILE}" "${NOWORK_FILE}"
+  exit 0
+fi
+
 # Snapshot the tree BEFORE the run so the gate only counts this run's delta.
 WORK_BEFORE="$(tree_work)"
 
