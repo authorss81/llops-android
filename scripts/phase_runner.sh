@@ -165,6 +165,18 @@ has_new_work() {
   [ -n "${new}" ]
 }
 
+# True when the agent committed its own work during the run (it pushes phase
+# work itself, leaving the tree clean — that is evidence, not a no-op). Only
+# count commits that touched real files; empty or log/marker-only commits do
+# not count, so the gate cannot be gamed with a trivial commit.
+has_new_commits() {
+  local before="$1"
+  [ -n "${before}" ] || return 1
+  [ "${before}" = "$(git rev-parse HEAD 2>/dev/null)" ] && return 1
+  git diff --name-only "${before}"..HEAD 2>/dev/null \
+    | grep -vE "^logs/|^workspace/${PHASE}/\.|^workspace/\.[^/]*($|/)" | grep -q .
+}
+
 git_available() {
   git rev-parse --git-dir >/dev/null 2>&1
 }
@@ -254,6 +266,7 @@ fi
 
 # Snapshot the tree BEFORE the run so the gate only counts this run's delta.
 WORK_BEFORE="$(tree_work)"
+HEAD_BEFORE="$(git rev-parse HEAD 2>/dev/null || true)"
 
 if run_phase; then
   if ! git_available; then
@@ -265,7 +278,7 @@ if run_phase; then
     exit 0
   fi
 
-  if has_new_work "${WORK_BEFORE}"; then
+  if has_new_work "${WORK_BEFORE}" || has_new_commits "${HEAD_BEFORE}"; then
     echo "== [phase] SUCCESS + evidence gate passed: ${PHASE} left working-tree changes =="
     touch "${DONE_FILE}"
     rm -f "${DEFERRED_FILE}" "${SESSION_FILE}" "${BLOCKED_FILE}" "${ATTEMPTS_FILE}" "${DEFERRED_ATTEMPTS_FILE}" "${NOWORK_FILE}"
