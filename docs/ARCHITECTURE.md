@@ -154,6 +154,17 @@
     ONE non-alarming snackbar per page per session via `maybeNotifyGeometryCapped` (latch cleared on
     lock); `AnnotationCanvas.kt:1415-1434` culls pages whose slab misses the visible world rect
     `(screen − pan)/zoom` in paginated mode. Tests: `B2Dos01StrokeGeometryTest` (18) — 1053 green.
+  - **Implemented in phase-53** (B1-DB-2, see `workspace/phase-53/REPORT.md`): the plaintext→SQLCipher
+    migration can no longer destroy the original plaintext database on failure.
+    `NoteflowDatabase.migratePlaintextIfNeeded` (`:201-258`) swaps atomically — the encrypted scratch
+    file is verified (exists, non-empty, no plaintext header) then `tempFile.renameTo(dbFile)` replaces
+    the original via `rename()` (atomic on bionic/Linux), killing the old delete-then-rename window in
+    which the user had NO database file; stale `-wal`/`-shm` are removed only after the verified
+    encrypted file is in place. The catch block routes through the new pure-JVM `quarantineMigrateFailed`
+    (`:487-510`): drops ONLY the scratch copy, preserves the original + `-wal`/`-shm`/`-journal` as
+    `noteflow.sqlite.migrate-failed-<ts>`, and returns a timestamp so the caller raises the persistent
+    corruption flag (`DatabaseSecurityHelper.setCorruptionDetected`) — the phase-43 recovery screen
+    surfaces instead of silent data loss — then `throw e`.
 - **Canvas**: `ui/components/AnnotationCanvas.kt:83` (ink canvas, gestures, layers, `pointerInteropFilter`);
   `services/WetBrushEngine.kt:13` (AGSL wet-mixing gating); `ui/components/ShaderCapabilityHelper.kt:5`
   (`isAgslSupported` = SDK ≥ 33); `services/ShapeRecognitionHelper.kt:13` (`trySnapShape()` :27).

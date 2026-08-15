@@ -187,10 +187,22 @@ abstract class NoteflowDatabase : RoomDatabase() {
          * One-time in-place migration: opens an existing PLAINTEXT database
          * (created by pre-SQLCipher builds) with an empty key and rekeys it to
          * the current DEK passphrase. No-op when the file is already encrypted.
+         *
+         * B1-DB-2 (phase-53): the original plaintext database is the user's ONLY
+         * copy of their notes and must NEVER be deleted on a failure. The swap is
+         * atomic — the encrypted scratch file is verified (exists, non-empty, no
+         * plaintext header) and then renamed DIRECTLY over the original (rename()
+         * atomically replaces the target on bionic/Linux), so there is no
+         * delete-then-rename window in which the user has NO database file. Any
+         * failure preserves the original under `noteflow.sqlite.migrate-failed-<ts>`
+         * and raises the persistent corruption flag — phase-43 wires that flag to
+         * the corruption-recovery screen instead of silent data loss.
          */
         private fun migratePlaintextIfNeeded(context: Context, passphrase: String) {
             val dbFile = context.getDatabasePath("noteflow.sqlite")
             if (dbFile.exists() && dbFile.length() == 0L) {
+                // An empty 0-byte stub carries no user data — dropping it lets the
+                // encrypted vault be created fresh below.
                 dbFile.delete()
                 return
             }
@@ -212,22 +224,36 @@ abstract class NoteflowDatabase : RoomDatabase() {
                     encryptedDb.close()
                 }
 
+                // A successful sqlcipher_export writes a REAL non-empty encrypted
+                // database (SQLCipher output never carries the plaintext "SQLite
+                // format 3" header, so isPlaintextSqlite == false is the check).
+                // Only a verified scratch file may replace the original.
+                if (isPlaintextSqlite(tempFile) || tempFile.length() == 0L) {
+                    throw IllegalStateException("Encrypted migration file is missing or not encrypted")
+                }
+                // Atomic replace: renameTo() maps to rename() which replaces the
+                // existing target on bionic/Linux, so the original is only gone
+                // once the verified encrypted bytes are IN PLACE. The stale
+                // plaintext -wal/-shm companions are removed only after the swap.
+                if (!tempFile.renameTo(dbFile)) {
+                    throw IllegalStateException("Could not move encrypted migration into place")
+                }
                 val walFile = File(dbFile.path + "-wal")
                 if (walFile.exists()) walFile.delete()
                 val shmFile = File(dbFile.path + "-shm")
                 if (shmFile.exists()) shmFile.delete()
-
-                dbFile.delete()
-                tempFile.renameTo(dbFile)
 
                 com.authorss81.noteflow.services.DatabaseSecurityHelper.updateStoredChecksum(context)
             } catch (e: Exception) {
-                if (tempFile.exists()) tempFile.delete()
-                dbFile.delete()
-                val walFile = File(dbFile.path + "-wal")
-                if (walFile.exists()) walFile.delete()
-                val shmFile = File(dbFile.path + "-shm")
-                if (shmFile.exists()) shmFile.delete()
+                // B1-DB-2 (phase-53): NEVER delete the original plaintext database
+                // on a failure — the old code deleted db + wal + shm with no
+                // quarantine and no recovery screen, destroying the user's only
+                // copy. The original is preserved under *.migrate-failed-<ts> and
+                // the persistent corruption flag routes the user to the
+                // corruption-recovery screen (restore from backup / start fresh).
+                val timestamp = quarantineMigrateFailed(dbFile, tempFile)
+                com.authorss81.noteflow.services.DatabaseSecurityHelper.setCorruptionDetected(context, timestamp)
+                throw e
             }
         }
 
@@ -435,4 +461,50 @@ internal fun isDatabaseCorruptException(e: Throwable?): Boolean {
         msg.contains("file is not a database", ignoreCase = true) ||
         msg.contains("database disk image is malformed", ignoreCase = true) ||
         msg.contains("malformed", ignoreCase = true)
+}
+
+/**
+ * B1-DB-2 (phase-53): the plaintext→SQLCipher migration MUST NEVER destroy the
+ * original plaintext database on failure — it is the user's only copy of the
+ * notes, and the pre-fix catch block deleted db + wal + shm on ANY exception
+ * with no quarantine and no recovery screen.
+ *
+ * On a failed migration this function:
+ *  1. drops only the SCRATCH encrypted copy (`tempFile` — at most a partial
+ *     copy of the user's data, never the original),
+ *  2. renames the original database plus its `-wal`/`-shm`/`-journal`
+ *     companions to `noteflow.sqlite.migrate-failed-<ts>` (bytes preserved,
+ *     mirroring the phase-09 `*.corrupt-<ts>` open-failure quarantine),
+ *  3. returns the timestamp so the caller can raise the persistent corruption
+ *     flag via [DatabaseSecurityHelper.setCorruptionDetected] — the user then
+ *     lands on the corruption-recovery screen instead of silently losing the
+ *     file.
+ *
+ * Pure JVM (File ops only), unit-tested in B1Db02MigrationFailureTest. A failed
+ * rename simply leaves the file in place (bytes still preserved) — the recovery
+ * screen is shown regardless.
+ */
+internal fun quarantineMigrateFailed(dbFile: File, tempFile: File): Long {
+    if (tempFile.exists()) tempFile.delete()
+    val timestamp = System.currentTimeMillis()
+    val suffix = ".migrate-failed-$timestamp"
+    val dir = dbFile.parentFile
+    if (dir != null) {
+        val names = listOf(
+            dbFile.name,
+            dbFile.name + "-wal",
+            dbFile.name + "-shm",
+            dbFile.name + "-journal"
+        )
+        for (name in names) {
+            val source = File(dir, name)
+            if (source.exists()) {
+                try {
+                    source.renameTo(File(dir, name + suffix))
+                } catch (_: Exception) {
+                }
+            }
+        }
+    }
+    return timestamp
 }
