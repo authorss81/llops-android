@@ -49,6 +49,14 @@ class NoteRepository(private var db: NoteflowDatabase) {
      */
     private val searchCorpusMaxPages = 1500
 
+    /**
+     * Monotonic generation bumped by every page mutation / lock / re-key.
+     * Consumers (Phase 38 command palette) compare against this to know when
+     * their in-memory index is stale without re-scanning.
+     */
+    val currentSearchCorpusGeneration: Long
+        get() = synchronized(searchCorpusLock) { searchCorpusGeneration }
+
     private fun invalidateSearchCorpus() {
         synchronized(searchCorpusLock) {
             searchCorpusGeneration++
@@ -137,6 +145,13 @@ class NoteRepository(private var db: NoteflowDatabase) {
     suspend fun getAllActivePages(): List<NotePageEntity> = withContext(Dispatchers.IO) {
         db.pageDao().getAllActivePages().map { decryptPageIfNeeded(it) }
     }
+
+    /**
+     * Phase 38: the cached, decrypted corpus backing palette/quick-switcher
+     * searches. Same cache as [searchPages] — loaded once per epoch, invalidated
+     * on mutation/lock — so a keystroke never re-decrypts the vault.
+     */
+    suspend fun cachedCorpus(): List<NotePageEntity> = loadSearchCorpus()
 
     suspend fun checkpointWal() = withContext(Dispatchers.IO) {
         db.query("PRAGMA wal_checkpoint(FULL)", null).use { cursor ->

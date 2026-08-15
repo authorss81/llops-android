@@ -51,8 +51,20 @@
   `ui/components/markdown/MarkdownRenderer.kt` + `HybridMarkdownEditor.kt`
   (replaces the raw text field in EDIT/SPLIT panes; typed callouts + interactive
   checkboxes; `AnimatedCheckmark.kt` respects reduce-motion).
-- **Knowledge graph**: `ui/screens/KnowledgeGraphScreen.kt:55` (data built in-screen via
-  `services/WikiLinkParser.kt:66` `buildWikiLinkEdges`).
+- **Knowledge graph**: `ui/screens/KnowledgeGraphScreen.kt`
+  (Phase 38 rewrite — deterministic force-directed layout, cluster colouring, tag
+  filter chips, link pulses, collision bounding, low-RAM cull + notice) built on
+  `services/graph/GraphLayoutMath.kt` (forces `GraphPhysicsConfig`, layout +
+  collision `GraphLayoutMath`, clusters `assignClusters`, tiers
+  `GraphTierSelector`) and `services/WikiLinkParser.kt:66` `buildWikiLinkEdges`
+  + `:373` `buildTagHierarchy`. Serverless tier detection: `utils/DeviceCompatibilityManager.kt`.
+- **Command Palette (Phase 38 HUD)**: `ui/components/CommandPaletteOverlay.kt`
+  (global quick-switcher; two-finger swipe down in `MainActivity.kt`
+  `detectTwoFingerSwipeDown`, keyboard icon in `HomeScreen.kt`), ranking/tag
+  combination/action routing in `services/graph/CommandPaletteMath.kt`, search +
+  plugin-action execution in `NoteflowViewModel.commandPaletteSearch` /
+  `runPaletteAction` over the cached decrypted corpus
+  (`NoteRepository.cachedCorpus`, generation `currentSearchCorpusGeneration`).
 - **WebDAV sync**: `services/WebDavSyncService.kt:28` (encrypted vault archives, HTTPS enforced).
 - **LocalSend**: `services/localsend/LocalSendProtocol.kt:29`, `LocalSendSender.kt:48`.
 - **Palette**: `services/PaletteCatalog.kt:131` (swatches + `familyFor`), `PaletteMath` :24.

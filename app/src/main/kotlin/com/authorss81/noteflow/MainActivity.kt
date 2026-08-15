@@ -153,6 +153,7 @@ class MainActivity : FragmentActivity() {
             val pages by viewModel.pages.collectAsState()
             var activePageId by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf<String?>(null) }
             var showGraphView by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
+            var showCommandPalette by remember { mutableStateOf(false) }
 
             val activePage = pages.find { it.id == activePageId }
             val setActivePage: (NotePageEntity?) -> Unit = { page ->
@@ -183,6 +184,11 @@ class MainActivity : FragmentActivity() {
                 Surface(
                     modifier = Modifier
                         .fillMaxSize()
+                        // Phase 38: two-finger swipe down opens the global Command
+                        // Palette (discoverable: keyboard icon on the Home bar).
+                        .pointerInput(authenticated, showCommandPalette) {
+                            if (authenticated) detectTwoFingerSwipeDown { showCommandPalette = true }
+                        }
                         // 22.1: inactivity auto-lock — first touch after the idle
                         // window (or any touch when the timeout changed) locks.
                         .pointerInput(autoLockTimeoutSeconds) {
@@ -305,7 +311,8 @@ class MainActivity : FragmentActivity() {
                                         HomeScreen(
                                             viewModel = viewModel,
                                             onOpenPage = { pageToOpen -> setActivePage(pageToOpen) },
-                                            onOpenGraph = { showGraphView = true }
+                                            onOpenGraph = { showGraphView = true },
+                                            onOpenCommandPalette = { showCommandPalette = true }
                                         )
                                     } else {
                                         com.authorss81.noteflow.ui.components.FluidPageReveal(pageKey = page.id) {
@@ -399,7 +406,8 @@ class MainActivity : FragmentActivity() {
                                                     HomeScreen(
                                                         viewModel = viewModel,
                                                         onOpenPage = { pageToOpen -> setActivePage(pageToOpen) },
-                                                        onOpenGraph = { showGraphView = true }
+                                                        onOpenGraph = { showGraphView = true },
+                                                        onOpenCommandPalette = { showCommandPalette = true }
                                                     )
                                                 }
                                                 
@@ -494,6 +502,22 @@ onSaveContent = { newText ->
                         SnackbarHost(
                             hostState = snackbarHostState,
                             modifier = Modifier.align(Alignment.BottomCenter)
+                        )
+                    }
+
+                    // Phase 38: global Command Palette HUD (two-finger swipe down).
+                    if (authenticated && !corruptionBlocked && !restoreBlocked && showCommandPalette) {
+                        com.authorss81.noteflow.ui.components.CommandPaletteOverlay(
+                            viewModel = viewModel,
+                            onOpenNote = { id, _ ->
+                                showCommandPalette = false
+                                val found = pages.find { it.id == id }
+                                if (found != null) {
+                                    showGraphView = false
+                                    setActivePage(found)
+                                }
+                            },
+                            onClose = { showCommandPalette = false }
                         )
                     }
                 }
@@ -612,6 +636,49 @@ onSaveContent = { newText ->
     override fun onLowMemory() {
         super.onLowMemory()
         com.authorss81.noteflow.utils.BitmapPool.clear()
+    }
+}
+
+/**
+ * Phase 38: two-finger swipe DOWN anywhere in the unlocked vault opens the
+ * global Command Palette HUD. Detects ≥2 pointers simultaneously pressed,
+ * tracks their centroid, and fires when the centroid travelled >90px downward
+ * (x-drift below 220px so horizontal pans/pinch don't mis-trigger). The palette
+ * is harmless to open, so low-stakes false positives are acceptable.
+ */
+private suspend fun androidx.compose.ui.input.pointer.PointerInputScope.detectTwoFingerSwipeDown(
+    onOpen: () -> Unit
+) {
+    awaitPointerEventScope {
+        var twoFingerMode = false
+        var measuring = false
+        var startX = 0f
+        var startY = 0f
+        var lastX = 0f
+        var lastY = 0f
+        while (true) {
+            val event = awaitPointerEvent()
+            val pressed = event.changes.filter { it.pressed }
+            if (pressed.size >= 2) {
+                twoFingerMode = true
+                val cx = pressed.map { it.position.x }.average().toFloat()
+                val cy = pressed.map { it.position.y }.average().toFloat()
+                if (!measuring) {
+                    measuring = true
+                    startX = cx
+                    startY = cy
+                }
+                lastX = cx
+                lastY = cy
+            } else if (pressed.isEmpty() && twoFingerMode) {
+                break
+            }
+        }
+        if (twoFingerMode && measuring) {
+            val dy = lastY - startY
+            val dx = lastX - startX
+            if (dy > 90f && kotlin.math.abs(dx) < 220f) onOpen()
+        }
     }
 }
 

@@ -45,7 +45,8 @@ import java.io.File
 fun HomeScreen(
     viewModel: NoteflowViewModel,
     onOpenPage: (NotePageEntity) -> Unit,
-    onOpenGraph: () -> Unit = {}
+    onOpenGraph: () -> Unit = {},
+    onOpenCommandPalette: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -428,6 +429,9 @@ fun HomeScreen(
                             }
                         }) {
                             Icon(Icons.Outlined.Today, contentDescription = "Today's Journal Note", tint = MaterialTheme.colorScheme.primary)
+                        }
+                        IconButton(onClick = onOpenCommandPalette) {
+                            Icon(Icons.Outlined.Keyboard, contentDescription = "Command Palette (two-finger swipe down)", tint = MaterialTheme.colorScheme.primary)
                         }
                         IconButton(onClick = onOpenGraph) {
                             Icon(Icons.Outlined.Hub, contentDescription = "Knowledge Graph View", tint = MaterialTheme.colorScheme.primary)

@@ -90,6 +90,8 @@ import com.authorss81.noteflow.services.DownloadablePluginUpdater
 import com.authorss81.noteflow.services.PluginArtifactStorage
 import com.authorss81.noteflow.services.SettingsPluginEntryStore
 import com.authorss81.noteflow.services.SettingsPluginUpdateStore
+import com.authorss81.noteflow.services.WikiLinkParser
+import com.authorss81.noteflow.services.graph.CommandPaletteMath
 import com.authorss81.noteflow.theme.AppThemeMode
 import com.authorss81.noteflow.ui.components.WorkspaceTemplate
 import com.authorss81.noteflow.plugins.AndroidPluginLogger
@@ -2104,9 +2106,234 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    // -----------------------------------------------------------------------
+    // Phase 38 — command palette (HUD) search + plugin-action routing.
+    // Pure math lives in CommandPaletteMath; this layer only fixes it to the
+    // cached corpus (title/extractedText, tags from the cached tag hierarchy)
+    // and to PluginManager invocations. No background scanning, no network.
+    // -----------------------------------------------------------------------
+
+    /** Cached per-epoch palette documents + page tag map (never re-scanned). */
+    private data class PaletteIndex(
+        val docs: List<CommandPaletteMath.PaletteDoc>,
+        val pageTags: Map<String, Set<String>>,
+        val corpusGeneration: Long
+    )
+
+    @Volatile
+    private var paletteIndex: PaletteIndex? = null
+
+    /**
+     * Build (once per corpus generation) the palette's document set from the
+     * CACHED decrypted corpus — the exact source `NoteRepository` already keeps
+     * for search — plus the epoch-cached tag hierarchy flattened to per-page
+     * tag sets. Building is the only "scan": it happens once, reads no files,
+     * and is reused across keystrokes. Returns empty on vault lock (corpus path
+     * auto-empties).
+     */
+    private suspend fun buildPaletteIndex(): PaletteIndex {
+        val generation = repository.currentSearchCorpusGeneration
+        paletteIndex?.let { existing ->
+            if (existing.corpusGeneration == generation) return existing
+        }
+        val pages = repository.cachedCorpus()
+        val tagHierarchy = WikiLinkParser.buildTagHierarchy(pages)
+        val pageTags = WikiLinkParser.flattenPageTags(tagHierarchy)
+        val docs = pages.map { page ->
+            CommandPaletteMath.PaletteDoc(
+                id = page.id,
+                title = page.title,
+                body = page.extractedText ?: "",
+                tags = pageTags[page.id] ?: page.tags.split(',').map { it.trim() }.filter { it.isNotEmpty() }.toSet(),
+                updatedAt = page.updatedAt
+            )
+        }
+        val index = PaletteIndex(docs, pageTags, generation)
+        if (repository.currentSearchCorpusGeneration == generation) {
+            paletteIndex = index
+        }
+        return index
+    }
+
+    /**
+     * Reset the palette cache immediately (mutation already bumped the corpus
+     * generation; this forces the next query to rebuild even if generation was
+     * raced). Also called on lock.
+     */
+    fun invalidatePaletteIndex() {
+        paletteIndex = null
+    }
+
+    /**
+     * Query the cached palette index with optional tag filter. Runs on the IO
+     * dispatcher so a keystroke never blocks the UI thread. Returns ranked
+     * notes + a parallel list of matching tag suggestions.
+     */
+    suspend fun commandPaletteSearch(
+        query: String,
+        selectedTags: Set<String> = emptySet(),
+        requireAllTags: Boolean = true
+    ): CommandPaletteSearchResult = withContext(Dispatchers.IO) {
+        val index = buildPaletteIndex()
+        val notes = if (query.isBlank()) {
+            // Blank query → show most recently updated notes (recency browse).
+            index.docs
+                .sortedByDescending { it.updatedAt }
+                .take(8)
+                .map { d ->
+                    CommandPaletteMath.RankedNote(
+                        doc = d,
+                        score = d.updatedAt.toFloat() / 1000f,
+                        snippet = ""
+                    )
+                }
+        } else {
+            CommandPaletteMath.rank(query, index.docs, selectedTags, requireAllTags)
+        }
+        val tagSuggestions = if (query.isBlank()) emptyList() else suggestTags(query, index)
+        CommandPaletteSearchResult(notes, tagSuggestions)
+    }
+
+    private fun suggestTags(
+        query: String,
+        index: PaletteIndex
+    ): List<TagSuggestion> {
+        val q = query.trim().lowercase()
+        if (q.isEmpty()) return emptyList()
+        val occurrences = HashMap<String, Int>()
+        index.pageTags.values.forEach { tags ->
+            tags.forEach { tag ->
+                if (tag.lowercase().contains(q)) occurrences[tag] = (occurrences[tag] ?: 0) + 1
+            }
+        }
+        return occurrences.entries
+            .sortedWith(compareByDescending<Map.Entry<String, Int>> { it.value }.thenBy { it.key })
+            .take(6)
+            .map { TagSuggestion(it.key, it.value) }
+    }
+
+    /**
+     * Run a palette action through PluginManager. [arg] is the palette query
+     * tail for keyword actions (e.g. `web: android 16` → "android 16");
+     * [noteText] is the currently-open note's text so text-scoped actions
+     * (read-aloud, assistant, transform) have a real subject. Never throws;
+     * every path returns a user-facing summary.
+     */
+    suspend fun runPaletteAction(
+        action: CommandPaletteMath.ActionMatch,
+        arg: String,
+        noteText: String?
+    ): PaletteActionResult = when (action.action.capabilityKey) {
+        PluginCapability.WebSearch.key -> when (val r = searchWeb(arg)) {
+            is PluginResult.Success -> when (val o = r.value) {
+                is WebSearchOutcome.Success -> {
+                    val first = o.results.firstOrNull()
+                    if (first == null) PaletteActionResult.Text("Web search found no results.")
+                    else PaletteActionResult.Text("[${first.title}](${first.url})")
+                }
+                is WebSearchOutcome.Error -> PaletteActionResult.Error(o.message)
+            }
+            is PluginResult.Failure -> PaletteActionResult.Error(r.message)
+            is PluginResult.Unavailable -> PaletteActionResult.Error(r.message)
+        }
+        PluginCapability.TextTransform.key -> {
+            val commandPaletteText = routeTextArg(arg, noteText)
+            when (val r = transformNoteText(commandPaletteText)) {
+                is PluginResult.Success -> PaletteActionResult.Text((r.value as? String) ?: "Transformed.")
+                else -> PaletteActionResult.Error((r as? PluginResult.Failure)?.message ?: "Transform unavailable.")
+            }
+        }
+        PluginCapability.UnitConversion.key -> when (val r = convertUnits(arg)) {
+            is PluginResult.Success -> when (val o = r.value) {
+                is UnitConversionOutcome.Success -> PaletteActionResult.Text(o.text)
+                is UnitConversionOutcome.Error -> PaletteActionResult.Error(o.message)
+            }
+            else -> PaletteActionResult.Error((r as? PluginResult.Failure)?.message ?: "Unit conversion unavailable.")
+        }
+        PluginCapability.Dictionary.key -> when (val r = lookupDictionaryWord(arg)) {
+            is PluginResult.Success -> when (val o = r.value) {
+                is DictionaryOutcome.Success -> {
+                    val def = o.lookup.definitions.firstOrNull()
+                    val text = def?.let { "“${o.lookup.word}” (${o.lookup.source}): ${it.definition}" }
+                        ?: "“${o.lookup.word}”: no definition returned."
+                    PaletteActionResult.Text(text)
+                }
+                is DictionaryOutcome.NotFound -> PaletteActionResult.Text(o.message)
+                is DictionaryOutcome.Error -> PaletteActionResult.Error(o.message)
+            }
+            else -> PaletteActionResult.Error((r as? PluginResult.Failure)?.message ?: "Dictionary unavailable.")
+        }
+        PluginCapability.Weather.key -> when (val r = fetchWeatherSnapshot()) {
+            is PluginResult.Success -> when (val o = r.value) {
+                is WeatherOutcome.Success -> {
+                    val s = o.snapshot
+                    PaletteActionResult.Text(
+                        "${s.city}: ${s.weatherDescription} — ${s.tempMinC}° / ${s.tempMaxC}°C"
+                    )
+                }
+                is WeatherOutcome.Error -> PaletteActionResult.Error(o.message)
+            }
+            else -> PaletteActionResult.Error((r as? PluginResult.Failure)?.message ?: "Weather unavailable.")
+        }
+        PluginCapability.ReadAloud.key -> {
+            val passage = noteText ?: arg
+            when (val r = readAloud(passage, quietMode = false)) {
+                is PluginResult.Success -> when (val o = r.value) {
+                    is ReadAloudOutcome.Started -> PaletteActionResult.Text("Reading aloud (${o.chunkCount} chunks).")
+                    is ReadAloudOutcome.Empty -> PaletteActionResult.Text(o.message)
+                    is ReadAloudOutcome.Quiet -> PaletteActionResult.Text(o.message)
+                    is ReadAloudOutcome.Error -> PaletteActionResult.Error(o.message)
+                }
+                else -> PaletteActionResult.Error((r as? PluginResult.Failure)?.message ?: "Read-aloud unavailable.")
+            }
+        }
+        PluginCapability.Assistant.key -> {
+            val question = routeTextArg(arg, noteText)
+            val subject = noteText ?: ""
+            when (val r = assistantAnswerQuestion(subject, question)) {
+                is PluginResult.Success -> when (val o = r.value) {
+                    is AssistantOutcome.Success -> PaletteActionResult.Text(o.text)
+                    else -> PaletteActionResult.Error(
+                        (r.value as? AssistantOutcome.ModelNotReady)?.message
+                            ?: (r.value as? AssistantOutcome.Error)?.message
+                            ?: "Assistant unavailable."
+                    )
+                }
+                else -> PaletteActionResult.Error((r as? PluginResult.Failure)?.message ?: "Assistant unavailable.")
+            }
+        }
+        PluginCapability.OCR.key ->
+            PaletteActionResult.Error("OCR needs an image — open a note containing a photo, then use the editor's OCR.")
+        PluginCapability.Dictation.key ->
+            PaletteActionResult.Error("Dictation needs the microphone — open a note and use the editor's dictation button.")
+        else -> PaletteActionResult.Error("This action isn't installed. Check ⋮ menu → Plugin Store.")
+    }
+
+    private fun routeTextArg(
+        arg: String,
+        noteText: String?
+    ): String = if (arg.isNotBlank()) arg else (noteText ?: "")
+
+    /** Result of a palette action invocation, shaped for a dialog/snackbar. */
+    sealed class PaletteActionResult {
+        data class Text(val text: String) : PaletteActionResult()
+        data class Error(val message: String) : PaletteActionResult()
+    }
+
+    data class TagSuggestion(
+        val tag: String,
+        val count: Int
+    )
+
+    data class CommandPaletteSearchResult(
+        val notes: List<CommandPaletteMath.RankedNote>,
+        val tagSuggestions: List<TagSuggestion>
+    )
+
     fun lock() {
 
         repository.zeroizeKey()
+        invalidatePaletteIndex()
         // N6/A1: decrypted content must not stay resident in StateFlows after lock.
         _pages.value = emptyList()
         _selectedPage.value = null

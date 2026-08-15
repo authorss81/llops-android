@@ -346,6 +346,25 @@ object WikiLinkParser {
     }
 
     /**
+     * Pure helper: flatten a [buildTagHierarchy] tree into `pageId → tags`
+     * (every full tag path the page belongs to, deduped and sorted). Cheap —
+     * no I/O, no re-scan; the caller feeds it the cached hierarchy. Used by the
+     * KnowledgeGraph tag chips/filters and the Phase 38 command palette.
+     */
+    fun flattenPageTags(hierarchy: List<TagNode>): Map<String, Set<String>> {
+        if (hierarchy.isEmpty()) return emptyMap()
+        val out = HashMap<String, MutableSet<String>>(hierarchy.sumOf { it.matchingPageIds.size }.coerceAtLeast(8))
+        fun visit(node: TagNode) {
+            for (pageId in node.matchingPageIds) {
+                out.getOrPut(pageId) { mutableSetOf() }.add(node.fullTagPath)
+            }
+            for (child in node.children) visit(child)
+        }
+        for (root in hierarchy) visit(root)
+        return out.mapValues { (_, v) -> v.sorted().toSet() }
+    }
+
+    /**
      * Builds the hierarchical #tag tree (B2-DOS-11: recursion depth = number of
      * `/`-segments is attacker-controlled, so [MAX_TAG_TREE_DEPTH] caps both the
      * tree depth and the recursive [MutableTagNodeBuilder.toTagNode] walk).
