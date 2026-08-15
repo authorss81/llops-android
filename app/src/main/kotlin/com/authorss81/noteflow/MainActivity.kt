@@ -14,7 +14,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.input.pointer.pointerInput
-import kotlinx.coroutines.NonCancellable
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -38,6 +37,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.authorss81.noteflow.data.model.NotePageEntity
+import com.authorss81.noteflow.services.NoteBodyVaultPolicy
 import com.authorss81.noteflow.theme.NoteflowTheme
 import com.authorss81.noteflow.ui.screens.EditorScreen
 import com.authorss81.noteflow.ui.screens.HomeScreen

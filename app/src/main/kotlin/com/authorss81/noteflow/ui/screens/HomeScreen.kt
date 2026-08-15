@@ -243,19 +243,28 @@ fun HomeScreen(
                     importedCount++
                 } else {
                     val type = if (ImportExportService.isPdf(ext)) "pdf" else if (ImportExportService.isImage(ext)) "image" else "text"
-                    val path = ImportExportService.persistFile(context, fileName, bytes)
+                    // phase-44 review fix (B1-DB-4): unknown text-like extensions
+                    // (e.g. .markdown/.rst) must NOT land as a plaintext body file at
+                    // rest — same column-only contract as .md/.txt. Only genuine
+                    // PDF/image sources are persisted as binary artifacts.
+                    val isTextBodyType = type == "text"
+                    val path: String? = if (isTextBodyType) null else ImportExportService.persistFile(context, fileName, bytes)
 
                     val (extractedText, pageCount, isLandscapeFormat) = withContext(Dispatchers.IO) {
-                        val extracted = DocumentTextExtractor.extractText(File(path), type)
-                        val count = ImportExportService.getPdfPageCount(path)
+                        val extracted = if (isTextBodyType) {
+                            String(bytes, Charsets.UTF_8)
+                        } else {
+                            DocumentTextExtractor.extractText(File(path!!), type)
+                        }
+                        val count = if (isTextBodyType) 1 else ImportExportService.getPdfPageCount(path!!)
                         var landscapeFormat = false
                         try {
                             if (type == "image") {
                                 val options = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                                android.graphics.BitmapFactory.decodeFile(path, options)
+                                android.graphics.BitmapFactory.decodeFile(path!!, options)
                                 landscapeFormat = options.outWidth > options.outHeight
                             } else if (type == "pdf") {
-                                val pfd = android.os.ParcelFileDescriptor.open(File(path), android.os.ParcelFileDescriptor.MODE_READ_ONLY)
+                                val pfd = android.os.ParcelFileDescriptor.open(File(path!!), android.os.ParcelFileDescriptor.MODE_READ_ONLY)
                                 val renderer = android.graphics.pdf.PdfRenderer(pfd)
                                 if (renderer.pageCount > 0) {
                                     val pdfPage = renderer.openPage(0)
