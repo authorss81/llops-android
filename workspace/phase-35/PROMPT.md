@@ -1,4 +1,4 @@
-# Phase 35: Canvas & Scribe Ergonomics [NOT STARTED]
+# Phase 35: Canvas & Scribe Ergonomics [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app. The canvas (`ui/components/AnnotationCanvas.kt`) and editor

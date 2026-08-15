@@ -1540,36 +1540,30 @@ Stroke(
             }
 
             // Eyedropper Magnifying Loupe Overlay
+            // Phase 35: now a real magnifier — a 5x5 pixel-grid loupe sampled from
+            // the ACTUAL rendered page bitmap around the pointer, so users can
+            // micro-target strokes that are thinner than a finger. Falls back to a
+            // plain color circle when no bitmap is available.
             if (currentTool == StrokeTool.EYEDROPPER && eyedropperPosition != null && sampledColorPreview != null) {
                 val pos = eyedropperPosition!!
                 val sampledColor = sampledColorPreview!!
-                val textLight = (0.299f * sampledColor.red + 0.587f * sampledColor.green + 0.114f * sampledColor.blue) < 0.5f
-                Box(
-                    modifier = Modifier
-                        .offset { IntOffset((pos.x - 48.dp.toPx()).toInt(), (pos.y - 100.dp.toPx()).toInt()) }
-                        .size(88.dp)
-                        .clip(CircleShape)
-                        .background(sampledColor)
-                        .border(3.dp, Color.White, CircleShape)
-                        .border(4.dp, Color.Black.copy(alpha = 0.35f), CircleShape),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(
-                            Icons.Outlined.Colorize,
-                            contentDescription = null,
-                            tint = if (textLight) Color.White else Color.Black,
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Text(
-                            text = "#${Integer.toHexString(sampledColor.toArgb()).takeLast(6).uppercase()}",
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                color = if (textLight) Color.White else Color.Black,
-                                fontSize = 10.sp
-                            )
-                        )
-                    }
-                }
+                val loupeCanvasOffset = Offset(
+                    x = (pos.x - internalPanOffset.x) / internalZoomScale,
+                    y = (pos.y - internalPanOffset.y) / internalZoomScale
+                )
+                EyedropperMagnifierLoupe(
+                    pos = pos,
+                    sampledColor = sampledColor,
+                    canvasOffset = loupeCanvasOffset,
+                    targetPage = activeTargetPage,
+                    rawBitmap = activeRawBitmapMap[activeTargetPage],
+                    pageWidthPx = pageWidthPx,
+                    pageHeightPx = pageHeightPx,
+                    pageTopY = calculatePageYOffset(activeTargetPage),
+                    fallbackColor = parsedPaperColor,
+                    zoomScale = internalZoomScale,
+                    density = LocalDensity.current
+                )
             }
 
             // Canvas Viewport Minimap Widget (Bottom Right)
@@ -1614,6 +1608,97 @@ Stroke(
                             val minimapHeightPx = with(density) { 140.dp.toPx() }
                             val screenW = with(density) { configuration.screenWidthDp.dp.toPx() }
                             val screenH = with(density) { configuration.screenHeightDp.dp.toPx() }
+
+                            // Phase 35: spatial HUD — spring-smoothed zoom %, active
+                            // layer + layer count, and the viewport bounds in canvas
+                            // coords. The zoom controls keep the canvas point under the
+                            // viewport centre stationary and spring back to the "nice"
+                            // level under full motion; reduce-motion snaps instead.
+                            val smoothZoomPct = androidx.compose.animation.core.animateFloatAsState(
+                                targetValue = internalZoomScale * 100f,
+                                animationSpec = if (reduceMotion) {
+                                    androidx.compose.animation.core.snap()
+                                } else {
+                                    androidx.compose.animation.core.spring(
+                                        dampingRatio = androidx.compose.animation.core.Spring.DampingRatioNoBouncy,
+                                        stiffness = androidx.compose.animation.core.Spring.StiffnessMedium
+                                    )
+                                },
+                                label = "minimapZoom"
+                            )
+                            val activeLayerName = remember(layers, activeLayerId) {
+                                layers.find { it.id == activeLayerId }?.name
+                            }
+                            val viewTopLeft = Offset(
+                                -internalPanOffset.x / internalZoomScale,
+                                -internalPanOffset.y / internalZoomScale
+                            )
+                            val viewBottomRight = Offset(
+                                viewTopLeft.x + screenW / internalZoomScale,
+                                viewTopLeft.y + screenH / internalZoomScale
+                            )
+
+                            fun zoomCanvasBy(mult: Float) {
+                                val newScale = (internalZoomScale * mult).coerceIn(0.5f, 4.0f)
+                                val center = Offset(screenW / 2f, screenH / 2f)
+                                val canvasPoint = Offset(
+                                    (center.x - internalPanOffset.x) / internalZoomScale,
+                                    (center.y - internalPanOffset.y) / internalZoomScale
+                                )
+                                updateZoomAndPan(
+                                    newScale,
+                                    Offset(center.x - canvasPoint.x * newScale, center.y - canvasPoint.y * newScale)
+                                )
+                            }
+
+                            Text(
+                                text = "Zoom ${smoothZoomPct.value.toInt()}%",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 4.dp)
+                            )
+                            Text(
+                                text = buildString {
+                                    append("Layers ${layers.size}")
+                                    if (!activeLayerName.isNullOrBlank()) append(" · ${activeLayerName}")
+                                    if (layers.isEmpty()) append(" · base")
+                                },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 4.dp)
+                            )
+                            Text(
+                                text = "View (${viewTopLeft.x.toInt()},${viewTopLeft.y.toInt()})–(${viewBottomRight.x.toInt()},${viewBottomRight.y.toInt()})",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                modifier = Modifier.padding(horizontal = 4.dp)
+                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                IconButton(
+                                    onClick = { zoomCanvasBy(0.75f) },
+                                    modifier = Modifier.size(24.dp)
+                                ) {
+                                    Icon(Icons.Outlined.Remove, contentDescription = "Zoom Out", modifier = Modifier.size(14.dp))
+                                }
+                                TextButton(
+                                    onClick = { updateZoomAndPan(1f, Offset.Zero) },
+                                    modifier = Modifier.height(24.dp)
+                                ) {
+                                    Text("100%", style = MaterialTheme.typography.labelSmall)
+                                }
+                                IconButton(
+                                    onClick = { zoomCanvasBy(1.3333f) },
+                                    modifier = Modifier.size(24.dp)
+                                ) {
+                                    Icon(Icons.Outlined.Add, contentDescription = "Zoom In", modifier = Modifier.size(14.dp))
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(2.dp))
 
                             Box(
                                 modifier = Modifier
@@ -1798,6 +1883,127 @@ Stroke(
                     brushRenderSettings.chiselNibAngleDeg = value
                 },
                 onDismiss = { showBrushStudio = false }
+            )
+        }
+    }
+}
+
+/**
+ * Phase 35: magnifier loupe for the Eyedropper tool. Draws a 5x5 grid of pixels
+ * sampled from the actual rendered page bitmap around the pointer position,
+ * magnified ~4x so users can micro-target sub-finger strokes. Pure rendering —
+ * the color pick logic stays in [sampleColorAt]/EyedropperSamplingMath.
+ */
+@Composable
+private fun EyedropperMagnifierLoupe(
+    pos: Offset,
+    sampledColor: Color,
+    canvasOffset: Offset,
+    targetPage: Int,
+    rawBitmap: android.graphics.Bitmap?,
+    pageWidthPx: Float,
+    pageHeightPx: Float,
+    pageTopY: Float,
+    fallbackColor: Color,
+    zoomScale: Float,
+    density: androidx.compose.ui.unit.Density
+) {
+    val gridCells = 5
+    val cellDp = 22.dp
+    val gridSizeDp = cellDp * gridCells
+    val cellPx = with(density) { cellDp.toPx() }
+    val mag = 4f
+    val step = cellPx / mag
+    val loupeDp = gridSizeDp + 22.dp
+    val textLight = sampledColor.luminance() > 0.5f
+
+    val paperColor = fallbackColor
+    val paperArgb = paperColor.toArgb()
+    val bmp = rawBitmap?.takeIf { !it.isRecycled }
+
+    val hexLabel = remember(sampledColor) {
+        "#${Integer.toHexString(sampledColor.toArgb()).takeLast(6).uppercase(java.util.Locale.US)}"
+    }
+
+    // Place the loupe above-left of the pointer so the finger doesn't cover it.
+    val gridSizePx = with(density) { gridSizeDp.toPx() }
+    val chipOffsetPx = with(density) { 26.dp.toPx() }
+    val offsetPx = with(density) { (gridSizeDp / 2f + 12.dp).toPx() }
+    Box(
+        modifier = Modifier
+            .offset { IntOffset((pos.x - offsetPx).toInt(), (pos.y - offsetPx - gridSizePx - chipOffsetPx).toInt()) }
+            .size(loupeDp)
+            .shadow(12.dp, CircleShape)
+            .clip(CircleShape)
+            .background(Color.Black.copy(alpha = 0.12f))
+    ) {
+        Canvas(modifier = Modifier.size(gridSizeDp)) {
+            val center = size.width / 2f
+            for (r in 0 until gridCells) {
+                for (c in 0 until gridCells) {
+                    val worldX = canvasOffset.x + (c - (gridCells - 1) / 2f) * step
+                    val worldY = canvasOffset.y + (r - (gridCells - 1) / 2f) * step
+                    var cellArgb = paperArgb
+                    if (bmp != null) {
+                        val px = com.authorss81.noteflow.services.EyedropperSamplingMath.canvasToPagePixel(
+                            canvasX = worldX,
+                            canvasY = worldY,
+                            pageTopY = pageTopY,
+                            pageWidthPx = pageWidthPx,
+                            pageHeightPx = pageHeightPx,
+                            bitmapWidth = bmp.width,
+                            bitmapHeight = bmp.height
+                        )
+                        if (px != null) {
+                            try {
+                                cellArgb = bmp.getPixel(px.first, px.second)
+                            } catch (e: Exception) {
+                                // out-of-bounds race — fall back to paper
+                            }
+                        }
+                    }
+                    drawRect(
+                        color = Color(cellArgb),
+                        topLeft = Offset(c * cellPx, r * cellPx),
+                        size = Size(cellPx, cellPx)
+                    )
+                    drawRect(
+                        color = Color.Black.copy(alpha = 0.12f),
+                        topLeft = Offset(c * cellPx, r * cellPx),
+                        size = Size(cellPx, cellPx),
+                        style = DrawStrokeStyle(width = 1f)
+                    )
+                }
+            }
+            // Center-cell targeting ring so the exact sampled pixel is obvious.
+            drawCircle(
+                color = Color.White,
+                radius = cellPx * 0.48f,
+                center = Offset(center, center),
+                style = DrawStrokeStyle(width = 3f)
+            )
+            drawCircle(
+                color = Color.Black.copy(alpha = 0.5f),
+                radius = cellPx * 0.48f,
+                center = Offset(center, center),
+                style = DrawStrokeStyle(width = 1.5f)
+            )
+        }
+        // Hex label chip pinned below the grid.
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .offset(y = gridSizeDp + 2.dp)
+                .clip(RoundedCornerShape(6.dp))
+                .background(if (textLight) Color.Black.copy(alpha = 0.55f) else Color.White.copy(alpha = 0.55f))
+                .padding(horizontal = 6.dp, vertical = 2.dp)
+        ) {
+            Text(
+                text = hexLabel,
+                style = MaterialTheme.typography.labelSmall.copy(
+                    color = if (textLight) Color.White else Color.Black,
+                    fontSize = 10.sp
+                )
             )
         }
     }

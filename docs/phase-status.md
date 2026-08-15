@@ -41,6 +41,7 @@
 | phase-27 | `NOT STARTED` | False-implementation audit. PROMPT.md only. |
 | phase-28 | `NOT STARTED` | APK pentest attack. PROMPT.md only. |
 | phase-29 | `NOT STARTED` | Security-fix phase generation + final doc-fix. PROMPT.md only. |
+| phase-35 | `DONE` | Canvas & scribe ergonomics (FloatingToolDock replacing FloatingBottomToolbarPill: draggable edge-snap pill via new `services/DockSnapMath.kt`, ≤2 taps for all tools, auto-tuck on pen); live nib previews (`services/NibPreviewMath.kt` driving enhanced `PenNibVisualPreview` + live sliders in the width picker); minimap spatial HUD (zoom%/layers/viewport, spring/snap, zoom controls, toggled from persisted `minimap_hud_enabled`); palette studio (`DesignerPalettes` — nordic/botanical/cyberpunk/terra, family-invariant preserved) + `services/HarmonicContrastMath.kt` contrast studio row + eyedropper magnifier loupe. `workspace/phase-35/REPORT.md`. New tests: NibPreviewMathTest (23), DockSnapMathTest (15), DesignerPalettesTest (10), HarmonicContrastMathTest (18); PaletteCatalogTest + ColorHarmonyHelperTest still green; `gradle testDebugUnitTest` 805 green, `gradle assembleDebug` green. |
 
 ## ROADMAP.md phases (the app's own feature roadmap, 1-35)
 

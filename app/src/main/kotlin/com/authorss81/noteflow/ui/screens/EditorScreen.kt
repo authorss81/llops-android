@@ -7,15 +7,23 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.VectorConverter
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
@@ -45,9 +53,13 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.authorss81.noteflow.data.model.*
@@ -76,6 +88,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import kotlin.math.roundToInt
 
 /**
  * Toolbar State Management enum for floating capsule & popover bottom sheets.
@@ -330,6 +343,10 @@ fun EditorScreen(
     var pressureCurve by remember { mutableStateOf(PressureCurve.fromSettingKey(viewModel.settings.pressureCurveKey)) }
     var symmetryMode by remember { mutableStateOf(SymmetryMode.fromSettingKey(viewModel.settings.symmetryModeKey)) }
 
+    // Phase 35: minimap HUD visibility, persisted in SettingsManager so the
+    // canvas minimap toggle survives navigation.
+    var showMinimap by remember { mutableStateOf(viewModel.settings.minimapHudEnabled) }
+
         LaunchedEffect(Unit) {
             val detectedTier = com.authorss81.noteflow.utils.DeviceCompatibilityManager.getDeviceTier(context, viewModel.settings)
             if (detectedTier == com.authorss81.noteflow.utils.DeviceTier.LOW_END) {
@@ -339,6 +356,18 @@ fun EditorScreen(
                     viewModel.settings.lowEndWarningShown = true
                     viewModel.showSnackbar(
                         "GPU Wet Brushes disabled for low-end device performance. You can override this in settings.",
+                        isLong = true
+                    )
+                }
+                // Phase 35: the minimap HUD draws per-frame viewport + thumbnails on
+                // 2-core devices — turn it off once (with a message, never silent)
+                // and let the user re-enable it from canvas settings.
+                if (viewModel.settings.minimapHudEnabled && !viewModel.settings.lowEndMinimapWarningShown) {
+                    showMinimap = false
+                    viewModel.settings.minimapHudEnabled = false
+                    viewModel.settings.lowEndMinimapWarningShown = true
+                    viewModel.showSnackbar(
+                        "Minimap HUD turned off for low-end device performance. You can re-enable it in canvas settings.",
                         isLong = true
                     )
                 }
@@ -822,8 +851,6 @@ fun EditorScreen(
         }
         onBack()
     }
-
-    var showMinimap by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -1507,7 +1534,8 @@ fun EditorScreen(
                 }
             }
 
-            // Floating Bottom/Side Toolbar Pill (Capsule) — auto-hides when drawing
+            // Floating Tool Dock (Phase 35) — pill that snaps to any screen edge
+            // with a spring and auto-tucks while a stroke is being drawn.
             val isLandscape = androidx.compose.ui.platform.LocalConfiguration.current.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
 
             AnimatedVisibility(
@@ -1526,19 +1554,15 @@ fun EditorScreen(
                         fadeOut() + slideOutVertically { it }
                     }
                 ),
-                modifier = Modifier
-                    .align(if (isLandscape) Alignment.CenterEnd else Alignment.BottomCenter)
-                    .padding(
-                        bottom = if (isLandscape) 0.dp else 20.dp,
-                        end = if (isLandscape) 20.dp else 0.dp
-                    )
+                modifier = Modifier.fillMaxSize()
             ) {
-                FloatingBottomToolbarPill(
+                FloatingToolDock(
                     currentTool = currentTool,
                     lastDrawingTool = lastDrawingTool,
                     currentColor = currentColor,
                     currentWidth = currentWidth,
                     toolbarState = toolbarState,
+                    isLandscape = isLandscape,
                     onToolClick = {
                         toolbarState = if (toolbarState == FloatingToolbarState.TOOL_PICKER) FloatingToolbarState.COLLAPSED else FloatingToolbarState.TOOL_PICKER
                     },
@@ -1556,7 +1580,15 @@ fun EditorScreen(
                     },
                     onUndo = { handleUndo() },
                     onRedo = { handleRedo() },
-                    isLandscape = isLandscape
+                    onQuickTool = { tool ->
+                        toolbarState = FloatingToolbarState.COLLAPSED
+                        currentTool = tool
+                        activePresetId = null
+                        activeCustomPresetId = null
+                        if (tool == StrokeTool.STICKER) {
+                            toolbarState = FloatingToolbarState.STICKER_PICKER
+                        }
+                    }
                 )
             }
 
@@ -1796,7 +1828,10 @@ fun EditorScreen(
                     paperColorHex = selectedHex
                 },
                 onUploadCustomBg = { bgImagePicker.launch("image/*") },
-                onMinimapToggle = { showMinimap = !showMinimap },
+                onMinimapToggle = {
+                    showMinimap = !showMinimap
+                    viewModel.settings.minimapHudEnabled = showMinimap
+                },
                 onResetZoomPan = {
                     zoomScale = 1f
                     panOffset = Offset.Zero
@@ -1929,15 +1964,20 @@ fun EditorScreen(
 }
 
 /**
- * Floating Bottom Toolbar Pill capsule
+ * Floating minimalist tool dock — pill-shaped, freely draggable, and spring-
+ * snapping to the nearest screen edge (Phase 35). The dock tucks away when a
+ * stroke starts (toolbarState == HIDDEN_DRAWING) and returns on canvas tap/
+ * stroke end. Expanding the pill reveals a one-tap quick-tool rail, so every
+ * existing tool stays reachable in ≤2 taps (quick rail = 1, tool picker = 2).
  */
 @Composable
-private fun FloatingBottomToolbarPill(
+private fun FloatingToolDock(
     currentTool: StrokeTool,
     lastDrawingTool: StrokeTool,
     currentColor: Color,
     currentWidth: Float,
     toolbarState: FloatingToolbarState,
+    isLandscape: Boolean,
     onToolClick: () -> Unit,
     onTogglePan: () -> Unit,
     onColorClick: () -> Unit,
@@ -1945,293 +1985,496 @@ private fun FloatingBottomToolbarPill(
     onSettingsClick: () -> Unit,
     onUndo: () -> Unit,
     onRedo: () -> Unit,
-    isLandscape: Boolean = false
+    onQuickTool: (StrokeTool) -> Unit
 ) {
-    val displayTool = if (currentTool == StrokeTool.PAN || currentTool == StrokeTool.SELECT) {
-        lastDrawingTool
-    } else {
-        currentTool
-    }
+    val reduceMotion = com.authorss81.noteflow.theme.LocalReduceMotion.current
+    val density = LocalDensity.current
+    val scope = rememberCoroutineScope()
 
-    Surface(
-        shape = RoundedCornerShape(28.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        tonalElevation = 6.dp,
-        shadowElevation = 8.dp,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
-        modifier = if (isLandscape) {
-            Modifier.width(56.dp).wrapContentHeight()
-        } else {
-            Modifier.height(56.dp)
+    // Resting content top-left in screen pixels. rawPos tracks the finger while
+    // dragging; snapAnim drives the spring back to the nearest edge.
+    var rawPos by remember { mutableStateOf(Offset.Zero) }
+    var isDragging by remember { mutableStateOf(false) }
+    val snapAnim = remember { Animatable(Offset.Zero, Offset.VectorConverter) }
+    var initialized by remember { mutableStateOf(false) }
+    var dockW by remember { mutableFloatStateOf(with(density) { 156.dp.toPx() }) }
+    var dockH by remember { mutableFloatStateOf(with(density) { 56.dp.toPx() }) }
+    var expanded by remember { mutableStateOf(false) }
+
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val screenW = with(density) { maxWidth.toPx() }
+        val screenH = with(density) { maxHeight.toPx() }
+        val marginPx = with(density) { 16.dp.toPx() }
+
+        LaunchedEffect(maxWidth, maxHeight, dockW, dockH) {
+            if (!initialized && dockW > 0f && dockH > 0f && screenW > 0f && screenH > 0f) {
+                initialized = true
+                snapAnim.snapTo(Offset((screenW - dockW) / 2f, screenH - dockH - marginPx))
+            }
         }
-    ) {
-        if (isLandscape) {
-            Column(
-                modifier = Modifier
-                    .padding(horizontal = 4.dp, vertical = 8.dp)
-                    .verticalScroll(rememberScrollState()),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                // Tool selector button
-                Surface(
-                    onClick = onToolClick,
-                    shape = RoundedCornerShape(20.dp),
-                    color = if (toolbarState == FloatingToolbarState.TOOL_PICKER) MaterialTheme.colorScheme.primaryContainer else Color.Transparent
-                ) {
-                    Box(
-                        modifier = Modifier.padding(8.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = getToolIcon(displayTool),
-                            contentDescription = displayTool.label,
-                            tint = if (toolbarState == FloatingToolbarState.TOOL_PICKER) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.size(20.dp)
+
+        fun snapToEdge() {
+            val centre = Offset(rawPos.x + dockW / 2f, rawPos.y + dockH / 2f)
+            val anchor = com.authorss81.noteflow.services.DockSnapMath.snap(
+                centre = com.authorss81.noteflow.services.DockSnapMath.Offset(centre.x, centre.y),
+                screenW = screenW,
+                screenH = screenH,
+                marginPx = marginPx,
+                dockW = dockW,
+                dockH = dockH
+            )
+            val target = Offset(anchor.x, anchor.y)
+            isDragging = false
+            scope.launch {
+                snapAnim.snapTo(rawPos)
+                if (reduceMotion) {
+                    snapAnim.snapTo(target)
+                } else {
+                    snapAnim.animateTo(
+                        targetValue = target,
+                        animationSpec = androidx.compose.animation.core.spring(
+                            dampingRatio = androidx.compose.animation.core.Spring.DampingRatioNoBouncy,
+                            stiffness = androidx.compose.animation.core.Spring.StiffnessMedium,
+                            visibilityThreshold = Offset(1f, 1f)
                         )
-                    }
-                }
-
-                // Scroll / Pan Canvas Toggle Button
-                val isPanActive = currentTool == StrokeTool.PAN || currentTool == StrokeTool.SELECT
-                Surface(
-                    onClick = onTogglePan,
-                    shape = RoundedCornerShape(20.dp),
-                    color = if (isPanActive) MaterialTheme.colorScheme.primaryContainer else Color.Transparent
-                ) {
-                    Box(
-                        modifier = Modifier.padding(8.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            Icons.Outlined.PanTool,
-                            contentDescription = "Scroll / Pan Canvas",
-                            tint = if (isPanActive) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-                }
-
-                // Color swatch button
-                Surface(
-                    onClick = onColorClick,
-                    shape = CircleShape,
-                    color = if (toolbarState == FloatingToolbarState.COLOR_PICKER) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
-                    modifier = Modifier.size(40.dp)
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Box(
-                            modifier = Modifier
-                                .size(24.dp)
-                                .clip(CircleShape)
-                                .background(currentColor)
-                                .border(1.5.dp, MaterialTheme.colorScheme.outline, CircleShape)
-                        )
-                    }
-                }
-
-                // Width badge button
-                Surface(
-                    onClick = onWidthClick,
-                    shape = RoundedCornerShape(20.dp),
-                    color = if (toolbarState == FloatingToolbarState.WIDTH_PICKER) MaterialTheme.colorScheme.primaryContainer else Color.Transparent
-                ) {
-                    Box(
-                        modifier = Modifier.padding(8.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            Icons.Outlined.LineWeight,
-                            contentDescription = "Stroke Width",
-                            tint = if (toolbarState == FloatingToolbarState.WIDTH_PICKER) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-                }
-
-                androidx.compose.material3.HorizontalDivider(
-                    modifier = Modifier
-                        .width(24.dp)
-                        .padding(vertical = 2.dp),
-                    color = MaterialTheme.colorScheme.outlineVariant
-                )
-
-                // Canvas Settings button
-                IconButton(
-                    onClick = onSettingsClick,
-                    modifier = Modifier.size(40.dp)
-                ) {
-                    Icon(
-                        Icons.Outlined.Tune,
-                        contentDescription = "Canvas & Paper Settings",
-                        tint = if (toolbarState == FloatingToolbarState.SETTINGS_MENU) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-
-                // Undo / Redo
-                IconButton(onClick = onUndo, modifier = Modifier.size(36.dp)) {
-                    Icon(
-                        Icons.Outlined.Undo,
-                        contentDescription = "Undo",
-                        modifier = Modifier.size(18.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                IconButton(onClick = onRedo, modifier = Modifier.size(36.dp)) {
-                    Icon(
-                        Icons.Outlined.Redo,
-                        contentDescription = "Redo",
-                        modifier = Modifier.size(18.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
+        }
+
+        val snapPosition = snapAnim.value
+        val displayPos = if (isDragging) rawPos else snapPosition
+        val dockEdge = com.authorss81.noteflow.services.DockSnapMath.nearestEdge(
+            displayPos.x + dockW / 2f, displayPos.y + dockH / 2f, screenW, screenH
+        )
+        val vertical = isLandscape || dockEdge == com.authorss81.noteflow.services.DockSnapMath.DockEdge.START ||
+            dockEdge == com.authorss81.noteflow.services.DockSnapMath.DockEdge.END
+
+        val displayTool = if (currentTool == StrokeTool.PAN || currentTool == StrokeTool.SELECT) {
+            lastDrawingTool
         } else {
-            Row(
-                modifier = Modifier
-                    .padding(horizontal = 8.dp, vertical = 4.dp)
-                    .horizontalScroll(rememberScrollState()),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            currentTool
+        }
+
+        Box(
+            modifier = Modifier
+                .offset { IntOffset(displayPos.x.roundToInt(), displayPos.y.roundToInt()) }
+                .onSizeChanged { size -> if (!isDragging) { dockW = size.width.toFloat(); dockH = size.height.toFloat() } }
+                .pointerInput(Unit) {
+                    detectDragGestures(
+                        onDragStart = {
+                            rawPos = snapAnim.value
+                            isDragging = true
+                        },
+                        onDrag = { change, amount ->
+                            change.consume()
+                            val constrained = com.authorss81.noteflow.services.DockSnapMath.constrainInside(
+                                rawPos.x + amount.x, rawPos.y + amount.y, screenW, screenH, dockW, dockH
+                            )
+                            rawPos = Offset(constrained.x, constrained.y)
+                        },
+                        onDragEnd = { snapToEdge() },
+                        onDragCancel = { snapToEdge() }
+                    )
+                }
+                .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
+        ) {
+            Surface(
+                shape = RoundedCornerShape(28.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                tonalElevation = 6.dp,
+                shadowElevation = 8.dp,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
             ) {
-                // Tool selector button
-                Surface(
-                    onClick = onToolClick,
-                    shape = RoundedCornerShape(20.dp),
-                    color = if (toolbarState == FloatingToolbarState.TOOL_PICKER) MaterialTheme.colorScheme.primaryContainer else Color.Transparent
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                if (vertical) {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
-                        Icon(
-                            imageVector = getToolIcon(displayTool),
-                            contentDescription = displayTool.label,
-                            tint = if (toolbarState == FloatingToolbarState.TOOL_PICKER) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Text(
-                            text = displayTool.label,
-                            style = MaterialTheme.typography.labelMedium,
-                            color = if (toolbarState == FloatingToolbarState.TOOL_PICKER) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+                        AnimatedVisibility(
+                            visible = expanded,
+                            enter = com.authorss81.noteflow.theme.MotionSystem.enter(
+                                fadeIn() + androidx.compose.animation.expandVertically()
+                            ),
+                            exit = com.authorss81.noteflow.theme.MotionSystem.exit(
+                                fadeOut() + androidx.compose.animation.shrinkVertically()
+                            )
+                        ) {
+                            DockQuickToolsColumn(
+                                currentTool = currentTool,
+                                onQuickTool = onQuickTool,
+                                onTogglePan = onTogglePan,
+                                onExpandToggled = { expanded = !expanded },
+                                expanded = expanded
+                            )
+                        }
+                        DockMainColumn(
+                            displayTool = displayTool,
+                            toolbarState = toolbarState,
+                            currentColor = currentColor,
+                            currentWidth = currentWidth,
+                            isPanActive = currentTool == StrokeTool.PAN || currentTool == StrokeTool.SELECT,
+                            expanded = expanded,
+                            onToolClick = onToolClick,
+                            onTogglePan = onTogglePan,
+                            onColorClick = onColorClick,
+                            onWidthClick = onWidthClick,
+                            onSettingsClick = onSettingsClick,
+                            onUndo = onUndo,
+                            onRedo = onRedo,
+                            onExpandToggled = { expanded = !expanded }
                         )
                     }
-                }
-
-                // Scroll / Pan Canvas Toggle Button
-                val isPanActive = currentTool == StrokeTool.PAN || currentTool == StrokeTool.SELECT
-                Surface(
-                    onClick = onTogglePan,
-                    shape = RoundedCornerShape(20.dp),
-                    color = if (isPanActive) MaterialTheme.colorScheme.primaryContainer else Color.Transparent
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                } else {
+                    Column(
+                        modifier = Modifier.padding(vertical = 4.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
-                        Icon(
-                            Icons.Outlined.PanTool,
-                            contentDescription = "Scroll / Pan Canvas",
-                            tint = if (isPanActive) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Text(
-                            text = "Scroll",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (isPanActive) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-
-                // Color swatch button
-                Surface(
-                    onClick = onColorClick,
-                    shape = CircleShape,
-                    color = if (toolbarState == FloatingToolbarState.COLOR_PICKER) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
-                    modifier = Modifier.size(40.dp)
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Box(
-                            modifier = Modifier
-                                .size(24.dp)
-                                .clip(CircleShape)
-                                .background(currentColor)
-                                .border(1.5.dp, MaterialTheme.colorScheme.outline, CircleShape)
-                        )
-                    }
-                }
-
-                // Width badge button
-                Surface(
-                    onClick = onWidthClick,
-                    shape = RoundedCornerShape(20.dp),
-                    color = if (toolbarState == FloatingToolbarState.WIDTH_PICKER) MaterialTheme.colorScheme.primaryContainer else Color.Transparent
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Icon(
-                            Icons.Outlined.LineWeight,
-                            contentDescription = "Stroke Width",
-                            tint = if (toolbarState == FloatingToolbarState.WIDTH_PICKER) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Text(
-                            text = "${currentWidth.toInt()}pt",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (toolbarState == FloatingToolbarState.WIDTH_PICKER) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                        AnimatedVisibility(
+                            visible = expanded,
+                            enter = com.authorss81.noteflow.theme.MotionSystem.enter(
+                                fadeIn() + androidx.compose.animation.expandVertically()
+                            ),
+                            exit = com.authorss81.noteflow.theme.MotionSystem.exit(
+                                fadeOut() + androidx.compose.animation.shrinkVertically()
+                            )
+                        ) {
+                            DockQuickToolsRow(
+                                currentTool = currentTool,
+                                onQuickTool = onQuickTool,
+                                onTogglePan = onTogglePan,
+                                expanded = expanded,
+                                onExpandToggled = { expanded = !expanded }
+                            )
+                        }
+                        DockMainRow(
+                            displayTool = displayTool,
+                            toolbarState = toolbarState,
+                            currentColor = currentColor,
+                            currentWidth = currentWidth,
+                            isPanActive = currentTool == StrokeTool.PAN || currentTool == StrokeTool.SELECT,
+                            onToolClick = onToolClick,
+                            onTogglePan = onTogglePan,
+                            onColorClick = onColorClick,
+                            onWidthClick = onWidthClick,
+                            onSettingsClick = onSettingsClick,
+                            onUndo = onUndo,
+                            onRedo = onRedo,
+                            expanded = expanded,
+                            onExpandToggled = { expanded = !expanded }
                         )
                     }
-                }
-
-                VerticalDivider(
-                    modifier = Modifier
-                        .height(24.dp)
-                        .padding(horizontal = 2.dp),
-                    color = MaterialTheme.colorScheme.outlineVariant
-                )
-
-                // Canvas Settings button
-                IconButton(
-                    onClick = onSettingsClick,
-                    modifier = Modifier.size(40.dp)
-                ) {
-                    Icon(
-                        Icons.Outlined.Tune,
-                        contentDescription = "Canvas & Paper Settings",
-                        tint = if (toolbarState == FloatingToolbarState.SETTINGS_MENU) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-
-                // Undo / Redo
-                IconButton(onClick = onUndo, modifier = Modifier.size(36.dp)) {
-                    Icon(
-                        Icons.Outlined.Undo,
-                        contentDescription = "Undo",
-                        modifier = Modifier.size(18.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                IconButton(onClick = onRedo, modifier = Modifier.size(36.dp)) {
-                    Icon(
-                        Icons.Outlined.Redo,
-                        contentDescription = "Redo",
-                        modifier = Modifier.size(18.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
                 }
             }
         }
     }
 }
 
-/**
- * Tool Picker Modal Bottom Sheet
- */
+@Composable
+private fun DockMainRow(
+    displayTool: StrokeTool,
+    toolbarState: FloatingToolbarState,
+    currentColor: Color,
+    currentWidth: Float,
+    isPanActive: Boolean,
+    onToolClick: () -> Unit,
+    onTogglePan: () -> Unit,
+    onColorClick: () -> Unit,
+    onWidthClick: () -> Unit,
+    onSettingsClick: () -> Unit,
+    onUndo: () -> Unit,
+    onRedo: () -> Unit,
+    expanded: Boolean,
+    onExpandToggled: () -> Unit
+) {
+    Row(
+        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(2.dp)
+    ) {
+        DockToolButton(
+            onClick = onToolClick,
+            selected = toolbarState == FloatingToolbarState.TOOL_PICKER,
+            content = {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(
+                        imageVector = getToolIcon(displayTool),
+                        contentDescription = displayTool.label,
+                        tint = if (toolbarState == FloatingToolbarState.TOOL_PICKER) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Text(
+                        text = displayTool.label,
+                        style = MaterialTheme.typography.labelMedium,
+                        maxLines = 1,
+                        color = if (toolbarState == FloatingToolbarState.TOOL_PICKER) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+                    )
+                }
+            }
+        )
+
+        DockIconButton(
+            onClick = onTogglePan,
+            selected = isPanActive,
+            icon = { Icon(Icons.Outlined.PanTool, contentDescription = "Scroll / Pan Canvas", modifier = Modifier.size(18.dp)) }
+        )
+
+        DockColorButton(currentColor = currentColor, selected = toolbarState == FloatingToolbarState.COLOR_PICKER, onClick = onColorClick)
+
+        DockIconButton(
+            onClick = onWidthClick,
+            selected = toolbarState == FloatingToolbarState.WIDTH_PICKER,
+            icon = { Icon(Icons.Outlined.LineWeight, contentDescription = "Stroke Width · ${currentWidth.toInt()}pt", modifier = Modifier.size(18.dp)) }
+        )
+
+        if (toolbarState == FloatingToolbarState.WIDTH_PICKER) {
+            Text(
+                text = "${currentWidth.toInt()}pt",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
+        androidx.compose.material3.VerticalDivider(
+            modifier = Modifier.height(24.dp).padding(horizontal = 2.dp),
+            color = MaterialTheme.colorScheme.outlineVariant
+        )
+
+        DockIconButton(
+            onClick = onSettingsClick,
+            selected = toolbarState == FloatingToolbarState.SETTINGS_MENU,
+            icon = { Icon(Icons.Outlined.Tune, contentDescription = "Canvas & Paper Settings", modifier = Modifier.size(18.dp)) }
+        )
+
+        DockIconButton(onClick = onUndo, selected = false, icon = { Icon(Icons.Outlined.Undo, contentDescription = "Undo", modifier = Modifier.size(18.dp)) })
+        DockIconButton(onClick = onRedo, selected = false, icon = { Icon(Icons.Outlined.Redo, contentDescription = "Redo", modifier = Modifier.size(18.dp)) })
+
+        DockIconButton(
+            onClick = onExpandToggled,
+            selected = expanded,
+            icon = { Icon(Icons.Outlined.UnfoldMore, contentDescription = if (expanded) "Collapse Quick Tools" else "Expand Quick Tools", modifier = Modifier.size(18.dp)) }
+        )
+    }
+}
+
+@Composable
+private fun DockMainColumn(
+    displayTool: StrokeTool,
+    toolbarState: FloatingToolbarState,
+    currentColor: Color,
+    currentWidth: Float,
+    isPanActive: Boolean,
+    expanded: Boolean,
+    onToolClick: () -> Unit,
+    onTogglePan: () -> Unit,
+    onColorClick: () -> Unit,
+    onWidthClick: () -> Unit,
+    onSettingsClick: () -> Unit,
+    onUndo: () -> Unit,
+    onRedo: () -> Unit,
+    onExpandToggled: () -> Unit
+) {
+    Column(
+        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(2.dp)
+    ) {
+        DockToolButton(
+            onClick = onToolClick,
+            selected = toolbarState == FloatingToolbarState.TOOL_PICKER,
+            content = {
+                Icon(
+                    imageVector = getToolIcon(displayTool),
+                    contentDescription = displayTool.label,
+                    tint = if (toolbarState == FloatingToolbarState.TOOL_PICKER) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        )
+
+        DockIconButton(
+            onClick = onTogglePan,
+            selected = isPanActive,
+            icon = { Icon(Icons.Outlined.PanTool, contentDescription = "Scroll / Pan Canvas", modifier = Modifier.size(18.dp)) }
+        )
+
+        DockColorButton(currentColor = currentColor, selected = toolbarState == FloatingToolbarState.COLOR_PICKER, onClick = onColorClick)
+
+        DockIconButton(
+            onClick = onWidthClick,
+            selected = toolbarState == FloatingToolbarState.WIDTH_PICKER,
+            icon = { Icon(Icons.Outlined.LineWeight, contentDescription = "Stroke Width", modifier = Modifier.size(18.dp)) }
+        )
+
+        androidx.compose.material3.HorizontalDivider(
+            modifier = Modifier.width(24.dp).padding(vertical = 2.dp),
+            color = MaterialTheme.colorScheme.outlineVariant
+        )
+
+        DockIconButton(
+            onClick = onSettingsClick,
+            selected = toolbarState == FloatingToolbarState.SETTINGS_MENU,
+            icon = { Icon(Icons.Outlined.Tune, contentDescription = "Canvas & Paper Settings", modifier = Modifier.size(18.dp)) }
+        )
+
+        DockIconButton(onClick = onUndo, selected = false, icon = { Icon(Icons.Outlined.Undo, contentDescription = "Undo", modifier = Modifier.size(18.dp)) })
+        DockIconButton(onClick = onRedo, selected = false, icon = { Icon(Icons.Outlined.Redo, contentDescription = "Redo", modifier = Modifier.size(18.dp)) })
+
+        DockIconButton(
+            onClick = onExpandToggled,
+            selected = expanded,
+            icon = { Icon(Icons.Outlined.UnfoldMore, contentDescription = if (expanded) "Collapse Quick Tools" else "Expand Quick Tools", modifier = Modifier.size(18.dp)) }
+        )
+    }
+}
+
+@Composable
+private fun DockQuickToolsRow(
+    currentTool: StrokeTool,
+    onQuickTool: (StrokeTool) -> Unit,
+    onTogglePan: () -> Unit,
+    expanded: Boolean,
+    onExpandToggled: () -> Unit
+) {
+    val quickTools = listOf(
+        StrokeTool.ERASER,
+        StrokeTool.TEXT,
+        StrokeTool.STICKER,
+        StrokeTool.RECTANGLE,
+        StrokeTool.ARROW,
+        StrokeTool.LINE,
+        StrokeTool.EYEDROPPER
+    )
+    Row(
+        modifier = Modifier.padding(horizontal = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(2.dp)
+    ) {
+        for (tool in quickTools) {
+            DockToolButton(
+                onClick = { onQuickTool(tool) },
+                selected = currentTool == tool,
+                content = {
+                    Icon(
+                        imageVector = getToolIcon(tool),
+                        contentDescription = tool.label,
+                        tint = if (currentTool == tool) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            )
+        }
+    }
+}
+
+@Composable
+private fun DockQuickToolsColumn(
+    currentTool: StrokeTool,
+    onQuickTool: (StrokeTool) -> Unit,
+    onTogglePan: () -> Unit,
+    expanded: Boolean,
+    onExpandToggled: () -> Unit
+) {
+    val quickTools = listOf(
+        StrokeTool.ERASER,
+        StrokeTool.TEXT,
+        StrokeTool.STICKER,
+        StrokeTool.RECTANGLE,
+        StrokeTool.ARROW,
+        StrokeTool.LINE,
+        StrokeTool.EYEDROPPER
+    )
+    Column(
+        modifier = Modifier.padding(vertical = 2.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(2.dp)
+    ) {
+        for (tool in quickTools) {
+            DockToolButton(
+                onClick = { onQuickTool(tool) },
+                selected = currentTool == tool,
+                content = {
+                    Icon(
+                        imageVector = getToolIcon(tool),
+                        contentDescription = tool.label,
+                        tint = if (currentTool == tool) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            )
+        }
+    }
+}
+
+@Composable
+private fun DockToolButton(
+    onClick: () -> Unit,
+    selected: Boolean,
+    content: @Composable () -> Unit
+) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(20.dp),
+        color = if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent
+    ) {
+        Box(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp).minimumInteractiveComponentSize(),
+            contentAlignment = Alignment.Center
+        ) {
+            content()
+        }
+    }
+}
+
+@Composable
+private fun DockIconButton(
+    onClick: () -> Unit,
+    selected: Boolean,
+    icon: @Composable () -> Unit
+) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(20.dp),
+        color = if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent
+    ) {
+        Box(
+            modifier = Modifier.size(36.dp).minimumInteractiveComponentSize(),
+            contentAlignment = Alignment.Center
+        ) {
+            icon()
+        }
+    }
+}
+
+@Composable
+private fun DockColorButton(
+    currentColor: Color,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    Surface(
+        onClick = onClick,
+        shape = CircleShape,
+        color = if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+        modifier = Modifier.minimumInteractiveComponentSize()
+    ) {
+        Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(6.dp)) {
+            Box(
+                modifier = Modifier
+                    .size(24.dp)
+                    .clip(CircleShape)
+                    .background(currentColor)
+                    .border(1.5.dp, MaterialTheme.colorScheme.outline, CircleShape)
+            )
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ToolPickerBottomSheet(
@@ -2504,6 +2747,49 @@ private fun ColorPickerBottomSheet(
 
             Spacer(modifier = Modifier.height(16.dp))
 
+            // Phase 35: curated designer palette selector (Vibrant + 4 studio
+            // palettes). Switching the palette swaps the family sections below.
+            var selectedPaletteName by remember { mutableStateOf("vibrant") }
+            Text(
+                text = "Palette Studio",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                val paletteNames = listOf(
+                    "vibrant" to "Vibrant",
+                    "nordic" to "Nordic",
+                    "botanical" to "Botanical",
+                    "cyberpunk" to "Cyberpunk",
+                    "terra" to "Terracotta"
+                )
+                paletteNames.forEach { (name, label) ->
+                    FilterChip(
+                        selected = selectedPaletteName == name,
+                        onClick = { selectedPaletteName = name },
+                        label = { Text(label, style = MaterialTheme.typography.labelMedium) },
+                        leadingIcon = {
+                            Box(
+                                modifier = Modifier
+                                    .size(12.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        com.authorss81.noteflow.services.DesignerPalettes.swatchesFor(name).firstOrNull()?.let { Color(it.argb) }
+                                            ?: MaterialTheme.colorScheme.primary
+                                    )
+                            )
+                        }
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+
             // Phase 19: scrollable, organized color picker — HSV panel (advanced
             // mode only), recent colors, curated family sections, saved swatches.
             Column(
@@ -2596,17 +2882,21 @@ private fun ColorPickerBottomSheet(
                     Spacer(modifier = Modifier.height(24.dp))
                 }
 
-                // Curated families: static, organized, deduped sections.
-                val familySections = remember {
+                // Curated families: static, organized, deduped sections. Phase 35: sections
+                // come from the active designer palette ("vibrant" = the classic
+                // vibrant catalog) but are still grouped in enum family order.
+                val familySections = remember(selectedPaletteName) {
+                    val swatches = com.authorss81.noteflow.services.DesignerPalettes.swatchesFor(selectedPaletteName)
+                    val byFamily = swatches.groupBy { it.family }
                     com.authorss81.noteflow.services.ColorFamily.entries.mapNotNull { family ->
-                        val swatches = com.authorss81.noteflow.services.PaletteCatalog.forFamily(family)
-                        if (swatches.isNotEmpty()) family to swatches else null
+                        byFamily[family]?.let { family to it }
                     }
                 }
-                val catalogArgbSet = remember {
-                    com.authorss81.noteflow.services.PaletteCatalog.curated.map { it.argb }.toSet()
+                val paletteArgbSet = remember(selectedPaletteName) {
+                    com.authorss81.noteflow.services.DesignerPalettes.swatchesFor(selectedPaletteName).map { it.argb }.toSet()
                 }
-                val recentColors = remember(palette) {
+                val catalogArgbSet = paletteArgbSet
+                val recentColors = remember(palette, selectedPaletteName) {
                     val extras = palette.filter { it.toArgb() !in catalogArgbSet }
                     val source = if (extras.isNotEmpty()) extras.asReversed() else palette.asReversed()
                     source.distinctBy { it.toArgb() }.take(16)
@@ -2798,7 +3088,103 @@ Spacer(modifier = Modifier.height(16.dp))
                 sourceColor = currentColor,
                 onColorSelect = onColorSelect
             )
+
+            // Phase 35: harmonic contrast studio — complementary + analogous
+            // suggestions with their mathematically computed WCAG ratio vs a
+            // white paper background, so the user can pick a legible pair.
+            Spacer(modifier = Modifier.height(20.dp))
+            ContrastSuggestionsRow(
+                sourceColor = currentColor,
+                onColorSelect = onColorSelect
+            )
             Spacer(modifier = Modifier.height(24.dp))
+        }
+    }
+}
+
+/**
+ * Phase 35: complementary + analogous suggestions with WCAG contrast labels.
+ */
+@Composable
+private fun ContrastSuggestionsRow(
+    sourceColor: Color,
+    onColorSelect: (Color) -> Unit
+) {
+    val sourceRgb = com.authorss81.noteflow.services.ColorHarmonyHelper.Rgb(
+        android.graphics.Color.red(sourceColor.toArgb()).toFloat(),
+        android.graphics.Color.green(sourceColor.toArgb()).toFloat(),
+        android.graphics.Color.blue(sourceColor.toArgb()).toFloat()
+    )
+    val background = com.authorss81.noteflow.services.ColorHarmonyHelper.Rgb(255f, 255f, 255f)
+    val suggestions = remember(sourceRgb.r, sourceRgb.g, sourceRgb.b) {
+        com.authorss81.noteflow.services.HarmonicContrastMath.suggestions(sourceRgb, background)
+    }
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Contrast Studio",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary
+            )
+            Text(
+                text = "WCAG ratio vs white",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+        suggestions.forEach { s ->
+            val argb = android.graphics.Color.rgb(
+                s.color.r.toInt().coerceIn(0, 255),
+                s.color.g.toInt().coerceIn(0, 255),
+                s.color.b.toInt().coerceIn(0, 255)
+            )
+            val c = Color(argb)
+            val ratioLabel = "%.2f:1".format(java.util.Locale.US, s.ratio)
+            val badge = when {
+                s.ratio >= 7f -> "AAA"
+                s.ratio >= 4.5f -> "AA"
+                else -> "—"
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onColorSelect(c) }
+                    .padding(vertical = 3.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(26.dp)
+                        .clip(CircleShape)
+                        .background(c)
+                        .border(1.dp, MaterialTheme.colorScheme.outline, CircleShape)
+                )
+                Text(
+                    text = s.label,
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.weight(1f)
+                )
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = when {
+                        s.ratio >= 7f -> MaterialTheme.colorScheme.primaryContainer
+                        s.ratio >= 4.5f -> MaterialTheme.colorScheme.secondaryContainer
+                        else -> MaterialTheme.colorScheme.surfaceVariant
+                    }
+                ) {
+                    Text(
+                        text = "$ratioLabel $badge".trim(),
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
+            }
         }
     }
 }
@@ -3061,28 +3447,93 @@ private fun WidthPickerBottomSheet(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Stroke visual live preview
+            // Phase 35: live nib preview — the palette selector shows real-time
+            // pressure / tilt / wetness response on the stroke (NibPreviewMath),
+            // updating as the sliders below are dragged. Values are local to the
+            // sheet; real strokes keep sampling actual stylus input.
+            var livePressure by remember { mutableFloatStateOf(0.62f) }
+            var liveTilt by remember { mutableFloatStateOf(18f) }
+            var liveWetness by remember { mutableFloatStateOf(0.25f) }
+
+            Text(
+                text = "Live Nib Preview",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary
+            )
+            Spacer(modifier = Modifier.height(8.dp))
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(36.dp)
+                    .height(56.dp)
                     .clip(RoundedCornerShape(12.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+                    .background(Color.White.copy(alpha = 0.85f))
+                    .border(0.5.dp, Color.Black.copy(alpha = 0.08f), RoundedCornerShape(12.dp)),
                 contentAlignment = Alignment.Center
             ) {
-                Canvas(
+                com.authorss81.noteflow.ui.components.PenNibVisualPreview(
+                    tool = currentTool,
+                    color = currentColor,
+                    width = currentWidth,
+                    pressure = livePressure,
+                    tiltDeg = liveTilt,
+                    wetness = liveWetness,
                     modifier = Modifier
-                        .fillMaxWidth(0.8f)
-                        .height(currentWidth.coerceAtLeast(1f).dp)
-                ) {
-                    drawRoundRect(
-                        color = currentColor,
-                        cornerRadius = CornerRadius(currentWidth, currentWidth)
-                    )
-                }
+                        .fillMaxWidth(0.9f)
+                        .height(48.dp)
+                )
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = "Force ${(livePressure * 100).toInt()}%",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = "Tilt ${liveTilt.toInt()}°",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = "Wetness ${(liveWetness * 100).toInt()}%",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            Spacer(modifier = Modifier.height(4.dp))
+            Slider(
+                value = livePressure,
+                onValueChange = { livePressure = it },
+                valueRange = 0.05f..1f,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Slider(
+                value = liveTilt,
+                onValueChange = { liveTilt = it },
+                valueRange = 0f..75f,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Slider(
+                value = liveWetness,
+                onValueChange = { liveWetness = it },
+                valueRange = 0f..1f,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            Text(
+                text = "Thickness: ${currentWidth.toInt()}pt",
+                style = MaterialTheme.typography.titleMedium
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
 
             Slider(
                 value = currentWidth,

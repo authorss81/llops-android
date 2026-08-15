@@ -208,6 +208,19 @@ class SettingsManager(context: Context) {
         get() = prefs.getBoolean("show_stroke_previews_in_picker", false)
         set(value) = prefs.edit().putBoolean("show_stroke_previews_in_picker", value).apply()
 
+    // Phase 35: the spatial minimap HUD. ON by default; auto-disabled once on
+    // LOW_END devices (with a one-time message) and re-enableable here. The
+    // dock's pen auto-tuck is deliberately NOT a setting — it is the default
+    // scribe behaviour and only the canvas tap/end gesture restores the dock.
+    var minimapHudEnabled: Boolean
+        get() = prefs.getBoolean("minimap_hud_enabled", true)
+        set(value) = prefs.edit().putBoolean("minimap_hud_enabled", value).apply()
+
+    // Phase 35: remembers whether the low-end auto-disable message has been shown.
+    var lowEndMinimapWarningShown: Boolean
+        get() = prefs.getBoolean("low_end_minimap_warning_shown", false)
+        set(value) = prefs.edit().putBoolean("low_end_minimap_warning_shown", value).apply()
+
     var databaseIntegrityWarningDismissed: Boolean
         get() = prefs.getBoolean("database_integrity_warning_dismissed", false)
         set(value) = prefs.edit().putBoolean("database_integrity_warning_dismissed", value).apply()

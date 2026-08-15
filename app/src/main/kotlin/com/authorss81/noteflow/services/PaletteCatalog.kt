@@ -210,3 +210,71 @@ object PaletteCatalog {
     /** Default palette shown to brand-new users / the recent-colors row. */
     fun defaultColorInts(): List<Int> = curated.map { it.argb }
 }
+
+/**
+ * Curated designer palettes (Phase 35) shown alongside the vibrant palette.
+ *
+ * Every swatch keeps an honest [familyFor] classification at construction (the
+ * family is DERIVED, not hand-labelled), so the same family-invariant rule that
+ * guards [PaletteCatalog.curated] applies to these palettes too.
+ */
+object DesignerPalettes {
+
+    private fun ds(hex: Int): PaletteCatalog.Swatch {
+        val r = (hex ushr 16) and 0xFF
+        val g = (hex ushr 8) and 0xFF
+        val b = hex and 0xFF
+        return PaletteCatalog.Swatch(
+            family = PaletteMath.familyFor(PaletteMath.newRgb(r, g, b)),
+            r = r, g = g, b = b
+        )
+    }
+
+    private fun dedup(swatches: List<PaletteCatalog.Swatch>): List<PaletteCatalog.Swatch> {
+        val seen = mutableSetOf<Int>()
+        return swatches.filter { seen.add(it.argb) }
+    }
+
+    /** Cool, muted, Scandinavian fjord / pine / slate palette. */
+    val nordic: List<PaletteCatalog.Swatch> = dedup(listOf(
+        ds(0xD6E4F0), ds(0xAFC8DD), ds(0x8FB4C8), ds(0x6A97B4), ds(0x4E7E9E),
+        ds(0x3A647F), ds(0x29495F), ds(0x1F3448), ds(0x274B3F), ds(0x3E6B5B),
+        ds(0x5F8A78), ds(0x86A89A), ds(0xAFC2B4), ds(0xE4DFD0), ds(0xCBBFA9),
+        ds(0xA69881), ds(0x7A6F5D), ds(0x4E463B), ds(0x2F2A26), ds(0x14181C),
+        ds(0x5A636E), ds(0x89929B)
+    ))
+
+    /** Leafy botanical greens with bark, sand and water accents. */
+    val botanical: List<PaletteCatalog.Swatch> = dedup(listOf(
+        ds(0x22431F), ds(0x2D5A27), ds(0x3F6D33), ds(0x558B2F), ds(0x6DAE43),
+        ds(0x8CC75E), ds(0xABD47E), ds(0xCBE3A8), ds(0xE4EDD2), ds(0x5C7A4A),
+        ds(0x7A8B56), ds(0x9C8C5A), ds(0xC0A87C), ds(0xE2CFA9), ds(0xF3E4C4),
+        ds(0x8B5A2B), ds(0x6B4226), ds(0x4E342E), ds(0x2E6E69), ds(0x4E8E7E),
+        ds(0x86C5C5), ds(0xB7DDE0)
+    ))
+
+    /** Neon-on-dark-night cyberpunk palette (deep purples, cyan, acid). */
+    val cyberpunk: List<PaletteCatalog.Swatch> = dedup(listOf(
+        ds(0x050010), ds(0x0D0221), ds(0x1A0B2E), ds(0x2D1B69), ds(0x4C2BD2),
+        ds(0x7B3FF2), ds(0xA855F7), ds(0xC026FF), ds(0xE91E63), ds(0xFF2E7F),
+        ds(0xFF6B9D), ds(0x00E5FF), ds(0x00F5D4), ds(0x2E9EFF), ds(0x5678FF),
+        ds(0x9A00FF), ds(0x7CFFB2), ds(0x3FDE28), ds(0xE2FF00), ds(0xFFB300),
+        ds(0xFF7A00), ds(0xF8F4FF)
+    ))
+
+    /** Warm, earthy terracotta studio palette. */
+    val warmTerracotta: List<PaletteCatalog.Swatch> = dedup(listOf(
+        ds(0x8B3A1F), ds(0x9C4A2C), ds(0xA85B34), ds(0xB85C38), ds(0xC26A3E),
+        ds(0xCC7950), ds(0xD98C5F), ds(0xE8A87C), ds(0xF0B98F), ds(0xF6C9A5),
+        ds(0xFBD9BE), ds(0xE5C1A0), ds(0xD9A779), ds(0xC98A5B), ds(0xA96842),
+        ds(0x845A38), ds(0x5E4030), ds(0x3D2A1E), ds(0x2A1E18), ds(0x7A6A5A)
+    ))
+
+    fun swatchesFor(name: String): List<PaletteCatalog.Swatch> = when (name) {
+        "nordic" -> nordic
+        "botanical" -> botanical
+        "cyberpunk" -> cyberpunk
+        "terra" -> warmTerracotta
+        else -> PaletteCatalog.curated
+    }
+}
