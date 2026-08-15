@@ -228,6 +228,30 @@
     `noteflow.sqlite.keystore-lost-<ts>` via `quarantineVaultFiles`, bytes preserved — never
     quarantined as corrupt). `MainActivity` renders the dedicated `KeystoreKeyLostScreen` between
     the corruption and restore screens. Tests: `B1Crypto05SilentRekeyTest` (16).
+  - **Implemented in phase-65** (B1-CRYPTO-07, see `workspace/phase-65/REPORT.md`): the vault-DEK
+    biometric AndroidKeyStore key is now ONLY ever created STRONG-bound (API 30+); on API 26-29 the
+    biometric-lock feature is refused/downgraded. Pure-JVM `services/BiometricKeyBindingPolicy.kt`
+    is the single decision table: `MIN_API_FOR_STRONG_BIOMETRIC_BINDING = 30`,
+    `strongBiometricKeyBindingSupported(apiLevel)`, `refuseEnableMessage(apiLevel)` (non-alarming),
+    and `PRE_30_BIOMETRIC_ONLY_VALIDITY_SECONDS = -1` — the ONLY pre-30 validity that excludes a
+    device credential (AOSP: non-(-1) validity, incl. the default 0, maps to
+    `HW_AUTH_PASSWORD | HW_AUTH_BIOMETRIC`, so a screen PIN satisfies a bare
+    `setUserAuthenticationRequired(true)` key). Enforcement layers: `NoteflowViewModel.setBiometricEnabled`
+    (`:2531`) REFUSES enabling below API 30 before the setting flips (one-shot `biometricRefusalMessage`
+    StateFlow `:1106`); `enforceDekAtRestPolicy` (`:2194`) DOWNGRADES a legacy enabled state below API 30
+    to password-only (setting off + `clearDek()`, never re-writes the weak-bound copy); `SecurityService.getOrCreateKey`
+    (`:76-98`) binds any pre-30 auth key defensively via `setUserAuthenticationValidityDurationSeconds(-1)`;
+    `getDecryptionCipher` (`:105-127`) + `getBiometricCipher` return null below API 30 (LockScreen falls
+    back to the master password + `disableBiometricFallback()`). The finding's explicit API-level marker:
+    `storeDek` stamps `DekDeviceBlob.wrapperApiLevel = Build.VERSION.SDK_INT` persisted as
+    `dek_wrapper_api_level` — informational/auditable only, deliberately NOT read-gated (a pre-fix
+    API-30+ blob carries marker 0 and MUST still unlock). `BiometricAuthHelper` now distinguishes
+    "strong biometric available at prompt time" (`isBiometricAvailable`) from "key can be STRONG-bound"
+    (`canCreateStrongBiometricBoundKey`); the settings dialog gates the switch on the latter and shows
+    the refusal message. `DekAtRestPolicy.modeFor` gained `strongBiometricBindingSupported: Boolean = true`
+    (3rd arg, default keeps 2-arg call sites compatible). Out of scope (documented, untouched):
+    `WebDavCredentialStore`'s positive-duration pre-30 binding is the B1-NET-08 design, and the minSdk
+    bump to 30 is a product decision. Tests: `B1Crypto07BiometricKeyBindingTest` (20).
 - **Canvas**: `ui/components/AnnotationCanvas.kt:83` (ink canvas, gestures, layers, `pointerInteropFilter`);
   `services/WetBrushEngine.kt:13` (AGSL wet-mixing gating); `ui/components/ShaderCapabilityHelper.kt:5`
   (`isAgslSupported` = SDK ≥ 33); `services/ShapeRecognitionHelper.kt:13` (`trySnapShape()` :27).

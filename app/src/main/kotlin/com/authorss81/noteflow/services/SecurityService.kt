@@ -74,10 +74,26 @@ class SecurityService internal constructor(
             .setKeySize(256)
             .setUserAuthenticationRequired(authRequired)
             .let {
-                if (authRequired && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                if (!authRequired) {
+                    it
+                } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    // API 30+: bind to BIOMETRIC_STRONG only (the correct spec).
                     it.setUserAuthenticationParameters(0, KeyProperties.AUTH_BIOMETRIC_STRONG)
                 } else {
-                    it
+                    // B1-CRYPTO-07 (phase-65): API 26-29 can NEVER express
+                    // AUTH_BIOMETRIC_STRONG. The old code left the bare
+                    // setUserAuthenticationRequired(true), whose default
+                    // validity (0) the keystore maps to HW_AUTH_PASSWORD |
+                    // HW_AUTH_BIOMETRIC — a device PIN/pattern/password would
+                    // authorize the unwrap. Enabling biometric unlock is refused
+                    // below API 30 (BiometricKeyBindingPolicy +
+                    // NoteflowViewModel), so this branch is purely DEFENSIVE for
+                    // any legacy/edge re-provision: bind biometric-only per use,
+                    // the strongest pre-30 expression, and never device credentials.
+                    @Suppress("DEPRECATION")
+                    it.setUserAuthenticationValidityDurationSeconds(
+                        BiometricKeyBindingPolicy.PRE_30_BIOMETRIC_ONLY_VALIDITY_SECONDS
+                    )
                 }
             }
             .build()
@@ -87,6 +103,12 @@ class SecurityService internal constructor(
     }
  
     fun getDecryptionCipher(): Cipher? {
+        // B1-CRYPTO-07 (phase-65): the DEK-wrapper key is ONLY usable for biometric
+        // unlock when the platform can bind it to AUTH_BIOMETRIC_STRONG. Below API 30
+        // the pre-30 binding is at best "any biometric", so the cipher is never handed
+        // to the biometric prompt there — LockScreen falls back to the master password
+        // and `disableBiometricFallback` flips the setting off.
+        if (!BiometricKeyBindingPolicy.strongBiometricKeyBindingSupported(Build.VERSION.SDK_INT)) return null
         val blob = dekStore.read() ?: return null
         return try {
             val combined = Base64.decode(blob.encoded, Base64.NO_WRAP)
@@ -145,7 +167,23 @@ class SecurityService internal constructor(
             // distinguishable from "no blob stored" (and the recovery screen can
             // tell the user which device key is missing).
             val alias = if (authRequired) "${KEY_ALIAS}_auth" else KEY_ALIAS
-            dekStore.write(DekDeviceBlob(encoded, authRequired, wrapperAlias = alias, wrapperVersion = WRAPPER_VERSION))
+            // B1-CRYPTO-07 (phase-65): ALSO stamp the platform API level at wrap time
+            // (the finding's "store an explicit marker of the API level at key
+            // creation"). Informational/auditable: enforcement lives in
+            // BiometricKeyBindingPolicy + the ViewModel gates (auth-gated blobs are
+            // never created below API 30), so the marker is not consulted on the
+            // read path — gating on it would refuse pre-fix blobs that carry no
+            // marker (wrapperApiLevel = 0) and break the first post-upgrade
+            // biometric unlock of legitimate API-30+ users.
+            dekStore.write(
+                DekDeviceBlob(
+                    encoded,
+                    authRequired,
+                    wrapperAlias = alias,
+                    wrapperVersion = WRAPPER_VERSION,
+                    wrapperApiLevel = Build.VERSION.SDK_INT,
+                )
+            )
             true
         } catch (e: Exception) {
             // Return the failure to the caller instead of crashing app startup.
@@ -268,12 +306,16 @@ internal interface DekDeviceStore {
  * keystore reset/app-data restore can distinguish "the device key is gone"
  * ([DekReadResult.KeyLost], recovery screen) from "no blob was ever stored"
  * ([DekReadResult.NoBlob], fresh mint).
+ *
+ * B1-CRYPTO-07 (phase-65): [wrapperApiLevel] records the platform API level at
+ * wrap time (informational/auditable — see [SecurityService.storeDek]).
  */
 internal data class DekDeviceBlob(
     val encoded: String,
     val authRequired: Boolean,
     val wrapperAlias: String? = null,
     val wrapperVersion: Int = 1,
+    val wrapperApiLevel: Int = 0,
 )
 
 /**
@@ -299,7 +341,8 @@ internal class SharedPrefsDekDeviceStore(context: Context) : DekDeviceStore {
             encoded,
             prefs.getBoolean(KEY_AUTH_REQUIRED, false),
             prefs.getString(KEY_WRAPPER_ALIAS, null),
-            prefs.getInt(KEY_WRAPPER_VERSION, 1)
+            prefs.getInt(KEY_WRAPPER_VERSION, 1),
+            prefs.getInt(KEY_WRAPPER_API_LEVEL, 0)
         )
     }
 
@@ -309,6 +352,7 @@ internal class SharedPrefsDekDeviceStore(context: Context) : DekDeviceStore {
             .putBoolean(KEY_AUTH_REQUIRED, blob.authRequired)
             .putString(KEY_WRAPPER_ALIAS, blob.wrapperAlias)
             .putInt(KEY_WRAPPER_VERSION, blob.wrapperVersion)
+            .putInt(KEY_WRAPPER_API_LEVEL, blob.wrapperApiLevel)
             .apply()
     }
 
@@ -318,6 +362,7 @@ internal class SharedPrefsDekDeviceStore(context: Context) : DekDeviceStore {
             .remove(KEY_AUTH_REQUIRED)
             .remove(KEY_WRAPPER_ALIAS)
             .remove(KEY_WRAPPER_VERSION)
+            .remove(KEY_WRAPPER_API_LEVEL)
             .commit()
     }
 
@@ -327,6 +372,7 @@ internal class SharedPrefsDekDeviceStore(context: Context) : DekDeviceStore {
         const val KEY_AUTH_REQUIRED = "dek_auth_required"
         const val KEY_WRAPPER_ALIAS = "dek_wrapper_alias"
         const val KEY_WRAPPER_VERSION = "dek_wrapper_version"
+        const val KEY_WRAPPER_API_LEVEL = "dek_wrapper_api_level"
     }
 }
 

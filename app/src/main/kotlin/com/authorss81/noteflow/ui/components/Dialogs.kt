@@ -1,5 +1,6 @@
 package com.authorss81.noteflow.ui.components
 
+import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
@@ -14,6 +15,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import com.authorss81.noteflow.services.BiometricAuthHelper
+import com.authorss81.noteflow.services.BiometricKeyBindingPolicy
 import com.authorss81.noteflow.services.ImportExportService
 import com.authorss81.noteflow.services.PasswordStrengthPolicy
 import com.authorss81.noteflow.services.UpdateInfo
@@ -421,6 +424,7 @@ fun SecuritySettingsDialog(
 ) {
     val hasPass by viewModel.hasMasterPassword.collectAsState()
     val biometricEnabled by viewModel.biometricEnabled.collectAsState()
+    val biometricRefusalMessage by viewModel.biometricRefusalMessage.collectAsState()
     val autoLockTimeoutSeconds by viewModel.autoLockTimeoutSeconds.collectAsState()
     var showPasswordInput by remember { mutableStateOf(false) }
     var password by remember { mutableStateOf("") }
@@ -491,7 +495,15 @@ fun SecuritySettingsDialog(
                                 tempChecked = checked
                                 verifyPassword = ""
                                 verifyError = null
-                                showPasswordPrompt = true
+                                // B1-CRYPTO-07 (phase-65): on API 26-29 the platform
+                                // cannot create a key bound to a strong biometric, so
+                                // enabling is refused up-front (no pointless password
+                                // prompt) with a clear non-alarming message.
+                                if (checked && !BiometricAuthHelper.canCreateStrongBiometricBoundKey()) {
+                                    verifyError = BiometricKeyBindingPolicy.refuseEnableMessage(Build.VERSION.SDK_INT)
+                                } else {
+                                    showPasswordPrompt = true
+                                }
                             }
                         )
                     }
@@ -523,7 +535,8 @@ fun SecuritySettingsDialog(
                                             if (viewModel.setBiometricEnabled(tempChecked, verifyPassword)) {
                                                 showPasswordPrompt = false
                                             } else {
-                                                verifyError = "Incorrect Master Password"
+                                                verifyError =
+                                                    biometricRefusalMessage ?: "Incorrect Master Password"
                                             }
                                         }
                                     }

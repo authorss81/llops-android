@@ -2,6 +2,7 @@ package com.authorss81.noteflow.ui.viewmodel
 
 import android.app.Application
 import android.content.Context
+import android.os.Build
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.authorss81.noteflow.data.db.NoteflowDatabase
@@ -61,6 +62,7 @@ import com.authorss81.noteflow.plugins.TranslationModelStatus
 import com.authorss81.noteflow.plugins.TranslationOutcome
 import com.authorss81.noteflow.plugins.TranslationPlugin
 import com.authorss81.noteflow.plugins.TtsChunk
+import com.authorss81.noteflow.services.BiometricKeyBindingPolicy
 import com.authorss81.noteflow.services.DatabaseSecurityHelper
 import com.authorss81.noteflow.services.DekAtRestMode
 import com.authorss81.noteflow.services.DekAtRestPolicy
@@ -1096,6 +1098,13 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
 
     private val _biometricEnabled = MutableStateFlow(settings.biometricAuthEnabled)
     val biometricEnabled: StateFlow<Boolean> = _biometricEnabled.asStateFlow()
+
+    // B1-CRYPTO-07 (phase-65): one-shot NON-alarming message when a biometric-unlock
+    // enable is refused because the platform cannot bind a key to AUTH_BIOMETRIC_STRONG
+    // (API < 30). Cleared on every successful enable; the settings dialog reads it to
+    // explain a refused toggle instead of the generic "Incorrect Master Password".
+    private val _biometricRefusalMessage = MutableStateFlow<String?>(null)
+    val biometricRefusalMessage: StateFlow<String?> = _biometricRefusalMessage.asStateFlow()
 
     // 22.1: seconds of foreground inactivity before auto-lock (0 = off).
     private val _autoLockTimeoutSeconds = MutableStateFlow(settings.autoLockTimeoutSeconds)
@@ -2183,7 +2192,28 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
      * callers never report success over a failed keystore write or failed clear.
      */
     private fun enforceDekAtRestPolicy(): Boolean {
-        return when (DekAtRestPolicy.modeFor(settings.hasMasterPassword, settings.biometricAuthEnabled)) {
+        // B1-CRYPTO-07 (phase-65): a platform that cannot bind an AndroidKeyStore key
+        // to AUTH_BIOMETRIC_STRONG (API 26-29) must never hold an auth-gated device
+        // copy. If a legacy biometricAuthEnabled=true survived from a pre-fix install
+        // on such a device, DOWNGRADE to password-only now — clear the weak-bound blob
+        // and flip the setting off with a one-time non-alarming message — instead of
+        // re-writing it on this (and every future) unlock.
+        if (settings.biometricAuthEnabled &&
+            !BiometricKeyBindingPolicy.strongBiometricKeyBindingSupported(Build.VERSION.SDK_INT)
+        ) {
+            settings.biometricAuthEnabled = false
+            _biometricEnabled.value = false
+            _biometricRefusalMessage.value =
+                BiometricKeyBindingPolicy.refuseEnableMessage(Build.VERSION.SDK_INT)
+        }
+        return when (
+            DekAtRestPolicy.modeFor(
+                hasMasterPassword = settings.hasMasterPassword,
+                biometricAuthEnabled = settings.biometricAuthEnabled,
+                strongBiometricBindingSupported =
+                    BiometricKeyBindingPolicy.strongBiometricKeyBindingSupported(Build.VERSION.SDK_INT),
+            )
+        ) {
             DekAtRestMode.PASSWORD_ONLY -> security.clearDek()
             DekAtRestMode.BIOMETRIC_GATED_AUTH_COPY -> {
                 val dek = repository.encryptionKey
@@ -2502,6 +2532,19 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         if (!verifyMasterPassword(password)) return false
         if (repository.encryptionKey == null) return false
 
+        // B1-CRYPTO-07 (phase-65): the AUTHORITATIVE gate. On API 26-29 the platform
+        // cannot create a key bound to AUTH_BIOMETRIC_STRONG — the best binding there
+        // is "any biometric per use", and the pre-fix bare
+        // setUserAuthenticationRequired(true) even accepted a device credential.
+        // Refuse the enable with a clear, non-alarming message; the setting is never
+        // flipped and no weak-bound device copy is ever written. The user keeps their
+        // (verified) master-password-only protection.
+        if (enabled && !BiometricKeyBindingPolicy.strongBiometricKeyBindingSupported(Build.VERSION.SDK_INT)) {
+            _biometricRefusalMessage.value =
+                BiometricKeyBindingPolicy.refuseEnableMessage(Build.VERSION.SDK_INT)
+            return false
+        }
+
         val previous = settings.biometricAuthEnabled
         return try {
             // B1-CRYPTO-02 (phase-45): the pre-fix code flipped the setting and
@@ -2518,6 +2561,7 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
                 settings.biometricAuthEnabled = previous
                 return false
             }
+            if (enabled) _biometricRefusalMessage.value = null
             _biometricEnabled.value = enabled
             true
         } catch (e: Exception) {
@@ -2527,6 +2571,12 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun getBiometricCipher(): androidx.biometric.BiometricPrompt.CryptoObject? {
+        // B1-CRYPTO-07 (phase-65): never hand a DEK-wrapping cipher to the biometric
+        // prompt on a platform that cannot bind the key to AUTH_BIOMETRIC_STRONG
+        // (API 26-29). The null return makes LockScreen fall back to the master
+        // password and call disableBiometricFallback(), which clears the setting and
+        // the device copy.
+        if (!BiometricKeyBindingPolicy.strongBiometricKeyBindingSupported(Build.VERSION.SDK_INT)) return null
         val cipher = security.getDecryptionCipher() ?: return null
         return androidx.biometric.BiometricPrompt.CryptoObject(cipher)
     }
