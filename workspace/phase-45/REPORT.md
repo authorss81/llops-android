@@ -90,3 +90,29 @@ docs/ARCHITECTURE.md
 docs/phase-status.md
 docs/security-report.md
 ```
+
+---
+
+## Addendum — `.done` marker restored (2026-08-15, re-run)
+
+The B1-CRYPTO-02 fix (commit `2fc44e0`) was fully implemented, committed and
+verified, but the phase's `.done` marker was never committed with it. The next
+runner tick re-selected the completed phase and left stale `.no_work`
+(empty) + `.attempts` (`1`) markers (commit `125d6ce`) — the same
+phase-32/42/43 scenario where a phase with all work already committed gets
+re-run and the evidence gate records a no-work "failure".
+
+On this re-run the fix was re-verified against the current tree:
+
+- `gradle :app:testDebugUnitTest` → **BUILD SUCCESSFUL**, **978 tests / 0
+  failures / 0 errors / 0 skipped** (94 test suites; `B1Crypto02DekAtRestTest`
+  9/9 + `DekAtRestPolicyTest` 4/4 green, all existing password set/verify/change
+  suites green).
+- `gradle :app:assembleDebug` → **BUILD SUCCESSFUL** (2m 35s, 49 executed /
+  41 up-to-date).
+
+Marker state corrected exactly as phase-42 (`workspace/phase-42/{.no_work => .done}`
+in `ba74d5d`) and phase-43 (`55671e1`): `.no_work` renamed to `.done`,
+`.attempts` deleted, everything committed + pushed so `select-phase` stops
+re-selecting this completed phase. No code, schema, dependencies, or
+`.github/workflows/` changed in this addendum.
