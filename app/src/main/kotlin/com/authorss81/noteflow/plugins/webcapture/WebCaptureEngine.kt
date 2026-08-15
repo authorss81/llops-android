@@ -55,16 +55,16 @@ class WebCaptureEngine(
     }
 
     override suspend fun captureWebPage(context: Context?, url: String): WebCaptureOutcome {
-        when (val v = WebPageFetchPolicy.validateUrl(url)) {
+        val validatedUrl = when (val v = WebPageFetchPolicy.validateUrl(url)) {
             is WebPageFetchPolicy.Either.Error -> return WebCaptureOutcome.Error(v.message)
-            is WebPageFetchPolicy.Either.Valid -> Unit
+            is WebPageFetchPolicy.Either.Valid -> v.validation.url
         }
         if (context != null && !hasActiveNetwork(context)) {
             return WebCaptureOutcome.Error("Offline — check your connection.")
         }
-        return fetcher.fetch(url).fold(
+        return fetcher.fetch(validatedUrl).fold(
             onSuccess = { html ->
-                val extracted = WebToMarkdownExtractor.extract(html, url)
+                val extracted = WebToMarkdownExtractor.extract(html, validatedUrl)
                 if (extracted.markdown.isBlank()) {
                     WebCaptureOutcome.Error("The page has no readable content to capture.")
                 } else {

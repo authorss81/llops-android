@@ -266,6 +266,10 @@
     `CitationFormatterCore.validateUrl`) and every redirect `Location` is re-parsed and re-validated
     against the same scheme allow-list + `SsrfHostPolicy` before connecting (incl. an HTTPS→HTTP
     downgrade refusal under the citation fetcher's default `httpsOnly`). See `workspace/phase-51/REPORT.md`.
+    Review fix (2026-08-15): `SsrfHostPolicy.isOpaqueIpv4Literal` refuses ambiguous numeric encodings
+    (`0x7f.0.0.1`, `0177.0.0.1`) whose per-segment value differs by resolver; `normalize` strips a bare
+    `host:port`; `WebCaptureEngine.captureWebPage` fetches the normalized `Validation.url`. Name-based
+    DNS-rebinding remains a tracked out-of-scope residual (`docs/security-report.md`).
 - **Palette**: `services/PaletteCatalog.kt:131` (swatches + `familyFor`), `PaletteMath` :24.
 - **Brush preview**: `ui/components/PenNibVisualPreview.kt:50` (driven by `services/NibPreviewMath.kt`).
 - **Glass theme**: `theme/GlassSurfaces.kt:44` (`GlassBlurGate`), :80 (`GlassSurfaceMath`), :140

@@ -59,3 +59,15 @@ All checks are textual/structural — **no DNS resolution**, so unit tests run w
 - **Recursive DNS-resolution egress enforcement**: a hostile public hostname whose DNS returns an internal IP (DNS-rebinding / `metadata.google.internal`-style names that are not an IP literal) is not caught by a literal blocklist — enforcing it would inject a DNS round-trip (and a resolved-IP→connect pin) into every fetch, a behaviour change beyond this literal-blocklist fix. Numerical/IP-literal and `.local` vectors cited in B1-NET-04 are closed; name-based rebinding should be its own phase (transport-level resolved-IP pinning).
 - **HttpsTitleFetcher HTTP allowance**: kept, because (a) entry already normalizes bare hosts to `https`, (b) the Citation plugin has an honest host-label fallback, and (c) `httpsOnly=true` is the production default — the finding said "consider HTTPS-only"; the upgrade is not forced to keep the Data-Capture behaviour identical for opt-in `httpsOnly=false`.
 - Other findings that touch these files (B1-NET-05 scheme-downgrade semantics for WebDAV/DuckDuckGo/Weather/Dictionary; User-Agent fingerprinting B1-NET-09) are separate phases and untouched.
+
+## Review fixes applied (2026-08-15)
+
+Post-phase review of commit `ce3b4c6` found and fixed the following (all verified in this round):
+
+1. **Ambiguous IPv4 textual encodings** (`SsrfHostPolicy.isOpaqueIpv4Literal`). The blocklist parsed `0177.0.0.1` as decimal `177.0.0.1` (public) and treated `0x7f.0.0.1`/`017700000001` as hostnames — resolvers that read leading-zero as octal (`0177` → `127.0.0.1`) or per-segment `0x` hex would still reach loopback. These forms are now refused outright before `parseIpv4`, since their per-segment value is not unique across resolvers. Canonical dotted-quad / short decimal forms are unchanged.
+2. **`validateUrl` normalization was discarded** (`WebCaptureEngine.captureWebPage`). The engine validated but passed the raw paste to `WebPageFetcher`; bare-host inputs (`example.com/path`) that validation upgraded to `https://…` were then refused at fetch hop 0 (and the message claimed a redirect). The engine now fetches (and passes to `WebToMarkdownExtractor`) the normalized `Validation.url`.
+3. **DNS/name-based rebinding residual** (`metadata.google.internal`, `*.nip.io`-style literals, hostile DNS answers) is a tracked, documented out-of-scope item in `docs/security-report.md` (now explicit), not silently dropped.
+4. **`blockedReason` host:port foot-gun** (`SsrfHostPolicy.normalize`). A bare `127.0.0.1:8080` input now strips the port before the blocklist runs; IPv6 literals (two or more `:`) are untouched.
+5. **Trailing newline hygiene** on `SsrfHostPolicy.kt`, `HttpsTitleFetcher.kt`, `B1Net04SsrfBlocklistTest.kt`.
+
+Re-verification: `B1Net04SsrfBlocklistTest` 22 tests green (3 new: `ambiguous ipv4 textual encodings are blocked`, `host-port strings are still blocklisted`, `validateUrl normalizes a bare host to https for the fetcher`); `gradle testDebugUnitTest` **1075 green / 0 failures**; `gradle assembleDebug` **green**. No schema change, no migration, no new deps, `.github/workflows/` untouched.

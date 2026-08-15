@@ -66,6 +66,27 @@ class B1Net04SsrfBlocklistTest {
     }
 
     @Test
+    fun `ambiguous ipv4 textual encodings are blocked`() {
+        // Leading-zero "octal" and per-segment-0x hex segments are read as
+        // 127.0.0.1/loopback by some resolvers and as decimal by others —
+        // they must be refused outright, never given a decimal-only reading.
+        for (host in listOf(
+            "0177.0.0.1", "0177.1", "017700000001", "127.0.0.01000",
+            "0x7f.0.0.1", "0X7F.0.0.1", "127.0.0x0.0.1"
+        )) {
+            assertNotNull("expected $host blocked", SsrfHostPolicy.blockedReason(host))
+        }
+    }
+
+    @Test
+    fun `host-port strings are still blocklisted`() {
+        for (host in listOf("127.0.0.1:8080", "localhost:8080", "169.254.169.254:80", "10.0.0.1:443")) {
+            assertNotNull("expected $host blocked", SsrfHostPolicy.blockedReason(host))
+        }
+        assertNull("public host with port allowed", SsrfHostPolicy.blockedReason("example.com:443"))
+    }
+
+    @Test
     fun `ipv6 loopback unspecified link-local and ULA are blocked`() {
         for (host in listOf("::1", "[::1]", "::", "[::]", "fe80::1", "[fe80::1]", "fc00::1", "fd00::1", "fdff::1", "fd00:ec2::254")) {
             assertNotNull("expected $host blocked", SsrfHostPolicy.blockedReason(host))
@@ -87,7 +108,8 @@ class B1Net04SsrfBlocklistTest {
         for (host in listOf(
             "example.com", "example.com.", "sub.example.co.uk", "8.8.8.8", "1.2.3.4",
             "172.15.0.1", "172.32.0.1", "192.169.1.1", "11.0.0.1", "169.253.0.1",
-            "100.63.0.1", "100.128.0.1", "2001:db8::1", "[2606:4700::1111]"
+            "100.63.0.1", "100.128.0.1", "2001:db8::1", "[2606:4700::1111]",
+            "abcdef.xyz", "00.com", "0x.example.com"
         )) {
             assertNull("expected $host allowed", SsrfHostPolicy.blockedReason(host))
         }
@@ -99,11 +121,19 @@ class B1Net04SsrfBlocklistTest {
     fun `validateUrl refuses internal destinations`() {
         for (url in listOf(
             "http://127.0.0.1/", "http://localhost:8080/admin", "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
-            "http://192.168.1.1/status", "http://10.0.0.1/", "https://[::1]/", "http://foo.local/", "http://2130706433/"
+            "http://192.168.1.1/status", "http://10.0.0.1/", "https://[::1]/", "http://foo.local/", "http://2130706433/",
+            "http://0177.0.0.1/", "http://0x7f.0.0.1/"
         )) {
             val out = WebPageFetchPolicy.validateUrl(url)
             assertTrue("expected $url rejected, got $out", out is WebPageFetchPolicy.Either.Error)
         }
+    }
+
+    @Test
+    fun `validateUrl normalizes a bare host to https for the fetcher`() {
+        val v = WebPageFetchPolicy.validateUrl("example.com/path")
+        assertTrue("expected accepted", v is WebPageFetchPolicy.Either.Valid)
+        assertEquals("https://example.com/path", (v as WebPageFetchPolicy.Either.Valid).validation.url)
     }
 
     @Test
@@ -129,7 +159,7 @@ class B1Net04SsrfBlocklistTest {
         for (location in listOf(
             "http://127.0.0.1/x", "http://169.254.169.254/latest/meta-data/", "http://192.168.1.1/status",
             "http://10.0.0.1/x", "http://[::1]/x", "http://foo.local/x", "http://localhost/x",
-            "//169.254.169.254/latest/meta-data/", "http://2130706433/x"
+            "//169.254.169.254/latest/meta-data/", "http://2130706433/x", "http://0177.0.0.1/x", "http://0x7f.0.0.1/x"
         )) {
             assertNotNull("expected redirect to $location refused", hop(location, base))
         }

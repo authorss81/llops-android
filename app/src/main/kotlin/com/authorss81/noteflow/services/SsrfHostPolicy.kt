@@ -15,6 +15,12 @@ import java.net.URI
  * IPv4-compatible embedded-IPv4 forms, and the reserved mDNS/local hostnames
  * (`localhost`, `*.local`, `*.localhost`).
  *
+ * Refused outright as "internal" are also the IPv4 textual encodings whose
+ * per-segment value is **not unique across resolvers** — per-`0x`-prefix
+ * segments (`0x7f.0.0.1`) and leading-zero digit runs (`0177.0.0.1`), which an
+ * octal-capable resolver reads as `127.0.0.1` loopback while a plain one reads
+ * `177.0.0.1`. See [isOpaqueIpv4Literal].
+ *
  * All checks are textual/structural — **no DNS resolution** happens here, so
  * unit tests run without a network and a hostile DNS answer cannot silently
  * pass. Resolving a returned hostname and pinning the CONNECT to the resolved
@@ -26,7 +32,7 @@ object SsrfHostPolicy {
     /** @return a human-readable reason when [rawHost] is an internal/reserved
      *  destination, or null when it is safe to connect to. Host must be the
      *  authority host as produced by [URI.getHost] (no port, IPv6 optionally
-     *  bracketed); ports are handled by the caller, never by this object. */
+     *  bracketed); a bare `host:port` is also accepted defensively. */
     fun blockedReason(rawHost: String): String? {
         val host = normalize(rawHost)
         if (host.isEmpty()) return null
@@ -37,6 +43,11 @@ object SsrfHostPolicy {
                 host.endsWith(".local") ->
                 return "Internal/reserved hostnames (localhost, *.local) cannot be fetched."
         }
+
+        // Ambiguous numeric encodings first: a leading-zero / per-segment-hex
+        // literal must never be given the benefit of a decimal-only reading
+        // (see isOpaqueIpv4Literal).
+        if (isOpaqueIpv4Literal(host)) return MESSAGE
 
         parseIpv4(host)?.let { return ipv4Reason(it) }
         parseIpv6(host)?.let { return ipv6Reason(it.first, it.second) }
@@ -50,6 +61,17 @@ object SsrfHostPolicy {
         if (host.endsWith(".")) host = host.dropLast(1) // FQDN trailing dot
         if (host.startsWith("[") && host.endsWith("]")) {
             host = host.substring(1, host.length - 1)
+        }
+        // Robustness: a caller that passes a bare "host:port" (instead of the
+        // port-free host) still gets the blocklist applied. A single ':' with a
+        // pure-digit suffix is a port; IPv6 literals carry two or more ':' so
+        // they are never touched here.
+        if (host.count { it == ':' } == 1) {
+            val colon = host.lastIndexOf(':')
+            val port = host.substring(colon + 1)
+            if (port.isNotEmpty() && port.all { it.isDigit() }) {
+                host = host.substring(0, colon)
+            }
         }
         return host
     }
@@ -99,6 +121,29 @@ object SsrfHostPolicy {
         if (last >= (1L shl lastWidth)) return null
         value = (value shl lastWidth) or last
         return value
+    }
+
+    /**
+     * True when [host] is a numeric-looking IPv4 literal written in a form whose
+     * per-segment value is NOT uniquely defined across resolvers:
+     *  - a segment carrying a `0x`/`0X` hex prefix (`0x7f.0.0.1`), and
+     *  - a leading-zero digit run (`0177.0.0.1`, `017700000001`), read as octal
+     *    (`0177` → `127.0.0.1` loopback) by some resolvers and as decimal
+     *    (`177.0.0.1`) by others.
+     * These ambiguous encodings are refused outright: the cost of over-blocking
+     * an oddball literal is nil, while a resolver that reads them as internal
+     * addresses would otherwise reach the LAN/loopback. Canonical dotted-quad /
+     * short decimal forms (`127.0.0.1`, `127.1`, `2130706433`) are untouched
+     * here and handled by [parseIpv4] + [ipv4Reason].
+     */
+    private fun isOpaqueIpv4Literal(host: String): Boolean {
+        val pureNumeric =
+            host.all { it.isDigit() || it == '.' || it == 'x' || it == 'X' || it in 'a'..'f' || it in 'A'..'F' }
+        if (pureNumeric && host.contains('.')) {
+            if (Regex("(?i)(^|\\.)0[xX][0-9a-f]+").containsMatchIn(host)) return true
+            if (Regex("(?i)(^|\\.)0\\d").containsMatchIn(host)) return true
+        }
+        return Regex("^0\\d+$").matches(host)
     }
 
     /** @return [MESSAGE] when the 32-bit address falls in an internal range. */
