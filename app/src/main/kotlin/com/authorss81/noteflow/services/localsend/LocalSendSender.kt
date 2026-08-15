@@ -36,16 +36,26 @@ import com.authorss81.noteflow.utils.HttpUserAgent
  * NEARBY_WIFI_DEVICES) — discovery goes through raw UDP sockets and HTTP
  * probes that need INTERNET alone (same permission WebDAV already holds).
  *
- * Security posture:
- * - Nothing is sent until the user selects a file AND taps a discovered device.
- * - The receiving device must human-accept: `/prepare-upload` only returns 200
- *   after the receiver's user confirms (403 = declined). We never auto-accept,
- *   and we never serve/receive anything — this is sender-only.
- * - HTTPS receivers are verified against their announced certificate
- *   fingerprint (SHA-256 of the cert). A mismatched cert fails loudly.
+ * Security posture (B1-NET-02, phase-41):
+ * - Nothing is sent until the user selects a file AND taps a discovered device
+ *   AND confirms the per-send dialog ([LocalSendSendDialog]).
+ * - The receiver must be PAIRED: its TLS certificate fingerprint must have been
+ *   explicitly verified out-of-band and persisted (TOFU,
+ *   [LocalSendPairedDeviceStore]) or [sendFile] refuses before any byte moves.
+ * - TLS is REQUIRED for any payload: a receiver announcing `protocol:"http"`
+ *   (or no fingerprint) can never receive bytes; `openConnection` refuses
+ *   non-https URLs outright.
+ * - The receiver's `/prepare-upload` 200 is treated as ZERO evidence of human
+ *   consent (a fake receiver answers it immediately). Consent is the pairing +
+ *   the user's explicit per-send confirmation only.
+ * - HTTPS receivers are additionally verified against their announced
+ *   certificate fingerprint (SHA-256 of the cert). A mismatched cert fails
+ *   loudly.
  * - The current in-flight connection is exposed for cancellation.
  */
-class LocalSendSender {
+class LocalSendSender(
+    private val pairedDevices: LocalSendPairedDeviceStore = InMemoryLocalSendPairedDeviceStore()
+) {
 
     companion object {
         private const val TAG = "LocalSendSender"
@@ -293,6 +303,21 @@ class LocalSendSender {
             return@withContext SendResult(false, "The file to send is empty or missing.")
         }
 
+        // B1-NET-02 gate: the ONLY way a payload may leave this device.
+        // Consent is not the receiver's prepare-upload 200 (a fake receiver
+        // answers that immediately). Consent is: (1) the receiver is paired —
+        // its TLS cert fingerprint was verified out-of-band and persisted
+        // (TOFU), and (2) the user confirmed this send in the dialog. This
+        // gate also enforces HTTPS-only: a receiver that announces
+        // `protocol:"http"` (or none) is refused before any byte moves.
+        val gate = LocalSendPairing.gate(device, pairedDevices)
+        if (gate is LocalSendGate.Denied) {
+            return@withContext SendResult(false, gate.reason)
+        }
+        // The alias the user PAIRED — not the wire-supplied announce alias an
+        // attacker could forge ("Galaxy S24") — is what we display going forward.
+        val pairedAlias = (gate as LocalSendGate.Allowed).paired.alias.ifBlank { device.alias }
+
         val info = senderInfo()
         val fileId = UUID.randomUUID().toString()
         val total = file.length()
@@ -303,7 +328,11 @@ class LocalSendSender {
             return@withContext SendResult(false, "Could not read the file to send.")
         }
 
-        // 1. /prepare-upload — the human-confirm gate.
+        // 1. /prepare-upload — the receiver's own accept/decline step. NOTE
+        // (B1-NET-02): a `200` here is NOT treated as proof a human accepted —
+        // a fake receiver answers it immediately. The security boundary is the
+        // pairing + per-send confirmation above; this call only exists because
+        // the protocol needs its sessionId/token to stream bytes.
         val prepareBody = LocalSendMessages.buildPrepareUploadBody(
             info = info,
             fileId = fileId,
@@ -361,7 +390,7 @@ class LocalSendSender {
         }
 
         when (uploadResp.code) {
-            in 200..299 -> SendResult(true, "Sent to ${device.alias}", uploadResp.bytesSent)
+            in 200..299 -> SendResult(true, "Sent to $pairedAlias", uploadResp.bytesSent)
             403 -> SendResult(false, "The receiving device rejected the transfer.")
             409 -> SendResult(false, "The receiving device is already busy with another transfer.")
             422 -> SendResult(false, "File verification failed on the receiving device (checksum mismatch).")
@@ -454,24 +483,28 @@ class LocalSendSender {
         expectedFingerprint: String?
     ): HttpURLConnection? {
         val url = URL(urlString)
-        val conn: HttpURLConnection = if (url.protocol == "https") {
-            if (expectedFingerprint.isNullOrBlank()) {
-                throw IOExceptionCompat(
-                    "The device did not announce a TLS fingerprint, so a secure connection cannot be verified."
-                )
-            }
-            val https = url.openConnection() as HttpsURLConnection
-            https.sslSocketFactory = pinnedSslContext(expectedFingerprint).socketFactory
-            // The certificate is pinned via the announced fingerprint below;
-            // hostname verification is meaningless against a raw IP.
-            https.hostnameVerifier = TRUST_ALL_HOSTNAMES
-            https
-        } else {
-            url.openConnection() as HttpURLConnection
+        // B1-NET-02 (phase-41): TLS is REQUIRED for any payload. A `http:` URL
+        // here is a bug or a downgrade attempt — refuse loudly, never fall back
+        // to cleartext (the pairing gate already refuses `protocol:"http"`
+        // receivers, this is defense-in-depth for every payload connection).
+        if (url.protocol != "https") {
+            throw IOExceptionCompat(
+                "Refusing to send without TLS (the receiving device does not announce a secure connection)."
+            )
         }
-        conn.readTimeout = readTimeoutMs
-        conn.setRequestProperty("User-Agent", HttpUserAgent.GENERIC)
-        return conn
+        if (expectedFingerprint.isNullOrBlank()) {
+            throw IOExceptionCompat(
+                "The device did not announce a TLS fingerprint, so a secure connection cannot be verified."
+            )
+        }
+        val https = url.openConnection() as HttpsURLConnection
+        https.sslSocketFactory = pinnedSslContext(expectedFingerprint).socketFactory
+        // The certificate is pinned via the announced (paired) fingerprint; a
+        // hostname check against a raw IP is meaningless — so we trust the pin.
+        https.hostnameVerifier = TRUST_ALL_HOSTNAMES
+        https.readTimeout = readTimeoutMs
+        https.setRequestProperty("User-Agent", HttpUserAgent.GENERIC)
+        return https
     }
 
     private fun verifyNotCancelled() {
@@ -480,8 +513,12 @@ class LocalSendSender {
 
     /**
      * Pins the receiver's TLS certificate to the fingerprint it announced
-     * during discovery (SHA-256 of the cert). A device that serves a different
-     * cert than it announced fails loudly — never a silent bypass.
+     * during discovery (SHA-256 of the cert). Because the [LocalSendPairing.gate]
+     * already required that fingerprint to be PAIRED (user-verified out-of-band
+     * and persisted, B1-NET-02), this pin authenticates the receiver — a fake
+     * receiver announcing its own cert is refused at the pairing gate before
+     * it ever reaches here, and a device that serves a different cert than it
+     * announced fails loudly here.
      */
     private fun pinnedSslContext(expectedFingerprint: String): SSLContext {
         val context = SSLContext.getInstance("TLS")

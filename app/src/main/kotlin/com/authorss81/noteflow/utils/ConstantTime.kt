@@ -42,4 +42,17 @@ object ConstantTime {
             a.toByteArray(Charsets.US_ASCII),
             b.toByteArray(Charsets.US_ASCII)
         )
+
+    /**
+     * Constant-time equality for fixed-length ASCII PIN/code strings (e.g. the
+     * 6-digit LocalSend pairing code, `LocalSendPairingCodes.pairingCode`).
+     * Like [hexEqual] the caller MUST keep both sides the same length —
+     * [MessageDigest.isEqual] short-circuits false on a length difference,
+     * which is safe for these comparison values (they are never secrets).
+     */
+    fun stringEqual(a: String, b: String): Boolean =
+        MessageDigest.isEqual(
+            a.toByteArray(Charsets.US_ASCII),
+            b.toByteArray(Charsets.US_ASCII)
+        )
 }

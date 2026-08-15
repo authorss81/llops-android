@@ -74,7 +74,7 @@ object LocalSendMessages {
         val deviceType: String? = "mobile",
         val fingerprint: String? = null,
         val port: Int = LocalSendProtocol.DEFAULT_PORT,
-        val protocol: String = "http",
+        val protocol: String = "https",
         val download: Boolean = false
     )
 
@@ -96,6 +96,11 @@ object LocalSendMessages {
      * put `Build.MODEL` (or any OS/app/version fingerprint) into
      * `deviceModel`/`alias` — every LAN host that sees the announce, register
      * or prepare-upload bodies must not be able to fingerprint the exact handset.
+     *
+     * B1-NET-02 (phase-41): the announced `protocol` is NEVER `"http"` — this
+     * app only ever speaks TLS for LocalSend (it is sender-only, but the field
+     * must not advertise a cleartext endpoint), so a `"https"` value is
+     * always announced.
      */
     fun senderIdentity(fingerprint: String): Info = Info(
         alias = "InkFlow",
@@ -104,7 +109,7 @@ object LocalSendMessages {
         deviceType = "mobile",
         fingerprint = fingerprint,
         port = LocalSendProtocol.DEFAULT_PORT,
-        protocol = "http",
+        protocol = "https",
         download = false
     )
 

@@ -14,7 +14,7 @@
 | `data/db/` | `NoteflowDatabase.kt`, `Daos.kt` | Room DB (schema v9, 8 DAOs), corrupt-DB quarantine |
 | `data/repository/` | `NoteRepository.kt`, `LruBoundedMap.kt` | Encrypted read/write, search corpus, WAL checkpoint, re-key |
 | `services/` | `EncryptionService.kt`, `SecurityService.kt`, `DatabaseSecurityHelper.kt`, `VaultKeyHolder.kt`, `WetBrushEngine.kt`, `WebDavSyncService.kt`, `ImportExportService.kt`, `PaletteCatalog.kt`, `ShapeRecognitionHelper.kt` | Non-UI: crypto/vault, brush math, sync, import/export, palette |
-| `services/localsend/` | `LocalSendProtocol.kt`, `LocalSendSender.kt` | Pure-JVM LocalSend v2.2 + real network sender |
+| `services/localsend/` | `LocalSendProtocol.kt`, `LocalSendSender.kt`, `LocalSendPairing.kt`, `SettingsLocalSendPairedDeviceStore.kt` | Pure-JVM LocalSend v2.2 + real network sender + TOFU pairing gate (B1-NET-02) |
 | `plugins/` | `NoteflowPlugin.kt`, `PluginRegistry.kt`, `PluginManager.kt`, `PluginDiagnostics.kt`, `PluginLifecycle.kt` | Compile-time plugin framework + typed serving interfaces |
 | `plugins/runtime/` | `RuntimePluginLoader.kt`, `SignatureVerifiedPluginRuntime.kt`, `ArtifactSignatureVerifier.kt`, `PinnedCertHash.kt`, `PinnedTlsConnector.kt`, `PluginManifestFetcher.kt`, `HttpsPluginDownloadTransport.kt`, `PluginDownloader.kt`, `PluginUpdateEngine.kt` | Downloadable-plugin runtime: pinned-cert verify (manifest + artifact transports, no redirects), DexClassLoader, updates |
 | `plugins/store/` | `PluginStoreCatalog.kt`, `PluginStoreController.kt`, `RemotePluginInstaller.kt`, `PluginInstallStore.kt` | Plugin Store lifecycle (bundled catalog + remote install) |
@@ -84,6 +84,16 @@
     and 3xx redirects are refused with a clear `SyncResult(false, "Sync refused: ...")` —
     closes B1-NET-01 + the WebDAV slice of B1-NET-05 (see `workspace/phase-40/REPORT.md`).
 - **LocalSend**: `services/localsend/LocalSendProtocol.kt:29`, `LocalSendSender.kt:48`.
+  - **Implemented in phase-41**: confirmed-pairing gate for sends. Pure-JVM
+    `services/localsend/LocalSendPairing.kt` (`gate` = HTTPS-only +
+    fingerprint-present + TOFU-paired, `startPairing` derives a 6-digit out-of-band
+    code + formatted fingerprint, `confirmPairing`/`pair` persist a constant-time
+    verified TOFU anchor), stores `InMemoryLocalSendPairedDeviceStore` (tests) +
+    `SettingsLocalSendPairedDeviceStore` (SharedPreferences `localsend_paired_<fp>`).
+    `LocalSendSender.sendFile` refuses unpaired/http receivers before any I/O
+    (`:306-319`); `openConnection` refuses non-https payload URLs; the announce
+    never says `protocol:"http"`. `LocalSendSendDialog` shows a pairing +
+    per-send confirmation; `200` to `/prepare-upload` is zero evidence of consent.
 - **Palette**: `services/PaletteCatalog.kt:131` (swatches + `familyFor`), `PaletteMath` :24.
 - **Brush preview**: `ui/components/PenNibVisualPreview.kt:50` (driven by `services/NibPreviewMath.kt`).
 - **Glass theme**: `theme/GlassSurfaces.kt:44` (`GlassBlurGate`), :80 (`GlassSurfaceMath`), :140

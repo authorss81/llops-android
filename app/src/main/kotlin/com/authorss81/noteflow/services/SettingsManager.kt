@@ -3,6 +3,7 @@ package com.authorss81.noteflow.services
 import android.content.Context
 import android.content.SharedPreferences
 import com.authorss81.noteflow.plugins.PluginSettingKey
+import com.authorss81.noteflow.services.localsend.LocalSendPairingCodes
 import com.authorss81.noteflow.theme.AppThemeMode
 
 class SettingsManager(context: Context) {
@@ -371,6 +372,32 @@ class SettingsManager(context: Context) {
 
     fun hasPluginSetting(pluginId: String, key: String): Boolean =
         prefs.contains(PluginSettingKey.key(pluginId, key))
+
+    // Phase 41 / B1-NET-02: TOFU-paired LocalSend receivers. The value is a
+    // JSON blob from LocalSendPairedDeviceCodec keyed by the NORMALIZED TLS
+    // certificate fingerprint (lowercase, no colons); the alias is display-only
+    // — the fingerprint is the identity. SharedPreferences, no DB schema change.
+    fun getLocalSendPairedDeviceJson(fingerprint: String): String? =
+        prefs.getString(
+            "localsend_paired_" + LocalSendPairingCodes.normalizeFingerprint(fingerprint),
+            null
+        )
+
+    fun setLocalSendPairedDeviceJson(fingerprint: String, json: String?) {
+        val key = "localsend_paired_" + LocalSendPairingCodes.normalizeFingerprint(fingerprint)
+        prefs.edit().apply {
+            if (json == null) remove(key) else putString(key, json)
+        }.apply()
+    }
+
+    /** Every stored pairing's normalized-fingerprint key (for enumeration). */
+    fun allLocalSendPairedFingerprints(): List<String> {
+        val out = mutableListOf<String>()
+        prefs.all.keys.forEach { key ->
+            if (key.startsWith("localsend_paired_")) out.add(key.removePrefix("localsend_paired_"))
+        }
+        return out
+    }
 
     fun clearSecuritySettings() {
         prefs.edit()

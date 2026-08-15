@@ -59,6 +59,22 @@ class LocalSendProtocolTest {
         assertFalse(info.alias.contains(BuildModelPlaceholder.PIXEL))
     }
 
+    // B1-NET-02 (phase-41): this app never announces `protocol:"http"`.
+    @Test
+    fun senderIdentity_announcesHttpsNeverHttp() {
+        val info = LocalSendMessages.senderIdentity(fingerprint = "inkflow-abc123")
+        assertEquals("https", info.protocol)
+        val root = JsonParser.parseString(String(LocalSendMessages.buildAnnounce(info), Charsets.UTF_8)).asJsonObject
+        assertEquals("https", root.get("protocol").asString)
+        assertFalse(info.protocol.equals("http", ignoreCase = true))
+    }
+
+    @Test
+    fun infoDefaultProtocol_isHttps() {
+        val info = LocalSendMessages.Info(alias = "InkFlow")
+        assertEquals("https", info.protocol)
+    }
+
     @Test
     fun senderIdentityAnnounceJson_doesNotLeakModel() {
         val info = LocalSendMessages.senderIdentity(fingerprint = "inkflow-abc123")
