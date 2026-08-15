@@ -24,6 +24,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.font.FontWeight
 import com.authorss81.noteflow.data.model.CanvasMediaEmbed
 import com.authorss81.noteflow.data.model.Stroke
+import com.authorss81.noteflow.services.WaveformPeakMath
 import java.util.Locale
 
 @Composable
@@ -203,8 +204,13 @@ fun AudioPlaybackCard(
 
             Spacer(modifier = Modifier.height(6.dp))
 
-            // Waveform Visualizer & Scrub Bar (real recorded amplitudes only)
-            val amplitudes = embed.waveformAmplitudes
+            // Waveform Visualizer & Scrub Bar (real recorded amplitudes only).
+            // Phase 37 (B2-DOS-03): the UI only ever draws a bounded bar budget —
+            // WaveformPeakMath.downsample min/max-decimates so peaks are preserved
+            // and a long recording never turns into O(n) draw calls on a huge array.
+            val amplitudes = remember(embed.waveformAmplitudes) {
+                WaveformPeakMath.downsample(embed.waveformAmplitudes)
+            }
 
             val activeBarColor = MaterialTheme.colorScheme.primary
             val inactiveBarColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)

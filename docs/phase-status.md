@@ -42,6 +42,7 @@
 | phase-28 | `NOT STARTED` | APK pentest attack. PROMPT.md only. |
 | phase-29 | `NOT STARTED` | Security-fix phase generation + final doc-fix. PROMPT.md only. |
 | phase-35 | `DONE` | Canvas & scribe ergonomics (FloatingToolDock replacing FloatingBottomToolbarPill: draggable edge-snap pill via new `services/DockSnapMath.kt`, ≤2 taps for all tools, auto-tuck on pen); live nib previews (`services/NibPreviewMath.kt` driving enhanced `PenNibVisualPreview` + live sliders in the width picker); minimap spatial HUD (zoom%/layers/viewport, spring/snap, zoom controls, toggled from persisted `minimap_hud_enabled`); palette studio (`DesignerPalettes` — nordic/botanical/cyberpunk/terra, family-invariant preserved) + `services/HarmonicContrastMath.kt` contrast studio row + eyedropper magnifier loupe. `workspace/phase-35/REPORT.md`. New tests: NibPreviewMathTest (23), DockSnapMathTest (15), DesignerPalettesTest (10), HarmonicContrastMathTest (18); PaletteCatalogTest + ColorHarmonyHelperTest still green; `gradle testDebugUnitTest` 805 green, `gradle assembleDebug` green. |
+| phase-37 | `DONE` | Markdown & hybrid editor slice. HybridMarkdownEditor (`ui/components/markdown/`) now REPLACES the raw OutlinedTextField in MarkdownPreviewScreen EDIT + split SPLIT panes (`MarkdownPreviewScreen.kt:544,583,631`): live inline rendering of headings/bold/italic/code/lists/links; tap-to-edit raw block; typed callout cards (NOTEWARNING/TIP/IMPORTANT/QUOTE); interactive checkboxes via `AnimatedCheckmark` (respects reduce-motion + haptics policy). Pure-JVM block tokenizer (`services/MarkdownBlockTokenizer.kt`, exact source round-trip) + inline math scanner (`services/MarkdownInlineMath.kt`, code-span aware) + `WaveformPeakMath.downsample` bounds AudioPlaybackCard's draw budget to 220 bars (B2-DOS-03). **Note: initial commit `eec811c` DID NOT COMPILE + was unwired; review fixes landed here (see `workspace/phase-37/REPORT.md`)**. Tests: MarkdownBlockTokenizerTest (12), MarkdownInlineMathTest (6), WaveformPeakMathTest (6); `gradle testDebugUnitTest` 838 green, `gradle assembleDebug` green. |
 
 ## ROADMAP.md phases (the app's own feature roadmap, 1-35)
 
@@ -86,7 +87,7 @@
 
 ## Cross-cutting facts
 
-- All `.done` markers in `workspace/` live in `phase-01`..`phase-16`, `phase-18`..`phase-20` (verified by directory listing). No `.deferred`/`.blocked`/`.attempts` markers exist anywhere.
+- All `.done` markers in `workspace/` live in `phase-01`..`phase-16`, `phase-18`..`phase-20`, plus `phase-35`, `phase-36`, `phase-37` (verified by directory listing). No `.deferred`/`.blocked`/`.attempts` markers exist anywhere.
 - `phase-17` is the only phase whose directory no longer exists (deleted 4112eb8) and is therefore marked `CANCELLED` and excluded from heading marking.
 - ROADMAP/workspace numbering differ: workspace `phase-NN` (audit pipeline) ≠ ROADMAP `PHASE N` (app feature roadmap). Do not confuse them.
 - `phase-20` (this doc-fix) is `DONE`; `phase-21`..`phase-29` have PROMPT.md only — no implementation, no marker.

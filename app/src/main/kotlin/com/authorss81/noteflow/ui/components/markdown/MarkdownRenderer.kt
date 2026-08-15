@@ -27,6 +27,7 @@ import androidx.compose.material.icons.outlined.Warning
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -151,7 +152,7 @@ internal class MarkdownCheckboxCursor(
 private val checkboxPrefixRe = Regex("""^\[([ xX])\]\s""")
 
 @Composable
-fun MarkdownDocument(
+internal fun MarkdownDocument(
     content: String,
     primaryColor: Color,
     baseDir: File?,
@@ -324,13 +325,14 @@ private fun MarkdownCalloutCard(
     primaryColor: Color,
     serif: Boolean
 ) {
-    val (calloutColor, calloutTitle, calloutIcon): Triple<Color, String, ImageVector> = when (type) {
+    val calloutStyling: Triple<Color, String, ImageVector> = when (type) {
         CalloutType.WARNING -> Triple(Color(0xFFE53935), "WARNING", Icons.Outlined.Warning)
         CalloutType.TIP -> Triple(Color(0xFF43A047), "TIP", Icons.Outlined.Lightbulb)
         CalloutType.IMPORTANT -> Triple(Color(0xFF8E24AA), "IMPORTANT", Icons.Outlined.ErrorOutline)
         CalloutType.QUOTE -> Triple(Color(0xFF546E7A), "QUOTE", Icons.Outlined.FormatQuote)
         CalloutType.NOTE -> Triple(primaryColor, "NOTE", Icons.Outlined.Info)
     }
+    val (calloutColor, calloutTitle, calloutIcon) = calloutStyling
     val scheme = MaterialTheme.colorScheme
     Surface(
         color = calloutColor.copy(alpha = 0.12f),

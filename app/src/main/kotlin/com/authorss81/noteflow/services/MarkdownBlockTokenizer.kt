@@ -266,13 +266,12 @@ object MarkdownBlockTokenizer {
         val candidate = checkboxCandidates(content).getOrNull(candidateIndex) ?: return content
         if (candidate.lineIndex >= lines.size) return content
         val line = lines[candidate.lineIndex]
-        val replaced = checkboxItemRe.replaceFirst(line) { m ->
-            val newState = if (m.groupValues[2].trim() in setOf("x", "X")) " " else "x"
-            val prefix = line.substring(0, m.range.first)
-            val marker = m.groupValues[1]
-            val tail = m.groupValues[3]
-            "$prefix$marker [$newState] $tail"
-        }
+        val match = checkboxItemRe.find(line) ?: return content
+        val newState = if (match.groupValues[2].trim() in setOf("x", "X")) " " else "x"
+        val prefix = line.substring(0, match.range.first)
+        val marker = match.groupValues[1]
+        val tail = match.groupValues[3]
+        val replaced = "$prefix$marker [$newState] $tail"
         val out = ArrayList(lines)
         out[candidate.lineIndex] = replaced
         return out.joinToString("\n")
@@ -308,6 +307,6 @@ object MarkdownBlockTokenizer {
             typeToken.contains("QUOTE") -> CalloutType.QUOTE
             else -> CalloutType.NOTE
         }
-        return CalloutInfo(type, type, body)
+        return CalloutInfo(type, typeToken, body)
     }
 }

@@ -61,6 +61,7 @@ import com.authorss81.noteflow.data.model.NotePageEntity
 import com.authorss81.noteflow.services.WikiLinkParser
 import com.authorss81.noteflow.theme.serifBodyStyle
 import com.authorss81.noteflow.ui.components.BacklinksInspectorBottomSheet
+import com.authorss81.noteflow.ui.components.markdown.HybridMarkdownEditor
 import com.authorss81.noteflow.ui.viewmodel.NoteflowViewModel
 import java.io.File
 import org.commonmark.ext.gfm.tables.TableBlock
@@ -541,11 +542,14 @@ fun MarkdownPreviewScreen(
                             }
                         }
 
-                        OutlinedTextField(
+                        HybridMarkdownEditor(
                             value = contentText,
                             onValueChange = { contentText = it },
-                            modifier = Modifier.weight(1f).fillMaxWidth(),
-                            label = { Text("Markdown & WikiLink Content") }
+                            modifier = Modifier.weight(1f).fillMaxWidth().imePadding(),
+                            primaryColor = primaryColor,
+                            baseDir = page.sourceFilePath?.let { File(it).parentFile },
+                            onOpenWikiLink = onOpenWikiLink,
+                            serif = serifReadingMode
                         )
                     }
                 }
@@ -580,11 +584,14 @@ fun MarkdownPreviewScreen(
                                         Text("/ Commands", style = MaterialTheme.typography.labelSmall)
                                     }
                                 }
-                                OutlinedTextField(
+                                HybridMarkdownEditor(
                                     value = contentText,
                                     onValueChange = { contentText = it },
                                     modifier = Modifier.weight(1f).fillMaxWidth(),
-                                    label = { Text("Edit Markdown") }
+                                    primaryColor = primaryColor,
+                                    baseDir = page.sourceFilePath?.let { File(it).parentFile },
+                                    onOpenWikiLink = onOpenWikiLink,
+                                    serif = serifReadingMode
                                 )
                             }
 
@@ -628,11 +635,14 @@ fun MarkdownPreviewScreen(
                                         Text("/ Commands", style = MaterialTheme.typography.labelSmall)
                                     }
                                 }
-                                OutlinedTextField(
+                                HybridMarkdownEditor(
                                     value = contentText,
                                     onValueChange = { contentText = it },
                                     modifier = Modifier.weight(1f).fillMaxWidth(),
-                                    label = { Text("Edit Markdown") }
+                                    primaryColor = primaryColor,
+                                    baseDir = page.sourceFilePath?.let { File(it).parentFile },
+                                    onOpenWikiLink = onOpenWikiLink,
+                                    serif = serifReadingMode
                                 )
                             }
 

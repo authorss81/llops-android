@@ -43,8 +43,14 @@
 - **Downloadable runtime**: `plugins/runtime/RuntimePluginLoader.kt:68`; `services/AppClassLoaderFactory.kt:23`
   (`DexClassLoader`); `services/AppFacadeHost.kt:27` (deny-by-default facade, NO direct DB/keystore handles);
   `plugins/runtime/PinnedCertHash.kt:25`; `plugins/runtime/ArtifactSignatureVerifier.kt:52`.
-- **Markdown**: `ui/screens/EditorScreen.kt:109`, `ui/screens/MarkdownPreviewScreen.kt:137`
-  (renders via **commonmark 0.29.0 + gfm-tables**).
+- **Markdown**: `ui/screens/MarkdownPreviewScreen.kt:137` (renders via **commonmark 0.29.0 +
+  gfm-tables**). Phase 37 hybrid-editor slice: pure-JVM block tokenizer
+  `services/MarkdownBlockTokenizer.kt` (exact source round-trip), code-span-aware
+  inline-math scanner `services/MarkdownInlineMath.kt`, waveform decimation
+  `services/WaveformPeakMath.kt`, and the shared renderer + editor
+  `ui/components/markdown/MarkdownRenderer.kt` + `HybridMarkdownEditor.kt`
+  (replaces the raw text field in EDIT/SPLIT panes; typed callouts + interactive
+  checkboxes; `AnimatedCheckmark.kt` respects reduce-motion).
 - **Knowledge graph**: `ui/screens/KnowledgeGraphScreen.kt:55` (data built in-screen via
   `services/WikiLinkParser.kt:66` `buildWikiLinkEdges`).
 - **WebDAV sync**: `services/WebDavSyncService.kt:28` (encrypted vault archives, HTTPS enforced).
