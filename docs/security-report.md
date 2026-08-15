@@ -901,3 +901,87 @@ No DB schema, workflow, or dependency changes were made.
 - Highest phase before Phase 33: `phase-38`. Fix phases: `phase-39`..`phase-114` (76 phases, 77 findings - 75 one-finding phases + 1 grouping of B1-AUTH-06 into B1-DB-4).
 - Final phase: **phase-115** (document fix - final status & consistency sweep) - ALWAYS LAST.
 - Every finding above maps to exactly one phase, or is marked resolved-at-triage here.
+
+---
+
+# Phase 32 — APK dynamic/static analysis
+
+> The phase-30 findings above came from **source review** (nothing was ever run against
+> the built artifact). This section is the **offensive, tool-driven audit of the actual
+> APK** (workspace phase-32, executed 2026-08-15). Artifacts: locally built
+> `app/build/outputs/apk/debug/app-debug.apk` (SHA-256
+> `056c3a6729d031deb22afc418772bc15756929128782265be9620afc0f4bc966`) and
+> `app/build/outputs/apk/release/app-release.apk` (R8-minified, 142.0 MB). Tools used:
+> apktool, jadx 1.5.1, androguard 4.1.4 (`axml`), APKiD 3.1.0, `strings` (947k dex +
+> 118k native lines), `apksigner`, `zipalign`, `aapt dump badging`, `readelf`,
+> python3 `zipfile`. Full evidence: `workspace/phase-32/REPORT.md`. Dynamic/instrumented
+> tooling (emulator/Frida/objection) was not possible on the CI runner (no AVD/device) —
+> deferred to ROADMAP PHASE 34.9.
+
+## NEW findings (confirmed-by-tool, not previously reported)
+
+### [Phase-32-NEW-01] Base APK violates the "heavy/native features MUST be downloadable plugins" hard rule: 199 MB of bundled ML Kit translation models (80.2 MB packed = 56% of the shipping APK) plus ML Kit OCR natives are compiled in
+- **Severity:** MEDIUM
+- **Area:** Packaging / base-APK-size policy (AGENTS.md hard constraint)
+- **Agent/tool:** python3 `zipfile` size accounting on both APKs (`unzip -l`)
+- **Evidence:**
+  - `release APK_size = 142.0 MB, 906 entries`; `language-models/ raw=207.6 MB packed=80.2 MB (56% of APK)`; `native .so raw=128.5 MB packed=55.4 MB`; debug APK 173.5 MB (same LM pack + 4-ABI natives + unminified x23 dex).
+  - Root directory `language-models/` = ML Kit **translation** packs for 75 languages (`af`..`zu`, each `bigrams.json`/`fivegrams.json`/`quadrigrams.json`).
+  - `lib/*/libmlkit_google_ocr_pipeline.so` (11 MB aarch64), `libtranslate_jni.so` (16 MB aarch64) present per ABI; `plugins/translation/MlKitTranslatorEngine*` and `plugins/ocr/*` classes confirmed in dex via `strings`.
+  - NO `.gguf`, NO `tasks-genai`, NO `com/google/mediapipe` classes — the LLM correctly stayed downloadable-only (positive).
+- **Exploit scenario:** Not a confidentiality/integrity bug — a download/install-size and storage problem. Every install carries ~80 MB of translation models (uncompressed ~199 MB on disk) the user may never use, plus 4-ABI OCROCE natives; on a 16 GB low-end device this is material wasted storage, and it directly contradicts the agreed downloadable-plugin architecture (AGENTS.md, docs/plugin-architecture.md) that moved LLM/OCR off the base APK. Side effect: because the translation plugin is present and enabled by default, the models load eagerly at first TranslatePlugin use regardless of opt-in intent.
+- **Fix:** Move the ML Kit translation pack(s) and the OCR native dependency out of the base APK into the downloadable-plugin flow (per-language packs fetched+verified on demand, Phase 22-26 model), or at minimum make the translation models runtime-downloadable (ML Kit already supports remote model download — the app actively battles it by bundling 75 packs). Cap the base APK to a size budget and gate on it in CI.
+
+### [Phase-32-NEW-02] No ABI splits: every device downloads all four native ABIs (~55.4 MB packed) on top of the translation pack
+- **Severity:** LOW
+- **Area:** Packaging / efficiency
+- **Agent/tool:** `unzip -l` / `aapt dump badging` / python3 `zipfile`
+- **Evidence:** `native-code: 'arm64-v8a' 'armeabi-v7a' 'x86' 'x86_64'` (aapt badging); `lib/` contains all four ABIs of every `.so` (raw 128.5 MB, packed 55.4 MB). No split-per-ABI / Play bundle output configured.
+- **Exploit scenario:** On a 99% arm64 device the user downloads and stores the same app 3.5x heavier than needed, including x86/x86_64 natives that will never load. Combined with Phase-32-NEW-01 this makes the 142 MB release representative of what every user pays for but never needs.
+- **Fix:** Publish ABI-split APKs (or an app bundle). Trivially reduces the downloadable payload per device by ~2/3 of the native size.
+
+### [Phase-32-NEW-03] Release APK signed with APK Signature Scheme v2 only (no v3/v4) — no in-place signing-key rotation capability
+- **Severity:** INFO
+- **Area:** Android platform surface / signing
+- **Agent/tool:** `apksigner verify --print-certs -v`
+- **Evidence:** `Verified using v2 scheme: true`; `v1/v3/v3.1/v3.2/v4: false`; `Number of signers: 1`; `V2 Signer: certificate DN: C=US, O=Android, CN=Android Debug`, SHA-256 `81a2980a…`.
+- **Exploit scenario:** No direct exploit (v2 is the validated install scheme for minSdk 26+), but v3 carries the versioned key-rotation structure; with only v2, a future signing-key compromise cannot be rotated in-place — the app must be uninstalled/reinstalled, and combined with B1-PLAT-1 (well-known debug keystore) there is currently no production signing identity to rotate at all.
+- **Fix:** Configure a real release keystore (B1-PLAT-1's phase-57 fix) AND enable APK Signature Scheme v3 (automatic with AGP `v3SigningEnabled`/default when the min/target SDK ≥ 28 — it is off here only because signing config relies on the v2-only debug path).
+
+### [Phase-32-NEW-04] Compiled-in plugin-manifest pin is still the placeholder (`sha256/AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=`) — plugin-update channel dead until the operator substitutes the real pin
+- **Severity:** INFO (availability; security posture = intended fail-closed)
+- **Area:** Downloadable-plugin runtime / supply chain
+- **Agent/tool:** `strings` + smali inspection (`HostedPluginManifestKt`), decompiled `PinnedCertHash`/`HttpsManifestTransport` via jadx
+- **Evidence:** `HostedPluginManifestKt.PLUGIN_MANIFEST_CERT_PIN = "sha256/AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="` (base64 of bytes 0x00..0x1F — obvious placeholder) compiled into the release binary; `HttpsManifestTransport$fetch$2` smali shows the full guard chain (scheme-only → host allow-list `plugin-updates.inkflow.app` → `PinnedTlsConnector.open` → explicit 3xx refusal → 256 KiB cap); `PinnedCertHash.matches` = `ConstantTime.hexEqual`, `parse` rejects non-32-byte pins.
+- **Exploit scenario:** Because the placeholder hash can never equal any real certificate's SHA-256, **every plugin-update check on a shipped build fails closed** ("the manifest host's certificate does not match the pinned hash"). This is the phase-39 security fix working as designed — but it means the plugin-update channel is non-functional for all end-users until the operator replaces the constant with the real production leaf hash (fails-safe, availability-only).
+- **Fix:** Before the hosted plugin channel goes live, substitute the production `plugin-updates.inkflow.app` leaf cert hash for the placeholder in `HostedPluginManifest.kt:220` and re-ship. Until then, document that hosted updates are disabled (they already fail closed, so no code change is urgent).
+
+## Prior findings CONFIRMED on the APK (tool evidence vs source-only)
+
+| Finding | Binary-level confirmation |
+|---------|---------------------------|
+| `B1-PLAT-1` | `apksigner --print-certs`: release signed `CN=Android Debug`, SHA-256 `81a2980a…`, well-known key/password, v2-only |
+| `B1-PLAT-2` | Binary manifest: `MainActivity exported=true singleTask` + `ACTION_SEND text/plain`, `image/*`, `SEND_MULTIPLE image/*`, `*/*` |
+| `B1-PLAT-6` | `package=com.aistudio.inkflow.app.bkxjrz` (aapt badging) vs launchable-activity `com.authorss81.noteflow.MainActivity` |
+| `B1-PLAT-7` | `com.authorss81.noteflow.services.UpdateService` present in dex (auto-update APK discovery surface) |
+| `B1-NET-02` / `B1-NET-06` | `LocalSendSender$TRUST_ALL_HOSTNAMES.verify()` returns constant `1`; `:53317/api/localsend/v2/{register,prepare-upload,upload,cancel}`; LAN `legacyHttpScan`. Mitigation noted at binary level: `LocalSendTrustManager.validate()` SHA-256-pins the peer leaf cert, so the always-true hostname verifier is backed by a cert pin (severities unchanged) |
+| `B1-NET-03` / `B1-CRYPTO-01` | `plugin-updates.inkflow.app` host allow-listed; pinned no-redirect TLS transport + 3xx refusal + 256 KiB cap fully present in smali (phase-39 fix wiring confirmed) |
+| `B1-AUTH-01` | `services/AppClassLoaderFactory` (`DexClassLoader`) + `plugins/runtime/RuntimePluginLoader` in dex — downloadable plugin executes in-process |
+| `B2-CRYPTO-06` | `noteflow_backup_`, `noteflow_vault_backup_` filename prefixes + `noteflow_vault_backup_[^<]+\.nfb)` WebDAV href regex in dex strings |
+
+## Positives confirmed on the APK (not findings)
+
+- Release build has **no `android:debuggable`** (defaults false); only the CI debug artifact is debuggable.
+- `allowBackup=false` + `fullBackupContent=false` + `dataExtractionRules` — backup disabled in the binary.
+- FLAG_SECURE wired: decompiled `MainActivity` = `if (!BuildConfig.DEBUG) { getWindow().addFlags(8192) } else { clearFlags(8192) }` — applied in release.
+- R8 minify ON in release: single `classes.dex` (7.9 MB) vs 23 dex files in debug.
+- Minimal, justifiable permission set (no storage/location/camera/SMS); **no `network_security_config` + no `usesCleartextTraffic`** ⇒ platform default-deny of cleartext on targetSdk 36 (the documented local-network WebDAV HTTP opt-in is thus inert today — availability quirk, not an insecure-config leak).
+- Native hardening: all six aarch64 `.so` = ET_DYN + `GNU_RELRO` + `GNU_STACK=RW` (NX), no RWX segments.
+- No MediaPipe `tasks-genai` / GGUF / `com.google/mediapipe` classes in base — the LLM stayed downloadable-only (positive for AGENTS.md hard rule).
+- No hardcoded secrets: API keys, tokens, keystore passwords, private keys searched across 947k dex + 118k native strings — none found (weak-cipher strings are JSSE's built-in TLS cipher name tables; `HmacSHA1` is only LocalSend's local-protocol helper).
+- Telemetry dormant at binary level: Google `datatransport`/CCT + `firebaseinstallations`/`firebaseremoteconfig` URLs are bundled (ML Kit transitive) but **no `com.google.firebase.FirebaseApp` reference exists**, so the CCT backend cannot fire (B2-LOG-06 conclusion holds).
+- App crypto = `AES/GCM/NoPadding` + `PBKDF2WithHmacSHA256` + `SHA256`; pin compare is constant-time (`ConstantTime.hexEqual`) — confirmed from decompiled `services/*` and `PinnedCertHash`.
+
+## Not performed
+
+- Dynamic analysis (Frida padding-oracle probes, objection, runtime Frida hooking, on-device install) — no emulator/device on the CI runner. Left to ROADMAP PHASE 34.9's dynamic re-run with a real device.
