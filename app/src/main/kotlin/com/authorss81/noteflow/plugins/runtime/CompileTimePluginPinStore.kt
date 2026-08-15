@@ -11,6 +11,16 @@ import java.net.URL
  * This is the ONLY trust anchor the update chain accepts (B1-NET-03). A
  * version that has no pinned identity in the build is simply not updatable by
  * the Phase-24 mechanism — the manifest can never introduce one.
+ *
+ * Exact formats (operators generating pins and the hosted manifest MUST emit
+ * these byte-for-byte or a genuinely released update fails closed):
+ * - [sha256] — the lowercase 64-char hex SHA-256 of the artifact; compared
+ *   case-insensitively (hex digits are not case-sensitive).
+ * - [pinnedCertHash] — the RFC 7469-style `sha256/<base64>` pin of the TLS
+ *   leaf / signing certificate with the STANDARD base64 alphabet and `=`
+ *   padding, compared byte-exact (base64 IS case-sensitive — a casing or
+ *   padding divergence from the manifest's value permanently rejects the
+ *   release).
  */
 data class PinnedReleaseVersion(
     val sha256: String,
@@ -159,6 +169,20 @@ val DEFAULT_DOWNLOAD_HOSTS: Set<String> = setOf(DEFAULT_MANIFEST_HOST)
  * [PLUGIN_MANIFEST_CERT_PIN] does for the manifest transport. Publishing a
  * genuine plugin release REQUIRES adding its `PinnedPluginRelease` row(s) here
  * (and bumping the app); the manifest can never introduce an unpinned release.
+ *
+ * **Current limitation:** until a release is pinned, the hosted-update feature
+ * is INERT — every offer, even a genuine one, is refused with "no compile-time
+ * pinned identity". In a shipped build an installed downloadable plugin can
+ * only ever reach a version whose pin this build compiles in; newer releases
+ * need an app bump that ships their pins. This is the intended fail-closed
+ * stance, not a bug — treat it as a feature state until the first genuine
+ * release is pinned (see `docs/PLUGINS.md` "Publishing a downloadable plugin").
+ *
+ * NOTE for operators: when a pinned release's artifact host is NOT the manifest
+ * host, add that host to BOTH this store's `allowedDownloadHosts` AND
+ * `PluginDownloader.allowedDownloadHosts` — the two allow-lists are threaded
+ * independently and a mismatch surfaces as a confusing downloader refusal after
+ * the checker already accepted the update.
  */
 object CompileTimePluginPins {
 

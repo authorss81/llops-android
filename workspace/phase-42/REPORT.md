@@ -192,3 +192,36 @@ phase-32, `phase_runner.sh` already-done guard). Re-verified on this run:
   `PluginUpdateEngine.kt:110`, `PluginDownloader.kt:147`.
 - Restored `workspace/phase-42/.done` and removed the stale
   `.no_work`/`.attempts` markers so select-phase stops re-running phase-42.
+
+## Addendum 2 (2026-08-15) — review-fix applied (commit `65bf35e` was a stray re-run)
+
+A review of the phase-42 commits (`25d34b2`/`fec2e2b`/`ba74d5d`/`65bf35e`) applied
+these non-code/doc fixes (no behaviour change; the B1-NET-03 gates were re-verified
+unchanged):
+
+- **Marker hygiene:** commit `65bf35e` had re-added stale `.no_work`/`.deferred`/
+  `.deferred_attempts=1`/`.session` markers alongside `.done` — the exact
+  phase-32 marker contradiction described in `scripts/phase_runner.sh:244-253`.
+  Removed them (only `.done` remains), so `docs/phase-status.md`'s
+  "No ... markers exist anywhere" claim is true again for HEAD.
+- **`docs/security-report.md` B1-NET-03:** the "Evidence" block relabelled
+  **historical (as audited pre-fix)**; the two stale transport claims
+  (`instanceFollowRedirects=true` at pre-fix `PluginManifestFetcher.kt:98`,
+  artifact transport `HttpsPluginDownloadTransport.kt:56-62` following redirects)
+  are flagged as closed since phase 39 via `PinnedTlsConnector.kt:72`
+  (`instanceFollowRedirects=false`, all 3xx refused). B1-NET-05's evidence updated
+  to drop the now-fixed plugin transports and keep only the still-open transports.
+- **`CompileTimePluginPinStore.kt` KDoc:** documents the exact accepted formats
+  (lowercase 64-char hex `sha256` — compared case-insensitively; `sha256/<base64>`
+  `pinnedCertHash` — compared byte-exact, case-sensitive) and the **current
+  limitation** (empty `RELEASES` ⇒ hosted updates are inert until an operator pins
+  a genuine release + bumps the app) and the two independently-threaded allow-list
+  footgun for operators.
+- **`docs/PLUGINS.md`:** new "Current limitation (fail closed)" callout + a
+  "Publishing a downloadable plugin release" section (compute exact pin formats,
+  add `PinnedPluginRelease` rows + app bump, thread an off-manifest artifact host
+  into BOTH allow-lists).
+- **Style:** the four new/edited Kotlin files got the missing trailing newline
+  (`.editorconfig`).
+- **Re-verification:** `gradle :app:testDebugUnitTest` 943 tests / 0 failures,
+  `gradle :app:assembleDebug` BUILD SUCCESSFUL — no source semantics changed.

@@ -602,6 +602,34 @@ verified.** A downloaded remote plugin can be updated from the store:
   `PluginRuntime.rollback` restores a re-verified previous version — the sanctioned
   exception to the no-downgrade rule. Store Delete wipes the record too.
 
+> **Current limitation (fail closed — B1-NET-03, phase 42):** the update trust
+> anchor now lives in the APK, not the manifest
+> (`plugins/runtime/CompileTimePluginPinStore.kt`). The production release table
+> `CompileTimePluginPins.RELEASES` is deliberately **EMPTY** in this build, so NO
+> downloadable (remote) plugin can update via the store yet — every offer is refused
+> with "no compile-time pinned identity", including genuine ones. In a shipped build
+> an installed plugin can only ever reach a version whose pin that build compiles in;
+> newer releases need an app bump that ships their pins. This is the intended
+> fail-closed stance until the first genuine release is pinned (see below).
+
+### Publishing a downloadable plugin release
+
+1. Compute the artifact's `sha256` (lowercase 64-char hex SHA-256) and its
+   `pinnedCertHash` (`sha256/<base64>`, RFC 7469-style, standard base64 alphabet +
+   `=` padding, byte-exact — base64 is **case-sensitive**, so the value in the build
+   must byte-for-byte equal what the hosted manifest emits, or the release fails
+   closed).
+2. Add one `PinnedPluginRelease(id, version, sha256, pinnedCertHash)` row per
+   released version to `CompileTimePluginPins.RELEASES` and bump the app so that
+   build ships the pins. The manifest can never introduce a release that is not
+   pinned here.
+3. If the artifact `downloadUrl` host is NOT the manifest host, add that host to
+   BOTH the pin store's `allowedDownloadHosts` AND
+   `PluginDownloader.allowedDownloadHosts` — the two allow-lists are threaded
+   independently and a mismatch surfaces as a downloader refusal ("not on the
+   allow-listed plugin download hosts") only after the checker already accepted the
+   update.
+
 Where the pieces live:
 
 | File | Purpose |
