@@ -141,6 +141,13 @@ fun PluginStoreDialog(
                     modifier = Modifier.fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
+                    if (rows.isEmpty()) {
+                        item {
+                            TactileEmptyState(
+                                decision = EmptyStateResolver.decide(EmptyStateKind.PLUGIN_STORE)
+                            )
+                        }
+                    }
                     items(rows, key = { it.entry.pluginId }) { row ->
                                 val entry = row.entry
                         val info = row.state

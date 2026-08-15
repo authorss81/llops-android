@@ -938,45 +938,25 @@ fun HomeScreen(
                         }
 
                         if (activePageList.isEmpty()) {
+                            val emptyDecision = EmptyStateResolver.decide(
+                                kind = if (selectedTab == 3) {
+                                    EmptyStateKind.TRASH
+                                } else if (searchQuery.isNotBlank()) {
+                                    EmptyStateKind.HOME_GRID
+                                } else {
+                                    EmptyStateKind.HOME_GRID
+                                },
+                                hasQuery = searchQuery.isNotBlank(),
+                                isFirstRun = isFirstRun,
+                                query = searchQuery
+                            )
                             Box(
                                 modifier = Modifier
                                     .fillMaxSize()
                                     .padding(32.dp),
                                 contentAlignment = Alignment.Center
                             ) {
-                                Column(
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    modifier = Modifier.padding(24.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.AutoMirrored.Outlined.Article,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(64.dp),
-                                        tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
-                                    )
-                                    Spacer(modifier = Modifier.height(16.dp))
-                                    if (selectedTab == 3) {
-                                        Text(
-                                            text = "Trash is empty",
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    } else {
-                                        Text(
-                                            text = "YOUR VAULT IS QUIET",
-                                            style = MaterialTheme.typography.titleMedium,
-                                            fontWeight = FontWeight.Bold,
-                                            color = MaterialTheme.colorScheme.onSurface
-                                        )
-                                        Spacer(modifier = Modifier.height(4.dp))
-                                        Text(
-                                            text = "Link notes with [[wikilinks]] to grow your knowledge graph.",
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                                        )
-                                    }
-                                }
+                                TactileEmptyState(decision = emptyDecision)
                             }
                         } else {
                             if (selectedTab == 0) {
@@ -1894,18 +1874,13 @@ private fun NotebookAndSectionSelectorBar(
                 Spacer(modifier = Modifier.height(16.dp))
 
                 if (filteredNotebooks.isEmpty()) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(24.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = if (notebookQuery.isEmpty()) "No notebooks available" else "No notebooks match \"$notebookQuery\"",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                    TactileEmptyState(
+                        decision = EmptyStateResolver.decide(
+                            EmptyStateKind.NOTEBOOK_PICKER,
+                            hasQuery = notebookQuery.isNotEmpty(),
+                            query = notebookQuery
                         )
-                    }
+                    )
                 } else {
                     LazyColumn(
                         verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -2062,18 +2037,13 @@ private fun NotebookAndSectionSelectorBar(
                 Spacer(modifier = Modifier.height(16.dp))
 
                 if (filteredSections.isEmpty()) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(24.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = if (sectionQuery.isEmpty()) "No sections available" else "No sections match \"$sectionQuery\"",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                    TactileEmptyState(
+                        decision = EmptyStateResolver.decide(
+                            EmptyStateKind.SECTION_PICKER,
+                            hasQuery = sectionQuery.isNotEmpty(),
+                            query = sectionQuery
                         )
-                    }
+                    )
                 } else {
                     LazyColumn(
                         verticalArrangement = Arrangement.spacedBy(6.dp),

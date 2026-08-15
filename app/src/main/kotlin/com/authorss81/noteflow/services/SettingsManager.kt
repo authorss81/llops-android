@@ -182,6 +182,12 @@ class SettingsManager(context: Context) {
         get() = prefs.getBoolean("glass_blur_enabled", true)
         set(value) = prefs.edit().putBoolean("glass_blur_enabled", value).apply()
 
+    // Phase 34: Markdown long-form reading uses the editorial serif (Lora) only
+    // when this toggle is on; UI chrome stays geometric sans by default.
+    var serifReadingEnabled: Boolean
+        get() = prefs.getBoolean("serif_reading_enabled", false)
+        set(value) = prefs.edit().putBoolean("serif_reading_enabled", value).apply()
+
     // 22.1: auto-lock after this many seconds of inactivity while foregrounded (0 = off).
     var autoLockTimeoutSeconds: Int
         get() = prefs.getInt("auto_lock_timeout_seconds", 0)

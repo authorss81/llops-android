@@ -59,6 +59,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.authorss81.noteflow.data.model.NotePageEntity
 import com.authorss81.noteflow.services.WikiLinkParser
+import com.authorss81.noteflow.theme.serifBodyStyle
 import com.authorss81.noteflow.ui.components.BacklinksInspectorBottomSheet
 import com.authorss81.noteflow.ui.viewmodel.NoteflowViewModel
 import java.io.File
@@ -144,6 +145,11 @@ fun MarkdownPreviewScreen(
 ) {
     var viewMode by remember { mutableStateOf(MarkdownViewMode.SPLIT) }
     var splitOrientation by remember { mutableStateOf(SplitOrientation.AUTO) }
+    // Phase 34: long-form reading toggle — editorial serif for the body only;
+    // UI chrome stays sans. Persisted per device via SettingsManager.
+    var serifReadingMode by remember(page.id) {
+        mutableStateOf(viewModel.settings.serifReadingEnabled)
+    }
     var contentText by remember { mutableStateOf(initialContent) }
 
     // 22.9: never silently discard edits — flush content before navigating back.
@@ -270,6 +276,23 @@ fun MarkdownPreviewScreen(
                         }
                     ) {
                         Icon(Icons.Outlined.Save, contentDescription = "Save Content")
+                    }
+                    if (viewMode != MarkdownViewMode.EDIT) {
+                        FilterChip(
+                            selected = serifReadingMode,
+                            onClick = {
+                                serifReadingMode = !serifReadingMode
+                                viewModel.settings.serifReadingEnabled = serifReadingMode
+                            },
+                            label = { Text("Serif", style = MaterialTheme.typography.labelSmall) },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Outlined.Book,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                            }
+                        )
                     }
                     Box {
                         IconButton(onClick = { showPluginMenu = true }) {
@@ -532,7 +555,8 @@ fun MarkdownPreviewScreen(
                         content = contentText,
                         primaryColor = primaryColor,
                         baseDir = page.sourceFilePath?.let { File(it).parentFile },
-                        onOpenWikiLink = onOpenWikiLink
+                        onOpenWikiLink = onOpenWikiLink,
+                        serif = serifReadingMode
                     )
                 }
 
@@ -578,7 +602,8 @@ fun MarkdownPreviewScreen(
                                             content = contentText,
                                             primaryColor = primaryColor,
                                             baseDir = page.sourceFilePath?.let { File(it).parentFile },
-                                            onOpenWikiLink = onOpenWikiLink
+                                            onOpenWikiLink = onOpenWikiLink,
+                                            serif = serifReadingMode
                                         )
                                     }
                                 }
@@ -625,7 +650,8 @@ fun MarkdownPreviewScreen(
                                             content = contentText,
                                             primaryColor = primaryColor,
                                             baseDir = page.sourceFilePath?.let { File(it).parentFile },
-                                            onOpenWikiLink = onOpenWikiLink
+                                            onOpenWikiLink = onOpenWikiLink,
+                                            serif = serifReadingMode
                                         )
                                     }
                                 }
@@ -893,7 +919,8 @@ private fun MarkdownRenderedContent(
     content: String,
     primaryColor: Color,
     baseDir: File?,
-    onOpenWikiLink: (String) -> Unit
+    onOpenWikiLink: (String) -> Unit,
+    serif: Boolean = false
 ) {
     val document = remember(content) { markdownParser.parse(content) }
     Column(
@@ -906,7 +933,8 @@ private fun MarkdownRenderedContent(
             children = document.childrenList(),
             primaryColor = primaryColor,
             baseDir = baseDir,
-            onOpenWikiLink = onOpenWikiLink
+            onOpenWikiLink = onOpenWikiLink,
+            serif = serif
         )
     }
 }
@@ -916,7 +944,8 @@ private fun RenderBlocks(
     children: Iterable<Node>,
     primaryColor: Color,
     baseDir: File?,
-    onOpenWikiLink: (String) -> Unit
+    onOpenWikiLink: (String) -> Unit,
+    serif: Boolean = false
 ) {
     val scheme = MaterialTheme.colorScheme
     for (node in children) {
@@ -930,13 +959,13 @@ private fun RenderBlocks(
                 }
                 Text(
                     text = node.collectLiteral(),
-                    style = style.copy(
+                    style = serifBodyStyle(style, serif).copy(
                         fontWeight = FontWeight.Bold,
                         color = if (node.level <= 3) scheme.primary else scheme.onBackground
                     )
                 )
             }
-            is Paragraph -> MarkdownParagraph(node, primaryColor, onOpenWikiLink, baseDir)
+            is Paragraph -> MarkdownParagraph(node, primaryColor, onOpenWikiLink, baseDir, serif)
             is FencedCodeBlock, is IndentedCodeBlock -> {
                 val codeText = when (node) {
                     is FencedCodeBlock -> node.literal
@@ -956,7 +985,7 @@ private fun RenderBlocks(
                     )
                 }
             }
-            is BulletList -> RenderBlocks(node.childrenList(), primaryColor, baseDir, onOpenWikiLink)
+            is BulletList -> RenderBlocks(node.childrenList(), primaryColor, baseDir, onOpenWikiLink, serif)
             is OrderedList -> {
                 val startNumber = node.startNumber
                 val children = node.childrenList()
@@ -966,11 +995,12 @@ private fun RenderBlocks(
                         marker = "${startNumber + index}.",
                         primaryColor = primaryColor,
                         baseDir = baseDir,
-                        onOpenWikiLink = onOpenWikiLink
+                        onOpenWikiLink = onOpenWikiLink,
+                        serif = serif
                     )
                 }
             }
-            is ListItem -> ListItemView(node, "•", primaryColor, baseDir, onOpenWikiLink)
+            is ListItem -> ListItemView(node, "•", primaryColor, baseDir, onOpenWikiLink, serif)
             is BlockQuote -> {
                 val quoteText = node.collectLiteral().trim()
                 if (quoteText.startsWith("[!")) {
@@ -1007,7 +1037,7 @@ private fun RenderBlocks(
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(
                                     text = calloutBody,
-                                    style = MaterialTheme.typography.bodyMedium,
+                                    style = serifBodyStyle(MaterialTheme.typography.bodyMedium, serif),
                                     color = scheme.onSurface
                                 )
                             }
@@ -1022,12 +1052,12 @@ private fun RenderBlocks(
                                 .background(primaryColor.copy(alpha = 0.5f))
                         )
                         Column(modifier = Modifier.padding(horizontal = 12.dp)) {
-                            RenderBlocks(node.childrenList(), primaryColor, baseDir, onOpenWikiLink)
+                            RenderBlocks(node.childrenList(), primaryColor, baseDir, onOpenWikiLink, serif)
                         }
                     }
                 }
             }
-            is TableBlock -> MarkdownTable(node)
+            is TableBlock -> MarkdownTable(node, serif)
             is ThematicBreak -> HorizontalDivider(color = scheme.outline)
             is HtmlBlock -> {
                 val html = node.literal ?: ""
@@ -1056,7 +1086,7 @@ private fun RenderBlocks(
                             }
                             if (expanded) {
                                 Spacer(modifier = Modifier.height(8.dp))
-                                Text(text = detailsText, style = MaterialTheme.typography.bodyMedium)
+                                Text(text = detailsText, style = serifBodyStyle(MaterialTheme.typography.bodyMedium, serif))
                             }
                         }
                     }
@@ -1069,7 +1099,7 @@ private fun RenderBlocks(
             }
             else -> Text(
                 text = node.collectLiteral(),
-                style = MaterialTheme.typography.bodyLarge.copy(color = scheme.onBackground)
+                style = serifBodyStyle(MaterialTheme.typography.bodyLarge, serif).copy(color = scheme.onBackground)
             )
         }
         Spacer(modifier = Modifier.height(10.dp))
@@ -1082,25 +1112,26 @@ private fun ListItemView(
     marker: String,
     primaryColor: Color,
     baseDir: File?,
-    onOpenWikiLink: (String) -> Unit
+    onOpenWikiLink: (String) -> Unit,
+    serif: Boolean = false
 ) {
     Row(modifier = Modifier.fillMaxWidth()) {
         Text(
             text = marker,
-            style = MaterialTheme.typography.bodyLarge.copy(
+            style = serifBodyStyle(MaterialTheme.typography.bodyLarge, serif).copy(
                 color = primaryColor,
                 fontWeight = FontWeight.SemiBold
             ),
             modifier = Modifier.padding(end = 8.dp)
         )
         Column(modifier = Modifier.weight(1f)) {
-            RenderBlocks(item.childrenList(), primaryColor, baseDir, onOpenWikiLink)
+            RenderBlocks(item.childrenList(), primaryColor, baseDir, onOpenWikiLink, serif)
         }
     }
 }
 
 @Composable
-private fun MarkdownTable(node: TableBlock) {
+private fun MarkdownTable(node: TableBlock, serif: Boolean = false) {
     val scheme = MaterialTheme.colorScheme
     Column(modifier = Modifier.fillMaxWidth()) {
         for (child in node.childrenList()) {
@@ -1111,7 +1142,7 @@ private fun MarkdownTable(node: TableBlock) {
                         Row(modifier = Modifier.background(scheme.surfaceVariant)) {
                             for (cell in row.childrenList()) {
                                 val tableCell = cell as? TableCell ?: continue
-                                TableCellView(tableCell, isHeader = true)
+                                TableCellView(tableCell, isHeader = true, serif = serif)
                             }
                         }
                     }
@@ -1123,7 +1154,7 @@ private fun MarkdownTable(node: TableBlock) {
                         Row {
                             for (cell in row.childrenList()) {
                                 val tableCell = cell as? TableCell ?: continue
-                                TableCellView(tableCell, isHeader = false)
+                                TableCellView(tableCell, isHeader = false, serif = serif)
                             }
                         }
                     }
@@ -1134,13 +1165,13 @@ private fun MarkdownTable(node: TableBlock) {
 }
 
 @Composable
-private fun RowScope.TableCellView(cell: TableCell, isHeader: Boolean) {
+private fun RowScope.TableCellView(cell: TableCell, isHeader: Boolean, serif: Boolean = false) {
     Text(
         text = cell.collectLiteral(),
         style = if (isHeader) {
-            MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
+            serifBodyStyle(MaterialTheme.typography.bodyMedium, serif).copy(fontWeight = FontWeight.Bold)
         } else {
-            MaterialTheme.typography.bodyMedium
+            serifBodyStyle(MaterialTheme.typography.bodyMedium, serif)
         },
         modifier = Modifier
             .weight(1f)
@@ -1153,7 +1184,8 @@ private fun MarkdownParagraph(
     paragraph: Paragraph,
     primaryColor: Color,
     onOpenWikiLink: (String) -> Unit,
-    baseDir: File?
+    baseDir: File?,
+    serif: Boolean = false
 ) {
     val context = LocalContext.current
     val text = paragraph.collectLiteral()
@@ -1224,7 +1256,7 @@ private fun MarkdownParagraph(
     Column {
         ClickableText(
             text = annotated,
-            style = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onBackground),
+            style = serifBodyStyle(MaterialTheme.typography.bodyLarge, serif).copy(color = MaterialTheme.colorScheme.onBackground),
             onClick = { offset ->
                 val wikiLink = annotated.getStringAnnotations(tag = "WIKILINK", start = offset, end = offset)
                     .firstOrNull()

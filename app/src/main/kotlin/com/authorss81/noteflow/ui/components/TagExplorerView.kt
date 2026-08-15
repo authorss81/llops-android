@@ -76,10 +76,8 @@ fun TagExplorerView(
             }
         } else if (tagHierarchy.isEmpty()) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text(
-                    "No #tags found in your notes.\nAdd #tag or #category/subtag in note text!",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                TactileEmptyState(
+                    decision = EmptyStateResolver.decide(EmptyStateKind.TAG_VAULT)
                 )
             }
         } else {

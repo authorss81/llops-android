@@ -123,6 +123,15 @@ internal object TestArtifactBuilder {
      * @param descriptorId the id written into the descriptor (null omits the
      *   descriptor entirely for the missing-descriptor test).
      */
+    /**
+     * Monotonic counter so artifact filenames never collide even when two
+     * `System.nanoTime()` calls land in the same coarse clock tick — a collision
+     * used to let a later `build` silently OVERWRITE an earlier artifact,
+     * corrupting digest-based tests (e.g. the "hash mismatch" update test
+     * intermittently resolving to a match and succeeding).
+     */
+    private val buildSeq = java.util.concurrent.atomic.AtomicLong(0)
+
     fun build(
         workDir: File,
         keystore: Keystore,
@@ -131,10 +140,11 @@ internal object TestArtifactBuilder {
         descriptorId: String? = pluginId,
         sign: Boolean = true
     ): SignedArtifact {
-        val unsigned = File(workDir, "unsigned-${System.nanoTime()}.jar")
+        val seq = buildSeq.incrementAndGet()
+        val unsigned = File(workDir, "unsigned-$seq-${System.nanoTime()}.jar")
         writeUnsignedJar(unsigned, pluginClassName, descriptorId)
 
-        val artifactFile = File(workDir, "artifact-${System.nanoTime()}.jar")
+        val artifactFile = File(workDir, "artifact-$seq-${System.nanoTime()}.jar")
         if (sign) {
             signWithJarsigner(unsigned, artifactFile, keystore)
         } else {
