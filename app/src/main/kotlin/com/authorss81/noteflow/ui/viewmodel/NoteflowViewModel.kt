@@ -1152,6 +1152,12 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     private var lockoutTickerJob: Job? = null
     private var dataInitialized = false
 
+    // B1-AUTH-02 (phase-47): true after lock() disposes the SQLCipher connection.
+    // A successful explicit unlock (password or biometrics) must reinstate a live
+    // connection BEFORE any data-layer flow re-subscribes, so the lock boundary is
+    // enforced at the data layer, not just by the Compose LockScreen boolean.
+    private var databaseDisposedByLock = false
+
     private fun initializeData() {
         if (dataInitialized) return
         dataInitialized = true
@@ -2039,6 +2045,27 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
 
     fun lockoutActive(): Boolean = settings.lockoutUntilEpochMs > System.currentTimeMillis()
 
+    /**
+     * B1-AUTH-02 (phase-47): reinstates the live SQLCipher connection torn down
+     * by [lock] — only when it was actually disposed. No-op for cold starts and
+     * for in-session password re-verification (changeMasterPassword /
+     * removeMasterPassword / setBiometricEnabled), where the connection was never
+     * torn down. Runs with the DEK already placed in [VaultKeyHolder], so the
+     * rebuilt factory open is a legitimate (unlocked) open. Returns false
+     * (fail closed) if the rebuild fails; callers must then zeroize the DEK and
+     * refuse the unlock WITHOUT lockout bookkeeping.
+     */
+    private fun reinstateDatabaseAfterLock(): Boolean {
+        if (!databaseDisposedByLock) return true
+        return try {
+            repository.reopenDatabase(getApplication())
+            databaseDisposedByLock = false
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
     suspend fun verifyMasterPassword(password: String): Boolean {
         if (lockoutActive()) return false
         if (settings.masterPasswordSalt == null || settings.masterPasswordWrappedDek == null) return false
@@ -2046,6 +2073,15 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
             val dek = unwrapMasterDek(password)
                 ?: throw IllegalStateException("wrong master password")
             repository.encryptionKey = dek
+            // B1-AUTH-02 (phase-47): a previous lock() disposed the live connection;
+            // reinstate it BEFORE the dbGate flows flip on. An open failure here is
+            // NOT a wrong password — zeroize and fail closed without lockout
+            // bookkeeping so a transient error can never lock the user out.
+            if (!reinstateDatabaseAfterLock()) {
+                repository.zeroizeKey()
+                _authenticated.value = false
+                return false
+            }
             _authenticated.value = true
             _failedUnlockAttempts.value = 0
             settings.failedUnlockAttempts = 0
@@ -2159,6 +2195,13 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         val cipher = result.cryptoObject?.cipher ?: return false
         val dek = security.decryptWithCipher(cipher) ?: return false
         repository.encryptionKey = dek
+        // B1-AUTH-02 (phase-47): reinstate the connection disposed by lock() before
+        // any dbGate flow re-subscribes; fail closed (not a lockout) on open failure.
+        if (!reinstateDatabaseAfterLock()) {
+            repository.zeroizeKey()
+            _authenticated.value = false
+            return false
+        }
         _authenticated.value = true
         _failedUnlockAttempts.value = 0
         settings.failedUnlockAttempts = 0
@@ -2485,6 +2528,25 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     fun lock() {
 
         repository.zeroizeKey()
+        // B1-AUTH-02 (phase-47): the lock boundary must reach the DATA LAYER, not
+        // just the Compose LockScreen boolean. dispose() closes and forgets the
+        // Room/SQLCipher instance so NO keyed SQLCipher handle survives — a stale
+        // coroutine/plugin handle now fails closed ("connection pool has been
+        // closed") instead of reading plaintext, and a fresh open while locked
+        // throws in NoteflowSqlcipherFactory (LockedOpenGuard-driven) instead of
+        // re-deriving the DEK. Observer jobs are dropped so nothing keeps
+        // collecting from the closed vault; the unlock paths
+        // (verifyMasterPassword / verifyBiometricsAndUnlock) reinstate a live
+        // connection + observers. Skipped for passwordless vaults: there is no
+        // lock boundary there (the device-wrapped DEK is the boot credential by
+        // design), so closing the still-active session would only break the UI.
+        if (settings.hasMasterPassword) {
+            sectionsJob?.cancel()
+            pagesJob?.cancel()
+            NoteflowDatabase.dispose()
+            databaseDisposedByLock = true
+            dataInitialized = false
+        }
         invalidatePaletteIndex()
         // N6/A1: decrypted content must not stay resident in StateFlows after lock.
         _pages.value = emptyList()
@@ -2499,6 +2561,10 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
 
     override fun onCleared() {
         super.onCleared()
+        // B1-AUTH-02 (phase-47): the DEK is zeroized here; drop the keyed
+        // SQLCipher connection too so no SQLCipher handle outlives the token that
+        // opened it (a subsequently constructed ViewModel rebuilds via getDatabase).
+        NoteflowDatabase.dispose()
         repository.zeroizeKey()
     }
 }

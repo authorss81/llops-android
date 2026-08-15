@@ -342,21 +342,27 @@ abstract class NoteflowDatabase : RoomDatabase() {
                 System.loadLibrary("sqlcipher")
                 var dek = VaultKeyHolder.dek
                 if (dek == null) {
-                    val security = com.authorss81.noteflow.services.SecurityService.forDevice(context)
-                    // B1-CRYPTO-02 (phase-45 review fix): when a master password
-                    // exists the ONLY at-rest wrapping of the vault DEK is the
-                    // password-derived KEK — there is deliberately NO device copy.
-                    // A locked open (VaultKeyHolder.dek == null) must fail closed
-                    // here instead of calling getOrCreateDek(), which would mint a
-                    // FRESH non-auth DEK: that both re-creates the bypass blob and,
-                    // used as the SQLCipher passphrase against the real vault,
-                    // throws SQLiteNotADatabaseException → the phase-43 classifier
-                    // quarantines a perfectly healthy vault. The run-time flows are
-                    // gated on auth (dbGate), this is defense-in-depth for any
-                    // un-gated open.
                     val passwordProtected =
                         com.authorss81.noteflow.services.SettingsManager(context.applicationContext).hasMasterPassword
-                    dek = security.getOrCreateDek(allowPasswordlessMint = !passwordProtected)
+                    // B1-AUTH-02 (phase-47): a password-protected vault whose DEK has
+                    // been zeroized is a LOCKED open. It MUST fail closed here instead
+                    // of reaching for any persisted/derived key — lock() disposed the
+                    // live connection too, so without this guard a stale coroutine, a
+                    // plugin hook (B1-AUTH-01/03) or any un-gated open would either keep
+                    // using a keyed handle or re-materialize the DEK with no credential.
+                    if (!com.authorss81.noteflow.services.LockedOpenGuard.isOpenAllowed(
+                            dekInMemory = false,
+                            hasMasterPassword = passwordProtected
+                        )
+                    ) {
+                        throw IllegalStateException("Vault is locked: database key not available")
+                    }
+                    // Passwordless vault: the device-wrapped copy IS the vault key and
+                    // is legitimately available without a credential (the passwordless
+                    // boot credential by design) — re-read it, minting only on a true
+                    // first run, and keep the in-memory holder in sync.
+                    val security = com.authorss81.noteflow.services.SecurityService.forDevice(context)
+                    dek = security.getOrCreateDek(allowPasswordlessMint = true)
                     if (dek != null) {
                         VaultKeyHolder.dek = dek
                     }

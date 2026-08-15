@@ -82,6 +82,20 @@
     success/failure; `enforceDekAtRestPolicy()` returns it and `setBiometricEnabled` commits the
     setting only when the at-rest blob was actually written/cleared (reverts on failure). Tests:
     B1Crypto02DekAtRestTest now 12 (+3); 981 unit tests green + `assembleDebug` green.
+  - **Implemented in phase-47** (B1-AUTH-02, see `workspace/phase-47/REPORT.md`): the lock is
+    enforced at the DATA LAYER. `NoteflowViewModel.lock()` (`NoteflowViewModel.kt:2543-2549`) now
+    cancels the section/page observer jobs and calls `NoteflowDatabase.dispose()` so NO keyed
+    SQLCipher connection survives a password-vault lock (previously only `VaultKeyHolder` was
+    zeroized). `NoteflowSqlcipherFactory.create` (`data/db/NoteflowDatabase.kt:343-371`) routes a
+    `dek == null` open through the pure-JVM `services/LockedOpenGuard.kt`: a password-protected
+    vault with no in-memory DEK THROWS `"Vault is locked: database key not available"` BEFORE any
+    `getOrCreateDek()`/persisted-copy access (a passwordless vault still re-reads its
+    device-wrapped copy — the boot credential by design). Explicit unlocks
+    (`verifyMasterPassword` `:2080`, `verifyBiometricsAndUnlock` `:2220`) reinstate the live
+    connection via `reinstateDatabaseAfterLock()` (no-op unless `lock()` disposed it) BEFORE the
+    dbGate flows flip on, and an open failure there is zeroized — never counted as a wrong
+    password. `onCleared()` also disposes. `databaseDisposedByLock` + `dataInitialized=false` let
+    the next unlock re-establish observers against the fresh connection.
 - **Canvas**: `ui/components/AnnotationCanvas.kt:83` (ink canvas, gestures, layers, `pointerInteropFilter`);
   `services/WetBrushEngine.kt:13` (AGSL wet-mixing gating); `ui/components/ShaderCapabilityHelper.kt:5`
   (`isAgslSupported` = SDK ≥ 33); `services/ShapeRecognitionHelper.kt:13` (`trySnapShape()` :27).

@@ -62,11 +62,12 @@ Per area:
    code execution** in the app process (`B1-CRYPTO-01`, `B1-NET-03`).
 2. **HIGH — The vault key is obtainable without the password.** `B1-CRYPTO-02`
    is FIXED (phase-45): no non-user-authenticated DEK copy persists once a master
-   password exists, so the trivial root/plugin recovery is gone. Remaining: the
-   DB factory silently re-derives/never-guards a locked open (`B1-AUTH-02`,
-   phase-47), and the password-wrapped DEK can still be cracked offline on a
-   copied vault (`B1-CRYPTO-04`, `B1-PLAT-8`, `B1-AUTH-07`). The "5-fail lockout"
-   remains UI-only for offline attackers.
+   password exists, so the trivial root/plugin recovery is gone. `B1-AUTH-02`
+   (phase-47) also closed the locked-open gap: `lock()` now disposes the keyed
+   SQLCipher connection and the factory fails closed on any open while the DEK is
+   not in memory. Remaining: the password-wrapped DEK can still be cracked
+   offline on a copied vault (`B1-CRYPTO-04`, `B1-PLAT-8`, `B1-AUTH-07`). The
+   "5-fail lockout" remains UI-only for offline attackers.
 3. **HIGH — Note bodies live in plaintext on disk.** Markdown/text notes are
    persisted verbatim to `filesDir/noteflow/imports` (`B1-DB-4`, `B1-AUTH-06`),
    voice notes are unencrypted `.m4a` (`B1-DB-3`), and whole-vault exports land
@@ -828,7 +829,7 @@ No DB schema, workflow, or dependency changes were made.
 | B1-AUTH-06 | MEDIUM | phase-44 (grouped with B1-DB-4, same root cause) | `FIXED` (commit `c23a11c`, see `workspace/phase-44/REPORT.md`) |
 | B1-CRYPTO-02 | HIGH | phase-45 | `FIXED` 2026-08-15 (commit `2fc44e0`, see `workspace/phase-45/REPORT.md`) |
 | B1-AUTH-01 | HIGH | phase-46 | `FIXED` (classloader sandbox + verify-time static scan; `workspace/phase-46/REPORT.md`) |
-| B1-AUTH-02 | HIGH | phase-47 | `NOT STARTED` (planned) |
+| B1-AUTH-02 | HIGH | phase-47 | `FIXED` 2026-08-15 (lock() disposes the SQLCipher connection + factory fails closed on a locked open; `workspace/phase-47/REPORT.md`) |
 | B2-LOG-01 | HIGH | phase-48 | `NOT STARTED` (planned) |
 | B2-UI-1 | HIGH | phase-49 | `NOT STARTED` (planned) |
 | B2-DOS-01 | HIGH | phase-50 | `NOT STARTED` (planned) |
