@@ -12,12 +12,13 @@ package com.authorss81.noteflow.services
  * credential, no biometric and no lockout.
  *
  * The invariant: when a master password exists, the ONLY at-rest wrapping of
- * the DEK is under the password-derived KEK (`settings.masterPasswordSalt` +
- * `settings.masterPasswordWrappedDek`), UNLESS the user has EXPLICITLY opted
- * into biometric unlock — and then the device copy may exist ONLY as the
- * `authRequired = true` (biometric-gated) AndroidKeyStore blob. When NO master
- * password exists the vault is device-bound by design: the non-gated device
- * copy is required for passwordless boot.
+ * the DEK is under the password-derived KEK (the versioned
+ * `SettingsManager.masterPasswordCredentialOrLegacy` blob — salt + wrapped DEK
+ * committed atomically as ONE value, B1-CRYPTO-03/phase-62), UNLESS the user
+ * has EXPLICITLY opted into biometric unlock — and then the device copy may
+ * exist ONLY as the `authRequired = true` (biometric-gated) AndroidKeyStore
+ * blob. When NO master password exists the vault is device-bound by design:
+ * the non-gated device copy is required for passwordless boot.
  *
  * Pure JVM (no Android imports) so the decision table is unit-testable in
  * `app/src/test`. Wired in `NoteflowViewModel.enforceDekAtRestPolicy`.

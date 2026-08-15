@@ -2073,13 +2073,25 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
             val (targetDek, wrappedDek) = withContext(Dispatchers.Default) {
                 val existing = existingDek ?: security.readDek()
                 val d = existing ?: EncryptionService.generateDek()
-                kek = EncryptionService.deriveKey(normalized, salt)
-                d to EncryptionService.encrypt(d, kek)
+                val derivedKek = EncryptionService.deriveKey(normalized, salt)
+                kek = derivedKek
+                val wrapped = EncryptionService.encrypt(d, derivedKek)
+                // B1-CRYPTO-03 (phase-62): round-trip validation — the freshly
+                // wrapped DEK must decrypt back under this KEK before it is
+                // committed; a malformed wrap would be permanently un-unlockable.
+                val check = EncryptionService.decrypt(wrapped, derivedKek)
+                check.fill(0.toByte())
+                d to wrapped
             }
             dek = targetDek
 
-            settings.masterPasswordSalt = android.util.Base64.encodeToString(salt, android.util.Base64.NO_WRAP)
-            settings.masterPasswordWrappedDek = wrappedDek
+            // B1-CRYPTO-03 (phase-62): salt + wrapped DEK + format land as ONE
+            // versioned blob in a single disk-sync-acknowledged commit(), not two
+            // independent pref writes. All-or-nothing: on a failed commit the OLD
+            // credential (if any) is still on disk and nothing in-memory has
+            // changed — the vault remains unlockable (or, on first run, stays
+            // passwordless) and the user can simply retry.
+            if (!settings.commitMasterPasswordCredential(salt, wrappedDek)) return false
 
             repository.encryptionKey = dek
             _hasMasterPassword.value = true
@@ -2116,12 +2128,21 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         return try {
             val newSalt = EncryptionService.generateSalt()
             val newWrappedDek = withContext(Dispatchers.Default) {
-                kek = EncryptionService.deriveKey(newPasswordNormalized, newSalt)
-                EncryptionService.encrypt(currentDek, kek)
+                val derivedKek = EncryptionService.deriveKey(newPasswordNormalized, newSalt)
+                kek = derivedKek
+                val wrapped = EncryptionService.encrypt(currentDek, derivedKek)
+                // B1-CRYPTO-03 (phase-62): round-trip validation — the re-wrapped
+                // DEK must decrypt back under this KEK before it is committed.
+                val check = EncryptionService.decrypt(wrapped, derivedKek)
+                check.fill(0.toByte())
+                wrapped
             }
 
-            settings.masterPasswordSalt = android.util.Base64.encodeToString(newSalt, android.util.Base64.NO_WRAP)
-            settings.masterPasswordWrappedDek = newWrappedDek
+            // B1-CRYPTO-03 (phase-62): atomic single-commit swap. If the new
+            // credential cannot be durably written, the OLD (salt, wrappedDEK)
+            // pair still on disk stays valid — the vault remains unlockable with
+            // the old password and no partial pair can ever brick it.
+            if (!settings.commitMasterPasswordCredential(newSalt, newWrappedDek)) return false
 
             _hasMasterPassword.value = true
             _authenticated.value = true
@@ -2189,7 +2210,7 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
 
     suspend fun verifyMasterPassword(password: String): Boolean {
         if (lockoutActive()) return false
-        if (settings.masterPasswordSalt == null || settings.masterPasswordWrappedDek == null) return false
+        if (settings.masterPasswordCredentialOrLegacy == null) return false
         return try {
             val dek = unwrapMasterDek(password)
                 ?: throw IllegalStateException("wrong master password")
@@ -2249,9 +2270,17 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
      * Every rejected KEK is zeroized here.
      */
     private suspend fun unwrapMasterDek(password: String): ByteArray? = withContext(Dispatchers.Default) {
-        val saltStr = settings.masterPasswordSalt ?: return@withContext null
-        val wrappedDek = settings.masterPasswordWrappedDek ?: return@withContext null
-        val salt = android.util.Base64.decode(saltStr, android.util.Base64.NO_WRAP)
+        // B1-CRYPTO-03 (phase-62): the unlock path reads the credential through
+        // the single blob-or-legacy accessor. A stored blob is one value, so the
+        // salt and the wrapped DEK can never be half-written relative to each
+        // other — the exact state that used to permanently brick the vault.
+        val credential = settings.masterPasswordCredentialOrLegacy ?: return@withContext null
+        val salt = try {
+            credential.saltBytes()
+        } catch (e: IllegalArgumentException) {
+            return@withContext null
+        }
+        val wrappedDek = credential.wrappedDek
         for (candidateKey in EncryptionService.deriveKeyCandidates(password, salt)) {
             try {
                 val dek = EncryptionService.decrypt(wrappedDek, candidateKey)

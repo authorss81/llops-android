@@ -177,6 +177,18 @@
     `SettingsManager.voiceNotesEncryptedMigrated`, WAL-checkpoints + re-stamps the DB HMAC first.
     `exportBackup` packs only `.enc`; restore re-keys blobs to the restoring device's DEK
     (`ImportExportService.kt:1708`). Tests: `B1Db03VoiceNoteEncryptionTest` (18) — 1129 green.
+  - **Implemented in phase-62** (B1-CRYPTO-03, see `workspace/phase-62/REPORT.md`): the master-password
+    salt + wrapped-DEK pair is persisted atomically as ONE versioned blob
+    (`services/MasterPasswordCredential.kt`, format `MPB1|<saltB64>|<wrappedDek>`, pure JVM). The old two
+    independent SharedPreferences `.apply()` writes (`NoteflowViewModel.kt:1794-1795/1829-1830`) whose
+    inter-write kill bricked the vault are gone: `SettingsManager.commitMasterPasswordCredential`
+    (`SettingsManager.kt:101`) writes the blob + removes the two legacy keys in a single synchronous
+    `commit()` (atomic temp-file+rename — a torn write leaves the previous complete blob) and returns the
+    disk-acked result; the read accessor `masterPasswordCredentialOrLegacy` (`:84`) prefers the blob and
+    falls back to the legacy pair so pre-fix vaults unlock until the next set/change migrates them.
+    `setMasterPassword` (`:2094`) / `changeMasterPassword` (`:2145`) round-trip-validate the wrapped DEK
+    before committing and abort (`return false`) before any in-memory state flips on commit failure.
+    Tests: `B1Crypto03MasterPasswordAtomicTest` (7).
 - **Canvas**: `ui/components/AnnotationCanvas.kt:83` (ink canvas, gestures, layers, `pointerInteropFilter`);
   `services/WetBrushEngine.kt:13` (AGSL wet-mixing gating); `ui/components/ShaderCapabilityHelper.kt:5`
   (`isAgslSupported` = SDK ≥ 33); `services/ShapeRecognitionHelper.kt:13` (`trySnapShape()` :27).

@@ -73,13 +73,39 @@ class SettingsManager(context: Context) {
         get() = prefs.getString("last_notebook_id", null)
         set(value) = prefs.edit().putString("last_notebook_id", value).apply()
 
-    var masterPasswordSalt: String?
-        get() = prefs.getString("master_password_salt", null)
-        set(value) = prefs.edit().putString("master_password_salt", value).apply()
+    // B1-CRYPTO-03 (phase-62): salt + wrapped DEK + format now live as ONE
+    // versioned blob in a single pref key, committed atomically by
+    // commitMasterPasswordCredential (one commit(), all-or-nothing), so a
+    // process kill can never leave "new salt + old/missing wrappedDEK" and brick
+    // every future unlock. The pre-phase-62 two-key pair
+    // (master_password_salt / master_password_wrapped_dek) is still READ as a
+    // fallback until the next set/change migrates it to the blob in the same
+    // atomic commit — never written any more.
+    val masterPasswordCredentialOrLegacy: MasterPasswordCredential?
+        get() = MasterPasswordCredential.parse(prefs.getString("master_password_credential", null))
+            ?: MasterPasswordCredential.fromLegacy(
+                prefs.getString("master_password_salt", null),
+                prefs.getString("master_password_wrapped_dek", null)
+            )
 
-    var masterPasswordWrappedDek: String?
-        get() = prefs.getString("master_password_wrapped_dek", null)
-        set(value) = prefs.edit().putString("master_password_wrapped_dek", value).apply()
+    /**
+     * B1-CRYPTO-03 (phase-62): persists salt + wrapped DEK + format as ONE
+     * versioned blob in a SINGLE synchronous commit(). All-or-nothing — either
+     * the whole new credential is on disk or the previous state remains intact;
+     * there is no window in which a new salt can coexist with an old/missing
+     * wrapper. The legacy two-key pair is removed in the SAME commit so the two
+     * independent-write failure mode can never be re-created. Returns the
+     * disk-acknowledged result so the caller can abort BEFORE flipping any
+     * in-memory state when the write failed.
+     */
+    fun commitMasterPasswordCredential(salt: ByteArray, wrappedDek: String): Boolean {
+        val blob = MasterPasswordCredential.serialize(salt, wrappedDek)
+        return prefs.edit()
+            .putString("master_password_credential", blob)
+            .remove("master_password_salt")
+            .remove("master_password_wrapped_dek")
+            .commit()
+    }
 
     var failedUnlockAttempts: Int
         get() = prefs.getInt("failed_unlock_attempts", 0)
@@ -226,7 +252,7 @@ class SettingsManager(context: Context) {
         set(value) = prefs.edit().putInt("auto_lock_timeout_seconds", value).apply()
 
     val hasMasterPassword: Boolean
-        get() = masterPasswordSalt != null && masterPasswordWrappedDek != null
+        get() = masterPasswordCredentialOrLegacy != null
 
     var lowEndWarningShown: Boolean
         get() = prefs.getBoolean("low_end_warning_shown", false)
@@ -425,6 +451,7 @@ class SettingsManager(context: Context) {
 
     fun clearSecuritySettings() {
         prefs.edit()
+            .remove("master_password_credential")
             .remove("master_password_salt")
             .remove("master_password_wrapped_dek")
             .remove("biometric_auth_enabled")
