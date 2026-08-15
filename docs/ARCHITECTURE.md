@@ -270,6 +270,20 @@
     (`0x7f.0.0.1`, `0177.0.0.1`) whose per-segment value differs by resolver; `normalize` strips a bare
     `host:port`; `WebCaptureEngine.captureWebPage` fetches the normalized `Validation.url`. Name-based
     DNS-rebinding remains a tracked out-of-scope residual (`docs/security-report.md`).
+- **Implemented in phase-52** (B1-NET-05): HTTPS→HTTP redirect downgrades are
+    closed at EVERY base `HttpURLConnection` transport. New pure-JVM
+    `services/StrictRedirectPolicy.kt` (`checkTlsHop` `:31`, `resolveNextTlsHop`
+    `:57`, `RedirectRefusedException`, `MAX_REDIRECTS = 5`) is the single hop
+    policy: every hop — the entry URL AND every resolved 3xx `Location` — must
+    be `https` and pass the B1-NET-04 `SsrfHostPolicy` blocklist; loops,
+    malformed and blank targets are rejected. Wired with
+    `instanceFollowRedirects = false` (+ manual loop) into `DuckDuckGoClient`
+    `:163`, `OpenMeteoClient` (`WeatherClient.kt:104`), `DictionaryClient.kt:69`,
+    and `AppFacadeHost.httpGet` `:67` (previously `= true`); `LocalSendSender`
+    `:512` now also refuses redirects on its pinned payload connections. All
+    four transport constructors gained an injectable `connectionFactory` (default
+    = `openConnection`) so each is behavior-tested with a fake `HttpURLConnection`
+    (`B1Net05RedirectDowngradeTest`, 28 tests). See `workspace/phase-52/REPORT.md`.
 - **Palette**: `services/PaletteCatalog.kt:131` (swatches + `familyFor`), `PaletteMath` :24.
 - **Brush preview**: `ui/components/PenNibVisualPreview.kt:50` (driven by `services/NibPreviewMath.kt`).
 - **Glass theme**: `theme/GlassSurfaces.kt:44` (`GlassBlurGate`), :80 (`GlassSurfaceMath`), :140

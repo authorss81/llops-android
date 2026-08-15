@@ -1,11 +1,13 @@
 package com.authorss81.noteflow.plugins.websearch
 
 import com.authorss81.noteflow.plugins.WebSearchResult
+import com.authorss81.noteflow.services.StrictRedirectPolicy
 import com.authorss81.noteflow.utils.HttpUserAgent
 import com.google.gson.Gson
 import com.google.gson.JsonSyntaxException
 import java.io.IOException
 import java.net.HttpURLConnection
+import java.net.URI
 import java.net.URL
 import java.net.URLEncoder
 
@@ -133,38 +135,71 @@ class DuckDuckGoClient(
     private val urlBuilder: (String) -> String = DuckDuckGoQueryUrl::build,
     private val connectTimeoutMs: Int = 10_000,
     private val readTimeoutMs: Int = 10_000,
-    private val maxResponseBytes: Int = 1_000_000
+    private val maxResponseBytes: Int = 1_000_000,
+    private val connectionFactory: (String) -> HttpURLConnection = { url ->
+        URL(url).openConnection() as HttpURLConnection
+    }
 ) {
 
     fun search(query: String): List<WebSearchResult> {
-        val conn = URL(urlBuilder(query)).openConnection() as HttpURLConnection
+        var cur = try {
+            URI(urlBuilder(query))
+        } catch (e: Exception) {
+            throw DuckDuckGoSearchException("That doesn't look like a valid search-service URL.")
+        }
         try {
-            conn.requestMethod = "GET"
-            conn.connectTimeout = connectTimeoutMs
-            conn.readTimeout = readTimeoutMs
-            conn.setRequestProperty("Accept", "application/json")
-            conn.setRequestProperty("User-Agent", HttpUserAgent.GENERIC)
-            val code = conn.responseCode
-            if (code != 200) {
-                // Drain a little of the error body for a useful-but-safe message.
-                val detail = runCatching {
-                    (if (code in 400..599) conn.errorStream else conn.inputStream)
-                        ?.bufferedReader()?.use { it.readText(limit = 160) }?.trim()
-                }.getOrNull()
-                val suffix = if (detail.isNullOrBlank()) "" else " — $detail"
-                throw DuckDuckGoSearchException(
-                    "The search service returned HTTP $code. Try again later.$suffix"
-                )
+            repeat(StrictRedirectPolicy.MAX_REDIRECTS + 1) { _ ->
+                // B1-NET-05: reject any hop whose scheme is not https (the entry
+                // URL AND every 3xx target) and any hop on the B1-NET-04 SSRF
+                // blocklist, BEFORE a connection is opened.
+                StrictRedirectPolicy.checkTlsHop(cur)
+                val conn = connectionFactory(cur.toString())
+                try {
+                    conn.requestMethod = "GET"
+                    conn.connectTimeout = connectTimeoutMs
+                    conn.readTimeout = readTimeoutMs
+                    // Never auto-follow redirects: a downgrading 307 is surfaced
+                    // as its 3xx code and re-validated manually per hop below.
+                    conn.instanceFollowRedirects = false
+                    conn.setRequestProperty("Accept", "application/json")
+                    conn.setRequestProperty("User-Agent", HttpUserAgent.GENERIC)
+                    val code = conn.responseCode
+                    if (code in 300..399) {
+                        val next = StrictRedirectPolicy.resolveNextTlsHop(
+                            cur, conn.getHeaderField("Location")
+                        ) ?: throw DuckDuckGoSearchException(
+                            "The search service redirected without a redirect target."
+                        )
+                        cur = next
+                        return@repeat
+                    }
+                    if (code != 200) {
+                        // Drain a little of the error body for a useful-but-safe message.
+                        val detail = runCatching {
+                            (if (code in 400..599) conn.errorStream else conn.inputStream)
+                                ?.bufferedReader()?.use { it.readText(limit = 160) }?.trim()
+                        }.getOrNull()
+                        val suffix = if (detail.isNullOrBlank()) "" else " — $detail"
+                        throw DuckDuckGoSearchException(
+                            "The search service returned HTTP $code. Try again later.$suffix"
+                        )
+                    }
+                    val json = conn.inputStream.bufferedReader().use { it.readText(limit = maxResponseBytes) }
+                    return DuckDuckGoResponseParser.parse(json)
+                } finally {
+                    conn.disconnect()
+                }
             }
-            val json = conn.inputStream.bufferedReader().use { it.readText(limit = maxResponseBytes) }
-            return DuckDuckGoResponseParser.parse(json)
+            throw DuckDuckGoSearchException("The search service redirected too many times.")
+        } catch (e: StrictRedirectPolicy.RedirectRefusedException) {
+            throw DuckDuckGoSearchException(
+                e.message ?: "The search service attempted an insecure redirect."
+            )
         } catch (e: ResponseTooLargeException) {
             throw DuckDuckGoSearchException("The search service returned an oversized response.")
         } catch (e: IOException) {
             if (e is DuckDuckGoSearchException) throw e
             throw DuckDuckGoSearchException("Unable to reach the search service — check your connection.")
-        } finally {
-            conn.disconnect()
         }
     }
 

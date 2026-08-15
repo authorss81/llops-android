@@ -505,6 +505,11 @@ class LocalSendSender(
         }
         val https = url.openConnection() as HttpsURLConnection
         https.sslSocketFactory = pinnedSslContext(expectedFingerprint).socketFactory
+        // B1-NET-05 (phase-52): never auto-follow a 3xx — the receiving device's
+        // payload endpoints are built app-side, so a redirect could only be a
+        // server-side downgrade/forward of the transfer bytes. A redirecting peer
+        // answers with its 3xx code, which the transfer path treats as a failure.
+        https.instanceFollowRedirects = false
         // The certificate is pinned via the announced (paired) fingerprint; a
         // hostname check against a raw IP is meaningless — so we trust the pin.
         https.hostnameVerifier = TRUST_ALL_HOSTNAMES

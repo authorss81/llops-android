@@ -1,9 +1,11 @@
 package com.authorss81.noteflow.plugins.dictionary
 
 import com.authorss81.noteflow.plugins.DictionaryLookup
+import com.authorss81.noteflow.services.StrictRedirectPolicy
 import com.authorss81.noteflow.utils.HttpUserAgent
 import java.io.IOException
 import java.net.HttpURLConnection
+import java.net.URI
 import java.net.URL
 import java.net.URLEncoder
 
@@ -38,41 +40,74 @@ class DictionaryClient(
     private val urlBuilder: (String) -> String = DictionaryQueryUrl::build,
     private val connectTimeoutMs: Int = 10_000,
     private val readTimeoutMs: Int = 10_000,
-    private val maxResponseBytes: Int = 1_000_000
+    private val maxResponseBytes: Int = 1_000_000,
+    private val connectionFactory: (String) -> HttpURLConnection = { url ->
+        URL(url).openConnection() as HttpURLConnection
+    }
 ) {
 
     /** @return the parsed lookup, null when the service says "word not found". */
     fun lookup(word: String): DictionaryLookup? {
-        val conn = URL(urlBuilder(word)).openConnection() as HttpURLConnection
+        var cur = try {
+            URI(urlBuilder(word))
+        } catch (e: Exception) {
+            throw DictionaryServiceException("That doesn't look like a valid dictionary URL.")
+        }
         try {
-            conn.requestMethod = "GET"
-            conn.connectTimeout = connectTimeoutMs
-            conn.readTimeout = readTimeoutMs
-            conn.setRequestProperty("Accept", "application/json")
-            conn.setRequestProperty("User-Agent", HttpUserAgent.GENERIC)
-            val code = conn.responseCode
-            when {
-                code == 404 -> return null
-                code != 200 -> {
-                    val detail = runCatching {
-                        (if (code in 400..599) conn.errorStream else conn.inputStream)
-                            ?.bufferedReader()?.use { it.readText(limit = 160) }?.trim()
-                    }.getOrNull()
-                    val suffix = if (detail.isNullOrBlank()) "" else " — $detail"
-                    throw DictionaryServiceException(
-                        "The dictionary service returned HTTP $code. Try again later.$suffix"
-                    )
+            repeat(StrictRedirectPolicy.MAX_REDIRECTS + 1) { _ ->
+                // B1-NET-05: reject any hop whose scheme is not https (the entry
+                // URL AND every 3xx target) and any hop on the B1-NET-04 SSRF
+                // blocklist, BEFORE a connection is opened.
+                StrictRedirectPolicy.checkTlsHop(cur)
+                val conn = connectionFactory(cur.toString())
+                try {
+                    conn.requestMethod = "GET"
+                    conn.connectTimeout = connectTimeoutMs
+                    conn.readTimeout = readTimeoutMs
+                    // Never auto-follow redirects: a downgrading 3xx is surfaced
+                    // as its code and re-validated manually per hop below.
+                    conn.instanceFollowRedirects = false
+                    conn.setRequestProperty("Accept", "application/json")
+                    conn.setRequestProperty("User-Agent", HttpUserAgent.GENERIC)
+                    val code = conn.responseCode
+                    if (code in 300..399) {
+                        val next = StrictRedirectPolicy.resolveNextTlsHop(
+                            cur, conn.getHeaderField("Location")
+                        ) ?: throw DictionaryServiceException(
+                            "The dictionary service redirected without a redirect target."
+                        )
+                        cur = next
+                        return@repeat
+                    }
+                    when {
+                        code == 404 -> return null
+                        code != 200 -> {
+                            val detail = runCatching {
+                                (if (code in 400..599) conn.errorStream else conn.inputStream)
+                                    ?.bufferedReader()?.use { it.readText(limit = 160) }?.trim()
+                            }.getOrNull()
+                            val suffix = if (detail.isNullOrBlank()) "" else " — $detail"
+                            throw DictionaryServiceException(
+                                "The dictionary service returned HTTP $code. Try again later.$suffix"
+                            )
+                        }
+                    }
+                    val json = conn.inputStream.bufferedReader().use { it.readText(limit = maxResponseBytes) }
+                    return DictionaryResponseParser.parse(json, word)
+                } finally {
+                    conn.disconnect()
                 }
             }
-            val json = conn.inputStream.bufferedReader().use { it.readText(limit = maxResponseBytes) }
-            return DictionaryResponseParser.parse(json, word)
+            throw DictionaryServiceException("The dictionary service redirected too many times.")
+        } catch (e: StrictRedirectPolicy.RedirectRefusedException) {
+            throw DictionaryServiceException(
+                e.message ?: "The dictionary service attempted an insecure redirect."
+            )
         } catch (e: ResponseTooLargeException) {
             throw DictionaryServiceException("The dictionary service returned an oversized response.")
         } catch (e: IOException) {
             if (e is DictionaryServiceException) throw e
             throw DictionaryServiceException("Unable to reach the dictionary service — check your connection.")
-        } finally {
-            conn.disconnect()
         }
     }
 
