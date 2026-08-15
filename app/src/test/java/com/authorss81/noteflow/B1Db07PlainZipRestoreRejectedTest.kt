@@ -1,5 +1,6 @@
 package com.authorss81.noteflow
 
+import com.authorss81.noteflow.services.EncryptionService
 import com.authorss81.noteflow.services.backupRestoreOpenCandidates
 import com.authorss81.noteflow.services.isPlainPkBackupBytes
 import java.io.File
@@ -39,7 +40,26 @@ class B1Db07PlainZipRestoreRejectedTest {
         )
 
         assertTrue(isPlainPkBackupBytes(realZipHeader))
+        // PK\x05\x06 (end-of-central-directory) is a valid zip start signature too.
         assertTrue(isPlainPkBackupBytes(byteArrayOf('P'.code.toByte(), 'K'.code.toByte(), 0x05, 0x06)))
+        // ZIP64 EOCD record and data-descriptor signatures are also PK-headed.
+        assertTrue(isPlainPkBackupBytes(byteArrayOf('P'.code.toByte(), 'K'.code.toByte(), 0x06, 0x06)))
+        assertTrue(isPlainPkBackupBytes(byteArrayOf('P'.code.toByte(), 'K'.code.toByte(), 0x07, 0x08)))
+    }
+
+    @Test
+    fun `a payload that merely begins with the ASCII letters PK is not a plain zip`() {
+        // The classifier must validate the FULL 4-byte zip signature, not just the
+        // "PK" prefix — otherwise a text/base64 payload that happens to begin with
+        // "P","K" (e.g. device-DEK ciphertext whose base64 starts with those two
+        // letters) would be misclassified as an unencrypted backup and rejected.
+        assertFalse(
+            "binary that is PK + non-zip signature is not a zip",
+            isPlainPkBackupBytes(byteArrayOf('P'.code.toByte(), 'K'.code.toByte(), 0x00, 0x00, 'r'.code.toByte()))
+        )
+        assertFalse("ASCII text starting with PK is not a zip", isPlainPkBackupBytes("PKTextThatIs/*base64*".toByteArray(Charsets.UTF_8)))
+        assertFalse("PK followed by EOF marker bytes is not a zip", isPlainPkBackupBytes(byteArrayOf('P'.code.toByte(), 'K'.code.toByte(), 0x00, 0x04)))
+        assertFalse("PK followed by 0x03 0x00 is not a valid zip signature", isPlainPkBackupBytes(byteArrayOf('P'.code.toByte(), 'K'.code.toByte(), 0x03, 0x00)))
     }
 
     @Test
@@ -48,6 +68,30 @@ class B1Db07PlainZipRestoreRejectedTest {
         assertFalse("device-keyed base64 ciphertext is not a raw zip", isPlainPkBackupBytes("Q2lwaGVydGV4dA==".toByteArray(Charsets.UTF_8)))
         assertFalse("fewer than 4 bytes cannot be a zip header", isPlainPkBackupBytes(byteArrayOf('P'.code.toByte())))
         assertFalse("empty bytes cannot be a zip header", isPlainPkBackupBytes(ByteArray(0)))
+    }
+
+    @Test
+    fun `a real device-keyed legacy backup produces bytes that never trip the plain-zip classifier`() {
+        // exportBackup's legacy path emits EncryptionService.encrypt(zipData, key)
+        // — a base64 string of [PAYLOAD_VERSION=1][12B IV][ciphertext+tag]. The
+        // payload's first byte is the version marker (0x01), whose top 6 bits are
+        // 0, so the base64 output can only start with 'A' — never "PK". Pin that
+        // end-to-end so the entry gate (importBackup) never false-rejects a real
+        // device-keyed backup, which would be a restore-breaking regression.
+        val key = "0123456789abcdef0123456789abcdef".toByteArray(Charsets.UTF_8)
+        val fakeZip = byteArrayOf('P'.code.toByte(), 'K'.code.toByte(), 0x03, 0x04) + ByteArray(64)
+
+        val ciphertext = EncryptionService.encrypt(fakeZip, key)
+        val rawBackupBytes = ciphertext.toByteArray(Charsets.UTF_8)
+
+        assertTrue(
+            "the device-DEK ciphertext must start with the version-prefixed base64 alphabet, never 'PK'",
+            !rawBackupBytes.copyOfRange(0, 2).contentEquals(byteArrayOf('P'.code.toByte(), 'K'.code.toByte()))
+        )
+        assertFalse(
+            "a genuine device-keyed export must not be classified as an unencrypted plain zip",
+            isPlainPkBackupBytes(rawBackupBytes)
+        )
     }
 
     // ---- backupRestoreOpenCandidates (pure JVM behavior) --------------------

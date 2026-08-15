@@ -2465,9 +2465,23 @@ object ImportExportService {
  * B1-DB-7 (phase-56): true when [bytes] look like a raw PK zip — the signature
  * of a legacy PLAIN (unencrypted, unsigned) backup. Pure JVM so the restore
  * gate and the picker UI share one check and the unit tests can pin it.
+ *
+ * The full 4-byte signature is validated (not just the ASCII "PK" prefix), so
+ * a text/base64 payload that merely begins with the letters "PK" can never be
+ * misclassified as a plain zip — device-DEK ciphertext (which can start with
+ * any base64 char) always passes the entry gate into the decrypt path, while
+ * real zip files are still rejected outright.
  */
-internal fun isPlainPkBackupBytes(bytes: ByteArray): Boolean =
-    bytes.size >= 4 && bytes[0] == 'P'.code.toByte() && bytes[1] == 'K'.code.toByte()
+internal fun isPlainPkBackupBytes(bytes: ByteArray): Boolean {
+    if (bytes.size < 4) return false
+    if (bytes[0] != 'P'.code.toByte() || bytes[1] != 'K'.code.toByte()) return false
+    // Little-endian 16-bit value of bytes[2..3] compared against the valid
+    // ZIP record signatures that can appear at offset 0:
+    //   PK\x03\x04 local file header, PK\x05\x06 end-of-central-directory,
+    //   PK\x06\x06 ZIP64 EOCD record, PK\x07\x08 data descriptor.
+    val sig = (((bytes[2].toInt() and 0xFF) shl 8) or (bytes[3].toInt() and 0xFF))
+    return sig == 0x0304 || sig == 0x0506 || sig == 0x0606 || sig == 0x0708
+}
 
 /**
  * B1-DB-7 (phase-56): the ONLY keys allowed to open a restored backup database.
