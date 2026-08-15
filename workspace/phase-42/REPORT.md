@@ -173,3 +173,22 @@ Run on CI Linux runner (system gradle 8.13, JDK 17):
   FLAG_SECURE intact. No DB schema change, no migration.
 - B1-NET-03 documented as FIXED in `docs/security-report.md`; phase-status +
   ARCHITECTURE.md plugin-runtime sections updated.
+
+## Addendum (2026-08-15) — re-verification + marker restoration
+
+The phase implementation (commit `25d34b2`) was already committed, but the
+`.done` marker had not been comm‑itted with it; a subsequent no-work re-run
+(`fec2e2b`) left stale `.no_work`/`.attempts` markers that kept select-phase
+re-selecting this completed phase (the same review-fix scenario documented for
+phase-32, `phase_runner.sh` already-done guard). Re-verified on this run:
+
+- `gradle :app:testDebugUnitTest` — **943 tests, 0 failures** (91 result files).
+- `gradle :app:assembleDebug` — **BUILD SUCCESSFUL** on repeated runs, including
+  a full `--rerun-tasks` rebuild (57 tasks). The first invocation after the test
+  run failed once with a transient Gradle daemon state error; every subsequent
+  run — including a clean forced rebuild — passed. No source change was made to
+  fix it; files verify at the B1-NET-03 gates:
+  `CompileTimePluginPinStore.kt:90,96,101,106,131`, `PluginUpdateChecker.kt:91`,
+  `PluginUpdateEngine.kt:110`, `PluginDownloader.kt:147`.
+- Restored `workspace/phase-42/.done` and removed the stale
+  `.no_work`/`.attempts` markers so select-phase stops re-running phase-42.
