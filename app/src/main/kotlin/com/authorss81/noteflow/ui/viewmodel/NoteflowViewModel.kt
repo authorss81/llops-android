@@ -1797,12 +1797,16 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
 
     // ---------- Security & Master Password ----------
     companion object {
-        private const val MIN_PASSWORD_LENGTH = 6
         const val MAX_FAILED_ATTEMPTS = 5
     }
 
     suspend fun setMasterPassword(password: String): Boolean {
-        if (password.trim().isEmpty() || password.length < MIN_PASSWORD_LENGTH) return false
+        // B2-CRYPTO-07 (phase-113): length and emptiness are judged on the
+        // NFKC-NORMALIZED password, in grapheme clusters — this is exactly the
+        // byte sequence deriveKey will hash, so the check can never be undone
+        // by normalization collapsing the input differently at unlock time.
+        val normalized = EncryptionService.normalizePassword(password)
+        if (normalized.isBlank() || !EncryptionService.isValidPasswordLength(normalized)) return false
         var kek: ByteArray? = null
         val dek: ByteArray
         return try {
@@ -1813,7 +1817,7 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
             val (targetDek, wrappedDek) = withContext(Dispatchers.Default) {
                 val existing = existingDek ?: security.readDek()
                 val d = existing ?: EncryptionService.generateDek()
-                kek = EncryptionService.deriveKey(password, salt)
+                kek = EncryptionService.deriveKey(normalized, salt)
                 d to EncryptionService.encrypt(d, kek)
             }
             dek = targetDek
@@ -1841,7 +1845,11 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     }
 
     suspend fun changeMasterPassword(oldPassword: String, newPassword: String): Boolean {
-        if (newPassword.length < MIN_PASSWORD_LENGTH) return false
+        // B2-CRYPTO-07 (phase-113): same normalized-form length gate as
+        // setMasterPassword, so a new password is always stored+derived in the
+        // single NFKC form and survives re-typing on any keyboard/IME.
+        val newPasswordNormalized = EncryptionService.normalizePassword(newPassword)
+        if (!EncryptionService.isValidPasswordLength(newPasswordNormalized)) return false
         if (!verifyMasterPassword(oldPassword)) return false
         val currentDek = repository.encryptionKey ?: return false
         var kek: ByteArray? = null
@@ -1849,7 +1857,7 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         return try {
             val newSalt = EncryptionService.generateSalt()
             val newWrappedDek = withContext(Dispatchers.Default) {
-                kek = EncryptionService.deriveKey(newPassword, newSalt)
+                kek = EncryptionService.deriveKey(newPasswordNormalized, newSalt)
                 EncryptionService.encrypt(currentDek, kek)
             }
 
@@ -1901,18 +1909,10 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
 
     suspend fun verifyMasterPassword(password: String): Boolean {
         if (lockoutActive()) return false
-        var kek: ByteArray? = null
-        val dek: ByteArray
+        if (settings.masterPasswordSalt == null || settings.masterPasswordWrappedDek == null) return false
         return try {
-            val saltStr = settings.masterPasswordSalt ?: return false
-            val wrappedDek = settings.masterPasswordWrappedDek ?: return false
-
-            val salt = android.util.Base64.decode(saltStr, android.util.Base64.NO_WRAP)
-            dek = withContext(Dispatchers.Default) {
-                kek = EncryptionService.deriveKey(password, salt)
-                EncryptionService.decrypt(wrappedDek, kek)
-            }
-
+            val dek = unwrapMasterDek(password)
+                ?: throw IllegalStateException("wrong master password")
             repository.encryptionKey = dek
             _authenticated.value = true
             _failedUnlockAttempts.value = 0
@@ -1934,9 +1934,40 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
                 startLockoutTicker()
             }
             false
-        } finally {
-            kek?.fill(0.toByte())
         }
+    }
+
+    /**
+     * Unlocks the wrapped master DEK from a typed password (B2-CRYPTO-07).
+     *
+     * Always tries the NFKC-normalized password first — the single derivation
+     * path used to WRITE every key since phase-113 — so a password typed once
+     * as NFC and retyped as NFD (or vice versa) unlocks. ONLY when the raw
+     * input is NOT already normalized does it then try the legacy pre-fix raw
+     * bytes ([EncryptionService.deriveKeyLegacyRaw]) so a vault created before
+     * normalization with a non-NFKC byte sequence still opens — never a new
+     * lockout introduced by the fix itself.
+     *
+     * Side-effect free (no failed-attempt counters, no lockout). Returns the
+     * DEK bytes or null; callers own the returned bytes and MUST zeroize them.
+     * Every rejected KEK is zeroized here.
+     */
+    private suspend fun unwrapMasterDek(password: String): ByteArray? = withContext(Dispatchers.Default) {
+        val saltStr = settings.masterPasswordSalt ?: return@withContext null
+        val wrappedDek = settings.masterPasswordWrappedDek ?: return@withContext null
+        val salt = android.util.Base64.decode(saltStr, android.util.Base64.NO_WRAP)
+        for (candidateKey in EncryptionService.deriveKeyCandidates(password, salt)) {
+            try {
+                val dek = EncryptionService.decrypt(wrappedDek, candidateKey)
+                candidateKey.fill(0.toByte())
+                return@withContext dek
+            } catch (e: javax.crypto.AEADBadTagException) {
+                // Wrong key for this candidate — zeroize it and try the next
+                // (the legacy raw form) if any.
+                candidateKey.fill(0.toByte())
+            }
+        }
+        null
     }
 
     /**
@@ -1945,22 +1976,13 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
      * backup dialog is not an attack.
      */
     suspend fun isMasterPasswordValid(password: String): Boolean {
-        var kek: ByteArray? = null
-        return try {
-            val saltStr = settings.masterPasswordSalt ?: return false
-            val wrappedDek = settings.masterPasswordWrappedDek ?: return false
-            val salt = android.util.Base64.decode(saltStr, android.util.Base64.NO_WRAP)
-            val dek = withContext(Dispatchers.Default) {
-                kek = EncryptionService.deriveKey(password, salt)
-                EncryptionService.decrypt(wrappedDek, kek)
-            }
-            dek.fill(0.toByte())
-            true
+        val dek = try {
+            unwrapMasterDek(password)
         } catch (e: Exception) {
-            false
-        } finally {
-            kek?.fill(0.toByte())
-        }
+            null
+        } ?: return false
+        dek.fill(0.toByte())
+        return true
     }
 
     suspend fun setBiometricEnabled(enabled: Boolean, password: String): Boolean {

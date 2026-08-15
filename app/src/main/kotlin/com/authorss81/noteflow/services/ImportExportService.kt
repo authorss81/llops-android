@@ -1264,7 +1264,17 @@ object ImportExportService {
 
         if (backupPassword != null && key != null) {
             // v2: password-derived portable backup carrying the wrapped DEK.
-            require(backupPassword.length >= 6) { "Backup password must be at least 6 characters" }
+            // B2-CRYPTO-07 (phase-113): min/max are measured in graphemes of the
+            // NFKC-normalized form (what deriveKey will actually hash) — a
+            // compatibility/normalization shift can never make a valid password
+            // silently exceed the bound or be rejected at restore time.
+            val graphemes = EncryptionService.normalizedGraphemeCount(backupPassword)
+            require(graphemes >= EncryptionService.MIN_PASSWORD_GRAPHEMES) {
+                "Backup password must be at least ${EncryptionService.MIN_PASSWORD_GRAPHEMES} characters"
+            }
+            require(graphemes <= EncryptionService.MAX_PASSWORD_GRAPHEMES) {
+                "Backup password must be at most ${EncryptionService.MAX_PASSWORD_GRAPHEMES} characters"
+            }
             val salt = EncryptionService.generateSalt()
             val kek = EncryptionService.deriveKey(backupPassword, salt)
             try {
@@ -1386,22 +1396,43 @@ object ImportExportService {
         }
         var kek: ByteArray? = null
         try {
-            val derivedKek = EncryptionService.deriveKey(backupPassword, salt)
-            kek = derivedKek
-            val header = rawBytes.copyOfRange(0, headerSize)
-            val zipBytes = decryptBackupPayloadOrThrow(cipherText, derivedKek, iv, header, wrappedDek)
-            // The SAME derived KEK also unwraps the backup DEK — the restore path
-            // runs a single PBKDF2 in this method instead of one pass per step.
-            val dekHex = try {
-                EncryptionService.decryptAad(wrappedDek, derivedKek, BACKUP_DEK_WRAP_AAD)
-                    .also { it.fill(0.toByte()) }
-                    .toHexString()
-            } catch (e: Exception) {
-                null
+            // B2-CRYPTO-07 (phase-113): try the NFKC-normalized password first
+            // (the form used to WRITE keys since phase-113); if that yields a
+            // plain wrong-password outcome and the raw input is not already
+            // normalized, retry the legacy raw bytes so a pre-fix backup whose
+            // password was set with a non-NFKC byte sequence still restores.
+            for (derivedKek in EncryptionService.deriveKeyCandidates(backupPassword, salt)) {
+                kek = derivedKek
+                val header = rawBytes.copyOfRange(0, headerSize)
+                val payload = try {
+                    decryptBackupPayloadOrThrow(cipherText, derivedKek, iv, header, wrappedDek)
+                } catch (e: Exception) {
+                    // A corruption diagnosis means THIS candidate's password was
+                    // proven correct and the header/payload no longer match — it
+                    // is final, never retried against the other byte form.
+                    if (e.message?.contains("corrupted", ignoreCase = true) == true) throw e
+                    null
+                }
+                if (payload != null) {
+                    // The SAME derived KEK also unwraps the backup DEK — the
+                    // restore path runs a single PBKDF2 per candidate instead of
+                    // one pass per step.
+                    val dekHex = try {
+                        EncryptionService.decryptAad(wrappedDek, derivedKek, BACKUP_DEK_WRAP_AAD)
+                            .also { it.fill(0.toByte()) }
+                            .toHexString()
+                    } catch (e: Exception) {
+                        null
+                    }
+                    // KEK ownership hands off to importBackup, which zeroizes it
+                    // on every outcome; the failure paths below zeroize it too.
+                    return BackupV2Payload(payload, dekHex, derivedKek)
+                }
+                // Wrong-password candidate — zeroize it before trying the next.
+                kek?.fill(0.toByte())
+                kek = null
             }
-            // KEK ownership hands off to importBackup, which zeroizes it on every
-            // outcome; the failure paths below zeroize it before rethrowing.
-            return BackupV2Payload(zipBytes, dekHex, derivedKek)
+            throw IllegalArgumentException("Incorrect backup password.")
         } catch (e: Exception) {
             kek?.fill(0.toByte())
             throw e
@@ -1431,9 +1462,18 @@ object ImportExportService {
         val wrappedDek = rawBytes.copyOfRange(magic.size + BACKUP_SALT_SIZE + BACKUP_IV_SIZE, headerSize)
         var kek: ByteArray? = null
         try {
-            kek = EncryptionService.deriveKey(backupPassword, salt)
-            EncryptionService.decryptAad(wrappedDek, kek, BACKUP_DEK_WRAP_AAD)
-        } catch (e: Exception) {
+            // B2-CRYPTO-07 (phase-113): normalized password first, then the raw
+            // legacy bytes when it differs — see tryParseBackupV2.
+            for (derivedKek in EncryptionService.deriveKeyCandidates(backupPassword, salt)) {
+                kek = derivedKek
+                try {
+                    EncryptionService.decryptAad(wrappedDek, derivedKek, BACKUP_DEK_WRAP_AAD)
+                    return
+                } catch (e: Exception) {
+                    kek?.fill(0.toByte())
+                    kek = null
+                }
+            }
             throw IllegalArgumentException("Incorrect backup password.")
         } finally {
             kek?.fill(0.toByte())

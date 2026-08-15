@@ -14,6 +14,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import com.authorss81.noteflow.services.EncryptionService
 import com.authorss81.noteflow.services.ImportExportService
 import com.authorss81.noteflow.services.UpdateInfo
 import com.authorss81.noteflow.services.UpdateService
@@ -533,8 +534,14 @@ fun SecuritySettingsDialog(
                             confirmButton = {
                                 Button(
                                     onClick = {
-                                        if (newPass.length < 6) {
-                                            changeError = "New password must be at least 6 characters"
+                                        // B2-CRYPTO-07 (phase-113): length is
+                                        // enforced on the NFKC-normalized
+                                        // password, measured in graphemes.
+                                        val graphemes = EncryptionService.normalizedGraphemeCount(newPass)
+                                        if (graphemes < EncryptionService.MIN_PASSWORD_GRAPHEMES) {
+                                            changeError = "New password must be at least ${EncryptionService.MIN_PASSWORD_GRAPHEMES} characters"
+                                        } else if (graphemes > EncryptionService.MAX_PASSWORD_GRAPHEMES) {
+                                            changeError = "New password must be at most ${EncryptionService.MAX_PASSWORD_GRAPHEMES} characters"
                                         } else if (newPass != newPassConfirm) {
                                             changeError = "New passwords do not match"
                                         } else {
@@ -577,8 +584,13 @@ fun SecuritySettingsDialog(
             if (!hasPass && showPasswordInput) {
                 Button(
                     onClick = {
-                        if (password.length < 6) {
-                            errorMessage = "Password must be at least 6 characters"
+                        // B2-CRYPTO-07 (phase-113): length is enforced on the
+                        // NFKC-normalized password, measured in graphemes.
+                        val graphemes = EncryptionService.normalizedGraphemeCount(password)
+                        if (graphemes < EncryptionService.MIN_PASSWORD_GRAPHEMES) {
+                            errorMessage = "Password must be at least ${EncryptionService.MIN_PASSWORD_GRAPHEMES} characters"
+                        } else if (graphemes > EncryptionService.MAX_PASSWORD_GRAPHEMES) {
+                            errorMessage = "Password must be at most ${EncryptionService.MAX_PASSWORD_GRAPHEMES} characters"
                         } else if (password != passwordConfirm) {
                             errorMessage = "Passwords do not match"
                         } else {

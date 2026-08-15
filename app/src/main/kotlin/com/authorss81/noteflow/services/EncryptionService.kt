@@ -7,6 +7,8 @@ import com.authorss81.noteflow.data.model.StrokeTool
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import java.security.SecureRandom
+import java.text.BreakIterator
+import java.text.Normalizer
 import javax.crypto.Cipher
 import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.GCMParameterSpec
@@ -17,6 +19,15 @@ object EncryptionService {
     private const val GCM_IV_LENGTH = 12
     private const val GCM_TAG_LENGTH = 128
     private const val PAYLOAD_VERSION: Byte = 1
+
+    // B2-CRYPTO-07 (phase-113): password length bounds, measured in extended
+    // grapheme clusters (perceived characters), not UTF-16 code units. We store
+    // and derive the NFKC-normalized password, so both the 6-char minimum and
+    // the 128-char cap are enforced against that normalized form. The cap keeps
+    // a pathological input from inflating PBKDF2 work (HMAC-SHA256 processes the
+    // password in 64-byte blocks) and is far above any real user password.
+    const val MIN_PASSWORD_GRAPHEMES = 6
+    const val MAX_PASSWORD_GRAPHEMES = 128
     // Domain separation AAD: binds ciphertext to this app's field-encryption context.
     private val FIELD_AAD = "Noteflow-Vault-Field-Encryption-v1".toByteArray(Charsets.UTF_8)
     // B2-CRYPTO-09 (phase-107): per-record AAD prefix. Every field ciphertext now
@@ -34,7 +45,111 @@ object EncryptionService {
         return salt
     }
 
+    // ---------- B2-CRYPTO-07 (phase-113): Unicode normalization for passwords ----------
+
+    /**
+     * NFKC-normalizes a raw password before any length accounting or key
+     * derivation (B2-CRYPTO-07).
+     *
+     * NFKC is the strongest of the standard forms: it both canonicalizes
+     * (composed vs decomposed accents — NFC `é` U+00E9 vs NFD `e` + U+0301
+     * collapse to the SAME bytes, so a password typed on one keyboard/IME
+     * always matches the same password typed another way) and folds
+     * compatibility characters (full-width `Ａ`→`A`, ligatures `ﬁ`→`fi`).
+     * Without it, two "visually identical" passwords were silently different,
+     * permanently locking the vault with no diagnostic. With exactly ONE
+     * normalized derivation path, two byte sequences can never silently
+     * collide either.
+     */
+    fun normalizePassword(raw: String): String = Normalizer.normalize(raw, Normalizer.Form.NFKC)
+
+    /**
+     * Length of a password in extended grapheme clusters (perceived characters)
+     * AFTER NFKC normalization — see [normalizePassword]. `String.length` counts
+     * UTF-16 code units, so a full-width or accent-composed password would be
+     * over/under-counted; graphemes are what the user actually perceives.
+     */
+    fun normalizedGraphemeCount(raw: String): Int {
+        val iterator = BreakIterator.getCharacterInstance()
+        iterator.setText(normalizePassword(raw))
+        var count = 0
+        while (iterator.next() != BreakIterator.DONE) count++
+        return count
+    }
+
+    /** True iff the NFKC-normalized password is within [MIN_PASSWORD_GRAPHEMES]..[MAX_PASSWORD_GRAPHEMES]. */
+    fun isValidPasswordLength(raw: String): Boolean {
+        val graphemes = normalizedGraphemeCount(raw)
+        return graphemes in MIN_PASSWORD_GRAPHEMES..MAX_PASSWORD_GRAPHEMES
+    }
+
+    /**
+     * The candidate passwords for [deriveKey], newest-form first (B2-CRYPTO-07).
+     *
+     * A stored key is either (a) a post-fix key, derived from the NFKC
+     * normalized form, which matches the single normalized candidate, or
+     * (b) a PRE-fix key, derived from the raw UTF-16 bytes the user typed —
+     * which only matches when that raw string was already NFKC-compatible. For
+     * pre-fix vaults/backups whose password was set with a non-NFKC byte
+     * sequence (e.g. an IME that emits NFD, or a compatibility character), the
+     * normalized candidate differs and the RAW string is returned second as a
+     * legacy-compat reader. When raw is already normalized the list has a
+     * single element, so the common path never runs a second PBKDF2.
+     */
+    internal fun passwordCandidates(raw: String): List<String> {
+        val normalized = normalizePassword(raw)
+        return if (normalized == raw) listOf(normalized) else listOf(normalized, raw)
+    }
+
+    /**
+     * The candidate KEKs for a typed password, newest-form first, derived WITH
+     * the correct path for each form (B2-CRYPTO-07):
+     *
+     *  1. the NFKC-normalized key — `deriveKey`, the single path used to WRITE
+     *     every key since phase-113 (the input is normalized inside, so the
+     *     composed and decomposed spellings of the same password both land here);
+     *  2. ONLY when the raw input is not already normalized, the legacy
+     *     pre-fix key derived from the raw UTF-16 bytes via [deriveKeyLegacyRaw],
+     *     so a vault or backup created before normalization with a non-NFKC
+     *     byte sequence still opens.
+     *
+     * Callers must zeroize EVERY returned key: the elected one once they are
+     * done with it, and every rejected candidate.
+     */
+    internal fun deriveKeyCandidates(password: String, salt: ByteArray): List<ByteArray> {
+        val normalized = normalizePassword(password)
+        return passwordCandidates(password).map { candidate ->
+            if (candidate == normalized) deriveKey(candidate, salt) else deriveKeyLegacyRaw(candidate, salt)
+        }
+    }
+
+    /**
+     * Derives the 32-byte AES key from a password (B2-CRYPTO-07).
+     *
+     * THE single derivation path for vault and backup passwords: it ALWAYS
+     * NFKC-normalizes ([normalizePassword]) the input first, so a password set
+     * once as NFC and retyped as NFD (or vice versa) derives the identical key.
+     * PBKDF2WithHmacSHA256, 600k iterations, 256-bit output, 16-byte per-vault
+     * salt. Callers must zeroize the returned key after use.
+     */
     fun deriveKey(password: String, salt: ByteArray): ByteArray {
+        val keySpec = PBEKeySpec(normalizePassword(password).toCharArray(), salt, 600000, 256)
+        val factory = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
+        return factory.generateSecret(keySpec).encoded
+    }
+
+    /**
+     * Legacy PRE-B2-CRYPTO-07 key derivation — the raw UTF-16 bytes with NO
+     * normalization, exactly as `deriveKey` behaved before phase-113.
+     *
+     * Used ONLY by the [passwordCandidates] legacy read path so a vault or
+     * password-protected backup created BEFORE normalization with a non-NFKC
+     * password byte sequence still unlocks/restores. Never used to WRITE new
+     * keys. Wrong-password attempts reach it only through human input at a
+     * device prompt; both it and the normalized path run the same 600k-iteration
+     * PBKDF2 behind the same GCM tag check, so it adds no oracle.
+     */
+    internal fun deriveKeyLegacyRaw(password: String, salt: ByteArray): ByteArray {
         val keySpec = PBEKeySpec(password.toCharArray(), salt, 600000, 256)
         val factory = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
         return factory.generateSecret(keySpec).encoded

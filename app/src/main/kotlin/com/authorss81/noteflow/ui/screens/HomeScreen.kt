@@ -28,6 +28,7 @@ import com.authorss81.noteflow.data.model.NotePageEntity
 import com.authorss81.noteflow.data.model.NotebookEntity
 import com.authorss81.noteflow.data.model.SectionEntity
 import com.authorss81.noteflow.services.DocumentTextExtractor
+import com.authorss81.noteflow.services.EncryptionService
 import com.authorss81.noteflow.services.ImportExportService
 import com.authorss81.noteflow.theme.AppThemeMode
 import com.authorss81.noteflow.ui.components.*
@@ -1174,8 +1175,8 @@ fun HomeScreen(
                                     performRestore(context, pending, backupPasswordInput)
                                 }
                             } else {
-                                if (backupPasswordInput.length < 6) {
-                                    backupPasswordError = "Backup password must be at least 6 characters"
+                                if (EncryptionService.normalizedGraphemeCount(backupPasswordInput) < EncryptionService.MIN_PASSWORD_GRAPHEMES) {
+                                    backupPasswordError = "Backup password must be at least ${EncryptionService.MIN_PASSWORD_GRAPHEMES} characters"
                                 } else if (!isValidating) {
                                     isValidating = true
                                     scope.launch {
