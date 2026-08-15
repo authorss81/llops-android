@@ -41,6 +41,7 @@ SESSION_FILE="${PHASE_DIR}/.session"
 BLOCKED_FILE="${PHASE_DIR}/.blocked"
 ATTEMPTS_FILE="${PHASE_DIR}/.attempts"
 DEFERRED_ATTEMPTS_FILE="${PHASE_DIR}/.deferred_attempts"
+NOWORK_FILE="${PHASE_DIR}/.no_work"
 MAX_ATTEMPTS="${MAX_ATTEMPTS:-3}"
 MAX_DEFERRALS="${MAX_DEFERRALS:-5}"
 STOP_FILE="workspace/.stop"
@@ -143,6 +144,31 @@ build_context_header() {
   echo "== [phase] context header built: ${LOG_DIR}/${PHASE}.ctx =="
 }
 
+# --- Evidence gate (review finding fix): opencode exits 0 even when a session
+#     never does anything (phase-32 self-certified .done with zero work at
+#     commit 6b17422). A phase is only marked DONE when the run left real
+#     working-tree changes — pipeline artifacts (logs/<phase>.*, the phase's own
+#     hidden markers like .deferred/.session/.attempts) are not evidence.
+tree_work() {
+  git status --porcelain 2>/dev/null \
+    | sed -E 's/^(.{2})[[:space:]]+//' \
+    | grep -vE "^logs/|^workspace/${PHASE}/\.|^workspace/\.[^/]*($|/)" || true
+}
+
+# True when this run introduced changes (vs. the before-run snapshot).
+has_new_work() {
+  local before="$1"
+  local after
+  after="$(tree_work)"
+  local new
+  new="$(comm -13 <(printf '%s\n' "${before}" | sort -u) <(printf '%s\n' "${after}" | sort -u))"
+  [ -n "${new}" ]
+}
+
+git_available() {
+  git rev-parse --git-dir >/dev/null 2>&1
+}
+
 run_phase() {
   echo "== [phase] Running: ${PHASE} =="
   build_context_header
@@ -215,15 +241,37 @@ if [ "${DO_REVIEW}" = "--review-only" ]; then
   exit 0
 fi
 
-if run_phase; then
-  echo "== [phase] SUCCESS: ${PHASE} =="
-  touch "${DONE_FILE}"
-  rm -f "${DEFERRED_FILE}" "${SESSION_FILE}" "${BLOCKED_FILE}" "${ATTEMPTS_FILE}" "${DEFERRED_ATTEMPTS_FILE}"
+# Snapshot the tree BEFORE the run so the gate only counts this run's delta.
+WORK_BEFORE="$(tree_work)"
 
-  # Fix 9: do NOT run review inline here — the workflow commits the phase work
-  # first, then invokes this script again with --review-only. That way the phase
-  # is safely pushed even if the review step (or the whole job) times out.
-  exit 0
+if run_phase; then
+  if ! git_available; then
+    # No git repo to diff against (should not happen in CI) — don't trust the
+    # gate, but flag that evidence could not be verified.
+    echo "== [phase] WARNING: git unavailable — evidence gate skipped (verify ${PHASE} manually) =="
+    touch "${DONE_FILE}"
+    rm -f "${DEFERRED_FILE}" "${SESSION_FILE}" "${BLOCKED_FILE}" "${ATTEMPTS_FILE}" "${DEFERRED_ATTEMPTS_FILE}" "${NOWORK_FILE}"
+    exit 0
+  fi
+
+  if has_new_work "${WORK_BEFORE}"; then
+    echo "== [phase] SUCCESS + evidence gate passed: ${PHASE} left working-tree changes =="
+    touch "${DONE_FILE}"
+    rm -f "${DEFERRED_FILE}" "${SESSION_FILE}" "${BLOCKED_FILE}" "${ATTEMPTS_FILE}" "${DEFERRED_ATTEMPTS_FILE}" "${NOWORK_FILE}"
+
+    # Fix 9: do NOT run review inline here — the workflow commits the phase work
+    # first, then invokes this script again with --review-only. That way the phase
+    # is safely pushed even if the review step (or the whole job) times out.
+    exit 0
+  fi
+
+  # opencode exited 0 but left no evidence of work. Refuse to mark DONE; fall
+  # through to the failure classification so the attempt cap applies and the
+  # pipeline re-selects the phase on a later tick instead of moving on.
+  echo "== [phase] NO-WORK FAILURE: opencode exited 0 but ${PHASE} left no changes" \
+       "outside logs/ + phase markers =="
+  echo "== [phase] NOT marking done; counting as a failed attempt (cap ${MAX_ATTEMPTS}) =="
+  touch "${NOWORK_FILE}"
 fi
 
 # --- Phase failed: classify -------------------------------------------------------
