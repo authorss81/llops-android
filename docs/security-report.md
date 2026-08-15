@@ -833,7 +833,7 @@ No DB schema, workflow, or dependency changes were made.
 | B1-AUTH-02 | HIGH | phase-47 | `FIXED` 2026-08-15 (lock() disposes the SQLCipher connection + factory fails closed on a locked open; `workspace/phase-47/REPORT.md`) |
 | B2-LOG-01 | HIGH | phase-48 | `FIXED` (AppStartupLogger is event-only: crash handler + raw `printStackTrace` dump removed; PrivacyCrashReporter sole owner via pure-JVM `crashLogEntry`; `workspace/phase-48/REPORT.md`) |
 | B2-UI-1 | HIGH | phase-49 | `FIXED` 2026-08-15 (fail-closed writes: `VaultWriteGate.requireKey` throws on zeroized DEK; locked editor flushes deferred via `EditorFlushPolicy` and re-written encrypted after next unlock; `createNoteVersion` rejected while locked; all EditorScreen page-writes routed through the ViewModel gate — see `workspace/phase-49/REPORT.md`) |
-| B2-DOS-01 | HIGH | phase-50 | `NOT STARTED` (planned) |
+| B2-DOS-01 | HIGH | phase-50 | `FIXED` 2026-08-15 (stroke-geometry caps at every hop: write gate truncates per-stroke 20k / page 200k points / 2k strokes, paginated + length-gated load via `StrokeDao.getStrokesForPageBounded`, pre-Gson plaintext cap in `deserializeStrokes`, restore strips over-budget rows via `sanitizeRestoredStrokeGeometry`, viewport page-culling in `AnnotationCanvas` — see `workspace/phase-50/REPORT.md`) |
 | B1-NET-04 | MEDIUM | phase-51 | `NOT STARTED` (planned) |
 | B1-NET-05 | MEDIUM | phase-52 | `NOT STARTED` (planned) |
 | B1-DB-2 | MEDIUM | phase-53 | `NOT STARTED` (planned) |

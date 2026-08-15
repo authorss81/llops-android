@@ -25,6 +25,7 @@ import com.authorss81.noteflow.data.model.MediaEmbedType
 import com.authorss81.noteflow.data.model.PointF
 import com.authorss81.noteflow.data.model.Stroke
 import com.authorss81.noteflow.data.model.StrokeTool
+import com.authorss81.noteflow.services.StrokeGeometryPolicy
 import com.authorss81.noteflow.utils.BackupFileNamePolicy
 
 object ImportExportService {
@@ -1627,6 +1628,13 @@ object ImportExportService {
                     val cursor = db.rawQuery("PRAGMA integrity_check", null)
                     val ok = cursor.moveToFirst() && cursor.getString(0) == "ok"
                     if (ok) {
+                        // B2-DOS-01 (phase-50): strip oversized stroke geometry
+                        // NOW, while this candidate key can open the backup — an
+                        // attacker-planted stroke row whose encrypted pointsJson
+                        // (base64 ciphertext ≈ plaintext length, AES-GCM does not
+                        // compress) exceeds the budget must never migrate or swap
+                        // into the live vault.
+                        sanitizeRestoredStrokeGeometry(db)
                         // H3: read the schema version now, while the DB is open.
                         val versionCursor = db.rawQuery("PRAGMA user_version", null)
                         if (versionCursor.moveToFirst()) userVersion = versionCursor.getLong(0)
@@ -1655,6 +1663,37 @@ object ImportExportService {
                 migrateFieldCiphertexts(context, tempDb, currentDekHex, openedWith)
             }
         }
+    }
+
+    /**
+     * B2-DOS-01 (phase-50): drops every stroke row whose stored `pointsJson`
+     * column exceeds [StrokeGeometryPolicy.MAX_STORED_POINTS_JSON_CHARS].
+     *
+     * The stored value is base64 AES-256-GCM ciphertext (or a legacy plaintext
+     * JSON) whose length is an EXACT proxy for the plaintext geometry size —
+     * GCM does not compress, so a row cannot be "small on disk, huge when
+     * decrypted". Dropping here means the oversized row never reaches the
+     * re-key / field-migration / transplant steps and never lands in the live
+     * vault, so a crafted backup cannot OOM the app on page open. Pages and
+     * their other strokes are untouched — only the pathological rows go.
+     */
+    private fun sanitizeRestoredStrokeGeometry(db: net.zetetic.database.sqlcipher.SQLiteDatabase) {
+        try {
+            db.execSQL(
+                "DELETE FROM strokes WHERE length(pointsJson) > ?",
+                arrayOf<Any>(StrokeGeometryPolicy.MAX_STORED_POINTS_JSON_CHARS)
+            )
+        } catch (e: Exception) {
+            // A strokes table that doesn't exist (schema not yet applied) is not
+            // an error here — there is nothing to strip. Any real failure is
+            // re-thrown so the restore-abort path handles it.
+            if (shouldPropagateRestoreStripFailure(e)) throw e
+        }
+    }
+
+    private fun shouldPropagateRestoreStripFailure(e: Exception): Boolean {
+        val msg = e.message?.lowercase() ?: return true
+        return !msg.contains("no such table")
     }
 
     /**

@@ -1415,6 +1415,24 @@ fun AnnotationCanvas(
                     for (pageIdx in 0 until renderPageCount) {
                         val pageTopY = pageIdx * (pageHeightPx + pageGapPx)
 
+                        // B2-DOS-01 (phase-50): viewport culling. The graphicsLayer
+                        // scales/translates this whole canvas, so the on-screen
+                        // rect maps back to world/page coordinates as
+                        // (screen - pan) / zoom. A page whose slab does not
+                        // intersect that rect is skipped ENTIRELY (paper, template,
+                        // page bitmap, stroke filter + layer raster) — a long
+                        // document never pays O(strokes) per off-screen page, and
+                        // spot-zoom never scales per-frame work by total points.
+                        val visibleTop = (0f - internalPanOffset.y) / internalZoomScale
+                        val visibleBottom = (size.height - internalPanOffset.y) / internalZoomScale
+                        val pageBottomY = pageTopY + pageHeightPx
+                        if (pageBottomY < visibleTop || pageTopY > visibleBottom) continue
+                        // Horizontal band: when panned/zoomed so the whole world is
+                        // off the left/right edges, nothing on this document draws.
+                        if (canvasW <= 0f) continue
+                        if (((0f - internalPanOffset.x) / internalZoomScale) > canvasW) continue
+                        if (((size.width - internalPanOffset.x) / internalZoomScale) < 0f) continue
+
                         // 1. Differentiated Page Paper Container with Card Shadow & Page Badge
                         drawPaperCard(0f, pageTopY, canvasW, pageHeightPx, paperColor = parsedPaperColor, isDarkPaper = isDarkPaper, pageLabel = "Page ${pageIdx + 1}", showPageLabel = showPageIndicator)
                         drawPaperTemplate(template, 0f, pageTopY, canvasW, pageHeightPx, isDarkPaper = isDarkPaper, paperTexture = paperTexture)

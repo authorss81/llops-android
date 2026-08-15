@@ -6,6 +6,8 @@ import com.authorss81.noteflow.data.model.*
 import com.authorss81.noteflow.services.DatabaseSecurityHelper
 import com.authorss81.noteflow.services.EncryptionService
 import com.authorss81.noteflow.services.NoteBodyVaultPolicy
+import com.authorss81.noteflow.services.StrokeGeometryGateResult
+import com.authorss81.noteflow.services.StrokeGeometryPolicy
 import com.authorss81.noteflow.services.VaultKeyHolder
 import com.authorss81.noteflow.services.VaultWriteGate
 import com.authorss81.noteflow.services.WikiLinkParser
@@ -634,62 +636,107 @@ class NoteRepository(private var db: NoteflowDatabase) {
     }
 
     suspend fun getStrokesForPage(pageId: String): List<Stroke> = withContext(Dispatchers.Default) {
-        val strokeEntities = db.strokeDao().getStrokesForPage(pageId)
-        if (strokeEntities.isEmpty()) return@withContext emptyList()
+        // B2-DOS-01 (phase-50): the load path is BOUNDED. Previously the entire
+        // page's stroke rows were pulled at once and every pointsJson was
+        // decrypted + Gson-materialized (a crafted/hostile page with millions of
+        // points OOMed or ANRed the process). Now:
+        //  1. the DAO filters out rows whose stored (encrypted) pointsJson is
+        //     already over the budget and pages the rest (LIMIT/OFFSET);
+        //  2. each decrypted point payload goes through StrokeGeometryPolicy's
+        //     plaintext guard BEFORE parsing (belt + braces to deserializeStrokes);
+        //  3. per-stroke point lists are capped (legacy rows that over-specified
+        //     keep only their head);
+        //  4. the whole page stops loading once MAX_STROKES_PER_PAGE strokes or
+        //     MAX_POINTS_PER_PAGE points are consumed.
+        val loaded = ArrayList<Stroke>()
+        var pagePoints = 0
+        var offset = 0
+        val pageSize = StrokeGeometryPolicy.MAX_STROKES_LOAD_BATCH
+        while (loaded.size < StrokeGeometryPolicy.MAX_STROKES_PER_PAGE) {
+            val batch = db.strokeDao().getStrokesForPageBounded(
+                pageId,
+                StrokeGeometryPolicy.MAX_STORED_POINTS_JSON_CHARS,
+                pageSize,
+                offset
+            )
+            if (batch.isEmpty()) break
 
-        val loaded = strokeEntities.map { entity ->
-            val rawText = entity.textContent
-            val decryptedText = if (encryptionKey != null && rawText.isNotBlank()) {
-                try {
-                    String(EncryptionService.decryptField(rawText, encryptionKey!!, "strokes", entity.id, "textContent"))
-                } catch (e: Exception) {
+            var budgetExhausted = false
+            for (entity in batch) {
+                if (loaded.size >= StrokeGeometryPolicy.MAX_STROKES_PER_PAGE) {
+                    budgetExhausted = true
+                    break
+                }
+
+                val rawText = entity.textContent
+                val decryptedText = if (encryptionKey != null && rawText.isNotBlank()) {
+                    try {
+                        String(EncryptionService.decryptField(rawText, encryptionKey!!, "strokes", entity.id, "textContent"))
+                    } catch (e: Exception) {
+                        rawText
+                    }
+                } else {
                     rawText
                 }
-            } else {
-                rawText
-            }
 
-            val rawPointsJson = entity.pointsJson
-            val decryptedPointsJson = if (encryptionKey != null && rawPointsJson.isNotBlank()) {
-                try {
-                    String(EncryptionService.decryptField(rawPointsJson, encryptionKey!!, "strokes", entity.id, "pointsJson"))
-                } catch (e: Exception) {
+                val rawPointsJson = entity.pointsJson
+                val decryptedPointsJson = if (encryptionKey != null && rawPointsJson.isNotBlank()) {
+                    try {
+                        String(EncryptionService.decryptField(rawPointsJson, encryptionKey!!, "strokes", entity.id, "pointsJson"))
+                    } catch (e: Exception) {
+                        rawPointsJson
+                    }
+                } else {
                     rawPointsJson
                 }
-            } else {
-                rawPointsJson
-            }
-            val deserializedStrokes = EncryptionService.deserializeStrokes(decryptedPointsJson)
-            val firstDeserialized = deserializedStrokes.firstOrNull()
-            val points = deserializedStrokes.flatMap { it.points }
-            val start = if (entity.startX != null && entity.startY != null) PointF(entity.startX, entity.startY) else null
-            val end = if (entity.endX != null && entity.endY != null) PointF(entity.endX, entity.endY) else null
-            val isAdvanced = firstDeserialized?.isAdvanced ?: false
-            // Phase 27: color-mode fields round-trip through the stroke's serialized
-            // payload (pointsJson). Missing on old strokes => SOLID / seed 0, which is
-            // bit-identical to the pre-phase-27 behaviour.
-            val colorMode = com.authorss81.noteflow.data.model.StrokeColorMode.fromKey(firstDeserialized?.colorMode?.persistenceKey)
-            val colorSeed = firstDeserialized?.colorSeed ?: 0
-            val gradientToColorInt = firstDeserialized?.gradientToColorInt
+                if (StrokeGeometryPolicy.plaintextPointsJsonOverBudget(decryptedPointsJson.length)) {
+                    // Oversized legacy/planted payload — do not parse, skip the row.
+                    continue
+                }
+                val deserializedStrokes = EncryptionService.deserializeStrokes(decryptedPointsJson)
+                val firstDeserialized = deserializedStrokes.firstOrNull()
+                val rawPoints = deserializedStrokes.flatMap { it.points }
+                val points = StrokeGeometryPolicy.capLoadedPoints(rawPoints)
 
-            Stroke(
-                id = entity.id,
-                tool = try { StrokeTool.valueOf(entity.toolName) } catch (e: Exception) { StrokeTool.PEN },
-                colorInt = entity.colorInt,
-                width = entity.strokeWidth,
-                filled = entity.filled,
-                text = decryptedText,
-                points = points,
-                start = start,
-                end = end,
-                pdfPage = entity.pdfPage,
-                timestampMs = entity.timestampMs,
-                isAdvanced = isAdvanced,
-                layerId = entity.layerId,
-                colorMode = colorMode,
-                colorSeed = colorSeed,
-                gradientToColorInt = gradientToColorInt
-            )
+                // Page budget: total-points envelope. A page already at budget is
+                // not grown further, so load work is always bounded.
+                if (loaded.isNotEmpty() && pagePoints + points.size > StrokeGeometryPolicy.MAX_POINTS_PER_PAGE) {
+                    budgetExhausted = true
+                    break
+                }
+                pagePoints += points.size
+
+                val start = if (entity.startX != null && entity.startY != null) PointF(entity.startX, entity.startY) else null
+                val end = if (entity.endX != null && entity.endY != null) PointF(entity.endX, entity.endY) else null
+                val isAdvanced = firstDeserialized?.isAdvanced ?: false
+                // Phase 27: color-mode fields round-trip through the stroke's serialized
+                // payload (pointsJson). Missing on old strokes => SOLID / seed 0, which is
+                // bit-identical to the pre-phase-27 behaviour.
+                val colorMode = com.authorss81.noteflow.data.model.StrokeColorMode.fromKey(firstDeserialized?.colorMode?.persistenceKey)
+                val colorSeed = firstDeserialized?.colorSeed ?: 0
+                val gradientToColorInt = firstDeserialized?.gradientToColorInt
+
+                loaded += Stroke(
+                    id = entity.id,
+                    tool = try { StrokeTool.valueOf(entity.toolName) } catch (e: Exception) { StrokeTool.PEN },
+                    colorInt = entity.colorInt,
+                    width = entity.strokeWidth,
+                    filled = entity.filled,
+                    text = decryptedText,
+                    points = points,
+                    start = start,
+                    end = end,
+                    pdfPage = entity.pdfPage,
+                    timestampMs = entity.timestampMs,
+                    isAdvanced = isAdvanced,
+                    layerId = entity.layerId,
+                    colorMode = colorMode,
+                    colorSeed = colorSeed,
+                    gradientToColorInt = gradientToColorInt
+                )
+            }
+            if (budgetExhausted || batch.size < pageSize) break
+            offset += pageSize
         }
         loaded.forEach { lastSavedStrokeHash[it.id] = strokeContentHash(it) }
         loaded
@@ -737,10 +784,25 @@ class NoteRepository(private var db: NoteflowDatabase) {
         return h
     }
 
-    suspend fun saveStrokesForPage(pageId: String, strokes: List<Stroke>) = withContext(Dispatchers.Default) {
+    /**
+     * Persists a page's stroke rows. Returns a [StrokeGeometryGateResult]
+     * metering whether the write was bounded by B2-DOS-01 (phase-50) caps —
+     * callers surface a non-alarming notice when geometry was truncated/dropped
+     * instead of letting a page grow without bound.
+     */
+    suspend fun saveStrokesForPage(pageId: String, strokes: List<Stroke>): StrokeGeometryGateResult = withContext(Dispatchers.Default) {
+        // B2-DOS-01 (phase-50): the ONLY place stroke geometry may be written.
+        // Everything that reaches the encrypted pointsJson column already passed
+        // StrokeGeometryPolicy: per-stroke point caps + the page total envelope.
+        // A 2M-point stroke is truncated to its head; a page beyond
+        // MAX_POINTS_PER_PAGE/MAX_STROKES_PER_PAGE has its overflowing strokes
+        // dropped. The metering result lets the UI tell the user AT MOST once,
+        // non-alarmingly, that the page was bounded.
+        val gate = StrokeGeometryPolicy.applySaveGate(strokes)
+        val gatedStrokes = gate.kept
         db.withTransaction {
             val storedIds = db.strokeDao().getStrokeIdsForPage(pageId).toHashSet()
-            val incomingIds = HashSet<String>(strokes.size).apply { addAll(strokes.map { it.id }) }
+            val incomingIds = HashSet<String>(gatedStrokes.size).apply { addAll(gatedStrokes.map { it.id }) }
 
             val removedIds = storedIds - incomingIds
             if (removedIds.isNotEmpty()) {
@@ -748,7 +810,7 @@ class NoteRepository(private var db: NoteflowDatabase) {
                 removedIds.forEach(lastSavedStrokeHash::remove)
             }
 
-            val changed = strokes.filter { stroke ->
+            val changed = gatedStrokes.filter { stroke ->
                 strokeContentHash(stroke) != lastSavedStrokeHash[stroke.id]
             }
             if (changed.isEmpty()) return@withTransaction
@@ -787,9 +849,10 @@ class NoteRepository(private var db: NoteflowDatabase) {
                 )
             }
             db.strokeDao().insertStrokes(entities)
-            val hashes = strokes.associateBy({ it.id }, ::strokeContentHash)
+            val hashes = gatedStrokes.associateBy({ it.id }, ::strokeContentHash)
             entities.forEach { lastSavedStrokeHash[it.id] = hashes[it.id]!! }
         }
+        gate
     }
 
     private fun parseWaveformJson(json: String): List<Float> {

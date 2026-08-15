@@ -124,6 +124,18 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     // DEK zeroized ⇒ defer here and flush encrypted after the next unlock.
     private val editorFlushPolicy = EditorFlushPolicy()
 
+    // B2-DOS-01 (phase-50): the geometry-cap notice is a ONE-TIME message per
+    // page per session (AGENTS.md "never silent degradation — one-time
+    // non-alarming message"). Keyed by page id so a debounced autosave that
+    // keeps re-encountering an oversized stroke cannot re-notify every second;
+    // cleared at lock so a new unlock session can warn again if it matters.
+    private val geometryCappedNotifiedPages = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    private fun maybeNotifyGeometryCapped(pageId: String, gate: com.authorss81.noteflow.services.StrokeGeometryGateResult) {
+        if (!gate.geometryWasCapped) return
+        if (geometryCappedNotifiedPages.add(pageId)) showSnackbar(gate.noticeText)
+    }
+
     // Phase 10/11: plugin framework (see docs/PLUGINS.md + docs/PLUGIN_SDK.md).
     // Core registry/manager are dependency-free; persist opt-in + per-plugin
     // settings via SettingsManager; log lifecycle events to logcat (ids/names
@@ -2373,7 +2385,7 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         persistOrDefer(
             EditorFlushPolicy.DeferredSave(pageId, strokes, stickyNotes, embeds, layers),
             unlockedPersist = { repo ->
-                repo.saveStrokesForPage(pageId, strokes)
+                maybeNotifyGeometryCapped(pageId, repo.saveStrokesForPage(pageId, strokes))
                 repo.saveCanvasItemsForPage(pageId, stickyNotes, embeds)
                 repo.saveLayersForPage(pageId, layers)
             }
@@ -2395,7 +2407,9 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     ) {
         persistOrDefer(
             EditorFlushPolicy.DeferredSave(pageId, strokes, stickyNotes, embeds, layers),
-            unlockedPersist = { repo -> repo.saveStrokesForPage(pageId, strokes) }
+            unlockedPersist = { repo ->
+                maybeNotifyGeometryCapped(pageId, repo.saveStrokesForPage(pageId, strokes))
+            }
         )
     }
 
@@ -2500,7 +2514,10 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         for (save in toFlush) {
             viewModelScope.launch(Dispatchers.IO) {
                 try {
-                    repository.saveStrokesForPage(save.pageId, save.strokes)
+                    maybeNotifyGeometryCapped(
+                        save.pageId,
+                        repository.saveStrokesForPage(save.pageId, save.strokes)
+                    )
                     repository.saveCanvasItemsForPage(save.pageId, save.stickyNotes, save.embeds)
                     repository.saveLayersForPage(save.pageId, save.layers)
                 } catch (e: kotlinx.coroutines.CancellationException) {
@@ -2840,6 +2857,8 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
             dataInitialized = false
         }
         invalidatePaletteIndex()
+        // B2-DOS-01 (phase-50): a new unlock session may re-notify a capped page.
+        geometryCappedNotifiedPages.clear()
         // N6/A1: decrypted content must not stay resident in StateFlows after lock.
         _pages.value = emptyList()
         _selectedPage.value = null

@@ -172,6 +172,28 @@ interface StrokeDao {
     @Query("SELECT * FROM strokes WHERE pageId = :pageId ORDER BY ROWID ASC")
     suspend fun getStrokesForPage(pageId: String): List<StrokeEntity>
 
+    /**
+     * B2-DOS-01 (phase-50): bounded stroke reader. Two gates at the SQL level:
+     *  - `length(pointsJson) <= :maxStoredChars` refuses to load a stroke row
+     *    whose encrypted points column is already over the stored budget — the
+     *    base64 ciphertext is an exact proxy for the plaintext geometry because
+     *    AES-GCM does not compress, so an oversized row never materializes as a
+     *    multi-MB Kotlin String in the first place;
+     *  - `LIMIT/OFFSET` pages the result so a page cannot yank every row —
+     *    including pathological legacy rows — into memory at once.
+     */
+    @Query(
+        "SELECT * FROM strokes WHERE pageId = :pageId " +
+            "AND length(pointsJson) <= :maxStoredChars " +
+            "ORDER BY ROWID ASC LIMIT :limit OFFSET :offset"
+    )
+    suspend fun getStrokesForPageBounded(
+        pageId: String,
+        maxStoredChars: Int,
+        limit: Int,
+        offset: Int
+    ): List<StrokeEntity>
+
     @Query("SELECT id FROM strokes WHERE pageId = :pageId")
     suspend fun getStrokeIdsForPage(pageId: String): List<String>
 

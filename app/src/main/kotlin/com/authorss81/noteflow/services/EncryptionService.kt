@@ -469,6 +469,13 @@ object EncryptionService {
 
     fun deserializeStrokes(json: String): List<Stroke> {
         if (json.isBlank()) return emptyList()
+        // B2-DOS-01 (phase-50): refuse to Gson-materialize an oversized stroke
+        // payload. THE guard between a crafted/hostile points column and the
+        // object graph that would OOM the process: a 2M-point JSON (~100 MB)
+        // must never be parsed, only an empty list (the stroke is skipped)
+        // surfaced. The write path also caps strokes via StrokeGeometryPolicy,
+        // so this only trips on legacy/planted rows.
+        if (StrokeGeometryPolicy.plaintextPointsJsonOverBudget(json.length)) return emptyList()
         return try {
             val type = object : TypeToken<List<Stroke>>() {}.type
             gson.fromJson(json, type) ?: emptyList()

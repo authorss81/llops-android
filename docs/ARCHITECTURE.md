@@ -137,6 +137,23 @@
     locked interval loses the last stashed page delta/body. A durable pending-queue is impossible
     without writing the data to disk while locked (i.e. plaintext), which is exactly what this
     finding forbids, so the in-memory stash is deliberate and bounded (latest-wins per page).
+  - **Implemented in phase-50** (B2-DOS-01, see `workspace/phase-50/REPORT.md`): stroke geometry is
+    bounded at EVERY hop between DB bytes and the composable, so a crafted backup (B1-DB-7) or an
+    organic heavy page can no longer OOM/ANR page-open or scale renderer work linearly. New pure-JVM
+    `services/StrokeGeometryPolicy.kt` owns the budgets (20k pts/stroke, 200k pts/page, 2k strokes/
+    page; per-stroke plaintext cap 2.5M chars, stored base64-ciphertext cap 3.4M chars — AES-GCM
+    doesn't compress, so ciphertext length is an exact proxy) + `applySaveGate`/`gateStroke`/
+    `capLoadedPoints`/`storedPointsJsonOverBudget`/`plaintextPointsJsonOverBudget`.
+    `NoteRepository.saveStrokesForPage` (`:793`) routes every write through the gate (returns a
+    `StrokeGeometryGateResult`); `getStrokesForPage` (`:636`) pages through the new
+    `StrokeDao.getStrokesForPageBounded` (`Daos.kt:181`, `WHERE length(pointsJson) <= :maxStoredChars
+    … LIMIT :limit OFFSET :offset`), refuses over-budget plaintext pre-Gson, caps legacy over-specified
+    strokes and stops at the page budget. `EncryptionService.deserializeStrokes` (`:470`) guards the
+    parse length; `ImportExportService.sanitizeRestoredStrokeGeometry` (`:1674`) DELETEs over-budget
+    stroke rows from a restored backup DB before re-key/migrate/transplant; `NoteflowViewModel` shows
+    ONE non-alarming snackbar per page per session via `maybeNotifyGeometryCapped` (latch cleared on
+    lock); `AnnotationCanvas.kt:1415-1434` culls pages whose slab misses the visible world rect
+    `(screen − pan)/zoom` in paginated mode. Tests: `B2Dos01StrokeGeometryTest` (18) — 1053 green.
 - **Canvas**: `ui/components/AnnotationCanvas.kt:83` (ink canvas, gestures, layers, `pointerInteropFilter`);
   `services/WetBrushEngine.kt:13` (AGSL wet-mixing gating); `ui/components/ShaderCapabilityHelper.kt:5`
   (`isAgslSupported` = SDK ≥ 33); `services/ShapeRecognitionHelper.kt:13` (`trySnapShape()` :27).
