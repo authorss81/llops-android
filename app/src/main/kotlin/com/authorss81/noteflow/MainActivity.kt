@@ -1,6 +1,9 @@
 package com.authorss81.noteflow
 
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -47,6 +50,7 @@ import com.authorss81.noteflow.ui.screens.LockScreen
 import com.authorss81.noteflow.ui.screens.MarkdownPreviewScreen
 import com.authorss81.noteflow.ui.viewmodel.NoteflowViewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -104,17 +108,32 @@ class MainActivity : FragmentActivity() {
     // copied or staged until the user confirms.
     private var pendingShareConfirm by mutableStateOf<PendingShareConfirm?>(null)
 
+    // B1-PLAT-4 (phase-60): lock the INSTANT the screen turns off. On a no-keyguard
+    // / tablet device (a natural target for an ink-notes app) display-off may pause
+    // the activity without stopping it, so ON_STOP alone is not enough — a paused
+    // activity must not leave decrypted notes on screen for the next person. The
+    // protected system broadcast is delivered to runtime-registered receivers on
+    // every supported API level (26+), so no OS-floor fallback is needed.
+    private val screenOffReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == Intent.ACTION_SCREEN_OFF && viewModel.authenticated.value) {
+                viewModel.lock()
+            }
+        }
+    }
+
+    private var screenOffReceiverRegistered = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         com.authorss81.noteflow.services.PrivacyCrashReporter.initialize(applicationContext)
         AppStartupLogger.init(applicationContext)
         AppStartupLogger.logEvent(this, "MainActivity.onCreate started")
         enableEdgeToEdge()
-        if (!BuildConfig.DEBUG) {
-            window.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
-        } else {
-            window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
-        }
+        // B1-PLAT-4 (phase-60): FLAG_SECURE is applied UNCONDITIONALLY. The old
+        // debug carve-out that cleared the flag for debug builds is gone — there
+        // is no debug exception to the screenshot / recents-thumbnail ban.
+        window.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
 
         readShareIntent(intent)
 
@@ -130,6 +149,24 @@ class MainActivity : FragmentActivity() {
                 else -> {}
             }
         })
+
+        // B1-PLAT-4: runtime screen-off hook — lock immediately on display-off so
+        // a no-keyguard device never leaves decrypted notes on screen on resume.
+        // ACTION_SCREEN_OFF can only be sent by the system; below API 33 there is
+        // no receiver flag to declare, on API 33+ the documented system-broadcast
+        // pattern is the flagged registration.
+        screenOffReceiverRegistered = true
+        try {
+            val screenOffFilter = IntentFilter(Intent.ACTION_SCREEN_OFF)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(screenOffReceiver, screenOffFilter, Context.RECEIVER_EXPORTED)
+            } else {
+                @Suppress("UnspecifiedRegisterReceiverFlag")
+                registerReceiver(screenOffReceiver, screenOffFilter)
+            }
+        } catch (e: IllegalArgumentException) {
+            screenOffReceiverRegistered = false
+        }
 
         setContent {
             com.authorss81.noteflow.utils.JankStatsHelper.MonitorJank("MainActivity")
@@ -194,6 +231,30 @@ class MainActivity : FragmentActivity() {
                 }
             }
 
+            // B1-PLAT-4 (phase-60): the foreground inactivity auto-lock is a
+            // CONTINUOUS poll while unlocked — not "lock on the next touch after
+            // the idle window" (the phase-30 behavior left an unattended,
+            // foregrounded vault readable until the user touched it again, which
+            // on a no-keyguard device is exactly the attack). Restarted on every
+            // unlock so the idle baseline is fresh; the touch handler below only
+            // stamps lastActivityAtMs.
+            LaunchedEffect(autoLockTimeoutSeconds, authenticated) {
+                if (!authenticated) return@LaunchedEffect
+                lastActivityAtMs = System.currentTimeMillis()
+                while (viewModel.authenticated.value) {
+                    delay(com.authorss81.noteflow.services.AutoLockPolicy.IDLE_CHECK_INTERVAL_MS)
+                    if (com.authorss81.noteflow.services.AutoLockPolicy.shouldAutoLock(
+                            nowMs = System.currentTimeMillis(),
+                            lastActivityAtMs = lastActivityAtMs,
+                            timeoutSeconds = autoLockTimeoutSeconds
+                        )
+                    ) {
+                        viewModel.lock()
+                        return@LaunchedEffect
+                    }
+                }
+            }
+
             // 22.5 + B1-PLAT-2: apply a confirmed share-sheet capture once the
             // vault is unlocked. Bytes are copied ONLY here — never at intent
             // arrival and never while locked.
@@ -233,16 +294,13 @@ class MainActivity : FragmentActivity() {
                         .pointerInput(authenticated, showCommandPalette) {
                             if (authenticated) detectTwoFingerSwipeDown { showCommandPalette = true }
                         }
-                        // 22.1: inactivity auto-lock — first touch after the idle
-                        // window (or any touch when the timeout changed) locks.
+                        // 22.1 + B1-PLAT-4: every touch resets the foreground
+                        // inactivity timer. The lock itself fires from the poller
+                        // above — never gated on the next touch.
                         .pointerInput(autoLockTimeoutSeconds) {
                             awaitPointerEventScope {
                                 while (true) {
                                     awaitPointerEvent()
-                                    val timeoutMs = autoLockTimeoutSeconds * 1000L
-                                    if (timeoutMs > 0L && System.currentTimeMillis() - lastActivityAtMs > timeoutMs) {
-                                        viewModel.lock()
-                                    }
                                     lastActivityAtMs = System.currentTimeMillis()
                                 }
                             }
@@ -600,6 +658,17 @@ class MainActivity : FragmentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         readShareIntent(intent)
+    }
+
+    // B1-PLAT-4 (phase-60): the runtime action-screen-off receiver lives exactly
+    // as long as the activity — dropping it on destroy prevents any leak, and the
+    // guard keeps a config-change rebuild from double-unregistering.
+    override fun onDestroy() {
+        super.onDestroy()
+        if (screenOffReceiverRegistered) {
+            screenOffReceiverRegistered = false
+            unregisterReceiver(screenOffReceiver)
+        }
     }
 
     // 22.5 + Phase 15 + B1-PLAT-2 (phase-58): classify + validate incoming share

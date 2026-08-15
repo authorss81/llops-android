@@ -321,6 +321,19 @@
 - **ViewModel/nav**: `ui/viewmodel/NoteflowViewModel.kt:105` (builds SecurityService/NoteRepository/PluginRegistry
   :121/PluginManager :131/PluginRuntime :170/PluginStoreController :196; ~60 capability suspend fns);
   `MainActivity.kt:73` (single activity, **`mutableStateOf` nav** — NOT Navigation Compose).
+  - **Implemented in phase-60** (B1-PLAT-4, see `workspace/phase-60/REPORT.md`): the vault lock
+    boundary is no longer reachable only via ON_STOP / next-touch. Pure-JVM
+    `services/AutoLockPolicy.kt` owns the default (`DEFAULT_AUTO_LOCK_TIMEOUT_SECONDS = 300`,
+    read by `SettingsManager.autoLockTimeoutSeconds` — auto-lock ships ENABLED), the decision
+    (`shouldAutoLock`, `>=` boundary, 0/negative = off) and the poll cadence
+    (`IDLE_CHECK_INTERVAL_MS`). `MainActivity` runs a continuous 1 s idle poll while the vault is
+    authenticated (`LaunchedEffect(autoLockTimeoutSeconds, authenticated)`), stamps a fresh idle
+    baseline at each unlock, keeps the `pointerInput` touch handler timestamp-only, locks instantly
+    on a runtime `ACTION_SCREEN_OFF` receiver (register in onCreate / deregister in onDestroy;
+    API 33+ uses the flagged registration, below that the plain system-broadcast registration), and
+    applies FLAG_SECURE unconditionally (debug clearFlags carve-out deleted). `ON_STOP` → lock
+    retained. `ON_PAUSE` → lock explicitly NOT chosen (system-overlay pauses like phase-59's SAF
+    pickers, biometric prompts and the share sheet must not force a lock).
 - **Import/export**: `services/ImportExportService.kt:30` (encrypted backup/restore, `validateBackupPassword`,
   PDF/HTML/image export).
   - **Implemented in phase-55** (B1-DB-5, see `workspace/phase-55/REPORT.md`): the HTML/Obsidian

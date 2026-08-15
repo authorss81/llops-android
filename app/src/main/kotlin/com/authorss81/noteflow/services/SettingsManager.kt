@@ -214,9 +214,15 @@ class SettingsManager(context: Context) {
         get() = prefs.getBoolean("serif_reading_enabled", false)
         set(value) = prefs.edit().putBoolean("serif_reading_enabled", value).apply()
 
-    // 22.1: auto-lock after this many seconds of inactivity while foregrounded (0 = off).
+    // 22.1 + B1-PLAT-4 (phase-60): auto-lock after this many seconds of inactivity
+    // while foregrounded (0 = off). Ships ENABLED (5 min) by default so a
+    // foregrounded, unattended vault cannot stay readable indefinitely on a
+    // no-keyguard device.
     var autoLockTimeoutSeconds: Int
-        get() = prefs.getInt("auto_lock_timeout_seconds", 0)
+        get() = prefs.getInt(
+            "auto_lock_timeout_seconds",
+            AutoLockPolicy.DEFAULT_AUTO_LOCK_TIMEOUT_SECONDS
+        )
         set(value) = prefs.edit().putInt("auto_lock_timeout_seconds", value).apply()
 
     val hasMasterPassword: Boolean
