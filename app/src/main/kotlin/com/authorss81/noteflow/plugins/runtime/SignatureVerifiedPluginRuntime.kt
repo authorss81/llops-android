@@ -39,7 +39,8 @@ fun interface PluginArtifactResolver {
  * already speak [PluginEntry] and need no other change.
  *
  * @param artifactResolver finds the on-disk artifact for an entry.
- * @param classLoaderFactory the plugin [ClassLoader] (DexClassLoader in prod).
+ * @param classLoaderFactory the plugin [ClassLoader] (DexClassLoader in prod,
+ *   whose app parent is scoped to the `plugins.*` framework surface — B1-AUTH-01).
  * @param contextFactory the capability facade factory (capability-aware in prod).
  * @param parentClassLoader parent for the plugin loader (the app classloader).
  * @param verifier the security gate (default [ArtifactSignatureVerifier]).

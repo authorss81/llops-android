@@ -61,9 +61,11 @@ data class PluginEntryDescriptor(
  *
  * @param classLoaderFactory where the plugin [ClassLoader] comes from.
  * @param contextFactory how the capability facade is built for [entry].
- * @param parentClassLoader the parent for the plugin loader (the app's
- *   classloader in production, so the plugin resolves the framework interfaces
- *   it was compiled against).
+ * @param parentClassLoader the parent for the plugin loader (in production the
+ *   app classloader, which [com.authorss81.noteflow.services.AppClassLoaderFactory]
+ *   wraps in a scoped [PluginFrameworkClassLoader] so plugin bytecode can only
+ *   resolve the `plugins.*` framework surface, never the app's private packages —
+ *   B1-AUTH-01).
  */
 class RuntimePluginLoader(
     private val classLoaderFactory: ClassLoaderFactory,

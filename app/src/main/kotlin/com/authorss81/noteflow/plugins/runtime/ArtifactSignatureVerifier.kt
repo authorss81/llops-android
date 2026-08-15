@@ -68,6 +68,17 @@ class ArtifactSignatureVerifier {
                     "(expected $expected, got $sha256). It will not be loaded."
             )
         }
+        // B1-AUTH-01 (phase-46): static security scan before the signer is even
+        // parsed. An artifact whose bytecode MENTIONS app-private packages or
+        // raw network primitives is refused here — before ANY class is created
+        // or resolved. Every plugin-bytecode path funnels through verify():
+        // install, every load re-verify, update and rollback.
+        when (val scan = ArtifactStaticScan().scan(file)) {
+            is ArtifactStaticScan.Result.Pass -> Unit
+            is ArtifactStaticScan.Result.Rejected -> return Result.Invalid(
+                "the artifact failed the plugin static security scan and will not be loaded: ${scan.reason}"
+            )
+        }
         val signerCert = findSignerCertificate(file)
             ?: return Result.Invalid(
                 "the artifact is not signed (no verifiable signer certificate was found). " +
