@@ -2,6 +2,7 @@ package com.authorss81.noteflow
 
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 import java.io.File
 
@@ -21,10 +22,20 @@ import java.io.File
  * back into the build or any Kotlin module's source:
  *
  *  - `app/build.gradle.kts` no longer references the library accessor;
- *  - `gradle/libs.versions.toml` no longer carries the version or library entry;
- *  - no production Kotlin/Java/AndroidManifest under `app/src/main`,
- *    `plugin-sdk/src/main` or `plugins/llm/src/main` references
- *    `androidx.security.crypto`, `EncryptedSharedPreferences` or `MasterKeys`;
+ *  - `gradle/libs.versions.toml` no longer carries the version or library entry
+ *    (deliberately scoped to the REMOVED artifact, NOT a blanket "androidx.security"
+ *    ban — a future maintained androidx.security artifact must stay usable);
+ *  - no production Kotlin/Java/AndroidManifest under any module's `src/main`
+ *    (discovered dynamically, so newly-added modules are covered automatically)
+ *    and no `.gradle.kts`/`.toml` build file references
+ *    `androidx.security.crypto`, `androidx.security:security`,
+ *    `EncryptedSharedPreferences` or `MasterKeys`;
+ *  - the unit-test runtime classpath carries no security-crypto (or its Tink
+ *    transitive) artifacts. Unit tests cannot read the final APK, so full
+ *    APK-level absence stays a build-time/CI check (`unzip -l ... | grep -c
+ *    androidx/security` = 0); this test pins the dependency-graph level, which
+ *    catches a reintroduction the source scans would miss (e.g. pulled in by a
+ *    module that postdates them);
  *  - the repo's encrypted-prefs lane stays exclusively AndroidKeyStore-based
  *    (`WebDavCredentialStore`), the recommended replacement, untouched.
  *
@@ -57,10 +68,6 @@ class SecurityCryptoAbsenceTest {
             "catalog must not declare the security-crypto library (removed in phase-112)",
             text.contains("security-crypto")
         )
-        assertFalse(
-            "catalog must not pin androidx.security at all (removed in phase-112)",
-            text.contains("androidx.security")
-        )
     }
 
     @Test
@@ -72,23 +79,56 @@ class SecurityCryptoAbsenceTest {
             "MasterKeys"
         )
         val offenders = StringBuilder()
-        sourceDirs().forEach { scanDir ->
-            scanDir.walkTopDown()
-                .filter { it.isFile && it.extension in setOf("kt", "java", "xml") }
-                .forEach { file ->
-                    val text = file.readText()
-                    forbidden.forEach { token ->
-                        if (text.contains(token)) {
-                            offenders.append("\n  ").append(relative(scanDir, file))
-                                .append(" -> \"").append(token).append("\"")
-                        }
-                    }
+        scanTargets().forEach { file ->
+            val text = file.readText()
+            forbidden.forEach { token ->
+                if (text.contains(token)) {
+                    offenders.append("\n  ").append(relativeToRepo(file))
+                        .append(" -> \"").append(token).append("\"")
                 }
+            }
         }
         assertTrue(
             "Deprecated security-crypto references must not exist (phase-112 removed them):" +
                 offenders.toString(),
             offenders.isEmpty()
+        )
+    }
+
+    @Test
+    fun `test runtime classpath carries no security-crypto or tink artifacts`() {
+        // Dependency-graph-level pin. The unit-test runtime classpath includes
+        // every :app implementation dependency, so if security-crypto (or the
+        // Tink it would pull in) were ever re-added — even by a module that
+        // postdates the source scans above — its classes become resolvable here
+        // and this test fails. Full APK-level absence is asserted at build time
+        // in CI via `unzip -l app-debug.apk | grep -c androidx/security` == 0.
+        val loader = javaClass.classLoader
+        try {
+            Class.forName("androidx.security.crypto.EncryptedSharedPreferences", false, loader)
+            fail("androidx.security.crypto.EncryptedSharedPreferences must NOT be on the test classpath (removed in phase-112)")
+        } catch (expected: ClassNotFoundException) {
+            // Absent, as required.
+        }
+        val tinkResolvable = try {
+            Class.forName("com.google.crypto.tink.KeysetHandle", false, loader)
+            true
+        } catch (expected: ClassNotFoundException) {
+            false
+        }
+        assertFalse(
+            "com.google.crypto.tink must not be on the test classpath (transitive of security-crypto)",
+            tinkResolvable
+        )
+
+        val classpath = System.getProperty("java.class.path") ?: ""
+        val offendingJars = classpath.split(File.pathSeparator)
+            .map { it.substringAfterLast(File.separator).lowercase() }
+            .filter { it.contains("security-crypto") || it.contains("securitycrypto") || it.contains("tink") }
+        assertTrue(
+            "No security-crypto / tink artifacts may be on the unit-test classpath:" +
+                offendingJars.joinToString("") { "\n  $it" },
+            offendingJars.isEmpty()
         )
     }
 
@@ -114,10 +154,36 @@ class SecurityCryptoAbsenceTest {
         )
     }
 
-    private fun relative(root: File, file: File): String =
-        file.absolutePath.removePrefix(root.absolutePath).removePrefix(File.separator)
+    /**
+     * All files to scan for the deprecated API: production sources from every
+     * module's `src/main` (discovered dynamically so newly-added modules are
+     * covered automatically) plus every build definition file (`*.gradle.kts`,
+     * `*.toml`) under the repo root. Checkout/build metadata dirs are pruned.
+     */
+    private fun scanTargets(): List<File> = buildList {
+        repoRoot().walkTopDown()
+            .onEnter { dir -> dir.name !in PRUNED_DIRS }
+            .filter { it.isDirectory && it.name == "main" && it.parentFile?.name == "src" }
+            .forEach { srcMain ->
+                srcMain.walkTopDown()
+                    .filter { it.isFile && it.extension in SOURCE_EXTENSIONS }
+                    .forEach { add(it) }
+            }
+        repoRoot().walkTopDown()
+            .onEnter { dir -> dir.name !in PRUNED_DIRS }
+            .filter { it.isFile && it.extension in BUILD_FILE_EXTENSIONS }
+            .forEach { add(it) }
+    }
+
+    private fun relativeToRepo(file: File): String =
+        file.absolutePath.removePrefix(repoRoot().absolutePath).removePrefix(File.separator)
 
     companion object {
+        private val PRUNED_DIRS =
+            setOf(".git", ".gradle", ".kotlin", "build", "logs", "docs", "workspace", "gradle")
+        private val SOURCE_EXTENSIONS = setOf("kt", "java", "xml")
+        private val BUILD_FILE_EXTENSIONS = setOf("kts", "toml")
+
         private fun repoRoot(): File {
             val cwd = File(System.getProperty("user.dir") ?: ".")
             var dir = cwd
@@ -130,15 +196,6 @@ class SecurityCryptoAbsenceTest {
                 dir = dir.parentFile ?: return cwd
             }
             return dir
-        }
-
-        private fun sourceDirs(): List<File> {
-            val root = repoRoot()
-            return listOf(
-                File(root, "app/src/main"),
-                File(root, "plugin-sdk/src/main"),
-                File(root, "plugins/llm/src/main")
-            ).filter { it.isDirectory }
         }
     }
 }

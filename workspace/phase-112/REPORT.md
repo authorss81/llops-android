@@ -100,6 +100,59 @@ wrapped DEK or decrypted-note data is touched, logged or newly persisted.
 `allowBackup="false"`, `ClipboardGuard` and `FLAG_SECURE` are untouched. No DB
 schema change / migration (no schema migration note required).
 
+## Review follow-up — fixes for review findings (committed after `cdb2b58`)
+
+Three review findings were fixed in a follow-up change to
+`SecurityCryptoAbsenceTest.kt` + this report:
+
+- **Dependency-graph pin added** (review finding 4): new 5th test
+  `test runtime classpath carries no security-crypto or tink artifacts` — the
+  unit-test runtime classpath carries every `:app` implementation dependency,
+  so the test asserts `androidx.security.crypto.EncryptedSharedPreferences` and
+  `com.google.crypto.tink.KeysetHandle` are NOT resolvable and that no
+  security-crypto/Tink jar entry is on `java.class.path`. This catches a
+  reintroduction the source scan would miss (e.g. pulled in by a module that
+  postdates the scan). Unit tests cannot read the final APK, so full APK-level
+  absence stays a build-time/CI check (`unzip -l app-debug.apk | grep -c
+  androidx/security` = 0 in the verification run below).
+- **Dynamic module discovery** (review finding 5): `source tree has zero
+  references to the deprecated crypto API` now discovers every module's
+  `src/main` from the repo tree (no hardcoded module list) and additionally
+  scans every `*.gradle.kts`/`*.toml` under the repo root (pruning `.git`,
+  `.gradle`, `.kotlin`, `build/`, `logs/`, `docs/`, `workspace/`, `gradle/`).
+  Future modules and their build files are covered without editing the test.
+- **Narrowed catalog pin** (review finding 6): `version catalog carries no
+  securityCrypto version or library` now bans only the REMOVED artifact
+  (`securityCrypto`, `security-crypto`) instead of blanket-banning the
+  `androidx.security` group string, so a future maintained androidx.security
+  artifact remains adoptable (per the finding's AndroidKeyStore+Tink guidance).
+
+Suite total with the follow-up: **702 tests** (697 pre-existing + 5 new).
+
+### Pre-existing flake observed (documented, unrelated, NOT fixed here)
+
+While re-running `gradle testDebugUnitTest`, the pre-existing
+`PluginUpdateEngineTest` intermittently failed 1 of its 10 testcases — the
+affected testcase varied between runs (`a hash mismatch on the downloaded
+artifact is never applied` one run, `rollback restores the recorded previous
+verified version` another). It is unrelated to phase-112:
+
+- **Proven pre-existing and intermittent:** the class also failed when run
+  against the UNMODIFIED baseline (phase-112's own test changes stashed); every
+  ISOLATED re-run of the class passes (`BUILD SUCCESSFUL`); and full-suite runs
+  flip between green and 1-of-702 failing with AND without these changes (both
+  states observed repeatedly). A fully green run of the complete suite
+  (702 tests, 0 failures) with these fixes is recorded immediately below.
+- **Root-cause (for phase-27):** `TestArtifactBuilder` delegates signing to
+  external `keytool`/`jarsigner` subprocesses (`TestDownloadablePlugin.kt:92-113,
+  156-173`) and writes jars with wall-clock `ZipEntry` timestamps
+  (`TestDownloadablePlugin.kt:175-192`), so v1/v2 artifacts are not guaranteed
+  byte-distinct across runs — a digest-mismatch/rollback expectation can then
+  see an identical artifact and flip the assertion. Concurrent-suite wall time
+  shifts that window.
+- Phase scope (B2-DEPS-02) forbids fixing other findings here; this is tracked
+  for the Phase 27 bug-fix queue. No production code is affected.
+
 ## Out-of-scope / notes
 
 - Only the unused `security-crypto` dependency is removed. The bloaty right-place
