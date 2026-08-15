@@ -189,6 +189,20 @@
     `setMasterPassword` (`:2094`) / `changeMasterPassword` (`:2145`) round-trip-validate the wrapped DEK
     before committing and abort (`return false`) before any in-memory state flips on commit failure.
     Tests: `B1Crypto03MasterPasswordAtomicTest` (7).
+  - **Implemented in phase-63** (B1-CRYPTO-04, see `workspace/phase-63/REPORT.md`): NEW master passwords
+    must clear the pure-JVM `services/PasswordStrengthPolicy.kt` (single decision table +
+    `PasswordStrengthVerdict` with human-readable messages): ≥ 8 NFKC-normalized graphemes
+    (`MIN_STRENGTH_GRAPHEMES` — stronger than the old 6 floor, still ≤ the 128 cap), no
+    sequential/keyboard-row/single-run-repeat patterns, ≥ 3 distinct graphemes, and 3-of-4 class
+    diversity for passwords < 12 graphemes (passphrases ≥ 12 pass on length alone). The policy judges
+    the NFKC-normalized password (the exact bytes `EncryptionService.deriveKey` hashes, B2-CRYPTO-07).
+    Authoritative gate in `NoteflowViewModel.setMasterPassword` (`:2071`) + `changeMasterPassword`
+    (`:2134`, NEW password only) and surfaced with `verdict.message` by both Dialogs.kt master-password
+    dialogs; unlock paths (`verifyMasterPassword`/`unwrapMasterDek`/`isMasterPasswordValid`) never
+    strength-gate, so a pre-existing weaker vault keeps unlocking and rotating. The finding's
+    "lockout is UI-only / vault only as strong as the password" caveat is documented in the policy KDoc;
+    TEE-bound attempt gating / Argon2id remain tracked follow-ups (not introduced, no new deps).
+    Tests: `B1Crypto04PasswordStrengthTest` (10).
 - **Canvas**: `ui/components/AnnotationCanvas.kt:83` (ink canvas, gestures, layers, `pointerInteropFilter`);
   `services/WetBrushEngine.kt:13` (AGSL wet-mixing gating); `ui/components/ShaderCapabilityHelper.kt:5`
   (`isAgslSupported` = SDK ≥ 33); `services/ShapeRecognitionHelper.kt:13` (`trySnapShape()` :27).

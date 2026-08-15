@@ -68,6 +68,7 @@ import com.authorss81.noteflow.services.EditorFlushPolicy
 import com.authorss81.noteflow.services.EncryptionService
 import com.authorss81.noteflow.services.ImportExportService
 import com.authorss81.noteflow.services.NoteBodyVaultPolicy
+import com.authorss81.noteflow.services.PasswordStrengthPolicy
 import com.authorss81.noteflow.services.SecurityService
 import com.authorss81.noteflow.services.SettingsManager
 import com.authorss81.noteflow.services.SettingsPluginEnableStore
@@ -2061,8 +2062,14 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         // NFKC-NORMALIZED password, in grapheme clusters — this is exactly the
         // byte sequence deriveKey will hash, so the check can never be undone
         // by normalization collapsing the input differently at unlock time.
+        // B1-CRYPTO-04 (phase-63): a NEW master password must additionally clear
+        // the strength policy — ≥ 8 graphemes, no sequential/keyboard/repeated
+        // patterns, class diversity for short passwords. The policy measures the
+        // same NFKC-normalized form, so the stored+derived bytes always satisfy
+        // it. Enforced here (authoritative) AND in the dialog (human-readable);
+        // never at verify/unlock, so a pre-existing weak vault keeps unlocking.
         val normalized = EncryptionService.normalizePassword(password)
-        if (normalized.isBlank() || !EncryptionService.isValidPasswordLength(normalized)) return false
+        if (!PasswordStrengthPolicy.evaluate(password).accepted) return false
         var kek: ByteArray? = null
         val dek: ByteArray
         return try {
@@ -2119,8 +2126,13 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         // B2-CRYPTO-07 (phase-113): same normalized-form length gate as
         // setMasterPassword, so a new password is always stored+derived in the
         // single NFKC form and survives re-typing on any keyboard/IME.
+        // B1-CRYPTO-04 (phase-63): the NEW password must clear the strength
+        // policy (≥ 8 graphemes, no sequential/repeated patterns, class
+        // diversity for short passwords), exactly as setMasterPassword requires.
+        // The OLD password is only VERIFIED (never strength-gated) so a
+        // pre-existing weaker vault can always be rotated and keep unlocking.
         val newPasswordNormalized = EncryptionService.normalizePassword(newPassword)
-        if (!EncryptionService.isValidPasswordLength(newPasswordNormalized)) return false
+        if (!PasswordStrengthPolicy.evaluate(newPassword).accepted) return false
         // B1-CRYPTO-03 (phase-62) review fix: snapshot the pre-verify session
         // BEFORE verifying — verifyMasterPassword installs the DEK and flips
         // _authenticated, and a failed credential commit below must restore this

@@ -14,8 +14,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
-import com.authorss81.noteflow.services.EncryptionService
 import com.authorss81.noteflow.services.ImportExportService
+import com.authorss81.noteflow.services.PasswordStrengthPolicy
 import com.authorss81.noteflow.services.UpdateInfo
 import com.authorss81.noteflow.services.UpdateService
 import com.authorss81.noteflow.services.UpdateSourceTrust
@@ -618,14 +618,19 @@ fun SecuritySettingsDialog(
                             confirmButton = {
                                 Button(
                                     onClick = {
-                                        // B2-CRYPTO-07 (phase-113): length is
-                                        // enforced on the NFKC-normalized
-                                        // password, measured in graphemes.
-                                        val graphemes = EncryptionService.normalizedGraphemeCount(newPass)
-                                        if (graphemes < EncryptionService.MIN_PASSWORD_GRAPHEMES) {
-                                            changeError = "New password must be at least ${EncryptionService.MIN_PASSWORD_GRAPHEMES} characters"
-                                        } else if (graphemes > EncryptionService.MAX_PASSWORD_GRAPHEMES) {
-                                            changeError = "New password must be at most ${EncryptionService.MAX_PASSWORD_GRAPHEMES} characters"
+                                        // B2-CRYPTO-07 (phase-113) + B1-CRYPTO-04
+                                        // (phase-63): the NEW password must clear the
+                                        // strength policy — ≥ 8 NFKC-normalized
+                                        // graphemes, no sequential/keyboard/repeated
+                                        // patterns, class diversity for short
+                                        // passwords. The verdict carries the exact
+                                        // non-alarming reason. The old password is
+                                        // only verified by the ViewModel, never
+                                        // strength-gated, so a pre-existing weaker
+                                        // vault keeps rotating.
+                                        val verdict = PasswordStrengthPolicy.evaluate(newPass)
+                                        if (!verdict.accepted) {
+                                            changeError = verdict.message
                                         } else if (newPass != newPassConfirm) {
                                             changeError = "New passwords do not match"
                                         } else {
@@ -668,13 +673,16 @@ fun SecuritySettingsDialog(
             if (!hasPass && showPasswordInput) {
                 Button(
                     onClick = {
-                        // B2-CRYPTO-07 (phase-113): length is enforced on the
-                        // NFKC-normalized password, measured in graphemes.
-                        val graphemes = EncryptionService.normalizedGraphemeCount(password)
-                        if (graphemes < EncryptionService.MIN_PASSWORD_GRAPHEMES) {
-                            errorMessage = "Password must be at least ${EncryptionService.MIN_PASSWORD_GRAPHEMES} characters"
-                        } else if (graphemes > EncryptionService.MAX_PASSWORD_GRAPHEMES) {
-                            errorMessage = "Password must be at most ${EncryptionService.MAX_PASSWORD_GRAPHEMES} characters"
+                        // B2-CRYPTO-07 (phase-113) + B1-CRYPTO-04 (phase-63):
+                        // a NEW master password must clear the strength policy
+                        // (≥ 8 NFKC-normalized graphemes, no sequential/repeated
+                        // patterns, class diversity for short passwords) so an
+                        // offline attacker with a copied vault cannot brute-force
+                        // the wrapped DEK in hours. The verdict message is the
+                        // exact non-alarming reason.
+                        val verdict = PasswordStrengthPolicy.evaluate(password)
+                        if (!verdict.accepted) {
+                            errorMessage = verdict.message
                         } else if (password != passwordConfirm) {
                             errorMessage = "Passwords do not match"
                         } else {
