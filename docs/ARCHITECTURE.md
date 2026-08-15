@@ -283,7 +283,13 @@
     `:512` now also refuses redirects on its pinned payload connections. All
     four transport constructors gained an injectable `connectionFactory` (default
     = `openConnection`) so each is behavior-tested with a fake `HttpURLConnection`
-    (`B1Net05RedirectDowngradeTest`, 28 tests). See `workspace/phase-52/REPORT.md`.
+    (`B1Net05RedirectDowngradeTest`, 28 tests). Review fix (2026-08-15): the
+    last base-app redirect-following hole was closed — `LocalSendSender.httpRegisterProbe`
+    (`LocalSendSender.kt:235`) now also sets `instanceFollowRedirects = false`
+    (`:240`, previously the platform's implicit `true`); the source-pin test now
+    enforces a per-file count invariant (every `openConnection()` must be matched
+    by an `instanceFollowRedirects = false`, 29 tests) so no future un-paired
+    connection can slip through. See `workspace/phase-52/REPORT.md`.
 - **Palette**: `services/PaletteCatalog.kt:131` (swatches + `familyFor`), `PaletteMath` :24.
 - **Brush preview**: `ui/components/PenNibVisualPreview.kt:50` (driven by `services/NibPreviewMath.kt`).
 - **Glass theme**: `theme/GlassSurfaces.kt:44` (`GlassBlurGate`), :80 (`GlassSurfaceMath`), :140

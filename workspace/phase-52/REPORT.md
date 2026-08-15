@@ -68,6 +68,14 @@ An `https://` server answering `302/307 Location: http://…` therefore made eac
 - `gradle :app:assembleDebug` — **green** (`app-debug.apk` on disk, ~173.6 MB range as in prior phases).
 - `gradle assembleRelease` interop sanity: not run this phase (unchanged signing/config; prior phases built it green; the PROM/PROMPT verification list names only `testDebugUnitTest` + `assembleDebug`).
 
+## Review fixes (2026-08-15)
+
+- **Closed the last base-app redirect-following hole**: `LocalSendSender.httpRegisterProbe` (`LocalSendSender.kt:235`) — the legacy LAN register probe — previously opened a connection on the platform's implicit `instanceFollowRedirects = true` and was missed by the phase-52 sweep (it predates `openConnection`'s `= false`; the string-pin test only proved the file contained *some* `= false`, and the no-`=true` scan cannot see an implicitly-defaulted connection). It now sets `instanceFollowRedirects = false` (`:240`), so a redirecting LAN peer surfaces as a failed probe instead of forwarding the probe POST off-target.
+- **Stronger source-pin test**: `B1Net05RedirectDowngradeTest` now enforces a per-file count invariant (`every connection opened by a base-app transport disables redirects`) — every `openConnection()` call in each base-app transport file must be matched by at least as many `instanceFollowRedirects = false` assignments. This pins the LocalSend probe gap and would catch any future `openConnection()` added without its matching `= false` (29 tests in the class now).
+- **Unified hop-cap wording**: `AppFacadeHost.httpGet`'s `"too many redirects"` surfaced as `"redirected too many times"` (`AppFacadeHost.kt:98`), matching the three plugin clients' phrasing; facade test assertion updated.
+- **Style**: trailing newline restored at EOF of `StrictRedirectPolicy.kt`.
+- Re-run: `gradle :app:testDebugUnitTest` **1104 green (0 failures)**, `gradle :app:assembleDebug` green.
+
 ## Out of scope (documented, not fixed here)
 
 - **`plugins/llm` `AssistantModelDownloader.kt:72`** (`instanceFollowRedirects = true`): this is the separate **non-base** downloadable-plugin module (`:plugins:llm`, `include(":plugins:llm")` in `settings.gradle.kts:27`; `:app` depends only on `:plugin-sdk`, `app/build.gradle.kts:131`). Its build is NOT covered by this phase's verification commands (`gradle :app:testDebugUnitTest` / `:app:assembleDebug`), so editing an unverifiable artifact was judged out of scope. Before that module ships it needs the same one-line treatment: `instanceFollowRedirects = false` (+ ideally a `StrictRedirectPolicy` hop loop on its model URL, which is operator-configured), mirroring phase-52. Same-finding instance, tracked in REPORT/phase-status so a later phase picks it up with the llm module build in scope.

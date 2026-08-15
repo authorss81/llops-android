@@ -232,7 +232,13 @@ class LocalSendSender(
     private fun httpRegisterProbe(targetIp: String): LocalSendDevice? {
         val conn: HttpURLConnection = try {
             val url = URL("http://$targetIp:${LocalSendProtocol.DEFAULT_PORT}${LocalSendProtocol.PATH_REGISTER}")
-            (url.openConnection() as HttpURLConnection)
+            val http = url.openConnection() as HttpURLConnection
+            // B1-NET-05 (phase-52): this legacy-register probe must not
+            // auto-follow a 3xx either — a redirecting LAN peer would
+            // otherwise forward the probe POST off-target. Refuse the
+            // hop so a 3xx surfaces as a failed probe.
+            http.instanceFollowRedirects = false
+            http
         } catch (e: Exception) {
             return null
         }

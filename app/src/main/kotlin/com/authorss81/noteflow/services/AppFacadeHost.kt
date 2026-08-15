@@ -95,7 +95,7 @@ class AppFacadeHost(
                     connection.disconnect()
                 }
             }
-            return FacadeResult.Failed("HTTP GET refused: too many redirects.")
+            return FacadeResult.Failed("HTTP GET refused: the service redirected too many times.")
         } catch (e: StrictRedirectPolicy.RedirectRefusedException) {
             return FacadeResult.Failed("HTTP GET refused: ${e.message}")
         } catch (e: Throwable) {

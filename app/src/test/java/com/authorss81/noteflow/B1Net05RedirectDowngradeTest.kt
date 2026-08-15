@@ -463,7 +463,7 @@ class B1Net05RedirectDowngradeTest {
         })
         val result = host.httpGet("https://plugin.example/start")
         assertTrue(result is FacadeResult.Failed)
-        assertTrue("too many redirects" in (result as FacadeResult.Failed).message)
+        assertTrue("redirected too many times" in (result as FacadeResult.Failed).message)
         assertTrue("must not exceed the hop cap", calls <= StrictRedirectPolicy.MAX_REDIRECTS + 1)
     }
 
@@ -489,6 +489,39 @@ class B1Net05RedirectDowngradeTest {
             assertTrue(
                 "$relative must disable auto-redirect following",
                 source.contains("instanceFollowRedirects = false")
+            )
+        }
+    }
+
+    @Test
+    fun `every connection opened by a base-app transport disables redirects`() {
+        // The string-presence pin above would let a second `openConnection()`
+        // slip through on the platform's implicit `= true` default (that was
+        // exactly the LocalSendSender.httpRegisterProbe gap this test pins).
+        // Enforce a per-file invariant instead: every openConnection() call in
+        // a base-app transport must be matched by at least one
+        // `instanceFollowRedirects = false` assignment.
+        val transports = mapOf(
+            "app/src/main/kotlin/com/authorss81/noteflow/plugins/websearch/DuckDuckGoClient.kt" to 1,
+            "app/src/main/kotlin/com/authorss81/noteflow/plugins/weather/WeatherClient.kt" to 1,
+            "app/src/main/kotlin/com/authorss81/noteflow/plugins/dictionary/DictionaryClient.kt" to 1,
+            "app/src/main/kotlin/com/authorss81/noteflow/services/AppFacadeHost.kt" to 1,
+            "app/src/main/kotlin/com/authorss81/noteflow/services/localsend/LocalSendSender.kt" to 2,
+            "app/src/main/kotlin/com/authorss81/noteflow/services/WebDavSyncService.kt" to 1,
+            "app/src/main/kotlin/com/authorss81/noteflow/plugins/citation/HttpsTitleFetcher.kt" to 1,
+            "app/src/main/kotlin/com/authorss81/noteflow/plugins/webcapture/WebPageFetcher.kt" to 1,
+            "app/src/main/kotlin/com/authorss81/noteflow/plugins/runtime/PinnedTlsConnector.kt" to 1
+        )
+        for ((relative, expectedOpenConnections) in transports) {
+            val source = File(repoRoot(), relative).readText()
+            // reading a .kt file: count every real openConnection() call site
+            val opens = source.split("openConnection()").size - 1
+            val disables = source.split("instanceFollowRedirects = false").size - 1
+            assertTrue(
+                "$relative must match every openConnection() with instanceFollowRedirects = false " +
+                    "(openConnection() calls observed: $opens, expected >= $expectedOpenConnections; disables: $disables)",
+                opens >= expectedOpenConnections &&
+                    disables >= opens
             )
         }
     }
