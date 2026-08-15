@@ -88,29 +88,59 @@ internal object TestArtifactBuilder {
         }
     }
 
-    /** Generate a fresh signing keystore (independent per call). */
-    fun newKeystore(workDir: File, name: String): Keystore {
+    /**
+     * Generate a fresh signing keystore (independent per call).
+     *
+     * @param alias the keystore alias (kept distinct across keys in the
+     *   two-signer test — jarsigner replaces an existing signature made under
+     *   the SAME alias, so two keys MUST use different aliases to coexist).
+     * @param startDate optional keytool `-startdate` (e.g. `"2000/01/01
+     *   00:00:00"`) so a test can mint an ALREADY-EXPIRED certificate
+     *   (B1-CRYPTO-08 validity gate).
+     * @param keyUsage optional keytool `-ext` value (e.g. `"keyUsage=keyCertSign"`)
+     *   so a test can mint a certificate whose KeyUsage excludes
+     *   digitalSignature (B1-CRYPTO-08 key-usage gate).
+     */
+    fun newKeystore(
+        workDir: File,
+        name: String,
+        alias: String = "plugin",
+        startDate: String? = null,
+        keyUsage: String? = null
+    ): Keystore {
         val ksFile = File(workDir, "$name.p12")
         val password = "noteflow-test-pass"
         val keytool = keytoolBinary()
-        val cmd = listOf(
-            keytool,
-            "-genkeypair", "-alias", "plugin",
-            "-keyalg", "RSA", "-keysize", "2048",
-            "-sigalg", "SHA256withRSA",
-            "-validity", "3650",
-            "-dname", "CN=Noteflow Plugin Test, O=Noteflow, C=XX",
-            "-keystore", ksFile.absolutePath,
-            "-storetype", "PKCS12",
-            "-storepass", password,
-            "-keypass", password,
-            "-noprompt"
-        )
+        val cmd = buildList {
+            addAll(
+                listOf(
+                    keytool,
+                    "-genkeypair", "-alias", alias,
+                    "-keyalg", "RSA", "-keysize", "2048",
+                    "-sigalg", "SHA256withRSA",
+                    "-validity", "3650",
+                    "-dname", "CN=Noteflow Plugin Test, O=Noteflow, C=XX",
+                    "-keystore", ksFile.absolutePath,
+                    "-storetype", "PKCS12",
+                    "-storepass", password,
+                    "-keypass", password,
+                    "-noprompt"
+                )
+            )
+            if (startDate != null) {
+                add("-startdate")
+                add(startDate)
+            }
+            if (keyUsage != null) {
+                add("-ext")
+                add(keyUsage)
+            }
+        }
         val process = ProcessBuilder(cmd).redirectErrorStream(true).start()
         val output = process.inputStream.bufferedReader().readText()
         check(process.waitFor() == 0) { "keytool failed: $output" }
         check(ksFile.isFile) { "keytool produced no keystore: $output" }
-        return Keystore(ksFile, "plugin", password.toCharArray())
+        return Keystore(ksFile, alias, password.toCharArray())
     }
 
     /**
@@ -138,7 +168,8 @@ internal object TestArtifactBuilder {
         pluginClassName: String = TestDownloadablePlugin::class.java.name,
         pluginId: String = TestDownloadablePlugin.TEST_PLUGIN_ID,
         descriptorId: String? = pluginId,
-        sign: Boolean = true
+        sign: Boolean = true,
+        additionalSigners: List<Keystore> = emptyList()
     ): SignedArtifact {
         val seq = buildSeq.incrementAndGet()
         val unsigned = File(workDir, "unsigned-$seq-${System.nanoTime()}.jar")
@@ -147,10 +178,66 @@ internal object TestArtifactBuilder {
         val artifactFile = File(workDir, "artifact-$seq-${System.nanoTime()}.jar")
         if (sign) {
             signWithJarsigner(unsigned, artifactFile, keystore)
+            // B1-CRYPTO-08: jarsigner preserves an existing signature block when
+            // re-signing with a DIFFERENT keystore, so an artifact signed once
+            // with `keystore` and again with each `additionalSigners` entry ends
+            // up with MULTIPLE signers covering every entry — the multi-signer
+            // shape the verifier must reject.
+            additionalSigners.forEachIndexed { i, extra ->
+                val stage = File(workDir, "stage-$seq-$i-${System.nanoTime()}.jar")
+                signWithJarsigner(artifactFile, stage, extra)
+                stage.copyTo(artifactFile, overwrite = true)
+                stage.delete()
+            }
         } else {
             unsigned.copyTo(artifactFile)
         }
         unsigned.delete()
+        val sha256 = com.authorss81.noteflow.plugins.runtime.PluginDigest.sha256Hex(artifactFile)!!
+        val cert = keystore.privateKeyEntry().certificateChain.first() as java.security.cert.X509Certificate
+        val pin = "sha256/" + com.authorss81.noteflow.plugins.runtime.PinnedCertHash.base64Sha256(cert)
+        return SignedArtifact(artifactFile, sha256, pin, cert)
+    }
+
+    /**
+     * Build a signed artifact and then append an EXTRA entry that the signature
+     * does NOT cover (no manifest `Name:` digest section, no signature block).
+     * The jar still verifies under `JarFile(verify = true)` — the existing
+     * signature block and manifest are copied byte-identically — but the
+     * appended entry carries NO certificates. This is exactly the "unsigned
+     * entry inside a verified jar" shape B1-CRYPTO-08 forces the verifier to
+     * reject (the pre-fix code skipped such entries and took the last signed
+     * cert instead).
+     */
+    fun buildWithUnsignedEntry(
+        workDir: File,
+        keystore: Keystore,
+        unsignedEntryName: String,
+        unsignedEntryContent: ByteArray
+    ): SignedArtifact {
+        val seq = buildSeq.incrementAndGet()
+        val unsigned = File(workDir, "unsigned-$seq-${System.nanoTime()}.jar")
+        writeUnsignedJar(unsigned, TestDownloadablePlugin::class.java.name, TestDownloadablePlugin.TEST_PLUGIN_ID)
+        val signedOnce = File(workDir, "once-$seq-${System.nanoTime()}.jar")
+        signWithJarsigner(unsigned, signedOnce, keystore)
+        unsigned.delete()
+
+        val artifactFile = File(workDir, "mixed-$seq-${System.nanoTime()}.jar")
+        java.util.zip.ZipInputStream(signedOnce.inputStream().buffered()).use { zin ->
+            java.util.zip.ZipOutputStream(artifactFile.outputStream().buffered()).use { zout ->
+                var entry = zin.nextEntry
+                while (entry != null) {
+                    zout.putNextEntry(java.util.zip.ZipEntry(entry.name))
+                    if (!entry.isDirectory) zin.copyTo(zout)
+                    zout.closeEntry()
+                    entry = zin.nextEntry
+                }
+                zout.putNextEntry(java.util.zip.ZipEntry(unsignedEntryName))
+                zout.write(unsignedEntryContent)
+                zout.closeEntry()
+            }
+        }
+        signedOnce.delete()
         val sha256 = com.authorss81.noteflow.plugins.runtime.PluginDigest.sha256Hex(artifactFile)!!
         val cert = keystore.privateKeyEntry().certificateChain.first() as java.security.cert.X509Certificate
         val pin = "sha256/" + com.authorss81.noteflow.plugins.runtime.PinnedCertHash.base64Sha256(cert)
