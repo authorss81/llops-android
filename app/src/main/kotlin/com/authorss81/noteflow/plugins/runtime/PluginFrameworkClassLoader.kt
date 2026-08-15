@@ -33,6 +33,15 @@ import java.lang.ClassLoader
  * and is refused identically. So even bytecode that never statically imports a
  * forbidden class cannot fabricate a handle to the vault.
  *
+ * NOTE (phase-46 review): the whole `plugins.*` namespace is treated as the
+ * shared framework surface and is resolvable by artifacts. Host internals under
+ * `plugins.*` MUST never expose a vault handle (a field/parameter/supertype of
+ * `VaultKeyHolder`, `SecurityService`, `NoteflowDatabase`, `SettingsManager`
+ * or `NoteRepository`) or an artifact could reach it through THIS loader.
+ * That invariant is pinned by `PluginBytecodeIsolationTest`
+ * (`no vault-handle types are referenced by code in the resolvable plugin
+ * surface`) — keep it green when touching plugin-host classes.
+ *
  * Pure JVM (extends [java.lang.ClassLoader]) — used directly by production
  * ([com.authorss81.noteflow.services.AppClassLoaderFactory]) and by the
  * pure-JVM runtime tests, so the sandbox semantics are provable without a

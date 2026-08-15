@@ -105,8 +105,13 @@
     (`services|data|ui|theme|utils`, slash+dot), bare secret-bearing class names (`VaultKeyHolder`,
     `EncryptionService`, `NoteflowDatabase`, `SettingsManager`, `NoteRepository`, `SecurityService`) and
     raw `java.net`/`javax.net.ssl` egress primitives, parsing `.class` constant pools + DEX string/type
-    tables structurally. `ProcessBuilder`/`Runtime` exec and a separate `:remote` process remain
-    out-of-scope (future isolation phases), noted in the phase-46 REPORT. Tests: `PluginBytecodeIsolationTest` (15).
+    tables structurally. Phase-46 review additions to the scan: net-egress + `ProcessBuilder`/`Runtime`
+    classes matched in slash AND dot form (a `Class.forName("java.net.HttpURLConnection")` reflection
+    literal is refused too), sensitive class names matched as whole tokens (no false-positive on a
+    benign plugin's own compound identifiers), and a source-level pin test holds the invariant that
+    `plugins.*` host code (the artifact-resolvable surface) never references a vault-handle type.
+    Native (`System.loadLibrary`) / `sun.misc.Unsafe` gating and a separate `:remote` process remain
+    out-of-scope (future isolation phases), noted in the phase-46 REPORT. Tests: `PluginBytecodeIsolationTest` (20).
   - **Implemented in phase-39**: update-manifest + artifact transports share
     `plugins/runtime/PinnedTlsConnector.kt` (`open` pins the leaf via constant-time
     `PinnedCertHash.matches`, `instanceFollowRedirects = false`; 3xx refused in both

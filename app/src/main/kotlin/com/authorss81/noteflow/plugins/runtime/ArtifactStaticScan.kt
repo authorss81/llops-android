@@ -37,15 +37,27 @@ import java.util.jar.JarFile
  *    `SettingsManager`, `NoteRepository`, the DB factory).
  * 2. **Sensitive class names** — bare `VaultKeyHolder`, `EncryptionService`,
  *    `NoteflowDatabase`, `SettingsManager`, `NoteRepository`, `SecurityService`
- *    anywhere (belt-and-braces against concatenated/obfuscated references).
+ *    appearing as a WHOLE token (belt-and-braces against concatenated /
+ *    string-built references like `Class.forName(pkg + "VaultKeyHolder")`).
+ *    Whole-token matching is deliberate: a benign plugin whose own API/strings
+ *    merely mention such a term (e.g. a `getNoteRepository()` helper name)
+ *    must not be false-rejected, while a literal `"VaultKeyHolder"` fragment is
+ *    still caught with certainty.
  * 3. **Raw network egress** — exact `java.net`/`javax.net.ssl` socket /
  *    connection primitives (`Socket`, `HttpURLConnection`, `URLConnection`,
- *    `URL`, `InetAddress`, `SocketChannel`, `SSLSocket`, …). Network MUST go
- *    through the host's capability facade, never the plugin's own sockets.
- *
- * Deliberately NOT included: `java/lang/ProcessBuilder` / `java/lang/Runtime`
- * (process execution is a separate boundary; a future isolation phase should
- * gate it too — see the phase-46 REPORT's out-of-scope notes).
+ *    `URL`, `InetAddress`, `SocketChannel`, `SSLSocket`, …), in BOTH the slash
+ *    form compiled into constant-pool/DEX type references AND the dot form
+ *    used by `Class.forName("java.net.HttpURLConnection")` literals and
+ *    string-concatenated reflection. Network MUST flow through the host's
+ *    capability facade, never the plugin's own sockets.
+ * 4. **Process execution** — `java/lang/ProcessBuilder` and `java/lang/Runtime`
+ *    (slash + dot). The phase-46 REPORT's out-of-scope note ("refuse
+ *    shell-exec classes in the scan") is now done; `exec`-based escape is
+ *    closed at the class-name level. Trade-off: a plugin cannot probe the
+ *    device via `Runtime.getRuntime().availableProcessors()` — such helpers
+ *    must come from the host facade. Native (`System.loadLibrary`) and
+ *    `sun.misc.Unsafe` remain a future separate boundary (native blobs cannot
+ *    be gated by class-name scans).
  *
  * Pure JVM; never throws — a file that refuses to be read as a JAR is returned
  * [Result.Pass] so the signature/identity gates (which already fail such a
@@ -128,22 +140,33 @@ class ArtifactStaticScan {
                 return "references the base-app private package '${slashLabel(p)}' that plugins may not touch."
             }
         }
-        for (n in SENSITIVE_CLASS_NAMES) {
-            if (value.contains(n)) {
-                return "references the base-app '${n}' class, which stays in the host — plugins never receive it."
-            }
+        containsSensitiveToken(value)?.let { name ->
+            return "references the base-app '${name}' class, which stays in the host — plugins never receive it."
         }
         val canonical = value.removePrefix("L").substringBefore(';')
-        if (canonical in NETWORK_EGRESS_CLASSES) {
+        val dotted = canonical.replace('/', '.')
+        if (canonical in NETWORK_EGRESS_CLASSES ||
+            canonical in NETWORK_EGRESS_DOT ||
+            dotted in NETWORK_EGRESS_CLASSES ||
+            dotted in NETWORK_EGRESS_DOT
+        ) {
             return "references raw network egress ('$canonical'). Plugin networking runs ONLY through the host's capability facade (httpGet)."
+        }
+        if (canonical in PROCESS_EXEC_CLASSES ||
+            canonical in PROCESS_EXEC_DOT ||
+            dotted in PROCESS_EXEC_CLASSES ||
+            dotted in PROCESS_EXEC_DOT
+        ) {
+            return "references process execution ('$canonical'). Plugin work must stay inside the verified plugin sandbox — no subprocesses."
         }
         return null
     }
 
     /** Streaming byte-substring search for non-class/non-dex entries. Only the
-     *  unambiguous app-private prefixes + sensitive names are searched raw
-     *  (network egress is checked on parsed strings, where exact matching is
-     *  possible — a raw `java/net/URL` would alias `URLClassLoader`). */
+     *  unambiguous app-private prefixes are searched raw (network/process-exec
+     *  egress + sensitive class names are checked via [containsSensitiveToken]
+     *  and the parsed-string checks, where exact/token matching is possible — a
+     *  raw `java/net/URL` would alias `URLClassLoader`). */
     private fun forbiddenRawBytes(input: java.io.InputStream): String? {
         // ISO-8859-1 maps bytes 1:1 to chars, so String.indexOf (JVM-intrinsic)
         // is a fast, correct byte-substring matcher.
@@ -161,6 +184,7 @@ class ArtifactStaticScan {
                     return rawMatchReason(pattern)
                 }
             }
+            containsSensitiveToken(haystack)?.let { return rawMatchReason(it) }
             // Keep the tail so a pattern split across two chunks still matches.
             val keepFrom = maxOf(0, combined.size - (RAW_MAX_PATTERN_LENGTH - 1))
             kept = combined.copyOfRange(keepFrom, combined.size)
@@ -201,7 +225,9 @@ class ArtifactStaticScan {
         )
 
         /** Bare sensitive class names (covers concatenated / string-built
-         *  references like `Class.forName(pkg + "VaultKeyHolder")`). */
+         *  references like `Class.forName(pkg + "VaultKeyHolder")`). Matched
+         *  ONLY as a whole token ([containsSensitiveToken]) so a benign
+         *  plugin's own compound identifiers are never false-flagged. */
         private val SENSITIVE_CLASS_NAMES: List<String> = listOf(
             "VaultKeyHolder",
             "EncryptionService",
@@ -229,8 +255,27 @@ class ArtifactStaticScan {
             "javax/net/ssl/HttpsURLConnection"
         )
 
-        private val RAW_BYTE_PATTERNS: List<String> =
-            APP_PRIVATE_PREFIXES + SENSITIVE_CLASS_NAMES
+        /** Dot-form spellings of the same egress classes — a
+         *  `Class.forName("java.net.HttpURLConnection")` reflection literal
+         *  compiles to exactly this string (slash-form detection alone was the
+         *  phase-46-review finding: the raw gate could be evaded with dot form). */
+        private val NETWORK_EGRESS_DOT: Set<String> =
+            NETWORK_EGRESS_CLASSES.map { it.replace('/', '.') }.toSet()
+
+        /** Process-execution classes (phase-46 review: closes the REPORT's
+         *  previously out-of-scope `exec` escape at the class-name level). */
+        private val PROCESS_EXEC_CLASSES: Set<String> = setOf(
+            "java/lang/ProcessBuilder",
+            "java/lang/Runtime"
+        )
+
+        private val PROCESS_EXEC_DOT: Set<String> =
+            PROCESS_EXEC_CLASSES.map { it.replace('/', '.') }.toSet()
+
+        /** Raw (non-parsed) entries are searched for the unambiguous app-private
+         *  prefixes only; sensitive names go through [containsSensitiveToken]
+         *  and egress/exec go through the parsed-string checks. */
+        private val RAW_BYTE_PATTERNS: List<String> = APP_PRIVATE_PREFIXES
 
         private fun slashLabel(pattern: String): String =
             if (pattern.startsWith("com.")) {
@@ -238,6 +283,28 @@ class ArtifactStaticScan {
             } else {
                 pattern.substringAfter("com/authorss81/noteflow/").removeSuffix("/")
             }
+
+        /**
+         * True when [value] contains [name] as a WHOLE token (neither preceded
+         * nor followed by an identifier character). `getNoteRepository` is NOT
+         * a mention; `Class.forName(pkg + "VaultKeyHolder")` literal fragments
+         * are. Shared by the parsed-string and raw-byte scans.
+         */
+        fun containsSensitiveToken(value: String): String? {
+            for (name in SENSITIVE_CLASS_NAMES) {
+                var from = 0
+                while (true) {
+                    val idx = value.indexOf(name, from)
+                    if (idx == -1) break
+                    val prevOk = idx == 0 || !value[idx - 1].isLetterOrDigit()
+                    val last = idx + name.length
+                    val nextOk = last >= value.length || !value[last].isLetterOrDigit()
+                    if (prevOk && nextOk) return name
+                    from = idx + 1
+                }
+            }
+            return null
+        }
     }
 }
 

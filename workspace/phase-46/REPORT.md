@@ -3,6 +3,7 @@
 - **Date:** 2026-08-15
 - **Finding:** `B1-AUTH-01` — *Downloadable plugin bytecode executes with the app classloader as parent, letting a signature-verified (or leaked-signer) artifact resolve `VaultKeyHolder`/`SecurityService` and read the vault DEK in-process* (HIGH)
 - **Scope:** one finding per phase (tight diff). No DB schema change, no migration, no new dependencies, `.github/workflows/` untouched.
+- **Review status:** phase review raised 5 findings; all closed in the same phase (see the "Phase-46 review fixes" section below).
 
 ## Root cause (before)
 
@@ -82,6 +83,18 @@ Two independent, required layers close the finding. Either alone is insufficient
 
 - The capability facade is now an enforceable boundary, not a convention: any plugin class that even MENTIONS a secret-bearing type is rejected before any bytecode materializes, and any class that survives could not resolve those types anyway.
 - Benign third-party plugin code (own package, only `plugins.*` + platform imports) is fully unaffected — proven end-to-end by the whitelisted load-and-execute test through a full `verify` → `load` → capability call.
+
+## Phase-46 review fixes (applied after the phase review)
+
+The phase-46 review raised 5 FINDINGS; all five were addressed in-tree (same phase, no new deps, no schema/workflow change):
+
+1. **F1 (MEDIUM) — dot-form network egress evasion closed.** The pre-review scan matched only slash-form net primitives; a reflection literal `Class.forName("java.net.HttpURLConnection")` (dot form) and string-concatenated net types evaded it. `ArtifactStaticScan.forbiddenIn` now checks the canonical name in BOTH the slash set (`NETWORK_EGRESS_CLASSES`) and its dot equivalent (`NETWORK_EGRESS_DOT`, `ArtifactStaticScan.kt`): slash CONSTANT_Class refs, `Ljava/net/...;` descriptors AND `"java.net.HttpURLConnection"` literals are all refused (exact membership — dot `java.net.URL` still never aliases `java.net.URLClassLoader`).
+2. **F2 (LOW) — false-positive over-rejection removed.** Bare sensitive names (`VaultKeyHolder`, `EncryptionService`, `NoteflowDatabase`, `SettingsManager`, `NoteRepository`, `SecurityService`) are now matched as WHOLE tokens (`containsSensitiveToken`, shared by the parsed-string and raw-byte scans) instead of substring-anywhere: `Class.forName(pkg + "VaultKeyHolder")` fragments are still caught, while a benign plugin's own `getNoteRepository()`-style identifiers pass. The "never false-positive" claim is now accurate.
+3. **F3 (LOW) — `plugins.*` host-surface invariant pinned.** The sandbox deliberately trusts the whole `plugins.*` namespace (that IS the artifact-facing surface), so host classes added there must never expose a vault handle. New pin test `no vault-handle types are referenced by code in the resolvable plugin surface` strips comments + string literals from every `plugins/**/*.kt` and asserts no code references the secret-bearing types; the class KDoc now documents the invariant.
+4. **F4 (LOW) — process-execution classes now gated.** The previously out-of-scope `java/lang/ProcessBuilder` and `java/lang/Runtime` (slash + dot) are now refused by the scan (`PROCESS_EXEC_CLASSES`/`PROCESS_EXEC_DOT`), closing `exec`-based escape at the class-name level as the REPORT's note proposed. Documented trade-off: a plugin cannot probe the device via `Runtime.getRuntime().availableProcessors()` — such helpers must come from the host facade. Native (`System.loadLibrary`) and `sun.misc.Unsafe` remain a separate future boundary (not class-name-gateable).
+5. **F5 (INFO) — doc drift.** Suite count corrected to 95 (996→1001 tests after the review additions).
+
+New tests in `PluginBytecodeIsolationTest` (15 → 20): dot-form `Class.forName` network literal rejected; dot-form string-built `VaultKeyHolder` ref rejected; `ProcessBuilder` + `Runtime.exec` rejected; benign lookalike identifiers accepted; `plugins.*` vault-handle source pin. `gradle :app:testDebugUnitTest` → **1001 tests, 0 failures, 95 suites**; `gradle :app:assembleDebug` → BUILD SUCCESSFUL.
 
 ## Files touched
 

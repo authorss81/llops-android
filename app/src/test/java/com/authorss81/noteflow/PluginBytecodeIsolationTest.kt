@@ -230,6 +230,97 @@ class PluginBytecodeIsolationTest {
         )
     }
 
+    @Test
+    fun `the static scan rejects a dot-form network egress Class forName literal`() {
+        // Phase-46 review: slash-form type references were caught, but a
+        // reflection literal `Class.forName("java.net.HttpURLConnection")`
+        // compiles to the DOT form — the old exact-slash set never matched it.
+        val artifact = signedArtifact(HostileForNameNetworkPlugin::class.java.name)
+        val scan = ArtifactStaticScan().scan(artifact.file)
+        assertTrue(
+            "scan -> ${(scan as? ArtifactStaticScan.Result.Rejected)?.reason}",
+            scan is ArtifactStaticScan.Result.Rejected
+        )
+        val reason = (scan as ArtifactStaticScan.Result.Rejected).reason
+        assertTrue("reason=$reason", reason.contains("network"))
+    }
+
+    @Test
+    fun `the static scan rejects a dot-form string-built VaultKeyHolder reference`() {
+        val artifact = signedArtifact(HostileForNameVaultPlugin::class.java.name)
+        val scan = ArtifactStaticScan().scan(artifact.file)
+        assertTrue(
+            "scan -> ${(scan as? ArtifactStaticScan.Result.Rejected)?.reason}",
+            scan is ArtifactStaticScan.Result.Rejected
+        )
+        val reason = (scan as ArtifactStaticScan.Result.Rejected).reason
+        assertTrue("reason=$reason", reason.contains("services") || reason.contains("VaultKeyHolder"))
+    }
+
+    @Test
+    fun `the static scan rejects process-execution classes`() {
+        // Phase-46 review: ProcessBuilder/Runtime.exec were previously out of
+        // scope — now refused at the class-name level (slash AND dot forms).
+        val pb = signedArtifact(HostileProcessBuilderPlugin::class.java.name)
+        val scanPb = ArtifactStaticScan().scan(pb.file)
+        assertTrue(
+            "ProcessBuilder -> ${(scanPb as? ArtifactStaticScan.Result.Rejected)?.reason}",
+            scanPb is ArtifactStaticScan.Result.Rejected
+        )
+        assertTrue("reason=${(scanPb as ArtifactStaticScan.Result.Rejected).reason}", (scanPb as ArtifactStaticScan.Result.Rejected).reason.contains("process"))
+
+        val rt = signedArtifact(HostileRuntimeExecPlugin::class.java.name)
+        val scanRt = ArtifactStaticScan().scan(rt.file)
+        assertTrue(
+            "Runtime.exec -> ${(scanRt as? ArtifactStaticScan.Result.Rejected)?.reason}",
+            scanRt is ArtifactStaticScan.Result.Rejected
+        )
+        assertTrue("reason=${(scanRt as ArtifactStaticScan.Result.Rejected).reason}", (scanRt as ArtifactStaticScan.Result.Rejected).reason.contains("process"))
+    }
+
+    @Test
+    fun `the static scan does not over-reject benign identifiers resembling a sensitive class`() {
+        // Phase-46 review: whole-token matching means a benign plugin's own
+        // compound identifiers (method names etc.) are NOT false-rejected.
+        val artifact = signedArtifact(BenignLookalikePlugin::class.java.name)
+        val scan = ArtifactStaticScan().scan(artifact.file)
+        assertTrue(
+            "benign lookalike plugin must pass the scan -> ${(scan as? ArtifactStaticScan.Result.Rejected)?.reason}",
+            scan is ArtifactStaticScan.Result.Pass
+        )
+    }
+
+    // ------------------------------------------------------------------ //
+    // 2a. The plugins.* host surface must never expose a vault handle (F3)  //
+    // ------------------------------------------------------------------ //
+
+    @Test
+    fun `no vault-handle types are referenced by code in the resolvable plugin surface`() {
+        // Phase-46 review: the sandbox trusts the whole `plugins.*` namespace
+        // (that is what a downloadable artifact resolves against). A future
+        // host class under `plugins.*` that holds a VaultKeyHolder /
+        // SecurityService / NoteflowDatabase / SettingsManager / NoteRepository
+        // handle would become artifact-reachable. This pins the invariant:
+        // plugin-host CODE (comments + string literals stripped, e.g. the scan's
+        // own pattern tables and KDoc mentions) never references those types.
+        val root = File(repoRoot(), "app/src/main/kotlin/com/authorss81/noteflow/plugins")
+        assertTrue("plugins host source root missing: $root", root.isDirectory)
+        val violations = mutableListOf<String>()
+        root.walkTopDown()
+            .filter { it.isFile && it.name.endsWith(".kt") }
+            .forEach { file ->
+                val code = stripCommentsAndStrings(file.readText())
+                ArtifactStaticScan.containsSensitiveToken(code)?.let {
+                    violations += "${file.relativeTo(root)} -> $it"
+                }
+            }
+        assertTrue(
+            "plugin-host code under plugins.* must not reference vault handles:\n" +
+                violations.joinToString("\n"),
+            violations.isEmpty()
+        )
+    }
+
     // ------------------------------------------------------------------ //
     // 3. Load-time sandbox (classloader) - hostile artifact                //
     // ------------------------------------------------------------------ //
@@ -341,8 +432,13 @@ class PluginBytecodeIsolationTest {
     // fixtures                                                             //
     // ------------------------------------------------------------------ //
 
+    private val ksSeq = java.util.concurrent.atomic.AtomicLong(0)
+
     private fun signedArtifact(pluginClassName: String): TestArtifactBuilder.SignedArtifact {
-        val ks = TestArtifactBuilder.newKeystore(tmp.root, "isolation-signer")
+        // Per-artifact keystore name: two signedArtifact calls in ONE test share
+        // tmp.root, and keytool refuses to re-create an existing alias.
+        val name = "isolation-signer-${ksSeq.incrementAndGet()}"
+        val ks = TestArtifactBuilder.newKeystore(tmp.root, name)
         return TestArtifactBuilder.build(tmp.root, ks, pluginClassName = pluginClassName)
     }
 
@@ -452,6 +548,213 @@ internal class HostileNetworkPlugin : NoteflowPlugin, TextTransformPlugin {
     override fun availability(context: android.content.Context?): PluginAvailability = PluginAvailability.Ok
     override fun onEnable(context: android.content.Context?, settings: PluginSettings) {}
     override fun transformText(text: String): String = text
+}
+
+/** A plugin that reaches for a raw socket REFLECTIVELY — a dot-form
+ *  `Class.forName("java.net.HttpURLConnection")` literal, which the pre-review
+ *  slash-form-only scan could not see. (Compile-time direct reference would
+ *  emit the slash CONSTANT_Class entry; the literal is the evasion.) */
+internal class HostileForNameNetworkPlugin : NoteflowPlugin, TextTransformPlugin {
+
+    @Suppress("UNUSED_VARIABLE")
+    override fun transformText(text: String): String {
+        val conn = Class.forName("java.net.HttpURLConnection")
+        val unused = conn
+        return text
+    }
+
+    override val manifest = PluginManifest(
+        id = TestDownloadablePlugin.TEST_PLUGIN_ID,
+        name = "Hostile Reflective Network Egress",
+        version = SemanticVersion(1, 0, 0),
+        minSupportedApi = 26,
+        description = "Attack artifact that reflects its way to raw sockets.",
+        capabilities = setOf(PluginCapability.TextTransform),
+        permissions = emptySet()
+    )
+
+    override fun availability(context: android.content.Context?): PluginAvailability = PluginAvailability.Ok
+    override fun onEnable(context: android.content.Context?, settings: PluginSettings) {}
+}
+
+/** A plugin that string-builds a vault type for reflection. */
+internal class HostileForNameVaultPlugin : NoteflowPlugin, TextTransformPlugin {
+
+    @Suppress("UNUSED_VARIABLE")
+    override fun transformText(text: String): String {
+        val prefix = "com.authorss81.noteflow.services."
+        val clazz = Class.forName(prefix + "VaultKeyHolder")
+        val unused = clazz
+        return text
+    }
+
+    override val manifest = PluginManifest(
+        id = TestDownloadablePlugin.TEST_PLUGIN_ID,
+        name = "Hostile Reflective Vault",
+        version = SemanticVersion(1, 0, 0),
+        minSupportedApi = 26,
+        description = "Attack artifact that reflects its way to the vault DEK.",
+        capabilities = setOf(PluginCapability.TextTransform),
+        permissions = emptySet()
+    )
+
+    override fun availability(context: android.content.Context?): PluginAvailability = PluginAvailability.Ok
+    override fun onEnable(context: android.content.Context?, settings: PluginSettings) {}
+}
+
+/** A plugin that spawns a subprocess via ProcessBuilder — the previously
+ *  out-of-scope exec vector, now refused at the class-name level. */
+internal class HostileProcessBuilderPlugin : NoteflowPlugin, TextTransformPlugin {
+
+    @Suppress("UNUSED_VARIABLE")
+    override fun transformText(text: String): String {
+        val pb = java.lang.ProcessBuilder("sh")
+        val unused = pb
+        return text
+    }
+
+    override val manifest = PluginManifest(
+        id = TestDownloadablePlugin.TEST_PLUGIN_ID,
+        name = "Hostile ProcessBuilder",
+        version = SemanticVersion(1, 0, 0),
+        minSupportedApi = 26,
+        description = "Attack artifact that spawns a subprocess.",
+        capabilities = setOf(PluginCapability.TextTransform),
+        permissions = emptySet()
+    )
+
+    override fun availability(context: android.content.Context?): PluginAvailability = PluginAvailability.Ok
+    override fun onEnable(context: android.content.Context?, settings: PluginSettings) {}
+}
+
+/** A plugin that shells out via Runtime.getRuntime().exec — same class-name
+ *  gate as [HostileProcessBuilderPlugin]. */
+internal class HostileRuntimeExecPlugin : NoteflowPlugin, TextTransformPlugin {
+
+    @Suppress("UNUSED_VARIABLE")
+    override fun transformText(text: String): String {
+        val proc = Runtime.getRuntime().exec("sh")
+        val unused = proc
+        return text
+    }
+
+    override val manifest = PluginManifest(
+        id = TestDownloadablePlugin.TEST_PLUGIN_ID,
+        name = "Hostile Runtime exec",
+        version = SemanticVersion(1, 0, 0),
+        minSupportedApi = 26,
+        description = "Attack artifact that shells out through Runtime.exec.",
+        capabilities = setOf(PluginCapability.TextTransform),
+        permissions = emptySet()
+    )
+
+    override fun availability(context: android.content.Context?): PluginAvailability = PluginAvailability.Ok
+    override fun onEnable(context: android.content.Context?, settings: PluginSettings) {}
+}
+
+/** A BENIGN plugin whose own identifiers merely RESEMBLE the sensitive class
+ *  names — the whole-token matching must not false-reject it. */
+internal class BenignLookalikePlugin : NoteflowPlugin, TextTransformPlugin {
+
+    @Suppress("UNUSED_VARIABLE")
+    override fun transformText(text: String): String {
+        val noteCount = getNoteRepositoryCount()
+        val securityCached = isSecurityServiceCached()
+        val unused = noteCount to securityCached
+        return text
+    }
+
+    @Suppress("unused")
+    private fun getNoteRepositoryCount(): Int = 0
+
+    @Suppress("unused")
+    private fun isSecurityServiceCached(): Boolean = false
+
+    override val manifest = PluginManifest(
+        id = TestDownloadablePlugin.TEST_PLUGIN_ID,
+        name = "Benign Lookalike",
+        version = SemanticVersion(1, 0, 0),
+        minSupportedApi = 26,
+        description = "A benign plugin with suspicious-looking method names.",
+        capabilities = setOf(PluginCapability.TextTransform),
+        permissions = emptySet()
+    )
+
+    override fun availability(context: android.content.Context?): PluginAvailability = PluginAvailability.Ok
+    override fun onEnable(context: android.content.Context?, settings: PluginSettings) {}
+}
+
+/**
+ * Strips Kotlin comments (line/block/KDoc) and string/char literals (regular,
+ * triple-quoted) from [source] so a source-level invariant pin tests barely
+ * the CODE a plugin-host class exposes, not its docs or message tables.
+ * Whole irrelevant spans are replaced with blank output.
+ */
+private fun stripCommentsAndStrings(source: String): String {
+    val out = StringBuilder(source.length)
+    val n = source.length
+    var i = 0
+    while (i < n) {
+        val c = source[i]
+        when {
+            c == '/' && i + 1 < n && source[i + 1] == '/' -> {
+                while (i < n && source[i] != '\n') i++
+            }
+            c == '/' && i + 1 < n && source[i + 1] == '*' -> {
+                i += 2
+                var depth = 1
+                while (i < n && depth > 0) {
+                    if (source[i] == '*' && i + 1 < n && source[i + 1] == '/') {
+                        depth--
+                        i += 2
+                    } else {
+                        i++
+                    }
+                }
+            }
+            c == '"' && i + 2 < n && source[i + 1] == '"' && source[i + 2] == '"' -> {
+                i += 3
+                while (i < n) {
+                    if (source[i] == '"' && i + 2 < n && source[i + 1] == '"' && source[i + 2] == '"') {
+                        i += 3
+                        break
+                    }
+                    i++
+                }
+            }
+            c == '"' -> {
+                i++
+                while (i < n) {
+                    when {
+                        source[i] == '\\' -> i += 2
+                        source[i] == '"' -> {
+                            i++
+                            break
+                        }
+                        else -> i++
+                    }
+                }
+            }
+            c == '\'' -> {
+                i++
+                while (i < n) {
+                    when {
+                        source[i] == '\\' -> i += 2
+                        source[i] == '\'' -> {
+                            i++
+                            break
+                        }
+                        else -> i++
+                    }
+                }
+            }
+            else -> {
+                out.append(c)
+                i++
+            }
+        }
+    }
+    return out.toString()
 }
 
 /**
