@@ -7,6 +7,7 @@ import com.authorss81.noteflow.services.DatabaseSecurityHelper
 import com.authorss81.noteflow.services.EncryptionService
 import com.authorss81.noteflow.services.NoteBodyVaultPolicy
 import com.authorss81.noteflow.services.VaultKeyHolder
+import com.authorss81.noteflow.services.VaultWriteGate
 import com.authorss81.noteflow.services.WikiLinkParser
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -28,6 +29,19 @@ class NoteRepository(private var db: NoteflowDatabase) {
         VaultKeyHolder.zeroize()
         invalidateSearchCorpus()
     }
+
+    /**
+     * B2-UI-1 (phase-49): fail-closed key for EVERY encrypted-field write. When
+     * the vault is locked (the DEK was zeroized by `lock()`/auto-lock), the write
+     * THROWS [com.authorss81.noteflow.services.VaultLockedWriteException] instead
+     * of silently storing plaintext — the old `if (encryptionKey != null) encrypt
+     * else raw` fallback that let a post-lock autosave/dispose-flush coroutine
+     * persist stroke textContent/pointsJson, embed textContent and note_versions
+     * bodies as plaintext rows is gone. Callers that may still be racing a lock
+     * (EditorScreen flushes) catch this and re-queue via the ViewModel's
+     * [EditorFlushPolicy] stash for after the next unlock.
+     */
+    private fun requireEncryptionKey(): ByteArray = VaultWriteGate.requireKey(encryptionKey)
 
     /**
      * In-memory cache of decrypted active pages (title + extractedText) used by
@@ -390,9 +404,9 @@ class NoteRepository(private var db: NoteflowDatabase) {
      * AEAD payload so even an empty note carries an integrity tag.
      */
     suspend fun updatePageBody(id: String, body: String) = withContext(Dispatchers.Default) {
-        val storedBody = encryptionKey?.let {
-            EncryptionService.encryptField(body.toByteArray(), it, "pages", id, "extractedText")
-        } ?: body
+        // B2-UI-1 (phase-49): fail closed — the note body column is encrypted at
+        // rest, so a locked vault must throw rather than store the raw body.
+        val storedBody = EncryptionService.encryptField(body.toByteArray(), requireEncryptionKey(), "pages", id, "extractedText")
         db.pageDao().updatePageBody(id, storedBody)
         invalidateSearchCorpus()
     }
@@ -528,16 +542,15 @@ class NoteRepository(private var db: NoteflowDatabase) {
     ): NotePageEntity = withContext(Dispatchers.Default) {
         val rawTitle = title.trim()
         val pageId = UUID.randomUUID().toString()
-        val storedTitle = encryptionKey?.let { EncryptionService.encryptField(rawTitle.toByteArray(), it, "pages", pageId, "title") } ?: rawTitle
+        // B2-UI-1 (phase-49): the DEK is required for the encrypted columns —
+        // a locked (zeroized) vault can never fall back to a plaintext title/body.
+        val dek = requireEncryptionKey()
+        val storedTitle = EncryptionService.encryptField(rawTitle.toByteArray(), dek, "pages", pageId, "title")
         val rawExtracted = extractedText ?: ""
         // B2-CRYPTO-10 (phase-108): a blank extractedText is stored as a real AEAD
         // payload too (never raw ""), so even an empty body carries an integrity
         // tag that a zeroed column cannot fake.
-        val storedExtracted = if (encryptionKey != null) {
-            EncryptionService.encryptField(rawExtracted.toByteArray(), encryptionKey!!, "pages", pageId, "extractedText")
-        } else {
-            rawExtracted
-        }
+        val storedExtracted = EncryptionService.encryptField(rawExtracted.toByteArray(), dek, "pages", pageId, "extractedText")
         val page = NotePageEntity(
             id = pageId,
             sectionId = sectionId,
@@ -557,7 +570,8 @@ class NoteRepository(private var db: NoteflowDatabase) {
 
     suspend fun renamePage(id: String, title: String) = withContext(Dispatchers.Default) {
         val rawTitle = title.trim()
-        val storedTitle = encryptionKey?.let { EncryptionService.encryptField(rawTitle.toByteArray(), it, "pages", id, "title") } ?: rawTitle
+        // B2-UI-1 (phase-49): fail closed — a locked vault can never store a plaintext title.
+        val storedTitle = EncryptionService.encryptField(rawTitle.toByteArray(), requireEncryptionKey(), "pages", id, "title")
         db.pageDao().renamePage(id, storedTitle)
         invalidateSearchCorpus()
     }
@@ -569,7 +583,8 @@ class NoteRepository(private var db: NoteflowDatabase) {
 
     suspend fun updatePageTitleAndTags(id: String, title: String, tags: String) = withContext(Dispatchers.Default) {
         val rawTitle = title.trim()
-        val storedTitle = encryptionKey?.let { EncryptionService.encryptField(rawTitle.toByteArray(), it, "pages", id, "title") } ?: rawTitle
+        // B2-UI-1 (phase-49): fail closed — a locked vault can never store a plaintext title.
+        val storedTitle = EncryptionService.encryptField(rawTitle.toByteArray(), requireEncryptionKey(), "pages", id, "title")
         db.pageDao().updatePageTitleAndTags(id, storedTitle, tags.trim())
         invalidateSearchCorpus()
     }
@@ -742,19 +757,14 @@ class NoteRepository(private var db: NoteflowDatabase) {
                 val rawText = stroke.text
                 // B2-CRYPTO-10 (phase-108): blank text is stored as a real AEAD
                 // payload, never raw "" — the row's blank-ness is always tagged.
-                val storedText = if (encryptionKey != null) {
-                    EncryptionService.encryptField(rawText.toByteArray(), encryptionKey!!, "strokes", stroke.id, "textContent")
-                } else {
-                    rawText
-                }
+                // B2-UI-1 (phase-49): the DEK is grabbed ONCE here; a lock that
+                // fires mid-write throws fail-closed instead of storing plaintext.
+                val dek = requireEncryptionKey()
+                val storedText = EncryptionService.encryptField(rawText.toByteArray(), dek, "strokes", stroke.id, "textContent")
 
                 val dummyStroke = stroke.copy(text = "")
                 val pointsJson = EncryptionService.serializeStrokes(listOf(dummyStroke))
-                val storedPointsJson = if (encryptionKey != null) {
-                    EncryptionService.encryptField(pointsJson.toByteArray(), encryptionKey!!, "strokes", stroke.id, "pointsJson")
-                } else {
-                    pointsJson
-                }
+                val storedPointsJson = EncryptionService.encryptField(pointsJson.toByteArray(), dek, "strokes", stroke.id, "pointsJson")
 
                 StrokeEntity(
                     id = stroke.id,
@@ -891,11 +901,9 @@ class NoteRepository(private var db: NoteflowDatabase) {
             val entities = embeds.map { embed ->
                 val rawText = embed.textContent ?: ""
                 // B2-CRYPTO-10 (phase-108): blank embed text is tagged too.
-                val storedText = if (encryptionKey != null) {
-                    EncryptionService.encryptField(rawText.toByteArray(), encryptionKey!!, "media_embeds", embed.id, "textContent")
-                } else {
-                    rawText
-                }
+                // B2-UI-1 (phase-49): fail closed — never a plaintext embed body.
+                val dek = requireEncryptionKey()
+                val storedText = EncryptionService.encryptField(rawText.toByteArray(), dek, "media_embeds", embed.id, "textContent")
 
                 val waveformJson = embed.waveformAmplitudes.joinToString(prefix = "[", postfix = "]")
 
@@ -972,14 +980,13 @@ class NoteRepository(private var db: NoteflowDatabase) {
 
     suspend fun createNoteVersion(pageId: String, title: String, extractedText: String?, versionNote: String = "Saved version") = withContext(Dispatchers.IO) {
         val versionId = UUID.randomUUID().toString()
-        val storedTitle = encryptionKey?.let { EncryptionService.encryptField(title.toByteArray(), it, "note_versions", versionId, "title") } ?: title
         val rawExtracted = extractedText ?: ""
+        // B2-UI-1 (phase-49): fail closed — a note_versions body is encrypted at
+        // rest; a locked vault throws rather than storing the raw plaintext body.
+        val dek = requireEncryptionKey()
+        val storedTitle = EncryptionService.encryptField(title.toByteArray(), dek, "note_versions", versionId, "title")
         // B2-CRYPTO-10 (phase-108): blank version snapshots are tagged too.
-        val storedExtracted = if (encryptionKey != null) {
-            EncryptionService.encryptField(rawExtracted.toByteArray(), encryptionKey!!, "note_versions", versionId, "extractedText")
-        } else {
-            rawExtracted
-        }
+        val storedExtracted = EncryptionService.encryptField(rawExtracted.toByteArray(), dek, "note_versions", versionId, "extractedText")
         val version = NoteVersionEntity(
             id = versionId,
             pageId = pageId,

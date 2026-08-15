@@ -64,6 +64,7 @@ import com.authorss81.noteflow.plugins.TtsChunk
 import com.authorss81.noteflow.services.DatabaseSecurityHelper
 import com.authorss81.noteflow.services.DekAtRestMode
 import com.authorss81.noteflow.services.DekAtRestPolicy
+import com.authorss81.noteflow.services.EditorFlushPolicy
 import com.authorss81.noteflow.services.EncryptionService
 import com.authorss81.noteflow.services.ImportExportService
 import com.authorss81.noteflow.services.NoteBodyVaultPolicy
@@ -72,6 +73,8 @@ import com.authorss81.noteflow.services.SettingsManager
 import com.authorss81.noteflow.services.SettingsPluginEnableStore
 import com.authorss81.noteflow.services.SettingsPluginInstallStore
 import com.authorss81.noteflow.services.SettingsPluginSettingsStore
+import com.authorss81.noteflow.services.VaultLockedWriteException
+import com.authorss81.noteflow.services.VaultWriteGate
 import com.authorss81.noteflow.plugins.runtime.PluginRuntime
 import com.authorss81.noteflow.plugins.runtime.PluginRuntimeRegistry
 import com.authorss81.noteflow.plugins.runtime.RuntimeOutcome
@@ -115,6 +118,11 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     val security = SecurityService.forDevice(appContext)
     private val db by lazy { NoteflowDatabase.getDatabase(appContext) }
     val repository by lazy { NoteRepository(db) }
+
+    // B2-UI-1 (phase-49): stash of page snapshots that a vault lock raced.
+    // EditorScreen flushes route through this: DEK present ⇒ persist now;
+    // DEK zeroized ⇒ defer here and flush encrypted after the next unlock.
+    private val editorFlushPolicy = EditorFlushPolicy()
 
     // Phase 10/11: plugin framework (see docs/PLUGINS.md + docs/PLUGIN_SDK.md).
     // Core registry/manager are dependency-free; persist opt-in + per-plugin
@@ -1440,6 +1448,9 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         onComplete: () -> Unit
     ) {
         viewModelScope.launch {
+            // B2-UI-1 (phase-49): reject template creation while locked — the
+            // repository refuses to write plaintext encrypted columns.
+            if (repository.encryptionKey == null) return@launch
             val targetSection: SectionEntity
             if (createNewNotebook) {
                 val newNb = repository.createNotebook(template.defaultNotebookName)
@@ -1484,6 +1495,8 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         onCreated: ((NotePageEntity) -> Unit)? = null
     ): Job {
         return viewModelScope.launch {
+            // B2-UI-1 (phase-49): reject while locked — never create a plaintext page.
+            if (repository.encryptionKey == null) return@launch
             val sec = selectedSection.value ?: repository.ensureDefaultNotebookAndSection().second
             if (_selectedSection.value == null) {
                 _selectedSection.value = sec
@@ -1510,6 +1523,8 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         onCreated: (NotePageEntity) -> Unit
     ) {
         viewModelScope.launch {
+            // B2-UI-1 (phase-49): reject while locked — never persist plaintext.
+            if (repository.encryptionKey == null) return@launch
             val sec = selectedSection.value ?: repository.ensureDefaultNotebookAndSection().second
             val firstLine = sharedText?.lineSequence()?.firstOrNull()?.trim()?.take(40)
                 ?.takeIf { it.isNotBlank() }
@@ -1548,6 +1563,8 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
 
     fun renamePage(id: String, title: String) {
         viewModelScope.launch {
+            // B2-UI-1 (phase-49): reject while locked — never store a plaintext title.
+            if (repository.encryptionKey == null) return@launch
             repository.renamePage(id, title)
             if (selectedPage.value?.id == id) {
                 _selectedPage.value = repository.getPageById(id)
@@ -1557,6 +1574,8 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
 
     fun updatePageTitleAndTags(id: String, title: String, tags: String) {
         viewModelScope.launch {
+            // B2-UI-1 (phase-49): reject while locked — never store a plaintext title.
+            if (repository.encryptionKey == null) return@launch
             repository.updatePageTitleAndTags(id, title, tags)
             if (selectedPage.value?.id == id) {
                 _selectedPage.value = repository.getPageById(id)
@@ -1578,6 +1597,8 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         val settings = pluginRegistry.settingsFor(pluginIds.first { pluginRegistry.isEnabled(it.id) }.id)
         if (!settings.getBoolean("lang_auto_tag", true)) return
         viewModelScope.launch {
+            // B2-UI-1 (phase-49): reject while locked — never store a plaintext title.
+            if (repository.encryptionKey == null) return@launch
             val merged = autoTagNoteLanguage(text, tags)
             if (merged is PluginResult.Success) {
                 repository.updatePageTitleAndTags(pageId, title, merged.value)
@@ -1803,6 +1824,9 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     // ---------- Phase 3: Connected Knowledge Vault (Obsidian PKM Engine) ----------
     fun openOrCreateDailyNote(context: android.content.Context, onOpen: (NotePageEntity) -> Unit) {
         viewModelScope.launch {
+            // B2-UI-1 (phase-49): the create branch writes an encrypted page body —
+            // reject the whole open/create while locked.
+            if (repository.encryptionKey == null) return@launch
             val todayStr = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
             val targetTitle = "$todayStr.md"
 
@@ -1850,6 +1874,9 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
 
     fun openPageByTitle(title: String, context: android.content.Context, onOpen: (NotePageEntity) -> Unit) {
         viewModelScope.launch {
+            // B2-UI-1 (phase-49): the create branch writes an encrypted page body —
+            // reject the whole open/create while locked.
+            if (repository.encryptionKey == null) return@launch
             val activePages = repository.getAllActivePages()
             val cleanTarget = title.replace(".md", "").replace(".txt", "").trim()
             val existing = activePages.find {
@@ -2088,6 +2115,9 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
             settings.lockoutUntilEpochMs = 0L
             _lockoutRemainingMs.value = 0L
             initializeData()
+            // B2-UI-1 (phase-49): flush page saves that a lock deferred, now that
+            // the DEK is live again — rows are written encrypted, never plaintext.
+            flushPendingEditorSaves()
             // B1-CRYPTO-02 (phase-45): every password unlock enforces the at-rest
             // DEK policy (remove the non-auth device copy; keep only the auth-gated
             // one when biometrics are enabled).
@@ -2208,6 +2238,8 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         settings.lockoutUntilEpochMs = 0L
         _lockoutRemainingMs.value = 0L
         initializeData()
+        // B2-UI-1 (phase-49): flush page saves deferred during the lock.
+        flushPendingEditorSaves()
         // B1-CRYPTO-02 (phase-45): re-assert the policy after a biometric unlock so
         // a stale non-auth wrapper (if any survived an old-version connect) is purged
         // and the biometric-gated copy is pinned to the current DEK.
@@ -2241,8 +2273,148 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun createNoteVersion(pageId: String, title: String, extractedText: String?, versionNote: String = "Saved version") {
-        viewModelScope.launch {
-            repository.createNoteVersion(pageId, title, extractedText, versionNote)
+        // B2-UI-1 (phase-49): guard — a locked vault must not (a) write plaintext
+        // rows (the repository throws VaultLockedWriteException) nor (b) crash the
+        // process from that fail-closed throw. A snapshot skipped because the vault
+        // locked is "rejected", never written in the clear.
+        if (VaultWriteGate.persistNow(repository.encryptionKey != null)) {
+            viewModelScope.launch {
+                try {
+                    repository.createNoteVersion(pageId, title, extractedText, versionNote)
+                } catch (e: VaultLockedWriteException) {
+                    // vault locked mid-write: drop this one-off snapshot, never plaintext.
+                }
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // B2-UI-1 (phase-49) — locked-safe editor page flushes.
+    // EditorScreen no longer touches the repository directly for page writes;
+    // every flush routes through one of the three entry points below. Unlocked
+    // (DEK present) ⇒ persist now. Locked (DEK zeroized — auto-lock, manual
+    // "Lock Vault Now", ON_STOP, or a lock that races mid-write) ⇒ the snapshot
+    // is stashed in [editorFlushPolicy] and flushed ENCRYPTED after the next
+    // successful unlock. A plaintext row can never be written.
+    // -----------------------------------------------------------------------
+
+    /** Full-page flush (dispose flush, navigation/back flush, embed/sticky changes). */
+    fun flushEditorPageSave(
+        pageId: String,
+        strokes: List<Stroke>,
+        stickyNotes: List<CanvasStickyNote>,
+        embeds: List<CanvasMediaEmbed>,
+        layers: List<LayerEntity>
+    ) {
+        persistOrDefer(
+            EditorFlushPolicy.DeferredSave(pageId, strokes, stickyNotes, embeds, layers),
+            unlockedPersist = { repo ->
+                repo.saveStrokesForPage(pageId, strokes)
+                repo.saveCanvasItemsForPage(pageId, stickyNotes, embeds)
+                repo.saveLayersForPage(pageId, layers)
+            }
+        )
+    }
+
+    /**
+     * Strokes-only debounced autosave. When the vault is unlocked only the
+     * changed stroke rows are written (the historical 1s-debounce behaviour);
+     * when a lock beats the debounce the FULL page snapshot is stashed so the
+     * deferred flush reconstitutes the whole page after unlock.
+     */
+    fun autosaveStrokes(
+        pageId: String,
+        strokes: List<Stroke>,
+        stickyNotes: List<CanvasStickyNote>,
+        embeds: List<CanvasMediaEmbed>,
+        layers: List<LayerEntity>
+    ) {
+        persistOrDefer(
+            EditorFlushPolicy.DeferredSave(pageId, strokes, stickyNotes, embeds, layers),
+            unlockedPersist = { repo -> repo.saveStrokesForPage(pageId, strokes) }
+        )
+    }
+
+    /** Layers-only write (layer rename/order/visibility). Layers hold no secret
+     *  payload, but a post-lock write would hit the disposed pool — route it
+     *  through the same deferred flush as the rest of the page. */
+    fun saveLayersGated(
+        pageId: String,
+        layers: List<LayerEntity>,
+        strokes: List<Stroke>,
+        stickyNotes: List<CanvasStickyNote>,
+        embeds: List<CanvasMediaEmbed>
+    ) {
+        persistOrDefer(
+            EditorFlushPolicy.DeferredSave(pageId, strokes, stickyNotes, embeds, layers),
+            unlockedPersist = { repo -> repo.saveLayersForPage(pageId, layers) }
+        )
+    }
+
+    /**
+     * The single persist-vs-defer decision (see [VaultWriteGate]).
+     * Unlocked ⇒ persist [unlockedPersist] on the IO dispatcher; locked ⇒ stash.
+     * If a lock races the gate check the repository throws
+     * [VaultLockedWriteException] (or the DB pool is closed) — catch and stash,
+     * never crash, never lose the user's edits. `sampled` is re-stashed only for
+     * deferrals; an in-flight save that succeeded needs no resurrection.
+     */
+    private fun persistOrDefer(
+        save: EditorFlushPolicy.DeferredSave,
+        unlockedPersist: suspend (NoteRepository) -> Unit
+    ) {
+        if (!VaultWriteGate.persistNow(repository.encryptionKey != null)) {
+            editorFlushPolicy.defer(save)
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                unlockedPersist(repository)
+            } catch (e: VaultLockedWriteException) {
+                editorFlushPolicy.defer(save)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // A lock can zeroize the DEK / dispose the pool after the gate
+                // check; any save-path failure is re-queued for the next unlock.
+                if (repository.encryptionKey == null) {
+                    editorFlushPolicy.defer(save)
+                } else {
+                    throw e
+                }
+            }
+        }
+    }
+
+    /**
+     * B2-UI-1 (phase-49): flushes everything stashed while locked, once the vault
+     * is unlocked again and the DEK is live. Called by every unlock path right
+     * after `_authenticated = true`. Re-writes are idempotent (stroke hashes +
+     * upserts; export-equivalent deletes+reinserts on embeds).
+     */
+    private fun flushPendingEditorSaves() {
+        val toFlush = editorFlushPolicy.drain()
+        if (toFlush.isEmpty()) return
+        for (save in toFlush) {
+            viewModelScope.launch(Dispatchers.IO) {
+                try {
+                    repository.saveStrokesForPage(save.pageId, save.strokes)
+                    repository.saveCanvasItemsForPage(save.pageId, save.stickyNotes, save.embeds)
+                    repository.saveLayersForPage(save.pageId, save.layers)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: VaultLockedWriteException) {
+                    editorFlushPolicy.defer(save)
+                } catch (e: Exception) {
+                    // Re-lock raced the flush (or a transient error): re-stash so
+                    // it retries after the next unlock instead of losing the page.
+                    if (repository.encryptionKey == null) {
+                        editorFlushPolicy.defer(save)
+                    } else {
+                        throw e
+                    }
+                }
+            }
         }
     }
 

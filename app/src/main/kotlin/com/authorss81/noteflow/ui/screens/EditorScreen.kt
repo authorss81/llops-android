@@ -83,7 +83,6 @@ import com.authorss81.noteflow.ui.viewmodel.NoteflowViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -418,15 +417,17 @@ fun EditorScreen(
         isInitialLoadComplete = true
     }
 
-    // Unmount Guard: flush save when navigating away
+    // Unmount Guard: flush save when navigating away — but NEVER when the vault
+    // is locked (auto-lock / "Lock Vault Now" / ON_STOP dispose this editor while
+    // the DEK is zeroized). The ViewModel routes the flush through its lock-safe
+    // gate: unlocked ⇒ persist now; locked ⇒ stash the snapshot and write it
+    // ENCRYPTED after the next unlock. The old code launched these saves with
+    // `NonCancellable` and no authenticated/key check, which ran post-lock with
+    // `encryptionKey == null` and wrote PLAINTEXT stroke/embed rows (B2-UI-1).
     DisposableEffect(page.id) {
         onDispose {
             if (isInitialLoadComplete) {
-                viewModel.viewModelScope.launch(NonCancellable + Dispatchers.IO) {
-                    viewModel.repository.saveStrokesForPage(page.id, strokes)
-                    viewModel.repository.saveCanvasItemsForPage(page.id, stickyNotes, mediaEmbeds)
-                    viewModel.repository.saveLayersForPage(page.id, layers)
-                }
+                viewModel.flushEditorPageSave(page.id, strokes, stickyNotes, mediaEmbeds, layers)
             }
         }
     }
@@ -496,7 +497,12 @@ fun EditorScreen(
         saveJob?.cancel()
         saveJob = viewModel.viewModelScope.launch(Dispatchers.IO) {
             delay(1000) // 1s Debounce
-            viewModel.repository.saveStrokesForPage(page.id, newStrokes)
+            // B2-UI-1 (phase-49): route through the VM lock-safe gate. The old
+            // code called repository.saveStrokesForPage directly — a lock firing
+            // inside this 1s window (deterministic on auto-lock) ran the write
+            // with encryptionKey == null and persisted PLAINTEXT stroke rows.
+            // The gate persists now, or defers the whole snapshot for after unlock.
+            viewModel.autosaveStrokes(page.id, newStrokes, stickyNotes, mediaEmbeds, layers)
         }
     }
 
@@ -512,9 +518,8 @@ fun EditorScreen(
 
     fun handleLayersChange(newLayers: List<LayerEntity>) {
         layers = newLayers
-        scope.launch {
-            viewModel.repository.saveLayersForPage(page.id, newLayers)
-        }
+        // B2-UI-1 (phase-49): route the write through the lock-safe gate.
+        viewModel.saveLayersGated(page.id, newLayers, strokes, stickyNotes, mediaEmbeds)
     }
 
     fun onAddLayer() {
@@ -644,9 +649,8 @@ fun EditorScreen(
 
     fun handleMediaEmbedsChange(newEmbeds: List<CanvasMediaEmbed>) {
         mediaEmbeds = newEmbeds
-        viewModel.viewModelScope.launch(Dispatchers.IO) {
-            viewModel.repository.saveCanvasItemsForPage(page.id, stickyNotes, newEmbeds)
-        }
+        // B2-UI-1 (phase-49): lock-safe gated write (persist now / defer until unlock).
+        viewModel.flushEditorPageSave(page.id, strokes, stickyNotes, newEmbeds, layers)
     }
 
     // Phase 13: STICKER tool tap → persist an emoji sticker as a media_embeds row
@@ -683,9 +687,8 @@ fun EditorScreen(
 
     fun handleStickyNotesChange(newNotes: List<CanvasStickyNote>) {
         stickyNotes = newNotes
-        viewModel.viewModelScope.launch(Dispatchers.IO) {
-            viewModel.repository.saveCanvasItemsForPage(page.id, newNotes, mediaEmbeds)
-        }
+        // B2-UI-1 (phase-49): lock-safe gated write (persist now / defer until unlock).
+        viewModel.flushEditorPageSave(page.id, strokes, newNotes, mediaEmbeds, layers)
     }
 
     fun insertPage(before: Boolean) {
@@ -739,10 +742,8 @@ fun EditorScreen(
         mediaEmbeds = updatedEmbeds
         pdfTotalPages += 1
 
-        scope.launch {
-            viewModel.repository.saveStrokesForPage(page.id, updatedStrokes)
-            viewModel.repository.saveCanvasItemsForPage(page.id, updatedNotes, updatedEmbeds)
-        }
+        // B2-UI-1 (phase-49): lock-safe gated write.
+        viewModel.flushEditorPageSave(page.id, updatedStrokes, updatedNotes, updatedEmbeds, layers)
     }
 
     val photoPickerLauncher = rememberLauncherForActivityResult(
@@ -852,11 +853,8 @@ fun EditorScreen(
     BackHandler {
         saveJob?.cancel()
         if (isInitialLoadComplete) {
-            viewModel.viewModelScope.launch(NonCancellable + Dispatchers.IO) {
-                viewModel.repository.saveStrokesForPage(page.id, strokes)
-                viewModel.repository.saveCanvasItemsForPage(page.id, stickyNotes, mediaEmbeds)
-                viewModel.repository.saveLayersForPage(page.id, layers)
-            }
+            // B2-UI-1 (phase-49): lock-safe gated flush (persist now / defer until unlock).
+            viewModel.flushEditorPageSave(page.id, strokes, stickyNotes, mediaEmbeds, layers)
         }
         onBack()
     }
@@ -882,11 +880,8 @@ fun EditorScreen(
                         onClick = {
                             saveJob?.cancel()
                             if (isInitialLoadComplete) {
-                                viewModel.viewModelScope.launch(NonCancellable + Dispatchers.IO) {
-                                    viewModel.repository.saveStrokesForPage(page.id, strokes)
-                                    viewModel.repository.saveCanvasItemsForPage(page.id, stickyNotes, mediaEmbeds)
-                                    viewModel.repository.saveLayersForPage(page.id, layers)
-                                }
+                                // B2-UI-1 (phase-49): lock-safe gated flush.
+                                viewModel.flushEditorPageSave(page.id, strokes, stickyNotes, mediaEmbeds, layers)
                             }
                             onBack()
                         },

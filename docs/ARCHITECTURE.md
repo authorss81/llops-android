@@ -108,6 +108,21 @@
     `sanitizeMessage` (`:91-93`) redacts ANY `/data/user/<uid>/...` or `/data/data/...`
     path — covers both the namespace and the real applicationId dir. Tests:
     `B2Log01CrashReportingTest` (7) — 1020 unit tests green.
+  - **Implemented in phase-49** (B2-UI-1, see `workspace/phase-49/REPORT.md`): the WRITE side of the
+    lock boundary fails closed. Every editor page-write now routes through the ViewModel lock-safe
+    gate: `NoteflowViewModel.flushEditorPageSave`/`autosaveStrokes`/`saveLayersGated` + private
+    `persistOrDefer` (`NoteflowViewModel.kt:2302/2325/2341/2362`) decide persist-vs-defer via the new
+    pure-JVM `services/VaultWriteGate.kt` (`requireKey` throws `VaultLockedWriteException` on a
+    zeroized DEK; `persistNow` = the persist-vs-defer decision). Locked flushes are stashed in the
+    latest-wins `services/EditorFlushPolicy.kt` (`defer`/`drain`) and re-written ENCRYPTED by
+    `flushPendingEditorSaves()` (`:2395`) in BOTH unlock paths (`:2120`, `:2242`) — never dropped,
+    never plaintext, never crash. `NoteRepository.kt` uses `requireEncryptionKey()` (`:44`) in every
+    encrypted-column write (`updatePageBody`, `createPage`, `renamePage`, `updatePageTitleAndTags`,
+    `saveStrokesForPage`, `saveMediaEmbedsForPage`, `createNoteVersion`) and the
+    `encrypt-or-plaintext` elvis/else fallbacks are grep-verified gone. `EditorScreen.kt` has no
+    direct `viewModel.repository.save*` call sites (reads only); `createNoteVersion` is rejected
+    while locked. Reads remain direct through the live repository — B1-AUTH-02 governs the read side,
+    B2-UI-1 the write side.
 - **Canvas**: `ui/components/AnnotationCanvas.kt:83` (ink canvas, gestures, layers, `pointerInteropFilter`);
   `services/WetBrushEngine.kt:13` (AGSL wet-mixing gating); `ui/components/ShaderCapabilityHelper.kt:5`
   (`isAgslSupported` = SDK ≥ 33); `services/ShapeRecognitionHelper.kt:13` (`trySnapShape()` :27).
