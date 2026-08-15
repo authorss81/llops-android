@@ -252,7 +252,14 @@ class SettingsManager(context: Context) {
         set(value) = prefs.edit().putInt("auto_lock_timeout_seconds", value).apply()
 
     val hasMasterPassword: Boolean
-        get() = masterPasswordCredentialOrLegacy != null
+        // B1-CRYPTO-03 (phase-62): a stored-but-unparseable credential blob
+        // (unknown/future format version) must still count as "a master password
+        // EXISTS" — the accessor fails closed on it, so the vault is treated as
+        // protected and NEVER opened passwordless (which would otherwise cascade
+        // into the phase-09 corruption-quarantine path on a downgrade). Legacy
+        // half-pairs (salt without wrapper) resolve to null here exactly as
+        // pre-fix, so devices already bricked by the old bug are unchanged.
+        get() = masterPasswordCredentialOrLegacy != null || prefs.contains("master_password_credential")
 
     var lowEndWarningShown: Boolean
         get() = prefs.getBoolean("low_end_warning_shown", false)

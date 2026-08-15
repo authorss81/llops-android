@@ -295,6 +295,37 @@ class B1Crypto03MasterPasswordAtomicTest {
         )
     }
 
+    // ---------- phase-62 review fixes ----------
+
+    @Test
+    fun `failed commit restores the prior session and an unparseable blob still reads as protected`() {
+        val sm = readSettingsManager()
+        assertTrue(
+            "a present-but-unparseable credential blob must still count as a master password " +
+                "(never open the vault passwordless into the corruption path)",
+            sm.contains("masterPasswordCredentialOrLegacy != null || prefs.contains(\"master_password_credential\")")
+        )
+
+        val vm = readNoteflowViewModel()
+        val changeBlock = vm.substringAfter("suspend fun changeMasterPassword", "END")
+            .substringBefore("private fun computeLockoutDelayMs", "END")
+        assertTrue(
+            "changeMasterPassword must snapshot the pre-verify session before verifying",
+            changeBlock.contains("val wasAuthenticated = _authenticated.value")
+        )
+        assertTrue(
+            "changeMasterPassword must restore a session that was locked when the credential commit fails",
+            changeBlock.contains("if (!wasAuthenticated)") &&
+                changeBlock.contains("repository.zeroizeKey()") &&
+                changeBlock.contains("_authenticated.value = false")
+        )
+        assertTrue(
+            "the atomic commit and round-trip validation must survive the restore path",
+            changeBlock.contains("commitMasterPasswordCredential") &&
+                changeBlock.contains("EncryptionService.decrypt(wrapped, derivedKek)")
+        )
+    }
+
     // ---------- file readers ----------
 
     private fun readNoteflowViewModel(): String {

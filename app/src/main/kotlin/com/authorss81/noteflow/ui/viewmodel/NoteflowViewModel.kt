@@ -2121,6 +2121,13 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         // single NFKC form and survives re-typing on any keyboard/IME.
         val newPasswordNormalized = EncryptionService.normalizePassword(newPassword)
         if (!EncryptionService.isValidPasswordLength(newPasswordNormalized)) return false
+        // B1-CRYPTO-03 (phase-62) review fix: snapshot the pre-verify session
+        // BEFORE verifying — verifyMasterPassword installs the DEK and flips
+        // _authenticated, and a failed credential commit below must restore this
+        // prior state so a `false` return is never paired with a silently
+        // unlocked (or silently locked) session.
+        val wasAuthenticated = _authenticated.value
+        val priorFailedAttempts = _failedUnlockAttempts.value
         if (!verifyMasterPassword(oldPassword)) return false
         val currentDek = repository.encryptionKey ?: return false
         var kek: ByteArray? = null
@@ -2142,7 +2149,21 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
             // credential cannot be durably written, the OLD (salt, wrappedDEK)
             // pair still on disk stays valid — the vault remains unlockable with
             // the old password and no partial pair can ever brick it.
-            if (!settings.commitMasterPasswordCredential(newSalt, newWrappedDek)) return false
+            if (!settings.commitMasterPasswordCredential(newSalt, newWrappedDek)) {
+                // B1-CRYPTO-03 (phase-62) review fix: the intermediate
+                // verifyMasterPassword already authenticated this session. On a
+                // failed swap, restore the pre-call session: an already-unlocked
+                // session stays unlocked with the (still durable, still-valid)
+                // OLD credential; a session that was locked is returned to locked
+                // so the returned `false` is never a lie.
+                if (!wasAuthenticated) {
+                    repository.zeroizeKey()
+                    _authenticated.value = false
+                    _failedUnlockAttempts.value = priorFailedAttempts
+                    settings.failedUnlockAttempts = priorFailedAttempts
+                }
+                return false
+            }
 
             _hasMasterPassword.value = true
             _authenticated.value = true

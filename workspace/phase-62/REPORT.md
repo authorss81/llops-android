@@ -128,3 +128,36 @@ additionally lets the caller abort without touching in-memory security state.
   `reinstateDatabaseAfterLock`/unlock state in `changeMasterPassword`; a failed credential
   swap after a successful old-password verify leaves the vault unlocked in-session with
   the old credential — safe (never bricked, never half), and the UI re-verifies on retry.
+
+## Phase-62 review fixes (post-commit)
+
+Applied after review; no behavior regression to the atomicity fix.
+
+1. **Session restore on failed credential swap (review finding 4).** `changeMasterPassword`
+   now snapshots `_authenticated` + `_failedUnlockAttempts` BEFORE `verifyMasterPassword`
+   (`NoteflowViewModel.kt`) and, when `commitMasterPasswordCredential` fails, restores the
+   pre-call session: an already-unlocked session stays unlocked with the old credential
+   (still valid on disk); a session that was locked is returned to locked (`repository.zeroizeKey()`,
+   `_authenticated.value = false`) so the returned `false` is never paired with a silently
+   unlocked session. `setMasterPassword` needed no change — it already commits before any
+   in-memory flip.
+2. **Present-but-unparseable blob stays "has master password" (review finding 5).**
+   `SettingsManager.hasMasterPassword` now also returns true when the
+   `master_password_credential` key EXISTS but the accessor cannot parse it (unknown/future
+   format version). A downgraded app therefore treats the vault as protected and never opens
+   it passwordless — which would otherwise cascade into the phase-09 corruption-quarantine
+   path. The unlock paths still fail closed on such a blob (`verifyMasterPassword` returns
+   false, no lockout counted). Never reachable in this version (the atomic commit only ever
+   writes the valid `MPB1` blob); it is a downgrade/future-format guard.
+3. **Legacy half-pair devices unchanged (review finding 6, documented).** A pre-fix device
+   that already lost its wrapped DEK (salt present, wrapper missing) resolves to no-credential
+   exactly as pre-fix — those vaults were already bricked by the old bug and cannot be healed
+   (the AEAD-wrapped DEK bytes are unrecoverable). The fix prevents the failure mode going
+   forward; it does not resurrect lost keys.
+4. **Doc line-number drift (review finding 7, documented).** The pre-fix evidence lines
+   `NoteflowViewModel.kt:1794-1795/1829-1830` cited above and in the audit are from the audit
+   revision; the actual pre-fix lines in this phase's parent commit were `:2081-2082/:2123-2124`.
+5. **Trailing newline (review finding 8).** `MasterPasswordCredential.kt` ends with a newline.
+
+Verification re-run after the fixes: `gradle :app:testDebugUnitTest` (see output below) and
+`gradle :app:assembleDebug`.
