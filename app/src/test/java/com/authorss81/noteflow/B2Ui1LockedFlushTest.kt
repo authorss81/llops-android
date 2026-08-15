@@ -131,6 +131,33 @@ class B2Ui1LockedFlushTest {
     }
 
     @Test
+    fun `a locked markdown body is deferred, never dropped, latest-wins per page`() {
+        val policy = EditorFlushPolicy()
+        val oldSave = EditorFlushPolicy.DeferredBody("b1", "old body", "/legacy/old.md", "text")
+        val newSave = EditorFlushPolicy.DeferredBody("b1", "new body", null, null)
+
+        assertTrue("an absent DEK must NOT allow a now-persist", !policy.isUnlocked(false))
+        assertTrue("a first defer inserts", !policy.deferBody(oldSave))
+        assertTrue("a repeat defer replaces the older snapshot", policy.deferBody(newSave))
+        assertEquals("stash stays bounded to one body per page", 1, policy.deferredBodyCount)
+
+        val drained = policy.drainBodies()
+        assertEquals("exactly one body survives", 1, drained.size)
+        assertEquals("new body", drained[0].body)
+        assertEquals("legacy path of the latest snapshot is carried", null, drained[0].legacySourceFilePath)
+        assertEquals("the stash is empty after the drain", 0, policy.deferredBodyCount)
+    }
+
+    @Test
+    fun `a deferred body still carries the legacy file for deletion after unlock`() {
+        val policy = EditorFlushPolicy()
+        policy.deferBody(EditorFlushPolicy.DeferredBody("b2", "queued body", "/legacy/nested/notes.md", "text"))
+        val drained = policy.drainBodies()
+        assertEquals("the legacy file path survives the defer so the plaintext file",
+            "/legacy/nested/notes.md", drained[0].legacySourceFilePath)
+    }
+
+    @Test
     fun `rows persisted after an unlock cycle are all decryptable with the real key`() {
         val dek = ByteArray(32) { (it * 7).toByte() }
         val policy = EditorFlushPolicy()
@@ -206,6 +233,55 @@ class B2Ui1LockedFlushTest {
     }
 
     // ---------- wiring pins (the Android-bound classes) ----------
+
+    @Test
+    fun `guarded page writes turn a lock race into a handled notice, never a crash`() {
+        val source = java.io.File(repoRoot(), "app/src/main/kotlin/com/authorss81/noteflow/ui/viewmodel/NoteflowViewModel.kt").readText()
+
+        assertTrue("a shared write guard helper must exist", source.contains("private suspend fun <T> writeGuardedAgainstLock"))
+        assertTrue("the helper must carry the lock-race predicate", source.contains("private fun isLockRacedWrite"))
+
+        val guardedSignatures = listOf(
+            "fun applyWorkspaceTemplate", "fun addPage", "fun createNoteFromSharedContent",
+            "fun renamePage", "fun updatePageTitleAndTags", "fun autoTagLanguageOnSave",
+            "fun openOrCreateDailyNote", "fun openPageByTitle"
+        )
+        for (sig in guardedSignatures) {
+            val block = source.substringAfter(sig, "END").take(3500)
+            assertTrue(
+                "$sig must guard its repository writes against a lock race",
+                block.contains("writeGuardedAgainstLock") || block.contains("isLockRacedWrite")
+            )
+        }
+    }
+
+    @Test
+    fun `markdown body saves defer and re-write encrypted after unlock`() {
+        val source = java.io.File(repoRoot(), "app/src/main/kotlin/com/authorss81/noteflow/ui/viewmodel/NoteflowViewModel.kt").readText()
+
+        val markdown = source.substringAfter("fun saveMarkdownNoteBody", "END").take(1200)
+        assertTrue("markdown save must gate on the DEK before persisting", markdown.contains("VaultWriteGate.persistNow"))
+        assertTrue("a lock-beaten markdown save must be stashed, never dropped", markdown.contains("deferBody(deferred)"))
+        assertTrue("a mid-write lock must be stashed too, not turned into a loss snackbar", markdown.contains("VaultLockedWriteException"))
+
+        val flush = source.substringAfter("private fun flushPendingEditorSaves", "END").take(2000)
+        assertTrue("the unlock flush must drain deferred markdown bodies", flush.contains("drainBodies()"))
+        assertTrue("the unlock flush must write the body through the encrypted column", flush.contains("repository.updatePageBody(body.pageId, body.body)"))
+        assertTrue("the unlock flush deletes the legacy plaintext file only after the column write", flush.contains("NoteBodyVaultPolicy.deleteLegacyNoteTextBody(body.legacySourceFilePath"))
+    }
+
+    @Test
+    fun `createNoteVersion rejects a locked snapshot with a visible notice`() {
+        val source = java.io.File(repoRoot(), "app/src/main/kotlin/com/authorss81/noteflow/ui/viewmodel/NoteflowViewModel.kt").readText()
+        val block = source.substringAfter("fun createNoteVersion", "END").substringBefore("fun flushEditorPageSave", "END")
+
+        assertTrue("createNoteVersion must gate on the live DEK", block.contains("VaultWriteGate.persistNow"))
+        assertTrue(
+            "a locked rejection must surface a non-alarming notice",
+            block.contains("showSnackbar(\"Vault is locked — version snapshot not saved\")")
+        )
+        assertTrue("a mid-write lock must surface the same notice, never a silent drop", block.contains("catch (e: VaultLockedWriteException)"))
+    }
 
     @Test
     fun `repository encrypted-field writes fail closed - no plaintext fallback remains`() {

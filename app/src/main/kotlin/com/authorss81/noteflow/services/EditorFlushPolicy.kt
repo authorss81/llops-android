@@ -30,7 +30,20 @@ class EditorFlushPolicy {
         val layers: List<LayerEntity>
     )
 
+    /**
+     * A markdown/text note body that locked mid-save. The legacy companion
+     * plaintext file (if any) is deleted only AFTER the encrypted-column write,
+     * so it is carried here and deleted after the next unlock's flush.
+     */
+    data class DeferredBody(
+        val pageId: String,
+        val body: String,
+        val legacySourceFilePath: String?,
+        val legacySourceFileType: String?
+    )
+
     private val deferred = LinkedHashMap<String, DeferredSave>()
+    private val deferredBodies = LinkedHashMap<String, DeferredBody>()
 
     /** Unlocked ⇔ `repository.encryptionKey != null` at the call site. */
     fun isUnlocked(keyIsPresent: Boolean): Boolean = VaultWriteGate.persistNow(keyIsPresent)
@@ -48,6 +61,30 @@ class EditorFlushPolicy {
     /** Number of page snapshots currently deferred (stashed for a future unlock). */
     val deferredCount: Int
         get() = synchronized(this) { deferred.size }
+
+    /**
+     * Registers [body] as deferred (latest-wins per page). Returns true if it
+     * replaced an existing entry.
+     */
+    fun deferBody(body: DeferredBody): Boolean = synchronized(this) {
+        val replaced = deferredBodies.containsKey(body.pageId)
+        deferredBodies[body.pageId] = body
+        replaced
+    }
+
+    /** Number of note bodies currently deferred (stashed for a future unlock). */
+    val deferredBodyCount: Int
+        get() = synchronized(this) { deferredBodies.size }
+
+    /**
+     * Drains (snapshots + clears) every deferred note body. Must only be called
+     * once the vault is re-unlocked — otherwise the flush would immediately
+     * re-defer the body write.
+     */
+    fun drainBodies(): List<DeferredBody> = synchronized(this) {
+        if (deferredBodies.isEmpty()) emptyList()
+        else deferredBodies.values.toList().also { deferredBodies.clear() }
+    }
 
     /**
      * Drains (snapshots + clears) every deferred page save so the unlock handler

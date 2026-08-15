@@ -123,6 +123,20 @@
     direct `viewModel.repository.save*` call sites (reads only); `createNoteVersion` is rejected
     while locked. Reads remain direct through the live repository — B1-AUTH-02 governs the read side,
     B2-UI-1 the write side.
+  - **Phase-49 review fix (2026-08-15)**: (1) the non-flush page writes
+    (`applyWorkspaceTemplate`, `addPage`, `createNoteFromSharedContent`, `renamePage`,
+    `updatePageTitleAndTags`, `autoTagLanguageOnSave`, `openOrCreateDailyNote`, `openPageByTitle`)
+    now route through `NoteflowViewModel.writeGuardedAgainstLock` / `isLockRacedWrite`
+    — a lock racing the create/rename no longer crashes (bare TOCTOU guard), it surfaces a
+    non-alarming snackbar. (2) `saveMarkdownNoteBody` is lock-safe now too: `EditorFlushPolicy`
+    gained a `DeferredBody` stash (`deferBody`/`drainBodies`), so a body whose save races a lock is
+    re-written ENCRYPTED after the next unlock instead of being dropped behind an error snackbar;
+    the legacy plaintext file delete follows the encrypted-column write in the flush. (3)
+    `createNoteVersion` lock-rejection now shows a notice instead of a silent drop.
+    (4) KNOWN TRADE-OFF: the deferral stashes live in VM memory only — a process kill during a
+    locked interval loses the last stashed page delta/body. A durable pending-queue is impossible
+    without writing the data to disk while locked (i.e. plaintext), which is exactly what this
+    finding forbids, so the in-memory stash is deliberate and bounded (latest-wins per page).
 - **Canvas**: `ui/components/AnnotationCanvas.kt:83` (ink canvas, gestures, layers, `pointerInteropFilter`);
   `services/WetBrushEngine.kt:13` (AGSL wet-mixing gating); `ui/components/ShaderCapabilityHelper.kt:5`
   (`isAgslSupported` = SDK ≥ 33); `services/ShapeRecognitionHelper.kt:13` (`trySnapShape()` :27).

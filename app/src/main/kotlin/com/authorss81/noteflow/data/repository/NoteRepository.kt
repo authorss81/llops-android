@@ -757,8 +757,10 @@ class NoteRepository(private var db: NoteflowDatabase) {
                 val rawText = stroke.text
                 // B2-CRYPTO-10 (phase-108): blank text is stored as a real AEAD
                 // payload, never raw "" — the row's blank-ness is always tagged.
-                // B2-UI-1 (phase-49): the DEK is grabbed ONCE here; a lock that
-                // fires mid-write throws fail-closed instead of storing plaintext.
+                // B2-UI-1 (phase-49): the DEK is grabbed once PER STROKE here
+                // (inside the change loop); a lock that fires mid-write throws
+                // fail-closed instead of storing plaintext, and the surrounding
+                // Room transaction rolls the whole page's write back.
                 val dek = requireEncryptionKey()
                 val storedText = EncryptionService.encryptField(rawText.toByteArray(), dek, "strokes", stroke.id, "textContent")
 

@@ -1450,38 +1450,41 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             // B2-UI-1 (phase-49): reject template creation while locked — the
             // repository refuses to write plaintext encrypted columns.
-            if (repository.encryptionKey == null) return@launch
-            val targetSection: SectionEntity
-            if (createNewNotebook) {
-                val newNb = repository.createNotebook(template.defaultNotebookName)
-                val sec = repository.createSection(newNb.id, template.defaultSectionName)
-                selectNotebook(newNb)
-                selectSection(sec)
-                targetSection = sec
-            } else {
-                val currentSec = selectedSection.value ?: repository.ensureDefaultNotebookAndSection().second
-                if (_selectedSection.value == null) {
-                    _selectedSection.value = currentSec
+            // B2-UI-1 review-fix: a lock racing the create no longer crashes —
+            // writeGuardedAgainstLock turns the fail-closed throw into a notice.
+            writeGuardedAgainstLock("Vault is locked — template not applied") {
+                val targetSection: SectionEntity
+                if (createNewNotebook) {
+                    val newNb = repository.createNotebook(template.defaultNotebookName)
+                    val sec = repository.createSection(newNb.id, template.defaultSectionName)
+                    selectNotebook(newNb)
+                    selectSection(sec)
+                    targetSection = sec
+                } else {
+                    val currentSec = selectedSection.value ?: repository.ensureDefaultNotebookAndSection().second
+                    if (_selectedSection.value == null) {
+                        _selectedSection.value = currentSec
+                    }
+                    targetSection = currentSec
                 }
-                targetSection = currentSec
-            }
 
-            var firstCreatedPage: NotePageEntity? = null
-            template.pagesToCreate.forEachIndexed { index, (title, content) ->
-                val page = repository.createPage(
-                    sectionId = targetSection.id,
-                    title = title,
-                    template = template.paperTemplate,
-                    extractedText = content,
-                    tags = "template"
-                )
-                if (index == 0) firstCreatedPage = page
-            }
-            observePages(targetSection.id)
-            if (firstCreatedPage != null) {
-                selectPage(firstCreatedPage)
-            }
-            onComplete()
+                var firstCreatedPage: NotePageEntity? = null
+                template.pagesToCreate.forEachIndexed { index, (title, content) ->
+                    val page = repository.createPage(
+                        sectionId = targetSection.id,
+                        title = title,
+                        template = template.paperTemplate,
+                        extractedText = content,
+                        tags = "template"
+                    )
+                    if (index == 0) firstCreatedPage = page
+                }
+                observePages(targetSection.id)
+                if (firstCreatedPage != null) {
+                    selectPage(firstCreatedPage)
+                }
+                onComplete()
+            } // writeGuardedAgainstLock: null here ⇒ lock rejected (notice shown, no crash).
         }
     }
 
@@ -1496,20 +1499,24 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     ): Job {
         return viewModelScope.launch {
             // B2-UI-1 (phase-49): reject while locked — never create a plaintext page.
-            if (repository.encryptionKey == null) return@launch
-            val sec = selectedSection.value ?: repository.ensureDefaultNotebookAndSection().second
-            if (_selectedSection.value == null) {
-                _selectedSection.value = sec
-            }
-            val page = repository.createPage(
-                sectionId = sec.id,
-                title = title,
-                sourceFilePath = sourceFilePath,
-                sourceFileType = sourceFileType,
-                template = template,
-                extractedText = extractedText,
-                tags = tags
-            )
+            // B2-UI-1 review-fix: a lock racing the create is a notice, not a crash.
+            val pair = writeGuardedAgainstLock("Vault is locked — page not created") {
+                val sec = selectedSection.value ?: repository.ensureDefaultNotebookAndSection().second
+                if (_selectedSection.value == null) {
+                    _selectedSection.value = sec
+                }
+                val created = repository.createPage(
+                    sectionId = sec.id,
+                    title = title,
+                    sourceFilePath = sourceFilePath,
+                    sourceFileType = sourceFileType,
+                    template = template,
+                    extractedText = extractedText,
+                    tags = tags
+                )
+                sec to created
+            } ?: return@launch
+            val (sec, page) = pair
             observePages(sec.id)
             selectPage(page)
             onCreated?.invoke(page)
@@ -1524,38 +1531,41 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     ) {
         viewModelScope.launch {
             // B2-UI-1 (phase-49): reject while locked — never persist plaintext.
-            if (repository.encryptionKey == null) return@launch
-            val sec = selectedSection.value ?: repository.ensureDefaultNotebookAndSection().second
-            val firstLine = sharedText?.lineSequence()?.firstOrNull()?.trim()?.take(40)
-                ?.takeIf { it.isNotBlank() }
-            val title = firstLine
-                ?: if (imagePaths.isNotEmpty()) "Shared Images (${imagePaths.size})" else "Shared Note"
-            val newPage = repository.createPage(
-                sectionId = sec.id,
-                title = title,
-                sourceFileType = when {
-                    imagePaths.isNotEmpty() -> "image"
-                    !sharedText.isNullOrBlank() -> "text"
-                    else -> null
-                },
-                extractedText = sharedText ?: ""
-            )
-            if (imagePaths.isNotEmpty()) {
-                repository.saveMediaEmbedsForPage(
-                    newPage.id,
-                    imagePaths.mapIndexed { index, path ->
-                        CanvasMediaEmbed(
-                            pageId = newPage.id,
-                            type = MediaEmbedType.PHOTO,
-                            x = 40f,
-                            y = 60f + index * 280f,
-                            width = 520f,
-                            height = 260f,
-                            contentUrlOrPath = path
-                        )
-                    }
+            // B2-UI-1 review-fix: a lock racing the create is a notice, not a crash.
+            val newPage = writeGuardedAgainstLock("Vault is locked — shared note not created") {
+                val sec = selectedSection.value ?: repository.ensureDefaultNotebookAndSection().second
+                val firstLine = sharedText?.lineSequence()?.firstOrNull()?.trim()?.take(40)
+                    ?.takeIf { it.isNotBlank() }
+                val title = firstLine
+                    ?: if (imagePaths.isNotEmpty()) "Shared Images (${imagePaths.size})" else "Shared Note"
+                val created = repository.createPage(
+                    sectionId = sec.id,
+                    title = title,
+                    sourceFileType = when {
+                        imagePaths.isNotEmpty() -> "image"
+                        !sharedText.isNullOrBlank() -> "text"
+                        else -> null
+                    },
+                    extractedText = sharedText ?: ""
                 )
-            }
+                if (imagePaths.isNotEmpty()) {
+                    repository.saveMediaEmbedsForPage(
+                        created.id,
+                        imagePaths.mapIndexed { index, path ->
+                            CanvasMediaEmbed(
+                                pageId = created.id,
+                                type = MediaEmbedType.PHOTO,
+                                x = 40f,
+                                y = 60f + index * 280f,
+                                width = 520f,
+                                height = 260f,
+                                contentUrlOrPath = path
+                            )
+                        }
+                    )
+                }
+                created
+            } ?: return@launch
             selectPage(newPage)
             onCreated(newPage)
         }
@@ -1564,10 +1574,12 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     fun renamePage(id: String, title: String) {
         viewModelScope.launch {
             // B2-UI-1 (phase-49): reject while locked — never store a plaintext title.
-            if (repository.encryptionKey == null) return@launch
-            repository.renamePage(id, title)
-            if (selectedPage.value?.id == id) {
-                _selectedPage.value = repository.getPageById(id)
+            // B2-UI-1 review-fix: a lock racing the rename is a notice, not a crash.
+            writeGuardedAgainstLock("Vault is locked — rename not saved") {
+                repository.renamePage(id, title)
+                if (selectedPage.value?.id == id) {
+                    _selectedPage.value = repository.getPageById(id)
+                }
             }
         }
     }
@@ -1575,10 +1587,12 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     fun updatePageTitleAndTags(id: String, title: String, tags: String) {
         viewModelScope.launch {
             // B2-UI-1 (phase-49): reject while locked — never store a plaintext title.
-            if (repository.encryptionKey == null) return@launch
-            repository.updatePageTitleAndTags(id, title, tags)
-            if (selectedPage.value?.id == id) {
-                _selectedPage.value = repository.getPageById(id)
+            // B2-UI-1 review-fix: a lock racing the save is a notice, not a crash.
+            writeGuardedAgainstLock("Vault is locked — title not saved") {
+                repository.updatePageTitleAndTags(id, title, tags)
+                if (selectedPage.value?.id == id) {
+                    _selectedPage.value = repository.getPageById(id)
+                }
             }
         }
     }
@@ -1598,13 +1612,23 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         if (!settings.getBoolean("lang_auto_tag", true)) return
         viewModelScope.launch {
             // B2-UI-1 (phase-49): reject while locked — never store a plaintext title.
-            if (repository.encryptionKey == null) return@launch
-            val merged = autoTagNoteLanguage(text, tags)
-            if (merged is PluginResult.Success) {
-                repository.updatePageTitleAndTags(pageId, title, merged.value)
-                if (selectedPage.value?.id == pageId) {
-                    _selectedPage.value = repository.getPageById(pageId)
+            // B2-UI-1 review-fix: the background tag merge may lock mid-write; that
+            // stays a SILENT no-op (per this function's no-message contract) — but
+            // it must never crash the process from the gate's fail-closed throw.
+            // Note: this is a fire-and-forget cosmetic merge; the page body itself
+            // is persisted by the caller's gated save, so nothing is lost.
+            try {
+                val merged = autoTagNoteLanguage(text, tags)
+                if (merged is PluginResult.Success) {
+                    repository.updatePageTitleAndTags(pageId, title, merged.value)
+                    if (selectedPage.value?.id == pageId) {
+                        _selectedPage.value = repository.getPageById(pageId)
+                    }
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (!isLockRacedWrite(e)) throw e
             }
         }
     }
@@ -1826,48 +1850,52 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             // B2-UI-1 (phase-49): the create branch writes an encrypted page body —
             // reject the whole open/create while locked.
-            if (repository.encryptionKey == null) return@launch
-            val todayStr = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
-            val targetTitle = "$todayStr.md"
+            // B2-UI-1 review-fix: a lock racing the read/write is a notice, not a
+            // crash; the existing-page read and new-page create stay together so
+            // neither can run against a disposed pool.
+            writeGuardedAgainstLock("Vault is locked — daily note not created") {
+                val todayStr = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
+                val targetTitle = "$todayStr.md"
 
-            val activePages = repository.getAllActivePages()
-            val existing = activePages.find {
-                it.title.equals(targetTitle, ignoreCase = true) ||
-                it.title.equals(todayStr, ignoreCase = true)
-            }
+                val activePages = repository.getAllActivePages()
+                val existing = activePages.find {
+                    it.title.equals(targetTitle, ignoreCase = true) ||
+                    it.title.equals(todayStr, ignoreCase = true)
+                }
 
-            if (existing != null) {
-                onOpen(existing)
-            } else {
-                val sec = selectedSection.value ?: repository.ensureDefaultNotebookAndSection().second
-                val journalTemplate = """
-                    # 📅 Journal - $todayStr
+                if (existing != null) {
+                    onOpen(existing)
+                } else {
+                    val sec = selectedSection.value ?: repository.ensureDefaultNotebookAndSection().second
+                    val journalTemplate = """
+                        # 📅 Journal - $todayStr
 
-                    #journal #daily
+                        #journal #daily
 
-                    ## 🎯 Today's Focus & Goals
-                    - [ ] 
+                        ## 🎯 Today's Focus & Goals
+                        - [ ] 
 
-                    ## 📝 Notes & Reflection
+                        ## 📝 Notes & Reflection
 
 
-                    ---
-                    *Linked Notes: [[Home]]*
-                """.trimIndent()
+                        ---
+                        *Linked Notes: [[Home]]*
+                    """.trimIndent()
 
-                // phase-44 (B1-DB-4): the body is stored ONLY in the
-                // field-encrypted extractedText column — never persisted to a
-                // plaintext .md/.txt file under filesDir/noteflow/imports.
-                val newPage = repository.createPage(
-                    sectionId = sec.id,
-                    title = targetTitle,
-                    sourceFilePath = null,
-                    sourceFileType = "text",
-                    template = "blank",
-                    extractedText = journalTemplate
-                )
-                selectPage(newPage)
-                onOpen(newPage)
+                    // phase-44 (B1-DB-4): the body is stored ONLY in the
+                    // field-encrypted extractedText column — never persisted to a
+                    // plaintext .md/.txt file under filesDir/noteflow/imports.
+                    val newPage = repository.createPage(
+                        sectionId = sec.id,
+                        title = targetTitle,
+                        sourceFilePath = null,
+                        sourceFileType = "text",
+                        template = "blank",
+                        extractedText = journalTemplate
+                    )
+                    selectPage(newPage)
+                    onOpen(newPage)
+                }
             }
         }
     }
@@ -1876,32 +1904,35 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             // B2-UI-1 (phase-49): the create branch writes an encrypted page body —
             // reject the whole open/create while locked.
-            if (repository.encryptionKey == null) return@launch
-            val activePages = repository.getAllActivePages()
-            val cleanTarget = title.replace(".md", "").replace(".txt", "").trim()
-            val existing = activePages.find {
-                val pageTitleClean = it.title.replace(".md", "").replace(".txt", "").trim()
-                pageTitleClean.equals(cleanTarget, ignoreCase = true)
-            }
+            // B2-UI-1 review-fix: a lock racing the read/write is a notice, not a
+            // crash; the existing-page read and new-page create stay together.
+            writeGuardedAgainstLock("Vault is locked — page not created") {
+                val activePages = repository.getAllActivePages()
+                val cleanTarget = title.replace(".md", "").replace(".txt", "").trim()
+                val existing = activePages.find {
+                    val pageTitleClean = it.title.replace(".md", "").replace(".txt", "").trim()
+                    pageTitleClean.equals(cleanTarget, ignoreCase = true)
+                }
 
-            if (existing != null) {
-                onOpen(existing)
-            } else {
-                val sec = selectedSection.value ?: repository.ensureDefaultNotebookAndSection().second
-                val targetFileName = "$cleanTarget.md"
-                val initialContent = "# $cleanTarget\n\nCreated via WikiLink `[[$cleanTarget]]`."
-                // phase-44 (B1-DB-4): body stored ONLY in the field-encrypted
-                // extractedText column — never a plaintext .md/.txt file.
-                val newPage = repository.createPage(
-                    sectionId = sec.id,
-                    title = targetFileName,
-                    sourceFilePath = null,
-                    sourceFileType = "text",
-                    template = "blank",
-                    extractedText = initialContent
-                )
-                selectPage(newPage)
-                onOpen(newPage)
+                if (existing != null) {
+                    onOpen(existing)
+                } else {
+                    val sec = selectedSection.value ?: repository.ensureDefaultNotebookAndSection().second
+                    val targetFileName = "$cleanTarget.md"
+                    val initialContent = "# $cleanTarget\n\nCreated via WikiLink `[[$cleanTarget]]`."
+                    // phase-44 (B1-DB-4): body stored ONLY in the field-encrypted
+                    // extractedText column — never a plaintext .md/.txt file.
+                    val newPage = repository.createPage(
+                        sectionId = sec.id,
+                        title = targetFileName,
+                        sourceFilePath = null,
+                        sourceFileType = "text",
+                        template = "blank",
+                        extractedText = initialContent
+                    )
+                    selectPage(newPage)
+                    onOpen(newPage)
+                }
             }
         }
     }
@@ -1914,17 +1945,36 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
      * the write survives the editor composable's teardown (the Phase-05
      * NonCancellable race the old file-write carried). No fallback to plaintext
      * on failure — the failure is surfaced so the user can retry.
+     *
+     * B2-UI-1 (phase-49 review-fix): a lock racing this save no longer drops the
+     * body behind an error snackbar — the snapshot is stashed in the same
+     * defer/re-write-encrypted-after-unlock policy as the ink flushes.
      */
     fun saveMarkdownNoteBody(page: NotePageEntity, body: String) {
         val pageId = page.id
         val legacyPath = page.sourceFilePath
         val legacyType = page.sourceFileType
+        val deferred = EditorFlushPolicy.DeferredBody(pageId, body, legacyPath, legacyType)
+        if (!VaultWriteGate.persistNow(repository.encryptionKey != null)) {
+            editorFlushPolicy.deferBody(deferred)
+            return
+        }
         viewModelScope.launch {
             try {
                 repository.updatePageBody(pageId, body)
                 NoteBodyVaultPolicy.deleteLegacyNoteTextBody(legacyPath, legacyType)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: VaultLockedWriteException) {
+                // Vault locked mid-write: stash, never plaintext, never dropped.
+                editorFlushPolicy.deferBody(deferred)
             } catch (e: Exception) {
-                showSnackbar("Failed to save note body", isLong = true)
+                if (repository.encryptionKey == null) {
+                    // A lock zeroized the DEK / disposed the pool mid-save.
+                    editorFlushPolicy.deferBody(deferred)
+                } else {
+                    showSnackbar("Failed to save note body", isLong = true)
+                }
             }
         }
     }
@@ -2277,14 +2327,28 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         // rows (the repository throws VaultLockedWriteException) nor (b) crash the
         // process from that fail-closed throw. A snapshot skipped because the vault
         // locked is "rejected", never written in the clear.
+        // B2-UI-1 review-fix: the rejection is no longer silent — the user gets a
+        // non-alarming notice so the dropped snapshot is never invisible.
         if (VaultWriteGate.persistNow(repository.encryptionKey != null)) {
             viewModelScope.launch {
                 try {
                     repository.createNoteVersion(pageId, title, extractedText, versionNote)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
                 } catch (e: VaultLockedWriteException) {
-                    // vault locked mid-write: drop this one-off snapshot, never plaintext.
+                    // vault locked mid-write: rejected, never plaintext, never silent.
+                    showSnackbar("Vault is locked — version snapshot not saved")
+                } catch (e: Exception) {
+                    if (repository.encryptionKey == null) {
+                        // A lock zeroized the DEK / disposed the pool mid-write.
+                        showSnackbar("Vault is locked — version snapshot not saved")
+                    } else {
+                        throw e
+                    }
                 }
             }
+        } else {
+            showSnackbar("Vault is locked — version snapshot not saved")
         }
     }
 
@@ -2352,6 +2416,43 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     }
 
     /**
+     * B2-UI-1 (phase-49 review-fix): single predicate for "this write failed
+     * BECAUSE the vault locked" — either the repository threw the fail-closed
+     * gate exception, or a lock zeroized the DEK / disposed the pool before the
+     * failure surfaced. Callers of the non-flush page writes (create/rename/tag/
+     * daily/wiki/template) use it to turn a lock-race crash into a handled
+     * rejection with a non-alarming notice.
+     */
+    private fun isLockRacedWrite(e: Exception): Boolean =
+        e is VaultLockedWriteException || repository.encryptionKey == null
+
+    /**
+     * B2-UI-1 (phase-49 review-fix): wraps a page write so a lock racing it
+     * cannot crash the process. Returns null when the write was rejected
+     * because the vault locked (or was locked before the write), and the block's
+     * value otherwise. Unlock-gated reads/state updates inside [block] are kept
+     * together so the pool-closed race on follow-up reads is caught too.
+     */
+    private suspend fun <T> writeGuardedAgainstLock(
+        lockedNotice: String,
+        block: suspend () -> T
+    ): T? {
+        if (repository.encryptionKey == null) return null
+        return try {
+            block()
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            if (isLockRacedWrite(e)) {
+                showSnackbar(lockedNotice)
+                null
+            } else {
+                throw e
+            }
+        }
+    }
+
+    /**
      * The single persist-vs-defer decision (see [VaultWriteGate]).
      * Unlocked ⇒ persist [unlockedPersist] on the IO dispatcher; locked ⇒ stash.
      * If a lock races the gate check the repository throws
@@ -2394,7 +2495,8 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
      */
     private fun flushPendingEditorSaves() {
         val toFlush = editorFlushPolicy.drain()
-        if (toFlush.isEmpty()) return
+        val toFlushBodies = editorFlushPolicy.drainBodies()
+        if (toFlush.isEmpty() && toFlushBodies.isEmpty()) return
         for (save in toFlush) {
             viewModelScope.launch(Dispatchers.IO) {
                 try {
@@ -2412,6 +2514,24 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
                         editorFlushPolicy.defer(save)
                     } else {
                         throw e
+                    }
+                }
+            }
+        }
+        for (body in toFlushBodies) {
+            viewModelScope.launch(Dispatchers.IO) {
+                try {
+                    repository.updatePageBody(body.pageId, body.body)
+                    NoteBodyVaultPolicy.deleteLegacyNoteTextBody(body.legacySourceFilePath, body.legacySourceFileType)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: VaultLockedWriteException) {
+                    editorFlushPolicy.deferBody(body)
+                } catch (e: Exception) {
+                    if (repository.encryptionKey == null) {
+                        editorFlushPolicy.deferBody(body)
+                    } else {
+                        showSnackbar("Failed to save note body", isLong = true)
                     }
                 }
             }
