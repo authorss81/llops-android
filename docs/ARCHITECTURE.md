@@ -203,6 +203,31 @@
     "lockout is UI-only / vault only as strong as the password" caveat is documented in the policy KDoc;
     TEE-bound attempt gating / Argon2id remain tracked follow-ups (not introduced, no new deps).
     Tests: `B1Crypto04PasswordStrengthTest` (10).
+  - **Implemented in phase-64** (B1-CRYPTO-05, see `workspace/phase-64/REPORT.md`): a stored DEK
+    device wrapper that becomes undecryptable (AndroidKeyStore key lost/unreadable) is NEVER
+    silently re-keyed. Pure-JVM `services/DekReadResult.kt` defines sealed `DekReadResult`
+    (`NoBlob` / `Unlocked(dek)` / `AuthRequired` / `KeyLost(wrapperAlias)`) + typed
+    `KeystoreKeyLostException(message, wrapperAlias)`. `SecurityService.readDekResult()`
+    (`SecurityService.kt:162-186`) distinguishes "no blob stored" from "blob present but its
+    wrapping key is gone" (the old `readDek()` collapsed both to `null`); `getOrCreateDek`
+    (`:203-236`) THROWS `KeystoreKeyLostException` on `KeyLost` at every mint site and mints only
+    from `NoBlob` + `allowPasswordlessMint` — the stored wrapper can never be overwritten by a
+    fresh DEK, so the phase-43 quarantiner is never tripped for this cause. `storeDek` stamps a
+    non-secret `wrapperAlias` + `wrapperVersion = 1` marker persisted/cleared by
+    `SharedPrefsDekDeviceStore` (`dek_wrapper_alias`/`dek_wrapper_version`). Recovery UX:
+    `NoteflowViewModel` gains a `_keystoreKeyLost` StateFlow gated into `dbGate` (third input
+    alongside `_authenticated` + `_corruptionBlocked`), the passwordless init routes through
+    `readDekResult` (Unlocked→use, NoBlob→mint, AuthRequired/KeyLost→recovery state — the old
+    `var dek = readDek(); if (dek == null) mint()` collapse is gone), `initializeData`'s catch
+    surfaces key-lost (not corruption) when the corruption flag is clear, `setMasterPassword`
+    throws `KeystoreKeyLostException` on `KeyLost`, and two exits exist:
+    `attemptKeystoreKeyLostRecoveryFromBackup` (validates the backup password BEFORE closing the
+    DB, mints a fresh DEK in memory, imports the backup re-keyed into it, and persists the device
+    wrapper ONLY AFTER the restore succeeds — a failed restore never overwrites the old wrapper)
+    and `startFreshAfterKeystoreKeyLoss` (moves the old vault aside as
+    `noteflow.sqlite.keystore-lost-<ts>` via `quarantineVaultFiles`, bytes preserved — never
+    quarantined as corrupt). `MainActivity` renders the dedicated `KeystoreKeyLostScreen` between
+    the corruption and restore screens. Tests: `B1Crypto05SilentRekeyTest` (16).
 - **Canvas**: `ui/components/AnnotationCanvas.kt:83` (ink canvas, gestures, layers, `pointerInteropFilter`);
   `services/WetBrushEngine.kt:13` (AGSL wet-mixing gating); `ui/components/ShaderCapabilityHelper.kt:5`
   (`isAgslSupported` = SDK ≥ 33); `services/ShapeRecognitionHelper.kt:13` (`trySnapShape()` :27).

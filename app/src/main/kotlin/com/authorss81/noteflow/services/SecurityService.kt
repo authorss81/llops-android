@@ -36,6 +36,9 @@ class SecurityService internal constructor(
         private const val KEY_ALIAS = "noteflow_dek_key"
         private const val ANDROID_KEYSTORE = "AndroidKeyStore"
 
+        /** Non-secret wrapper-format version stamped on every device blob (B1-CRYPTO-05). */
+        private const val WRAPPER_VERSION = 1
+
         /**
          * Android entry point: binds the real SharedPreferences-backed device store.
          * (Private primary constructor + factory so pure-JVM tests can inject an
@@ -137,7 +140,12 @@ class SecurityService internal constructor(
             System.arraycopy(encryptedDek, 0, combined, iv.size, encryptedDek.size)
 
             val encoded = Base64.encodeToString(combined, Base64.NO_WRAP)
-            dekStore.write(DekDeviceBlob(encoded, authRequired))
+            // B1-CRYPTO-05 (phase-64): stamp a NON-SECRET marker of which keystore
+            // alias/version wrapped this blob, so a future keystore-key loss is
+            // distinguishable from "no blob stored" (and the recovery screen can
+            // tell the user which device key is missing).
+            val alias = if (authRequired) "${KEY_ALIAS}_auth" else KEY_ALIAS
+            dekStore.write(DekDeviceBlob(encoded, authRequired, wrapperAlias = alias, wrapperVersion = WRAPPER_VERSION))
             true
         } catch (e: Exception) {
             // Return the failure to the caller instead of crashing app startup.
@@ -146,54 +154,85 @@ class SecurityService internal constructor(
     }
  
     /**
+     * B1-CRYPTO-05 (phase-64): reads the device copy AND distinguishes "no copy
+     * stored" ([DekReadResult.NoBlob]) from "copy stored but undecryptable"
+     * ([DekReadResult.KeyLost]) — the two states the pre-fix [readDek] conflated
+     * into null, which is what let [getOrCreateDek] silently re-key the vault.
+     */
+    fun readDekResult(): DekReadResult {
+        val blob = dekStore.read() ?: return DekReadResult.NoBlob
+        if (blob.authRequired) return DekReadResult.AuthRequired // Must use biometric unlock flow
+
+        return try {
+            val combined = Base64.decode(blob.encoded, Base64.NO_WRAP)
+            if (combined == null || combined.size < 12) return DekReadResult.KeyLost(blob.wrapperAlias)
+            val iv = ByteArray(12)
+            System.arraycopy(combined, 0, iv, 0, 12)
+            val cipherText = ByteArray(combined.size - 12)
+            System.arraycopy(combined, 12, cipherText, 0, cipherText.size)
+
+            val secretKey = getOrCreateKey(authRequired = false)
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            val spec = GCMParameterSpec(128, iv)
+            cipher.init(Cipher.DECRYPT_MODE, secretKey, spec)
+            DekReadResult.Unlocked(cipher.doFinal(cipherText))
+        } catch (e: Exception) {
+            // The stored wrapper exists but the AndroidKeyStore key that wrapped it
+            // is gone (keystore reset / ROM migration / app-data restore on some
+            // OEMs) or the blob is unreadable. NOT corruption — the vault DB is
+            // fine, it is simply still encrypted under a key we can no longer unwrap.
+            DekReadResult.KeyLost(blob.wrapperAlias)
+        }
+    }
+
+    /**
      * Reads the passwordless device copy of the DEK — B1-CRYPTO-02 fails closed:
      * an absent blob OR an auth-gated (`authRequired=true`, biometric-only) blob
      * returns null, never a passwordless unwrap. When the vault has a master
      * password and biometrics are OFF there is deliberately no device copy, so
      * this is the "no password ⇒ null" guard the finding requires.
+     *
+     * B1-CRYPTO-05 (phase-64): a stored-but-undecryptable blob ALSO returns null
+     * here, but callers that can mint must use [readDekResult]/[getOrCreateDek]
+     * instead — this legacy accessor intentionally flattens the distinction.
      */
-    fun readDek(): ByteArray? {
-        val blob = dekStore.read() ?: return null
-        if (blob.authRequired) return null // Must use biometric unlock flow
-
-        return try {
-            val combined = Base64.decode(blob.encoded, Base64.NO_WRAP)
-            if (combined.size < 12) return null
-            val iv = ByteArray(12)
-            System.arraycopy(combined, 0, iv, 0, 12)
-            val cipherText = ByteArray(combined.size - 12)
-            System.arraycopy(combined, 12, cipherText, 0, cipherText.size)
- 
-            val secretKey = getOrCreateKey(authRequired = false)
-            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-            val spec = GCMParameterSpec(128, iv)
-            cipher.init(Cipher.DECRYPT_MODE, secretKey, spec)
-            cipher.doFinal(cipherText)
-        } catch (e: Exception) {
-            null
-        }
+    fun readDek(): ByteArray? = when (val r = readDekResult()) {
+        is DekReadResult.Unlocked -> r.dek
+        else -> null
     }
-
     fun getOrCreateDek(allowPasswordlessMint: Boolean = true): ByteArray? {
-        val existing = readDek()
-        if (existing != null) return existing
-        val blob = dekStore.read()
-        // A biometric-gated device copy exists but was not unlockable without the
-        // biometric flow: never silently mint/re-persist a fresh fallback key.
-        if (blob != null && blob.authRequired) return null
-        // B1-CRYPTO-02 (phase-45 review fix): when a master password exists the
-        // ONLY at-rest wrapping of the DEK is the password-derived KEK. A locked
-        // open (VaultKeyHolder.dek == null) must NOT mint a fresh non-auth DEK —
-        // that would both recreate the bypass blob AND open the vault with the
-        // wrong SQLCipher passphrase (SQLiteNotADatabaseException → phase-43
-        // quarantine). The DB factory gates this with
-        // `allowPasswordlessMint = !settings.hasMasterPassword`; belt-and-braces
-        // here so no future caller can re-open the mint path on a protected vault.
-        if (!allowPasswordlessMint) return null
-
-        val newDek = EncryptionService.generateDek()
-        storeDek(newDek, authRequired = false)
-        return newDek
+        // B1-CRYPTO-05 (phase-64): readDekResult() distinguishes the four states
+        // the pre-fix readDek()-then-mint collapse treated as "null ⇒ mint".
+        return when (val result = readDekResult()) {
+            is DekReadResult.Unlocked -> result.dek
+            // A biometric-gated device copy exists but was not unlockable without
+            // the biometric flow: never silently mint/re-persist a fresh fallback key.
+            DekReadResult.AuthRequired -> null
+            // A device copy IS stored but its wrapping key is lost/unreadable.
+            // NEVER mint — overwriting the wrapper with a fresh DEK would open the
+            // still-encrypted vault with the wrong SQLCipher passphrase and the
+            // phase-43 quarantiner would report the survivable vault as "corrupt".
+            // The caller MUST route to the explicit keystore-key-lost recovery.
+            is DekReadResult.KeyLost -> throw KeystoreKeyLostException(
+                "Stored device DEK copy cannot be unwrapped — the AndroidKeyStore key " +
+                    "that wrapped it is lost. Refusing to silently re-key the vault; " +
+                    "restore from a backup or start fresh instead.",
+                result.wrapperAlias
+            )
+            DekReadResult.NoBlob -> {
+                // B1-CRYPTO-02 (phase-45 review fix): when a master password exists
+                // the ONLY at-rest wrapping of the DEK is the password-derived KEK. A
+                // locked open (VaultKeyHolder.dek == null) must NOT mint a fresh
+                // non-auth DEK — that would both recreate the bypass blob AND open
+                // the vault with the wrong SQLCipher passphrase. The DB factory gates
+                // this with `allowPasswordlessMint = !settings.hasMasterPassword`;
+                // belt-and-braces here so no future caller can re-open the mint path.
+                if (!allowPasswordlessMint) return null
+                val newDek = EncryptionService.generateDek()
+                storeDek(newDek, authRequired = false)
+                newDek
+            }
+        }
     }
 
     /**
@@ -220,8 +259,22 @@ internal interface DekDeviceStore {
     fun clear(): Boolean
 }
 
-/** The persisted wrapper: Base64(iv + AES-GCM(DEK)) plus the auth-gating flag. */
-internal data class DekDeviceBlob(val encoded: String, val authRequired: Boolean)
+/**
+ * The persisted wrapper: Base64(iv + AES-GCM(DEK)) plus the auth-gating flag.
+ *
+ * B1-CRYPTO-05 (phase-64): [wrapperAlias] + [wrapperVersion] are NON-SECRET
+ * markers stamped at wrap time — which AndroidKeyStore alias holds the wrapping
+ * key and which blob format version produced it. They are persisted so a later
+ * keystore reset/app-data restore can distinguish "the device key is gone"
+ * ([DekReadResult.KeyLost], recovery screen) from "no blob was ever stored"
+ * ([DekReadResult.NoBlob], fresh mint).
+ */
+internal data class DekDeviceBlob(
+    val encoded: String,
+    val authRequired: Boolean,
+    val wrapperAlias: String? = null,
+    val wrapperVersion: Int = 1,
+)
 
 /**
  * Real SharedPreferences-backed [DekDeviceStore] (`noteflow_keystore` file,
@@ -232,19 +285,30 @@ internal data class DekDeviceBlob(val encoded: String, val authRequired: Boolean
  * report success; a process kill right after "password set" cannot resurrect the
  * bypass byte copy. It also clears the stale `dek_auth_required` flag so a
  * removed non-auth wrapper can never masquerade as a biometric-gated key.
+ *
+ * B1-CRYPTO-05 (phase-64): [write] persists the non-secret wrapper-alias/version
+ * markers alongside the blob and [clear] drops them, so no stale marker can
+ * outlive a removed device copy.
  */
 internal class SharedPrefsDekDeviceStore(context: Context) : DekDeviceStore {
     private val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
 
     override fun read(): DekDeviceBlob? {
         val encoded = prefs.getString(KEY_DEK, null) ?: return null
-        return DekDeviceBlob(encoded, prefs.getBoolean(KEY_AUTH_REQUIRED, false))
+        return DekDeviceBlob(
+            encoded,
+            prefs.getBoolean(KEY_AUTH_REQUIRED, false),
+            prefs.getString(KEY_WRAPPER_ALIAS, null),
+            prefs.getInt(KEY_WRAPPER_VERSION, 1)
+        )
     }
 
     override fun write(blob: DekDeviceBlob) {
         prefs.edit()
             .putString(KEY_DEK, blob.encoded)
             .putBoolean(KEY_AUTH_REQUIRED, blob.authRequired)
+            .putString(KEY_WRAPPER_ALIAS, blob.wrapperAlias)
+            .putInt(KEY_WRAPPER_VERSION, blob.wrapperVersion)
             .apply()
     }
 
@@ -252,6 +316,8 @@ internal class SharedPrefsDekDeviceStore(context: Context) : DekDeviceStore {
         return prefs.edit()
             .remove(KEY_DEK)
             .remove(KEY_AUTH_REQUIRED)
+            .remove(KEY_WRAPPER_ALIAS)
+            .remove(KEY_WRAPPER_VERSION)
             .commit()
     }
 
@@ -259,6 +325,8 @@ internal class SharedPrefsDekDeviceStore(context: Context) : DekDeviceStore {
         const val PREF_NAME = "noteflow_keystore"
         const val KEY_DEK = "noteflow_sec_dek"
         const val KEY_AUTH_REQUIRED = "dek_auth_required"
+        const val KEY_WRAPPER_ALIAS = "dek_wrapper_alias"
+        const val KEY_WRAPPER_VERSION = "dek_wrapper_version"
     }
 }
 

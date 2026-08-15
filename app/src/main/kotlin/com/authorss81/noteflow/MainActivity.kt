@@ -28,6 +28,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Restore
 import androidx.compose.material.icons.outlined.Security
@@ -176,6 +177,7 @@ class MainActivity : FragmentActivity() {
             val databaseTampered by viewModel.databaseTampered.collectAsState()
             val restoreBlocked by viewModel.restoreBlocked.collectAsState()
             val corruptionBlocked by viewModel.corruptionBlocked.collectAsState()
+            val keystoreKeyLost by viewModel.keystoreKeyLost.collectAsState()
             val autoLockTimeoutSeconds by viewModel.autoLockTimeoutSeconds.collectAsState()
 
             // 22.9: status/nav-bar icon polarity must track the app's actual theme,
@@ -386,6 +388,14 @@ class MainActivity : FragmentActivity() {
                             // deleted; the user must restore from backup or explicitly
                             // start fresh before normal note access is shown.
                             CorruptionRecoveryScreen(viewModel = viewModel)
+                        } else if (keystoreKeyLost) {
+                            // B1-CRYPTO-05 (phase-64): the AndroidKeyStore key that
+                            // wrapped the device DEK copy is lost while the blob is
+                            // still stored. The vault DB is NOT corrupt — only the
+                            // device wrapper is gone — so we never auto-quarantine and
+                            // never silently re-key; the user restores from backup or
+                            // explicitly starts fresh.
+                            KeystoreKeyLostScreen(viewModel = viewModel)
                         } else if (restoreBlocked) {
                             RestoreBlockedScreen(viewModel = viewModel)
                         } else {
@@ -989,6 +999,107 @@ private fun CorruptionRecoveryScreen(viewModel: NoteflowViewModel) {
             onClick = { viewModel.startFreshAfterCorruption() }
         ) {
             Text("Start fresh with an empty vault")
+        }
+        errorMessage?.let {
+            Spacer(Modifier.height(12.dp))
+            Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+        }
+    }
+}
+
+/**
+ * B1-CRYPTO-05 (phase-64): shown when the AndroidKeyStore key that wrapped the
+ * device DEK copy is lost (app-data restore / ROM migration / keystore reset on
+ * some OEMs) while the blob itself is still stored. This is DISTINCT from the
+ * corruption screen: the vault database is intact and was NOT quarantined —
+ * it is simply still encrypted under a key we can no longer unwrap. The pre-fix
+ * behavior silently minted a fresh DEK over the stored wrapper, which made the
+ * next open fail against the still-encrypted vault and the phase-09 H2 handler
+ * quarantined survivable data as `*.corrupt-*`. The only sanctioned exits are
+ * restore-from-backup (re-keys into a fresh DEK) or an explicit start-fresh.
+ */
+@Composable
+private fun KeystoreKeyLostScreen(viewModel: NoteflowViewModel) {
+    var backupPassword by remember { mutableStateOf("") }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+    var confirmStartFresh by remember { mutableStateOf(false) }
+
+    val pickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: android.net.Uri? ->
+        if (uri != null) {
+            errorMessage = null
+            viewModel.attemptKeystoreKeyLostRecoveryFromBackup(uri, backupPassword.ifBlank { null }) { msg ->
+                errorMessage = msg
+            }
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Spacer(Modifier.height(48.dp))
+        Text("Device Security Key Lost", style = MaterialTheme.typography.headlineMedium)
+        Spacer(Modifier.height(12.dp))
+        Text(
+            "The device security key that protects your vault could not be found on this " +
+                "device. Your notes were NOT erased — your data is still intact and still " +
+                "encrypted, but the key that unlocks it is gone (this can happen after a " +
+                "device restore, a system update, or a security-key reset).",
+            style = MaterialTheme.typography.bodyMedium
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "Restore from a backup to get your notes back. Only choose \u201cStart fresh\u201d " +
+                "if you have no backup — the old vault is moved aside, not deleted, so it can " +
+                "still be recovered offline with the original key material.",
+            style = MaterialTheme.typography.bodyMedium
+        )
+        Spacer(Modifier.height(24.dp))
+        OutlinedTextField(
+            value = backupPassword,
+            onValueChange = { backupPassword = it },
+            label = { Text("Backup Password (if any)") },
+            visualTransformation = PasswordVisualTransformation(),
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(Modifier.height(16.dp))
+        Button(onClick = { pickerLauncher.launch(arrayOf("application/octet-stream", "*/*")) }) {
+            Icon(Icons.Outlined.Restore, contentDescription = null)
+            Spacer(Modifier.width(8.dp))
+            Text("Choose Backup & Restore")
+        }
+        Spacer(Modifier.height(12.dp))
+        if (!confirmStartFresh) {
+            OutlinedButton(onClick = { confirmStartFresh = true }) {
+                Text("Start fresh with an empty vault")
+            }
+        } else {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(
+                    "Starting fresh moves your existing (still-encrypted) vault aside and " +
+                        "creates a new empty vault. This cannot be undone in the app.",
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Spacer(Modifier.height(8.dp))
+                Button(
+                    onClick = { viewModel.startFreshAfterKeystoreKeyLoss() },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error
+                    )
+                ) {
+                    Text("Yes — start a fresh empty vault")
+                }
+                TextButton(onClick = { confirmStartFresh = false }) {
+                    Text("Cancel")
+                }
+            }
         }
         errorMessage?.let {
             Spacer(Modifier.height(12.dp))

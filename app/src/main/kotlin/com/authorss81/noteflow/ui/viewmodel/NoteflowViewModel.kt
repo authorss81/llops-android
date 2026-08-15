@@ -64,9 +64,11 @@ import com.authorss81.noteflow.plugins.TtsChunk
 import com.authorss81.noteflow.services.DatabaseSecurityHelper
 import com.authorss81.noteflow.services.DekAtRestMode
 import com.authorss81.noteflow.services.DekAtRestPolicy
+import com.authorss81.noteflow.services.DekReadResult
 import com.authorss81.noteflow.services.EditorFlushPolicy
 import com.authorss81.noteflow.services.EncryptionService
 import com.authorss81.noteflow.services.ImportExportService
+import com.authorss81.noteflow.services.KeystoreKeyLostException
 import com.authorss81.noteflow.services.NoteBodyVaultPolicy
 import com.authorss81.noteflow.services.PasswordStrengthPolicy
 import com.authorss81.noteflow.services.SecurityService
@@ -973,6 +975,18 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     val corruptionTimestamp: Long = DatabaseSecurityHelper.getCorruptionTimestamp(appContext)
 
     /**
+     * B1-CRYPTO-05 (phase-64): the AndroidKeyStore key that wraps the device DEK
+     * copy is LOST (app-data restore / ROM migration / keystore reset on some
+     * OEMs) while the blob itself is still stored — or the blob is unreadable.
+     * The vault database is NOT corrupt (only the device wrapper is gone), so we
+     * show the dedicated keystore-key-lost recovery screen (restore-from-backup
+     * / explicit start-fresh) INSTEAD of silently minting a fresh DEK over the
+     * still-encrypted vault. Never auto-quarantine in this state.
+     */
+    private val _keystoreKeyLost = MutableStateFlow(false)
+    val keystoreKeyLost: StateFlow<Boolean> = _keystoreKeyLost.asStateFlow()
+
+    /**
      * H2 (phase-09): the user explicitly chose to discard the quarantined vault
      * and continue with the (already created) empty database. Clears the flag
      * and re-arms the tamper baseline so the fresh vault is the new baseline.
@@ -1069,8 +1083,12 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     // and no flow may open the DB — the quarantined helper guard makes any open
     // fail (never auto-create an empty DB behind the user's back). Restore success
     // and "start fresh" clear the flag and re-arm these flows.
-    private val dbGate: Flow<Boolean> = combine(_authenticated, _corruptionBlocked) { isAuth, blocked ->
-        isAuth && !blocked
+    // B1-CRYPTO-05 (phase-64): the keystore-key-lost state is a THIRD gate — while
+    // it is set no flow may open the DB either (the passwordless factory would
+    // throw KeystoreKeyLostException), so the recovery screen can offer
+    // restore/start-fresh without any open racing it.
+    private val dbGate: Flow<Boolean> = combine(_authenticated, _corruptionBlocked, _keystoreKeyLost) { isAuth, blocked, keyLost ->
+        isAuth && !blocked && !keyLost
     }.distinctUntilChanged()
 
     private val _hasMasterPassword = MutableStateFlow(settings.hasMasterPassword)
@@ -1190,11 +1208,19 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
                 // B1-DB-1 (phase-43): the vault open failed and the quarantined-helper
                 // already set the persistent corruption flag before rethrowing. Surface
                 // the corruption-recovery screen IN THIS SESSION instead of crashing a
-                // dead DB. Any OTHER exception is rethrown (data corruption must never
-                // be silently swallowed).
+                // dead DB.
+                // B1-CRYPTO-05 (phase-64): a failed open whose device DEK copy is
+                // stored-but-undecryptable is a LOST KEYSTORE KEY, not corruption —
+                // the quarantiner never set its flag here (a key-lost passwordless
+                // boot is blocked before any open). Surface the keystore-key-lost
+                // recovery screen instead of treating survivable data as corrupt.
                 if (DatabaseSecurityHelper.hasCorruptionDetected(appContext)) {
                     _corruptionBlocked.value = true
+                } else if (runCatching { security.readDekResult() is DekReadResult.KeyLost }.getOrDefault(false)) {
+                    _keystoreKeyLost.value = true
                 } else {
+                    // Any other exception is rethrown (data corruption must never
+                    // be silently swallowed).
                     throw e
                 }
             }
@@ -1307,13 +1333,37 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
             // Vault locked: DB opens only after successful unlock.
         } else {
             // No master password → DEK is device-wrapped and available immediately.
-            var dek = security.readDek()
-            if (dek == null) {
-                dek = EncryptionService.generateDek()
-                security.storeDek(dek, authRequired = false)
+            // B1-CRYPTO-05 (phase-64): distinguish "no device copy stored" (true
+            // first run ⇒ mint + persist) from "a copy IS stored but its wrapping
+            // keystore key is lost/unreadable" (⇒ keystore-key-lost recovery screen,
+            // NEVER a silent re-key). The pre-fix `readDek() == null ⇒ mint` collapse
+            // silently overwrote the stored wrapper on keystore loss and the next
+            // SQLCipher open quarantined the survivable vault as "corrupt".
+            when (val result = security.readDekResult()) {
+                is DekReadResult.Unlocked -> {
+                    repository.encryptionKey = result.dek
+                    initializeData()
+                }
+                DekReadResult.NoBlob -> {
+                    // True first run (or the device copy was deliberately cleared by
+                    // removeMasterPassword): mint + persist the passwordless copy.
+                    val dek = EncryptionService.generateDek()
+                    repository.encryptionKey = dek
+                    security.storeDek(dek, authRequired = false)
+                    initializeData()
+                }
+                DekReadResult.AuthRequired -> {
+                    // A passwordless vault whose device copy is the biometric-gated
+                    // wrapper (anomalous — biometrics requires a master password).
+                    // It cannot be read without the biometric flow; surface the
+                    // recovery screen instead of minting over it.
+                    _keystoreKeyLost.value = true
+                }
+                is DekReadResult.KeyLost -> {
+                    // Keystore key lost / stored blob unreadable: explicit recovery.
+                    _keystoreKeyLost.value = true
+                }
             }
-            repository.encryptionKey = dek
-            initializeData()
         }
     }
 
@@ -1842,6 +1892,95 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    /**
+     * B1-CRYPTO-05 (phase-64): restore-from-backup path for the keystore-key-lost
+     * recovery screen. Unlike [attemptRecoveryFromBackup] (which reuses the live
+     * DEK), the old DEK is genuinely GONE here, so this flow mints a FRESH DEK,
+     * persists its device-wrapped copy (the post-restart passwordless boot
+     * credential), and imports the backup re-keyed into it. This is the ONLY
+     * sanctioned mint on the key-loss path — the user explicitly chose recovery.
+     */
+    fun attemptKeystoreKeyLostRecoveryFromBackup(uri: android.net.Uri, backupPassword: String?, onError: (String) -> Unit) {
+        viewModelScope.launch {
+            try {
+                val bytes = ImportExportService.readUriBytes(
+                    getApplication(),
+                    uri,
+                    ImportExportService.MAX_BACKUP_INPUT_BYTES
+                )
+                    ?: throw IllegalStateException("Could not read the selected backup file.")
+                // H1 (phase-09): reject a wrong password BEFORE closing the live DB.
+                if (backupPassword != null) {
+                    ImportExportService.validateBackupPassword(bytes, backupPassword)
+                }
+                // Mint a FRESH DEK to re-key the restored vault into. The wrapper is
+                // persisted ONLY after the restore succeeds, so a failed restore never
+                // overwrites the (still-stored, still-unreadable) old wrapper — the
+                // recovery screen stays shown and the user can simply retry.
+                val newDek = EncryptionService.generateDek()
+                repository.encryptionKey = newDek
+                repository.closeDatabase()
+                ImportExportService.importBackup(getApplication(), bytes, newDek, backupPassword)
+                if (!security.storeDek(newDek, authRequired = false)) {
+                    throw IllegalStateException("Could not persist the new device key — recovery aborted.")
+                }
+                DatabaseSecurityHelper.clearCorruptionDetected(getApplication())
+                DatabaseSecurityHelper.clearRestoreBlock(getApplication())
+                _keystoreKeyLost.value = false
+                _restoreBlocked.value = false
+                _corruptionBlocked.value = false
+                _databaseTampered.value = false
+                // B2-CRYPTO-09 (phase-107): the restored DB may carry legacy global-AAD
+                // field ciphertexts — force the record-AAD migration on the next launch.
+                settings.fieldAadMigrated = false
+                delay(500)
+                kotlin.system.exitProcess(0)
+            } catch (e: Exception) {
+                runCatching { repository.reopenDatabase(getApplication()) }
+                onError(e.message ?: "Recovery failed.")
+            }
+        }
+    }
+
+    /**
+     * B1-CRYPTO-05 (phase-64): "start fresh" for the keystore-key-lost recovery
+     * screen. The old vault file is still encrypted under the LOST device key and
+     * cannot be opened by this app — its bytes are moved aside as
+     * `noteflow.sqlite.keystore-lost-<ts>` (nothing deleted, for offline recovery
+     * with the original key material), the stale device wrapper is cleared, and a
+     * brand-new passwordless vault is booted with a fresh DEK.
+     */
+    fun startFreshAfterKeystoreKeyLoss() {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                quarantineVaultFiles("keystore-lost")
+                security.clearDek()
+            }
+            _keystoreKeyLost.value = false
+            // Re-run the passwordless boot with a deliberately fresh DEK.
+            val dek = EncryptionService.generateDek()
+            security.storeDek(dek, authRequired = false)
+            repository.encryptionKey = dek
+            dataInitialized = false
+            initializeData()
+        }
+    }
+
+    /** Renames the live vault DB (+wal/shm/journal) aside, preserving its bytes. */
+    private fun quarantineVaultFiles(suffixTag: String) {
+        val context: android.content.Context = getApplication()
+        val baseFile = context.getDatabasePath("noteflow.sqlite")
+        val dir = baseFile.parentFile ?: return
+        val timestamp = System.currentTimeMillis()
+        val suffix = ".$suffixTag-$timestamp"
+        for (name in listOf("noteflow.sqlite", "noteflow.sqlite-wal", "noteflow.sqlite-shm", "noteflow.sqlite-journal")) {
+            val source = File(dir, name)
+            if (source.exists()) {
+                runCatching { source.renameTo(File(dir, name + suffix)) }
+            }
+        }
+    }
+
     fun restorePage(id: String) {
         viewModelScope.launch {
             repository.restorePage(id)
@@ -2078,7 +2217,23 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
             // device-wrapped), so existing ciphertext stays valid; otherwise mint a new one.
             val existingDek = repository.encryptionKey
             val (targetDek, wrappedDek) = withContext(Dispatchers.Default) {
-                val existing = existingDek ?: security.readDek()
+                // B1-CRYPTO-05 (phase-64): re-use the existing DEK (in-memory, or the
+                // readable device copy) so existing ciphertext stays valid; on a true
+                // first run there is none, so mint. A STORED-BUT-UNDECRYPTABLE device
+                // copy (keystore key lost) must NEVER fall through to a mint here —
+                // that would wrap a fresh DEK under the new password while the vault
+                // is still encrypted under the lost one (silent re-key, data loss).
+                val existing = existingDek ?: when (val r = security.readDekResult()) {
+                    is DekReadResult.Unlocked -> r.dek
+                    DekReadResult.NoBlob -> null
+                    DekReadResult.AuthRequired -> null
+                    is DekReadResult.KeyLost -> throw KeystoreKeyLostException(
+                        "Stored device DEK copy cannot be unwrapped — refuse to set a " +
+                            "password over a vault whose device key is lost. Restore from " +
+                            "a backup or start fresh first.",
+                        r.wrapperAlias
+                    )
+                }
                 val d = existing ?: EncryptionService.generateDek()
                 val derivedKek = EncryptionService.deriveKey(normalized, salt)
                 kek = derivedKek
