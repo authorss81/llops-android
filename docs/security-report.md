@@ -330,11 +330,12 @@ No DB schema, workflow, or dependency changes were made.
 
 ### [B1-PLAT-5] PrivacyCrashReporter path-redaction regex targets the wrong package name, so app-private data paths leak into crash logs
 - **Severity:** LOW
+- **Status:** `FIXED` 2026-08-15 (phase-48 review fix, commit `59a5e53` + review fix; see `workspace/phase-48/REPORT.md`) — `PrivacyCrashReporter.sanitizeMessage` (`:85-93`) now redacts ANY app-private data path: `/data/user/<uid>/...` (modern) and `/data/data/...` (legacy alias), which covers both the namespace and the real applicationId dir `com.aistudio.inkflow.app.bkxjrz`. Pinned by `B2Log01CrashReportingTest` test `crash entry redacts the real runtime applicationId data dir too`. The planned `workspace/phase-89/PROMPT.md` work is superseded; phase-89 becomes a verify-only phase.
 - **Area:** Batch 1 · Android platform surface
 - **Agent:** b1-platform
 - **Evidence:** `PrivacyCrashReporter.kt:77` (regex `/data/user/\d+/com\.authorss81\.noteflow/\S+`) vs real runtime data dir `/data/user/0/com.aistudio.inkflow.app.bkxjrz/` (applicationId, `app/build.gradle.kts:15`)
 - **Exploit scenario:** Because the sanitizer matches the namespace (`com.authorss81.noteflow`) while the device actually uses `com.aistudio.inkflow.app.bkxjrz`, the regex never matches any real path and stack-trace messages can carry full app-private file paths (SQLCipher DB names, vault file layout, imports/exports dirs) into `noteflow_sanitized_crash.log`. Today the log is local-only, but it defeats the stated "zero leak" guarantee of the report and would leak vault layout if any log-viewing/sharing feature is added.
-- **Fix:** Build the redaction patterns from `context.packageName` / `context.dataDir.path` at runtime instead of a hardcoded string.
+- **Fix:** Build the redaction patterns from `context.packageName` / `context.dataDir.path` at runtime instead of a hardcoded string. **Applied:** generic `/data/user/<uid>/...` + `/data/data/...` redaction (covers namespace and applicationId paths without hardcoding either package).
 
 ### [B1-PLAT-6] applicationId vs namespace mismatch (`com.aistudio.inkflow.app.bkxjrz` vs `com.authorss81.noteflow`)
 - **Severity:** INFO
@@ -871,7 +872,7 @@ No DB schema, workflow, or dependency changes were made.
 | B1-NET-07 | LOW | phase-86 | `NOT STARTED` (planned) |
 | B1-DB-6 | LOW | phase-87 | `NOT STARTED` (planned) |
 | B1-DB-8 | LOW | phase-88 | `NOT STARTED` (planned) |
-| B1-PLAT-5 | LOW | phase-89 | `NOT STARTED` (planned) |
+| B1-PLAT-5 | LOW | phase-89 | `FIXED` 2026-08-15 (phase-48 review fix: generic `/data/user/<uid>/...` + `/data/data/...` redaction, superseding the namespace-only regex; see `workspace/phase-48/REPORT.md`) |
 | B1-PLAT-8 | LOW | phase-90 | `NOT STARTED` (planned) |
 | B1-CRYPTO-06 | LOW | phase-91 | `NOT STARTED` (planned) |
 | B1-AUTH-07 | LOW | phase-92 | `NOT STARTED` (planned) |

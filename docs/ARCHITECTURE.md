@@ -104,7 +104,10 @@
     entry flows through the pure-JVM `PrivacyCrashReporter.crashLogEntry` (`:64`, sanitized message +
     scrubbed `class.method(file:line)` frames) and the uncaught path writes to the local file only —
     never logcat. Repo-wide pin: `setDefaultUncaughtExceptionHandler` appears only in
-    `PrivacyCrashReporter.kt`. Tests: `B2Log01CrashReportingTest` (6) — 1019 unit tests green.
+    `PrivacyCrashReporter.kt`. Path redaction (B1-PLAT-5) is also closed here:
+    `sanitizeMessage` (`:91-93`) redacts ANY `/data/user/<uid>/...` or `/data/data/...`
+    path — covers both the namespace and the real applicationId dir. Tests:
+    `B2Log01CrashReportingTest` (7) — 1020 unit tests green.
 - **Canvas**: `ui/components/AnnotationCanvas.kt:83` (ink canvas, gestures, layers, `pointerInteropFilter`);
   `services/WetBrushEngine.kt:13` (AGSL wet-mixing gating); `ui/components/ShaderCapabilityHelper.kt:5`
   (`isAgslSupported` = SDK ≥ 33); `services/ShapeRecognitionHelper.kt:13` (`trySnapShape()` :27).

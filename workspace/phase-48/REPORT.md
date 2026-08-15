@@ -38,19 +38,20 @@
 
 ## Verification
 
-- **`gradle testDebugUnitTest`** — `BUILD SUCCESSFUL`, **1019 tests, 0 failures, 0 errors** (was 1014; +5 new `B2Log01CrashReportingTest`).
+- **`gradle testDebugUnitTest`** — `BUILD SUCCESSFUL`, **1020 tests, 0 failures, 0 errors** (was 1013; +7 new `B2Log01CrashReportingTest` incl. the B1-PLAT-5 redaction case).
 - **`gradle assembleDebug`** — `BUILD SUCCESSFUL`; `app/build/outputs/apk/debug/app-debug.apk` produced (173.6 MB). (First invocation reported a transient FAILURE with every subsequent re-invocation fully `UP-TO-DATE` green and the APK on disk — a daemon/task-environment hiccup, not a task failure; no task ever recorded a failure.)
-- **New/updated pure-JVM tests** — `app/src/test/java/com/authorss81/noteflow/B2Log01CrashReportingTest.kt` (5 tests):
+- **New/updated pure-JVM tests** — `app/src/test/java/com/authorss81/noteflow/B2Log01CrashReportingTest.kt` (7 tests):
   1. `AppStartupLogger installs no uncaught-exception handler anymore` — source pin: no `get/setDefaultUncaughtExceptionHandler`, no `defaultHandler`, `logCrash`, `printStackTrace`, `StringWriter`, `PrintWriter`.
   2. `AppStartupLogger never passes a throwable to logcat` — source pin: no `, e)` third-argument `Log.e` form.
   3. `crash entry sanitizes app-private paths and the raw trace` — synthetic `FileNotFoundException("/data/user/0/com.authorss81.noteflow/files/noteflow/imports/Cancer-Treatment-Plan_1724567890.md")` → entry has `[PATH_REDACTED]`, no raw path, no note-title filename.
-  4. `crash entry scrubs the trace - no printStackTrace form, no cause chain` — throwable with a cause → entry has no `Caused by`, no cause message, no second filename; scrubbed `at class.method(file:line)` frames present.
-  5. `uncaught path persists a sanitized entry without touching logcat` — source pin: `logUncaughtException` routes through `crashLogEntry` and contains no `Log.`.
-  Plus 6. `PrivacyCrashReporter is the only uncaught-exception handler in the app` — scans every `.kt` under `app/src/main`; only `PrivacyCrashReporter.kt` may call `setDefaultUncaughtExceptionHandler`.
+  4. `crash entry redacts the real runtime applicationId data dir too` — same assertion against the live appId path `/data/user/0/com.aistudio.inkflow.app.bkxjrz/files/...` (closes B1-PLAT-5's regex gap, see below).
+  5. `crash entry scrubs the trace - no printStackTrace form, no cause chain` — throwable with a cause → entry has no `Caused by`, no cause message, no second filename; scrubbed `at class.method(file:line)` frames present.
+  6. `uncaught path persists a sanitized entry without touching logcat` — source pin: `logUncaughtException` routes through `crashLogEntry` and contains no `Log.`.
+  7. `PrivacyCrashReporter is the only uncaught-exception handler in the app` — scans every `.kt` under `app/src/main`; only `PrivacyCrashReporter.kt` may call `setDefaultUncaughtExceptionHandler`.
 
 ## Out-of-scope (documented, NOT fixed here)
 
-- **B1-PLAT-5 (phase-89):** `PrivacyCrashReporter.sanitizeMessage` regex (`:91`) redacts the namespace path (`/data/user/<uid>/com.authorss81.noteflow/...`) but NOT the real runtime data dir (`/data/user/0/com.aistudio.inkflow.app.bkxjrz/...`). That gap is a separate LOW finding with its own phase; this diff deliberately does not touch the regex. Impact of this phase's HIGH severity (the logcat raw dump) is closed regardless, because AppStartupLogger no longer emits *any* crash data and PrivacyCrashReporter's uncaught path never writes to logcat.
+- **Original B1-PLAT-5 note (now CLOSED here, not deferred):** the sanitizer's path regex was namespace-only. **Review fix applied in this phase:** `PrivacyCrashReporter.sanitizeMessage` now redacts ANY app-private data path — `/data/user/<uid>/...` (modern) and `/data/data/...` (legacy alias) — which covers both the namespace and the real applicationId dir `com.aistudio.inkflow.app.bkxjrz`. Test 3.4/4 pins both forms. `docs/security-report.md` B1-PLAT-5 row and `workspace/phase-89/PROMPT.md` are updated to reflect that the finding is fixed ahead of its planned phase.
 - **B2-LOG-02 (phase-70):** `app_startup.log` still appends without a size cap/rotation. This diff partially helps (crash blocks are no longer appended), but the cap/rotation is a separate MEDIUM finding with its own phase.
 - **B2-LOG-03 (phase-70/other):** `ImportExportService` `Log.e/w(..., e)` paths — separate finding, untouched.
 - First-invocation transient `assembleDebug` failure: not reproducible (subsequent run fully green, all tasks `UP-TO-DATE`, APK present).

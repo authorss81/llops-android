@@ -1,4 +1,14 @@
-# Phase 89: B1-PLAT-5 - PrivacyCrashReporter path-redaction regex targets the... [NOT STARTED]
+# Phase 89: B1-PLAT-5 - PrivacyCrashReporter path-redaction regex targets the... [SUPERSEDED]
+
+> **Note (2026-08-15):** B1-PLAT-5 was FIXED in the phase-48 review pass
+> (`workspace/phase-48/REPORT.md`) — `PrivacyCrashReporter.sanitizeMessage`
+> (`:85-93`) now redacts ANY app-private data path via the generic
+> `/data/user/\d+/...` (modern) and `/data/data/...` (legacy alias) rules, which
+> cover both the namespace and the real applicationId dir. Pinned by
+> `B2Log01CrashReportingTest` test `crash entry redacts the real runtime
+> applicationId data dir too`. This phase is demoted to **verify-only**: run the
+> existing tests and confirm the finding stays closed; no code change required.
+> Do not re-introduce a hardcoded-package regex.
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

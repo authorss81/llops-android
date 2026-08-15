@@ -30,9 +30,8 @@ import org.junit.Test
  * level instead, same technique as SecurityCryptoAbsenceTest / B1Crypto02DekAtRestTest).
  *
  * NOTE: redaction of the REAL runtime data dir (`/data/user/0/com.aistudio.inkflow.app.bkxjrz/...`)
- * is B1-PLAT-5 (phase-89) - out of scope here; the sanitizer still masks the namespace
- * path it is built for, and this phase's HIGH severity (logcat raw dump) is closed by the
- * removal regardless.
+ * was B1-PLAT-5 (phase-89) but is also closed here (phase-48 review fix): the sanitizer now masks
+ * ANY app-private `/data/user/<uid>/...` (or `/data/data/...`) path, not just the namespace form.
  */
 class B2Log01CrashReportingTest {
 
@@ -76,6 +75,18 @@ class B2Log01CrashReportingTest {
         assertFalse("the note-title filename must not appear", entry.contains("Cancer-Treatment-Plan"))
         assertTrue("the redacted token must replace it", entry.contains("[PATH_REDACTED]"))
         assertTrue("the sanitized message must still identify the source", entry.contains("FileNotFoundException"))
+    }
+
+    @Test
+    fun `crash entry redacts the real runtime applicationId data dir too`() {
+        val throwable = FileNotFoundException(
+            "/data/user/0/com.aistudio.inkflow.app.bkxjrz/files/noteflow/imports/Surgery_Checklist_1724567890.md"
+        )
+        val entry = PrivacyCrashReporter.crashLogEntry("main", throwable, now = 1_700_000_000_000L)
+
+        assertFalse("the real applicationId data dir must not appear", entry.contains("com.aistudio.inkflow.app.bkxjrz"))
+        assertFalse("the note-title filename must not appear", entry.contains("Surgery_Checklist"))
+        assertTrue("the redacted token must replace it", entry.contains("[PATH_REDACTED]"))
     }
 
     @Test

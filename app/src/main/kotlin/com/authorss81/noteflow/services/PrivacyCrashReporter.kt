@@ -88,7 +88,11 @@ object PrivacyCrashReporter {
         return message
             .replace(Regex("[a-fA-F0-9]{32,}"), "[HASH_REDACTED]")
             .replace(Regex("(?i)password[=:]\\s*\\S+"), "password=[REDACTED]")
-            .replace(Regex("/data/user/\\d+/com\\.authorss81\\.noteflow/\\S+"), "[PATH_REDACTED]")
+            // B1-PLAT-5 (phase-48 review fix): redact ANY app-private data path —
+            // namespace AND real applicationId (`com.aistudio.inkflow.app.bkxjrz`)
+            // on `/data/user/<uid>/` (modern) or the legacy `/data/data/` alias.
+            .replace(Regex("/data/user/\\d+/\\S+"), "[PATH_REDACTED]")
+            .replace(Regex("/data/data/\\S+"), "[PATH_REDACTED]")
     }
 
     fun getSanitizedCrashLogs(context: Context): String {
