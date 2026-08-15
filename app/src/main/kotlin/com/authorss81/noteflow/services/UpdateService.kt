@@ -18,7 +18,8 @@ data class UpdateInfo(
     val newVersionName: String?,
     val newVersionCode: Int?,
     val apkFile: File?,
-    val releaseNotes: String?
+    val releaseNotes: String?,
+    val trust: UpdateSourceTrust
 )
 
 object UpdateService {
@@ -48,6 +49,12 @@ object UpdateService {
 
     /**
      * Inspects a local APK file and compares its versionCode and versionName against the current app.
+     *
+     * B1-PLAT-7: the result is ALWAYS classified by [UpdateTrustPolicy.classifySource].
+     * Until a remote-verified official channel exists the file is
+     * [UpdateSourceTrust.UNTRUSTED_LOCAL], and the announcement is deliberately trust-neutral
+     * (Never "New update detected" — that wording conditioned users into trusting files that
+     * merely appeared on the device). A signature mismatch still refuses the offer outright.
      */
     @Suppress("DEPRECATION")
     fun inspectApkFile(context: Context, apkFile: File): UpdateInfo? {
@@ -69,7 +76,11 @@ object UpdateService {
             }
             val apkVersionName = archiveInfo.versionName ?: "Unknown"
 
-            // Signature Check
+            val trust = UpdateTrustPolicy.classifySource(UpdateTrustPolicy.hasOfficialChannel())
+
+            // Integrity hint only — signature equality with the installed app is NOT
+            // proof of vendor provenance (B1-PLAT-1 debug-key fallback). A mismatch is
+            // still an outright refusal.
             if (!verifyApkSignature(context, apkFile)) {
                 return UpdateInfo(
                     hasUpdate = false,
@@ -78,7 +89,8 @@ object UpdateService {
                     newVersionName = apkVersionName,
                     newVersionCode = apkVersionCode,
                     apkFile = null,
-                    releaseNotes = "Signature mismatch! Update file is untrusted and will be ignored."
+                    releaseNotes = "Signature mismatch! The file does not match the installed app's signer and will be ignored.",
+                    trust = trust
                 )
             }
 
@@ -91,7 +103,12 @@ object UpdateService {
                 newVersionName = apkVersionName,
                 newVersionCode = apkVersionCode,
                 apkFile = apkFile,
-                releaseNotes = if (isNewer) "New update detected in local storage: $apkVersionName ($apkVersionCode)" else "Downloaded file is current or older."
+                releaseNotes = if (isNewer) {
+                    UpdateTrustPolicy.announcementForLocal(apkVersionName, apkVersionCode)
+                } else {
+                    UpdateTrustPolicy.staleFileMessage()
+                },
+                trust = trust
             )
         } catch (e: Exception) {
             null
@@ -99,19 +116,25 @@ object UpdateService {
     }
 
     /**
-     * Scans typical download locations for downloaded updates.
+     * Scans the app's PRIVATE storage (filesDir/cacheDir) for locally-staged APK files.
+     *
+     * B1-PLAT-7: publicly writable shared storage — /sdcard/Download,
+     * /storage/emulated/0/Download, and the external files dirs — is NEVER scanned.
+     * [UpdateTrustPolicy.isScanSafeDirectory] is the structural gate so any future
+     * added candidate still can't re-introduce a world-writable directory. A found file
+     * is offered only as [UpdateSourceTrust.UNTRUSTED_LOCAL] and its install is gated
+     * behind explicit confirmation.
      */
     fun checkForDownloadedUpdates(context: Context): UpdateInfo {
         val currentName = getCurrentVersionName(context)
         val currentCode = getCurrentVersionCode(context)
 
+        val trust = UpdateTrustPolicy.classifySource(UpdateTrustPolicy.hasOfficialChannel())
+
         val candidateDirs = listOfNotNull(
-            context.getExternalFilesDir(null),
-            context.cacheDir,
             context.filesDir,
-            File("/sdcard/Download"),
-            File("/storage/emulated/0/Download")
-        )
+            context.cacheDir
+        ).filter { UpdateTrustPolicy.isScanSafeDirectory(it) }
 
         for (dir in candidateDirs) {
             if (dir.exists() && dir.isDirectory) {
@@ -132,7 +155,8 @@ object UpdateService {
             newVersionName = null,
             newVersionCode = null,
             apkFile = null,
-            releaseNotes = null
+            releaseNotes = null,
+            trust = trust
         )
     }
 
@@ -142,8 +166,22 @@ object UpdateService {
      * A4/34.6: the APK is staged into filesDir/apk/ (the only filesDir path the
      * FileProvider exposes) before the URI is granted — the provider no longer
      * covers the whole filesDir.
+     *
+     * B1-PLAT-7: install is gated by [UpdateTrustPolicy.mayInstall]. An
+     * [UpdateSourceTrust.UNTRUSTED_LOCAL] file installs ONLY when the user explicitly
+     * confirmed the "not from a trusted source" warning; otherwise this returns false
+     * and nothing is staged or launched.
      */
-    fun installApk(context: Context, apkFile: File): Boolean {
+    fun installApk(
+        context: Context,
+        apkFile: File,
+        trust: UpdateSourceTrust,
+        userConfirmedUntrusted: Boolean
+    ): Boolean {
+        if (!UpdateTrustPolicy.mayInstall(trust, userConfirmedUntrusted)) {
+            Log.e("UpdateService", "Install refused: untrusted APK without explicit confirmation (B1-PLAT-7)")
+            return false
+        }
         if (!apkFile.exists()) return false
 
         return try {

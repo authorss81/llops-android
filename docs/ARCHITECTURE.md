@@ -368,6 +368,19 @@
     copies in `ImportExportService.kt` + the PSD copy are removed; HomeScreen (5 flows) +
     EditorScreen (7 flows) route through the exporter; LocalSend's cacheDir payload path unchanged.
     Tests: `ExportDestinationPolicyTest` (11) + `B1Plat03ExportConsentTest` (5) — 1196 total.
+- **Update / self-install**: `services/UpdateService.kt:128` (`checkForDownloadedUpdates` — scans ONLY app-private
+  `filesDir`/`cacheDir` through `UpdateTrustPolicy.isScanSafeDirectory`; public Downloads/external dirs are NEVER
+  scanned, B1-PLAT-7), `:60` (`inspectApkFile` — classifies via the policy, trust-neutral copy), `:175`
+  (`installApk` — first check is `UpdateTrustPolicy.mayInstall(trust, userConfirmedUntrusted)`, refuses unconfirmed
+  UNTRUSTED files before any staging); `ui/components/Dialogs.kt` `AppUpdateDialog` — "Scan App Storage for APK"
+  + strong untrusted-confirmation gate on "Install Update".
+  - **Implemented in phase-61** (B1-PLAT-7, see `workspace/phase-61/REPORT.md`): new pure-JVM
+    `services/UpdateTrustPolicy.kt` owns the trust model — no official channel ⇒ every locally-present APK is
+    `UpdateSourceTrust.UNTRUSTED_LOCAL` (`classifySource`/`hasOfficialChannel`), `isPubliclyWritableDirectory`
+    structurally refuses `/sdcard`·`/storage/emulated`·`…/Android/data/…` mounts, and `mayInstall` fail-closed-gates
+    UNTRUSTED installs behind explicit user confirmation. The old scan of `getExternalFilesDir` + `/sdcard/Download`
+    + `/storage/emulated/0/Download` and the "New update detected in local storage" conditioning wording are gone.
+    Tests: `B1Plat07UpdateTrustTest` (8).
 
 ## Build / CI essentials
 

@@ -18,6 +18,7 @@ import com.authorss81.noteflow.services.EncryptionService
 import com.authorss81.noteflow.services.ImportExportService
 import com.authorss81.noteflow.services.UpdateInfo
 import com.authorss81.noteflow.services.UpdateService
+import com.authorss81.noteflow.services.UpdateTrustPolicy
 import com.authorss81.noteflow.ui.viewmodel.NoteflowViewModel
 import kotlinx.coroutines.launch
 import java.io.File
@@ -84,6 +85,7 @@ fun AppUpdateDialog(
     var isChecking by remember { mutableStateOf(false) }
     var updateInfo by remember { mutableStateOf<UpdateInfo?>(null) }
     var statusMessage by remember { mutableStateOf<String?>(null) }
+    var showUntrustedConfirm by remember { mutableStateOf(false) }
 
     val scope = rememberCoroutineScope()
 
@@ -107,7 +109,7 @@ fun AppUpdateDialog(
                         if (inspected != null) {
                             updateInfo = inspected
                             statusMessage = if (inspected.hasUpdate) {
-                                "Found newer APK version!"
+                                "Selected local APK is newer than the installed app (${inspected.newVersionName})."
                             } else {
                                 "Selected APK version (${inspected.newVersionName}) is equal to or older than current version ($currentVersionName)."
                             }
@@ -200,16 +202,16 @@ fun AppUpdateDialog(
                         updateInfo = found
                         isChecking = false
                         statusMessage = if (found.hasUpdate) {
-                            "Found downloaded update!"
+                            "Found a local APK in the app's private storage."
                         } else {
-                            "No newer APK updates found in Downloads."
+                            "No newer APK found in the app's private storage (public Downloads are never scanned)."
                         }
                     },
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Icon(Icons.Outlined.Refresh, contentDescription = null)
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text(if (isChecking) "Checking Downloads..." else "Scan Downloads for APK")
+                    Text(if (isChecking) "Checking..." else "Scan App Storage for APK")
                 }
 
                 OutlinedButton(
@@ -228,10 +230,9 @@ fun AppUpdateDialog(
             if (updateInfo != null && updateInfo!!.hasUpdate && updateInfo!!.apkFile != null) {
                 Button(
                     onClick = {
-                        val success = UpdateService.installApk(context, updateInfo!!.apkFile!!)
-                        if (!success) {
-                            onSnackbar("Could not launch package installer.", false)
-                        }
+                        // B1-PLAT-7: every local APK is UNTRUSTED (no official channel
+                        // exists), so install is gated behind the strong confirmation below.
+                        showUntrustedConfirm = true
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
                 ) {
@@ -253,6 +254,56 @@ fun AppUpdateDialog(
             }
         }
     )
+
+    if (showUntrustedConfirm && updateInfo != null && updateInfo!!.apkFile != null) {
+        val confirmed = updateInfo!!
+        AlertDialog(
+            onDismissRequest = { showUntrustedConfirm = false },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Outlined.Warning, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(UpdateTrustPolicy.confirmationTitle())
+                }
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(
+                        UpdateTrustPolicy.confirmationMessage(),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Text(
+                        "File: ${confirmed.apkFile!!.name} — v${confirmed.newVersionName} (${confirmed.newVersionCode})",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showUntrustedConfirm = false
+                        val success = UpdateService.installApk(
+                            context,
+                            confirmed.apkFile!!,
+                            confirmed.trust,
+                            userConfirmedUntrusted = true
+                        )
+                        if (!success) {
+                            onSnackbar("Could not launch package installer.", false)
+                        }
+                    }
+                ) {
+                    Text("Install anyway", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showUntrustedConfirm = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
 }
 
 @Composable
