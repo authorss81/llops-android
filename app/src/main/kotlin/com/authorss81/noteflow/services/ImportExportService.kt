@@ -76,9 +76,42 @@ object ImportExportService {
         file.absolutePath
     }
 
-    suspend fun readUriBytes(context: Context, uri: Uri): ByteArray? = withContext(Dispatchers.IO) {
+    /**
+     * B1-DB-5 (phase-55): the stream is read under a hard byte cap so an
+     * attacker-controlled share/download can never `readBytes()` unbounded
+     * megabtyes→gigabytes into heap. An oversized stream raises
+     * [ImportArchivePolicy.ImportSizeLimitException] with a clean message (the
+     * caller surfaces it); genuine read failures still return null.
+     *
+     * The default cap is the import budget; the backup-restore callers pass the
+     * (larger) backup input cap explicitly so legitimate large vaults restore.
+     */
+    suspend fun readUriBytes(
+        context: Context,
+        uri: Uri,
+        maxBytes: Long = ImportArchivePolicy.MAX_IMPORT_ARCHIVE_INPUT_BYTES.toLong()
+    ): ByteArray? = withContext(Dispatchers.IO) {
         try {
-            context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+            val stream = context.contentResolver.openInputStream(uri) ?: return@withContext null
+            stream.use { input ->
+                val out = ByteArrayOutputStream()
+                val buffer = ByteArray(64 * 1024)
+                var total = 0L
+                var read = input.read(buffer)
+                while (read != -1) {
+                    total += read
+                    if (total > maxBytes) {
+                        throw ImportArchivePolicy.ImportSizeLimitException(
+                            "File is too large to import (max ${maxBytes / (1024L * 1024L)}MB)."
+                        )
+                    }
+                    out.write(buffer, 0, read)
+                    read = input.read(buffer)
+                }
+                out.toByteArray()
+            }
+        } catch (e: ImportArchivePolicy.ImportSizeLimitException) {
+            throw e
         } catch (e: Exception) {
             null
         }
@@ -1098,7 +1131,10 @@ object ImportExportService {
     // EncryptionService.encrypt/encryptAad output: 1 version byte + 12-byte IV + 32-byte
     // ciphertext + 16-byte tag.
     private const val BACKUP_WRAPPED_DEK_SIZE = 61
-    private const val MAX_BACKUP_INPUT_BYTES = 400L * 1024 * 1024 // hard cap before any decrypt/decompress
+    // Restore-path input cap. Larger than the import budget (200MB) so a
+    // legitimate vault backup (DB + media + voice blobs) still restores; the
+    // import callers use ImportArchivePolicy.MAX_IMPORT_ARCHIVE_INPUT_BYTES.
+    const val MAX_BACKUP_INPUT_BYTES = 400L * 1024 * 1024 // 400MB hard cap before any decrypt/decompress
 
     // B2-CRYPTO-03: domain separation for the two KEK uses in backup v2. The DEK
     // wrap and the zip-payload GCM now authenticate DIFFERENT AAD domains, so a
@@ -2015,6 +2051,9 @@ object ImportExportService {
                 extractedText = markdown,
                 tags = "imported_html"
             )
+        } catch (e: ImportArchivePolicy.ImportSizeLimitException) {
+            // B1-DB-5: an oversized share must surface, never be silently skipped.
+            throw e
         } catch (e: Exception) {
             Log.e("ImportExportService", "Failed to import HTML file", e)
             null
@@ -2030,12 +2069,23 @@ object ImportExportService {
     ): Int = withContext(Dispatchers.IO) {
         var count = 0
         try {
+            // B1-DB-5 (phase-55): the compressed archive input is capped before
+            // any decompression, and every entry is read under the per-entry /
+            // total / expansion-ratio / entry-count budgets.
             val bytes = readUriBytes(context, uri) ?: return@withContext 0
+            if (ImportArchivePolicy.inputArchiveOverLimit(bytes.size)) {
+                throw ImportArchivePolicy.ImportSizeLimitException(
+                    "Import rejected: archive is too large (max " +
+                        "${ImportArchivePolicy.MAX_IMPORT_ARCHIVE_INPUT_BYTES / (1024 * 1024)}MB)."
+                )
+            }
+            val accounting = ImportArchivePolicy.Accounting()
             ZipInputStream(ByteArrayInputStream(bytes)).use { zis ->
                 var entry = zis.nextEntry
                 while (entry != null) {
+                    ImportArchivePolicy.claimEntry(accounting)
                     if (!entry.isDirectory && (entry.name.endsWith(".html", ignoreCase = true) || entry.name.endsWith(".htm", ignoreCase = true))) {
-                        val htmlBytes = zis.readBytes()
+                        val htmlBytes = ImportArchivePolicy.readEntryBounded(zis, entry, accounting)
                         val htmlContent = String(htmlBytes, Charsets.UTF_8)
                         val (title, markdown) = HtmlToMarkdownConverter.convertHtmlToMarkdown(htmlContent)
 
@@ -2056,6 +2106,10 @@ object ImportExportService {
                     entry = zis.nextEntry
                 }
             }
+        } catch (e: ImportArchivePolicy.ImportSizeLimitException) {
+            // B1-DB-5: a zip bomb (or any budget breach) fails with a clean
+            // error — never a half-imported silent skip, never an OOM.
+            throw e
         } catch (e: Exception) {
             Log.e("ImportExportService", "Failed to import HTML ZIP folder", e)
         }
@@ -2202,52 +2256,61 @@ object ImportExportService {
     ): Int = withContext(Dispatchers.IO) {
         var count = 0
         try {
+            // B1-DB-5 (phase-55): the compressed archive input is capped before
+            // any decompression, and every entry is read under a SINGLE shared
+            // accounting budget (per-entry / total / expansion-ratio /
+            // entry-count). The old two-pass scan is now one pass so the budget
+            // is exact and every entry is parsed at most once.
             val bytes = readUriBytes(context, uri) ?: return@withContext 0
-            val attachmentMap = mutableMapOf<String, String>()
-
-            // Pass 1: Extract attachments/images to imports folder
+            if (ImportArchivePolicy.inputArchiveOverLimit(bytes.size)) {
+                throw ImportArchivePolicy.ImportSizeLimitException(
+                    "Import rejected: archive is too large (max " +
+                        "${ImportArchivePolicy.MAX_IMPORT_ARCHIVE_INPUT_BYTES / (1024 * 1024)}MB)."
+                )
+            }
+            val accounting = ImportArchivePolicy.Accounting()
             ZipInputStream(ByteArrayInputStream(bytes)).use { zis ->
                 var entry = zis.nextEntry
                 while (entry != null) {
-                    val ext = extensionOf(entry.name)
-                    if (!entry.isDirectory && isImage(ext)) {
-                        val fileBytes = zis.readBytes()
-                        val fileName = entry.name.substringAfterLast('/')
-                        val savedPath = persistFile(context, fileName, fileBytes)
-                        attachmentMap[fileName] = savedPath
+                    ImportArchivePolicy.claimEntry(accounting)
+                    if (!entry.isDirectory) {
+                        val ext = extensionOf(entry.name)
+                        when {
+                            isImage(ext) -> {
+                                val fileBytes = ImportArchivePolicy.readEntryBounded(zis, entry, accounting)
+                                val fileName = entry.name.substringAfterLast('/')
+                                persistFile(context, fileName, fileBytes)
+                            }
+                            entry.name.endsWith(".md", ignoreCase = true) -> {
+                                val mdBytes = ImportArchivePolicy.readEntryBounded(zis, entry, accounting)
+                                val rawContent = String(mdBytes, Charsets.UTF_8)
+
+                                val title = entry.name.substringAfterLast('/').substringBeforeLast('.')
+                                val tags = WikiLinkParser.extractTags(rawContent).joinToString(",")
+
+                                // B1-DB-4 (phase-44): the markdown body is stored ONLY in
+                                // the field-encrypted extractedText column — never as a
+                                // plaintext .md file. Attachments imported above remain
+                                // real files (they are media, not note bodies).
+                                repository.createPage(
+                                    sectionId = sectionId,
+                                    title = title,
+                                    sourceFilePath = null,
+                                    sourceFileType = "text",
+                                    extractedText = rawContent,
+                                    tags = tags.ifBlank { "obsidian_import" }
+                                )
+                                count++
+                            }
+                        }
                     }
                     entry = zis.nextEntry
                 }
             }
-
-            // Pass 2: Parse Markdown files
-            ZipInputStream(ByteArrayInputStream(bytes)).use { zis ->
-                var entry = zis.nextEntry
-                while (entry != null) {
-                    if (!entry.isDirectory && entry.name.endsWith(".md", ignoreCase = true)) {
-                        val mdBytes = zis.readBytes()
-                        val rawContent = String(mdBytes, Charsets.UTF_8)
-
-                        val title = entry.name.substringAfterLast('/').substringBeforeLast('.')
-                        val tags = WikiLinkParser.extractTags(rawContent).joinToString(",")
-
-                        // B1-DB-4 (phase-44): the markdown body is stored ONLY in
-                        // the field-encrypted extractedText column — never as a
-                        // plaintext .md file. Attachments imported in pass 1 remain
-                        // real files (they are media, not note bodies).
-                        repository.createPage(
-                            sectionId = sectionId,
-                            title = title,
-                            sourceFilePath = null,
-                            sourceFileType = "text",
-                            extractedText = rawContent,
-                            tags = tags.ifBlank { "obsidian_import" }
-                        )
-                        count++
-                    }
-                    entry = zis.nextEntry
-                }
-            }
+        } catch (e: ImportArchivePolicy.ImportSizeLimitException) {
+            // B1-DB-5: a zip bomb (or any budget breach) fails with a clean
+            // error — never a half-imported silent skip, never an OOM.
+            throw e
         } catch (e: Exception) {
             Log.e("ImportExportService", "Failed to import Obsidian Vault ZIP", e)
         }

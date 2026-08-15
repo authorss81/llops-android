@@ -13,7 +13,7 @@
 | `data/model/` | `Entities.kt`, `StrokeModels.kt` | Room entities (8) + stroke/ink types |
 | `data/db/` | `NoteflowDatabase.kt`, `Daos.kt` | Room DB (schema v9, 8 DAOs), corrupt-DB quarantine |
 | `data/repository/` | `NoteRepository.kt`, `LruBoundedMap.kt` | Encrypted read/write, search corpus, WAL checkpoint, re-key |
-| `services/` | `EncryptionService.kt`, `SecurityService.kt`, `DatabaseSecurityHelper.kt`, `VaultKeyHolder.kt`, `WetBrushEngine.kt`, `WebDavSyncService.kt`, `ImportExportService.kt`, `PaletteCatalog.kt`, `ShapeRecognitionHelper.kt`, `SsrfHostPolicy.kt`, `VoiceNoteCrypto.kt` | Non-UI: crypto/vault, brush math, sync, import/export, palette, SSRF blocklist (B1-NET-04), voice-note audio cryptor (B1-DB-3) |
+| `services/` | `EncryptionService.kt`, `SecurityService.kt`, `DatabaseSecurityHelper.kt`, `VaultKeyHolder.kt`, `WetBrushEngine.kt`, `WebDavSyncService.kt`, `ImportExportService.kt`, `ImportArchivePolicy.kt`, `PaletteCatalog.kt`, `ShapeRecognitionHelper.kt`, `SsrfHostPolicy.kt`, `VoiceNoteCrypto.kt` | Non-UI: crypto/vault, brush math, sync, import/export, zip-import zip-bomb policy (B1-DB-5), palette, SSRF blocklist (B1-NET-04), voice-note audio cryptor (B1-DB-3) |
 | `services/localsend/` | `LocalSendProtocol.kt`, `LocalSendSender.kt`, `LocalSendPairing.kt`, `SettingsLocalSendPairedDeviceStore.kt` | Pure-JVM LocalSend v2.2 + real network sender + TOFU pairing gate (B1-NET-02) |
 | `plugins/` | `NoteflowPlugin.kt`, `PluginRegistry.kt`, `PluginManager.kt`, `PluginDiagnostics.kt`, `PluginLifecycle.kt` | Compile-time plugin framework + typed serving interfaces |
 | `plugins/runtime/` | `RuntimePluginLoader.kt`, `SignatureVerifiedPluginRuntime.kt`, `ArtifactSignatureVerifier.kt`, `PinnedCertHash.kt`, `PinnedTlsConnector.kt`, `PluginManifestFetcher.kt`, `HttpsPluginDownloadTransport.kt`, `PluginDownloader.kt`, `PluginUpdateEngine.kt`, `CompileTimePluginPinStore.kt`, `PluginFrameworkClassLoader.kt`, `ArtifactStaticScan.kt` | Downloadable-plugin runtime: pinned-cert verify (manifest + artifact transports, no redirects), DexClassLoader (scoped `plugins.*`-only parent), verify-time static content scan (B1-AUTH-01), updates |
@@ -323,6 +323,16 @@
   `MainActivity.kt:73` (single activity, **`mutableStateOf` nav** — NOT Navigation Compose).
 - **Import/export**: `services/ImportExportService.kt:30` (encrypted backup/restore, `validateBackupPassword`,
   PDF/HTML/image export).
+  - **Implemented in phase-55** (B1-DB-5, see `workspace/phase-55/REPORT.md`): the HTML/Obsidian
+    zip import readers are zip-bomb-safe. New pure-JVM `services/ImportArchivePolicy.kt` owns the
+    budgets (50MB/entry, 200MB total, 100× declared-vs-actual ratio 4KB floor, 10k entries, 200MB
+    archive input) with single-settle accounting (`checkEntryChunk` per chunk, `settleEntryRead`
+    once per completed entry) and raises `ImportSizeLimitException` (an `IllegalStateException`).
+    `readUriBytes` (`ImportExportService.kt:89-118`) streams under a hard cap and re-throws the
+    dedicated exception; `importHtmlZipOrFolder` (`:2063`) and `importObsidianVaultZip` (`:2250`,
+    single-pass) route every entry through `claimEntry`/`readEntryBounded`; wholesale `zis.readBytes()`
+    is gone. Restore callers keep the 400MB `MAX_BACKUP_INPUT_BYTES` cap; HomeScreen surfaces a
+    non-alarming `"Import skipped: …"` snackbar. Tests: `B1Db05ImportZipBombTest` (13) — 1142 green.
 
 ## Build / CI essentials
 

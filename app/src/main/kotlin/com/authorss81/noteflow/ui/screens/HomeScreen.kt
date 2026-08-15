@@ -31,6 +31,7 @@ import com.authorss81.noteflow.data.model.NotebookEntity
 import com.authorss81.noteflow.data.model.SectionEntity
 import com.authorss81.noteflow.services.DocumentTextExtractor
 import com.authorss81.noteflow.services.EncryptionService
+import com.authorss81.noteflow.services.ImportArchivePolicy
 import com.authorss81.noteflow.services.ImportExportService
 import com.authorss81.noteflow.theme.AppThemeMode
 import com.authorss81.noteflow.ui.components.*
@@ -145,7 +146,11 @@ fun HomeScreen(
         if (uri != null) {
             scope.launch {
                 try {
-                    val bytes = ImportExportService.readUriBytes(context, uri) ?: return@launch
+                    val bytes = ImportExportService.readUriBytes(
+                        context,
+                        uri,
+                        ImportExportService.MAX_BACKUP_INPUT_BYTES
+                    ) ?: return@launch
                     if (bytes.size >= 5 && String(bytes.copyOfRange(0, 5)) == "NFLB2") {
                         pendingRestoreBytes = bytes
                         backupPasswordInput = ""
@@ -191,14 +196,29 @@ fun HomeScreen(
             var importedCount = 0
             val isSingleImport = uris.size == 1
             for (uri in uris) {
-                val bytes = ImportExportService.readUriBytes(context, uri) ?: continue
+                // B1-DB-5 (phase-55): an oversized share/download raises
+                // ImportSizeLimitException — surface it as a non-alarming
+                // snackbar instead of silently skipping the file.
+                val bytes = try {
+                    ImportExportService.readUriBytes(context, uri)
+                } catch (e: ImportArchivePolicy.ImportSizeLimitException) {
+                    viewModel.showSnackbar("Import skipped: ${e.message}", isLong = true)
+                    continue
+                } ?: continue
                 val fileName = ImportExportService.getUriFileName(context, uri)
                 val ext = ImportExportService.extensionOf(fileName)
 
                 if (ext == "html" || ext == "htm") {
                     val activeNb = viewModel.selectedNotebook.value?.id ?: "nb_default"
                     val activeSec = viewModel.selectedSection.value?.id ?: "sec_default"
-                    val page = ImportExportService.importHtmlFile(context, uri, viewModel.repository, activeNb, activeSec)
+                    val page = runCatching {
+                        ImportExportService.importHtmlFile(context, uri, viewModel.repository, activeNb, activeSec)
+                    }.getOrElse { e ->
+                        if (e is ImportArchivePolicy.ImportSizeLimitException) {
+                            viewModel.showSnackbar("Import skipped: ${e.message}", isLong = true)
+                        }
+                        null
+                    }
                     if (page != null) {
                         viewModel.selectedSection.value?.let { viewModel.selectSection(it) }
                         if (isSingleImport) onOpenPage(page)
@@ -207,9 +227,18 @@ fun HomeScreen(
                 } else if (ext == "zip") {
                     val activeNb = viewModel.selectedNotebook.value?.id ?: "nb_default"
                     val activeSec = viewModel.selectedSection.value?.id ?: "sec_default"
-                    var count = ImportExportService.importObsidianVaultZip(context, uri, viewModel.repository, activeNb, activeSec)
-                    if (count == 0) {
-                        count = ImportExportService.importHtmlZipOrFolder(context, uri, viewModel.repository, activeNb, activeSec)
+                    var count = runCatching {
+                        val c = ImportExportService.importObsidianVaultZip(context, uri, viewModel.repository, activeNb, activeSec)
+                        if (c == 0) {
+                            ImportExportService.importHtmlZipOrFolder(context, uri, viewModel.repository, activeNb, activeSec)
+                        } else c
+                    }.getOrElse { e ->
+                        // B1-DB-5: a zip bomb (entry/total/ratio/count breach)
+                        // must fail the import with a clean, visible error.
+                        if (e is ImportArchivePolicy.ImportSizeLimitException) {
+                            viewModel.showSnackbar("Import skipped: ${e.message}", isLong = true)
+                        }
+                        0
                     }
                     if (count > 0) {
                         viewModel.selectedSection.value?.let { viewModel.selectSection(it) }

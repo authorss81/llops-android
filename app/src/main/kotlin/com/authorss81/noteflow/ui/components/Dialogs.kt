@@ -93,7 +93,11 @@ fun AppUpdateDialog(
         if (uri != null) {
             scope.launch {
                 try {
-                    val bytes = ImportExportService.readUriBytes(context, uri)
+                    val bytes = ImportExportService.readUriBytes(
+                        context,
+                        uri,
+                        ImportExportService.MAX_BACKUP_INPUT_BYTES
+                    )
                     val fileName = uri.lastPathSegment?.substringAfterLast('/') ?: "downloaded_update.apk"
                     if (bytes != null) {
                         val destFile = File(context.cacheDir, if (fileName.endsWith(".apk")) fileName else "$fileName.apk")

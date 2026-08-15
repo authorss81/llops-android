@@ -1802,7 +1802,11 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     fun attemptRecoveryFromBackup(uri: android.net.Uri, backupPassword: String?, onError: (String) -> Unit) {
         viewModelScope.launch {
             try {
-                val bytes = ImportExportService.readUriBytes(getApplication(), uri)
+                val bytes = ImportExportService.readUriBytes(
+                    getApplication(),
+                    uri,
+                    ImportExportService.MAX_BACKUP_INPUT_BYTES
+                )
                     ?: throw IllegalStateException("Could not read the selected backup file.")
                 // H1 (phase-09): reject a wrong password BEFORE closing the live DB
                 // so the common failure case leaves the vault fully intact.
