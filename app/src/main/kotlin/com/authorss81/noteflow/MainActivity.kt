@@ -24,6 +24,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Restore
 import androidx.compose.material.icons.outlined.Security
@@ -66,8 +67,26 @@ enum class WindowSizeCategory {
     COMPACT, MEDIUM, EXPANDED
 }
 
-/** 22.5: content captured from the Android share sheet, pre-copied into app storage. */
-private data class SharedContent(val text: String?, val imagePaths: List<String>)
+/**
+ * B1-PLAT-2 (phase-58): content captured from the Android share sheet.
+ *
+ * [imagePaths] are local files already copied into app storage; empty until the
+ * bounded copy runs. [rawUris] are the source content URIs, staged ONLY after an
+ * explicit in-app "Clip into InkFlow?" confirmation AND only when the vault is
+ * unlocked — the copy is performed by the post-unlock apply effect, never while
+ * locked.
+ */
+private data class SharedContent(
+    val text: String?,
+    val imagePaths: List<String>,
+    val rawUris: List<String> = emptyList()
+)
+
+/** B1-PLAT-2 (phase-58): an incoming share held behind an explicit confirmation. */
+private data class PendingShareConfirm(
+    val clip: com.authorss81.noteflow.plugins.SharedClip,
+    val uriStrings: List<String>
+)
 
 @android.annotation.SuppressLint("ProduceStateDoesNotAssignValue")
 class MainActivity : FragmentActivity() {
@@ -79,6 +98,11 @@ class MainActivity : FragmentActivity() {
 
     // 22.5: pending share-sheet capture; applied once the vault is unlocked.
     private var pendingShare by mutableStateOf<SharedContent?>(null)
+
+    // B1-PLAT-2 (phase-58): an incoming share that passed cli classification but
+    // is HELD behind an explicit "Clip into InkFlow?" confirmation. Nothing is
+    // copied or staged until the user confirms.
+    private var pendingShareConfirm by mutableStateOf<PendingShareConfirm?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -170,12 +194,32 @@ class MainActivity : FragmentActivity() {
                 }
             }
 
-            // 22.5: apply a share-sheet capture once the vault is unlocked.
+            // 22.5 + B1-PLAT-2: apply a confirmed share-sheet capture once the
+            // vault is unlocked. Bytes are copied ONLY here — never at intent
+            // arrival and never while locked.
             LaunchedEffect(authenticated, pendingShare) {
                 val share = pendingShare ?: return@LaunchedEffect
                 if (!authenticated) return@LaunchedEffect
                 pendingShare = null
-                viewModel.createNoteFromSharedContent(share.text, share.imagePaths) { page ->
+                val paths = if (share.rawUris.isNotEmpty()) {
+                    withContext(Dispatchers.IO) {
+                        try {
+                            copySharedUris(share.rawUris)
+                        } catch (e: com.authorss81.noteflow.services.ImportArchivePolicy.ImportSizeLimitException) {
+                            null
+                        }
+                    } ?: run {
+                        viewModel.showSnackbar("Shared content is too large to clip.", isLong = true)
+                        return@LaunchedEffect
+                    }
+                } else {
+                    share.imagePaths
+                }
+                if (paths.isEmpty() && share.text.isNullOrBlank()) {
+                    viewModel.showSnackbar("Nothing readable to clip.", isLong = true)
+                    return@LaunchedEffect
+                }
+                viewModel.createNoteFromSharedContent(share.text, paths) { page ->
                     setActivePage(page)
                 }
             }
@@ -497,6 +541,38 @@ class MainActivity : FragmentActivity() {
                             hostState = snackbarHostState,
                             modifier = Modifier.align(Alignment.BottomCenter)
                         )
+
+                        // B1-PLAT-2 (phase-58): an incoming share is NEVER copied on
+                        // arrival — it is held behind this explicit confirmation.
+                        // Only a human tapping "Clip" stages it (and even then only
+                        // after the vault is unlocked; see the apply LaunchedEffect).
+                        pendingShareConfirm?.let { request ->
+                            androidx.compose.material3.AlertDialog(
+                                onDismissRequest = { pendingShareConfirm = null },
+                                title = { Text("Clip into InkFlow?") },
+                                text = {
+                                    Column {
+                                        Text(com.authorss81.noteflow.plugins.clipshare.ClipShareConfirmNotice.summary(request.clip))
+                                        Spacer(Modifier.height(8.dp))
+                                        Text(
+                                            com.authorss81.noteflow.plugins.clipshare.ClipShareConfirmNotice.body(request.clip),
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                },
+                                confirmButton = {
+                                    TextButton(onClick = { confirmPendingShare() }) {
+                                        Text("Clip")
+                                    }
+                                },
+                                dismissButton = {
+                                    TextButton(onClick = { pendingShareConfirm = null }) {
+                                        Text("Not now")
+                                    }
+                                }
+                            )
+                        }
                     }
 
                     // Phase 38: global Command Palette HUD (two-finger swipe down).
@@ -526,11 +602,12 @@ class MainActivity : FragmentActivity() {
         readShareIntent(intent)
     }
 
-    // 22.5 + Phase 15 (Clip to InkFlow): classify + validate incoming share
+    // 22.5 + Phase 15 + B1-PLAT-2 (phase-58): classify + validate incoming share
     // content through the ClipShare plugin BEFORE any bytes are copied into the
     // vault. A rejected clip (blank/oversized/unusable) shows the plugin's
-    // reason instead of creating a note; an accepted one is copied to app
-    // storage and applied once the vault unlocks.
+    // reason instead of creating a note; an ACCEPTED clip is HELD behind an
+    // explicit "Clip into InkFlow?" confirmation dialog — it is never copied on
+    // arrival, and the bounded copy runs only after confirmation and unlock.
     private fun readShareIntent(intent: Intent?) {
         if (intent == null) return
         val text = intent.getStringExtra(Intent.EXTRA_TEXT)
@@ -573,14 +650,12 @@ class MainActivity : FragmentActivity() {
                 is com.authorss81.noteflow.plugins.PluginResult.Success ->
                     when (val parsed = outcome.value) {
                         is com.authorss81.noteflow.plugins.ClipParseOutcome.Success -> {
-                            val paths = copySharedUris(uriStrings)
-                            if (paths.isEmpty() && parsed.clip.text.isNullOrBlank()) {
-                                withContext(Dispatchers.Main) {
-                                    viewModel.showSnackbar("Nothing readable to clip.", isLong = true)
-                                }
-                            } else {
-                                pendingShare = SharedContent(text, paths)
-                            }
+                            // B1-PLAT-2: hold the share behind an explicit
+                            // confirmation. NO bytes are copied here.
+                            pendingShareConfirm = PendingShareConfirm(
+                                clip = parsed.clip,
+                                uriStrings = parsed.clip.streams.map { it.uriString }
+                            )
                         }
                         is com.authorss81.noteflow.plugins.ClipParseOutcome.Rejected -> {
                             withContext(Dispatchers.Main) {
@@ -598,23 +673,66 @@ class MainActivity : FragmentActivity() {
         }
     }
 
-    // 22.5: copy shared content URIs into app-private storage immediately so the
-    // temporary read grant can never expire before the vault unlocks.
+    // B1-PLAT-2 (phase-58): the user explicitly confirmed the pending share.
+    // The share is staged for a POST-UNLOCK bounded copy (see the
+    // LaunchedEffect above) — nothing has touched disk yet.
+    private fun confirmPendingShare() {
+        val request = pendingShareConfirm ?: return
+        pendingShareConfirm = null
+        pendingShare = SharedContent(
+            text = request.clip.text,
+            imagePaths = emptyList(),
+            rawUris = request.uriStrings
+        )
+        if (!viewModel.authenticated.value) {
+            viewModel.showSnackbar("Clip confirmed — it will be added once you unlock.", isLong = true)
+        }
+    }
+
+    // 22.5 + B1-PLAT-2: copy shared content URIs into app-private storage with a
+    // HARD byte budget (50 MB per item, 200 MB total — see BoundedStreamCopier).
+    // An over-budget share throws ImportSizeLimitException; the caller surfaces a
+    // non-alarming message. Because this runs only after confirmation AND after
+    // unlock, a locked/attacker-fired share never touches disk.
     private fun copySharedUris(uriStrings: List<String>): List<String> {
         val copied = mutableListOf<String>()
         val dir = File(filesDir, "shared").apply { mkdirs() }
-        uriStrings.forEach { uriString ->
+        var totalBytes = 0L
+        for (uriString in uriStrings) {
+            var target: File? = null
             try {
                 val uri = Uri.parse(uriString)
+                if (totalBytes >= com.authorss81.noteflow.services.BoundedStreamCopier.MAX_TOTAL_BYTES) {
+                    throw com.authorss81.noteflow.services.ImportArchivePolicy.ImportSizeLimitException(
+                        "Shared content is too large to clip."
+                    )
+                }
                 val mime = contentResolver.getType(uri)
                 val ext = mime?.substringAfterLast('/')?.takeIf { it.isNotBlank() && it.length <= 5 } ?: "file"
-                val target = File(dir, "${System.currentTimeMillis()}-${copied.size}.$ext")
-                contentResolver.openInputStream(uri)?.use { input ->
-                    target.outputStream().use { out -> input.copyTo(out) }
-                    copied += target.absolutePath
-                }
+                target = File(dir, "${System.currentTimeMillis()}-${copied.size}.$ext")
+                val written = contentResolver.openInputStream(uri)?.use { input ->
+                    target.outputStream().use { out ->
+                        com.authorss81.noteflow.services.BoundedStreamCopier.copyBounded(
+                            input,
+                            out,
+                            minOf(
+                                com.authorss81.noteflow.services.BoundedStreamCopier.MAX_SINGLE_STREAM_BYTES,
+                                com.authorss81.noteflow.services.BoundedStreamCopier.MAX_TOTAL_BYTES - totalBytes
+                            )
+                        )
+                    }
+                } ?: 0L
+                totalBytes += written
+                if (written > 0L) copied += target.absolutePath else target.delete()
+            } catch (e: com.authorss81.noteflow.services.ImportArchivePolicy.ImportSizeLimitException) {
+                // B1-PLAT-2: an over-budget share must leave NOTHING behind —
+                // drop the partial target and any files already staged this call.
+                target?.delete()
+                copied.forEach { File(it).delete() }
+                throw e
             } catch (e: Exception) {
                 // unreadable share item — skip it
+                target?.delete()
             }
         }
         return copied
