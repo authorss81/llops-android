@@ -193,10 +193,14 @@ abstract class NoteflowDatabase : RoomDatabase() {
          * atomic — the encrypted scratch file is verified (exists, non-empty, no
          * plaintext header) and then renamed DIRECTLY over the original (rename()
          * atomically replaces the target on bionic/Linux), so there is no
-         * delete-then-rename window in which the user has NO database file. Any
-         * failure preserves the original under `noteflow.sqlite.migrate-failed-<ts>`
-         * and raises the persistent corruption flag — phase-43 wires that flag to
-         * the corruption-recovery screen instead of silent data loss.
+         * delete-then-rename window in which the user has NO database file. The
+         * original's stale plaintext `-wal`/`-shm`/`-journal` companions are removed
+         * BEFORE the swap (their content was already consumed by the export) so a
+         * crash between swap and cleanup can never leave a stale plaintext WAL next
+         * to the new encrypted file. Any failure preserves the original under
+         * `noteflow.sqlite.migrate-failed-<ts>` and raises the persistent corruption
+         * flag — phase-43 wires that flag to the corruption-recovery screen instead
+         * of silent data loss.
          */
         private fun migratePlaintextIfNeeded(context: Context, passphrase: String) {
             val dbFile = context.getDatabasePath("noteflow.sqlite")
