@@ -342,7 +342,7 @@ abstract class NoteflowDatabase : RoomDatabase() {
                 System.loadLibrary("sqlcipher")
                 var dek = VaultKeyHolder.dek
                 if (dek == null) {
-                    val security = com.authorss81.noteflow.services.SecurityService(context)
+                    val security = com.authorss81.noteflow.services.SecurityService.forDevice(context)
                     dek = security.getOrCreateDek()
                     if (dek != null) {
                         VaultKeyHolder.dek = dek

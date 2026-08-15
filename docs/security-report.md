@@ -60,12 +60,13 @@ Per area:
    verifier then trusts — so a single DNS/CA/MITM compromise of
    `plugin-updates.inkflow.app` yields self-consistent, user-approved **arbitrary
    code execution** in the app process (`B1-CRYPTO-01`, `B1-NET-03`).
-2. **HIGH — The vault key is obtainable without the password.** A non-user-
-   authenticated AndroidKeyStore copy of the DEK persists in prefs
-   (`B1-CRYPTO-02`), and the DB factory silently re-derives it on any open
-   (`B1-AUTH-02`). Root/forensic access or an in-process plugin recovers the DEK
-   with no credential. The "5-fail lockout" is UI-only theater for offline and
-   keystore-access attackers (`B1-CRYPTO-04`, `B1-PLAT-8`, `B1-AUTH-07`).
+2. **HIGH — The vault key is obtainable without the password.** `B1-CRYPTO-02`
+   is FIXED (phase-45): no non-user-authenticated DEK copy persists once a master
+   password exists, so the trivial root/plugin recovery is gone. Remaining: the
+   DB factory silently re-derives/never-guards a locked open (`B1-AUTH-02`,
+   phase-47), and the password-wrapped DEK can still be cracked offline on a
+   copied vault (`B1-CRYPTO-04`, `B1-PLAT-8`, `B1-AUTH-07`). The "5-fail lockout"
+   remains UI-only for offline attackers.
 3. **HIGH — Note bodies live in plaintext on disk.** Markdown/text notes are
    persisted verbatim to `filesDir/noteflow/imports` (`B1-DB-4`, `B1-AUTH-06`),
    voice notes are unencrypted `.m4a` (`B1-DB-3`), and whole-vault exports land
@@ -366,7 +367,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Exploit scenario:** The bundled catalog pins are compile-time (safe), but the Phase-24 *update* path replaces them with values taken from a hosted JSON manifest fetched over ordinary TLS with no extra authentication. Any CA in the device trust store can mint a leaf for the manifest host — realistic via a compromised public CA, an enterprise MDM/proxy CA, or DNS + rogue CA. A MITM serves a manifest announcing a "newer" version with `downloadUrl` = attacker host, `sha256` = hash of the malicious APK, `pinnedCertHash` = hash of the attacker's own cert. The user approves the update dialog (shows only version + release notes, no pin/details). `HttpsPluginDownloadTransport.createPinnedConnection` (HttpsPluginDownloadTransport.kt:143-154) happily pins to the attacker's cert, SHA-256 matches, the artifact's signer cert hashes to the "pin" — every check passes by construction — and `DexClassLoader` executes the attacker's code as a plugin with full app privileges. The documented "never from the network" pin guarantee (`PinnedCertHash.kt:20-21`) is silently contradicted by the update path.
 - **Fix:** Bind the manifest itself: fetch through a pinned transport using a **compile-time** cert hash (same mechanism as the artifact transport), or sign the manifest body with a compile-time-pinned key and verify before trusting any field. Update offers must never be allowed to re-define `sha256`/`pinnedCertHash` from an unauthenticated source; if the manifest is signed, the signature must commit the artifact pins.
 
-### [B1-CRYPTO-02] Master password is bypassable: a non-user-authenticated AndroidKeyStore copy of the vault DEK persists after the password is set
+### [B1-CRYPTO-02] Master password is bypassable: a non-user-authenticated AndroidKeyStore copy of the vault DEK persists after the password is set - **STATUS: FIXED (phase-45, `workspace/phase-45/REPORT.md`)**
 - **Severity:** HIGH
 - **Area:** Batch 1 · Cryptography & key management
 - **Agent:** b1-crypto
@@ -820,7 +821,7 @@ No DB schema, workflow, or dependency changes were made.
 | B1-DB-1 | HIGH | phase-43 | `FIXED` 2026-08-15 (commit `5015e6b`, see `workspace/phase-43/REPORT.md`) |
 | B1-DB-4 | HIGH | phase-44 | `FIXED` (commit `c23a11c`, see `workspace/phase-44/REPORT.md`) |
 | B1-AUTH-06 | MEDIUM | phase-44 (grouped with B1-DB-4, same root cause) | `FIXED` (commit `c23a11c`, see `workspace/phase-44/REPORT.md`) |
-| B1-CRYPTO-02 | HIGH | phase-45 | `NOT STARTED` (planned) |
+| B1-CRYPTO-02 | HIGH | phase-45 | `FIXED` (commit pending at close, see `workspace/phase-45/REPORT.md`) |
 | B1-AUTH-01 | HIGH | phase-46 | `NOT STARTED` (planned) |
 | B1-AUTH-02 | HIGH | phase-47 | `NOT STARTED` (planned) |
 | B2-LOG-01 | HIGH | phase-48 | `NOT STARTED` (planned) |

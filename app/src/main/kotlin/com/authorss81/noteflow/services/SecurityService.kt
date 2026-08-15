@@ -11,11 +11,37 @@ import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
-class SecurityService(private val context: Context) {
+/**
+ * Wraps the vault DEK under an AndroidKeyStore key and persists it as the
+ * "device copy" in `noteflow_keystore` SharedPreferences.
+ *
+ * B1-CRYPTO-02 (phase-45): before the fix, [getOrCreateDek] persisted the vault's
+ * DEK under a NON-user-authenticated AndroidKeyStore key (`authRequired = false`,
+ * key alias `noteflow_dek_key`), and the master-password flows never removed that
+ * copy — so a root/forensic attacker or an in-process plugin could invoke the
+ * keystore key under the app UID with no credential and recover the DEK. The
+ * invariant now enforced by [DekAtRestPolicy] (see `NoteflowViewModel.enforceDekAtRestPolicy`)
+ * is: when a master password exists, the only at-rest wrapping of the DEK is the
+ * password-derived KEK, UNLESS the user explicitly enabled biometrics — and then
+ * the device copy exists ONLY as the `authRequired = true` (biometric-gated) blob.
+ *
+ * The persistence layer is isolated behind [DekDeviceStore] so the fail-closed
+ * invariants (absent/gated blob ⇒ [readDek] returns null without a credential) are
+ * unit-testable on the JVM without AndroidKeyStore.
+ */
+class SecurityService internal constructor(
+    private val dekStore: DekDeviceStore,
+) {
     companion object {
         private const val KEY_ALIAS = "noteflow_dek_key"
         private const val ANDROID_KEYSTORE = "AndroidKeyStore"
-        private const val PREF_DEK_STORAGE = "noteflow_sec_dek"
+
+        /**
+         * Android entry point: binds the real SharedPreferences-backed device store.
+         * (Private primary constructor + factory so pure-JVM tests can inject an
+         * in-memory [DekDeviceStore] without a Context.)
+         */
+        fun forDevice(context: Context): SecurityService = SecurityService(SharedPrefsDekDeviceStore(context))
     }
 
     private fun getOrCreateKey(authRequired: Boolean = false): SecretKey {
@@ -52,17 +78,15 @@ class SecurityService(private val context: Context) {
                 }
             }
             .build()
- 
+
         keyGenerator.init(spec)
         return keyGenerator.generateKey()
     }
  
     fun getDecryptionCipher(): Cipher? {
-        val encoded = context.getSharedPreferences("noteflow_keystore", Context.MODE_PRIVATE)
-            .getString(PREF_DEK_STORAGE, null) ?: return null
-        
+        val blob = dekStore.read() ?: return null
         return try {
-            val combined = Base64.decode(encoded, Base64.NO_WRAP)
+            val combined = Base64.decode(blob.encoded, Base64.NO_WRAP)
             if (combined.size < 12) return null
             val iv = ByteArray(12)
             System.arraycopy(combined, 0, iv, 0, 12)
@@ -78,11 +102,9 @@ class SecurityService(private val context: Context) {
     }
 
     fun decryptWithCipher(cipher: Cipher): ByteArray? {
-        val encoded = context.getSharedPreferences("noteflow_keystore", Context.MODE_PRIVATE)
-            .getString(PREF_DEK_STORAGE, null) ?: return null
-        
+        val blob = dekStore.read() ?: return null
         return try {
-            val combined = Base64.decode(encoded, Base64.NO_WRAP)
+            val combined = Base64.decode(blob.encoded, Base64.NO_WRAP)
             val cipherText = ByteArray(combined.size - 12)
             System.arraycopy(combined, 12, cipherText, 0, cipherText.size)
             cipher.doFinal(cipherText)
@@ -104,25 +126,25 @@ class SecurityService(private val context: Context) {
             System.arraycopy(encryptedDek, 0, combined, iv.size, encryptedDek.size)
      
             val encoded = Base64.encodeToString(combined, Base64.NO_WRAP)
-            context.getSharedPreferences("noteflow_keystore", Context.MODE_PRIVATE)
-                .edit()
-                .putString(PREF_DEK_STORAGE, encoded)
-                .putBoolean("dek_auth_required", authRequired)
-                .apply()
+            dekStore.write(DekDeviceBlob(encoded, authRequired))
         } catch (e: Exception) {
             // Log/ignore keystore failure to avoid crashing app startup
         }
     }
  
+    /**
+     * Reads the passwordless device copy of the DEK — B1-CRYPTO-02 fails closed:
+     * an absent blob OR an auth-gated (`authRequired=true`, biometric-only) blob
+     * returns null, never a passwordless unwrap. When the vault has a master
+     * password and biometrics are OFF there is deliberately no device copy, so
+     * this is the "no password ⇒ null" guard the finding requires.
+     */
     fun readDek(): ByteArray? {
-        val prefs = context.getSharedPreferences("noteflow_keystore", Context.MODE_PRIVATE)
-        val encoded = prefs.getString(PREF_DEK_STORAGE, null) ?: return null
-        val authRequired = prefs.getBoolean("dek_auth_required", false)
-
-        if (authRequired) return null // Must use biometric unlock flow
+        val blob = dekStore.read() ?: return null
+        if (blob.authRequired) return null // Must use biometric unlock flow
 
         return try {
-            val combined = Base64.decode(encoded, Base64.NO_WRAP)
+            val combined = Base64.decode(blob.encoded, Base64.NO_WRAP)
             if (combined.size < 12) return null
             val iv = ByteArray(12)
             System.arraycopy(combined, 0, iv, 0, 12)
@@ -142,20 +164,76 @@ class SecurityService(private val context: Context) {
     fun getOrCreateDek(): ByteArray? {
         val existing = readDek()
         if (existing != null) return existing
-        val prefs = context.getSharedPreferences("noteflow_keystore", Context.MODE_PRIVATE)
-        val authRequired = prefs.getBoolean("dek_auth_required", false)
-        if (authRequired) return null
+        val blob = dekStore.read()
+        // A biometric-gated device copy exists but was not unlockable without the
+        // biometric flow: never silently mint/re-persist a fresh fallback key.
+        if (blob != null && blob.authRequired) return null
 
         val newDek = EncryptionService.generateDek()
         storeDek(newDek, authRequired = false)
         return newDek
     }
 
+    /**
+     * Removes the device-wrapped DEK copy completely (B1-CRYPTO-02). After this,
+     * [readDek] returns null with no credential and the ONLY at-rest wrapping of
+     * the vault DEK is the password-derived KEK in settings.
+     */
     fun clearDek() {
-        context.getSharedPreferences("noteflow_keystore", Context.MODE_PRIVATE)
-            .edit()
-            .remove(PREF_DEK_STORAGE)
+        dekStore.clear()
+    }
+}
+
+/**
+ * B1-CRYPTO-02 (phase-45) persistence seam for the device-wrapped DEK copy.
+ * `internal` so pure-JVM tests in this module can inject an in-memory fake and
+ * prove the fail-closed invariants without AndroidKeyStore/Context.
+ */
+internal interface DekDeviceStore {
+    fun read(): DekDeviceBlob?
+    fun write(blob: DekDeviceBlob)
+    fun clear()
+}
+
+/** The persisted wrapper: Base64(iv + AES-GCM(DEK)) plus the auth-gating flag. */
+internal data class DekDeviceBlob(val encoded: String, val authRequired: Boolean)
+
+/**
+ * Real SharedPreferences-backed [DekDeviceStore] (`noteflow_keystore` file,
+ * keys `noteflow_sec_dek` + `dek_auth_required`).
+ *
+ * B1-CRYPTO-02: [clear] uses `commit()` — not the async `.apply()` — so the
+ * non-auth blob is disk-acknowledged-gone BEFORE the master-password flows
+ * report success; a process kill right after "password set" cannot resurrect the
+ * bypass byte copy. It also clears the stale `dek_auth_required` flag so a
+ * removed non-auth wrapper can never masquerade as a biometric-gated key.
+ */
+internal class SharedPrefsDekDeviceStore(context: Context) : DekDeviceStore {
+    private val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+
+    override fun read(): DekDeviceBlob? {
+        val encoded = prefs.getString(KEY_DEK, null) ?: return null
+        return DekDeviceBlob(encoded, prefs.getBoolean(KEY_AUTH_REQUIRED, false))
+    }
+
+    override fun write(blob: DekDeviceBlob) {
+        prefs.edit()
+            .putString(KEY_DEK, blob.encoded)
+            .putBoolean(KEY_AUTH_REQUIRED, blob.authRequired)
             .apply()
+    }
+
+    override fun clear() {
+        prefs.edit()
+            .remove(KEY_DEK)
+            .remove(KEY_AUTH_REQUIRED)
+            .commit()
+    }
+
+    private companion object {
+        const val PREF_NAME = "noteflow_keystore"
+        const val KEY_DEK = "noteflow_sec_dek"
+        const val KEY_AUTH_REQUIRED = "dek_auth_required"
     }
 }
 

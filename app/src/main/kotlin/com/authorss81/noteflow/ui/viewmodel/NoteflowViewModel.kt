@@ -62,6 +62,8 @@ import com.authorss81.noteflow.plugins.TranslationOutcome
 import com.authorss81.noteflow.plugins.TranslationPlugin
 import com.authorss81.noteflow.plugins.TtsChunk
 import com.authorss81.noteflow.services.DatabaseSecurityHelper
+import com.authorss81.noteflow.services.DekAtRestMode
+import com.authorss81.noteflow.services.DekAtRestPolicy
 import com.authorss81.noteflow.services.EncryptionService
 import com.authorss81.noteflow.services.ImportExportService
 import com.authorss81.noteflow.services.NoteBodyVaultPolicy
@@ -110,7 +112,7 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     private val appContext: Application get() = getApplication()
 
     val settings = SettingsManager(appContext)
-    val security = SecurityService(appContext)
+    val security = SecurityService.forDevice(appContext)
     private val db by lazy { NoteflowDatabase.getDatabase(appContext) }
     val repository by lazy { NoteRepository(db) }
 
@@ -1899,6 +1901,28 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         const val MAX_FAILED_ATTEMPTS = 5
     }
 
+    /**
+     * B1-CRYPTO-02 (phase-45): enforce the [DekAtRestPolicy] invariant after any
+     * password set/change/unlock. When a master password exists and biometrics are
+     * OFF, the device-wrapped DEK copy (`noteflow_sec_dek`, non-auth AndroidKeyStore
+     * blob) is REMOVED so the only at-rest wrapping of the DEK is the password-derived
+     * KEK. When biometrics are explicitly ON, the device copy is (re)persisted with
+     * `authRequired = true` (biometric-gated) — the pre-fix code re-wrapped the DEK
+     * under the NON-auth keystore key here, a second instantiation of the bypass.
+     */
+    private fun enforceDekAtRestPolicy() {
+        when (DekAtRestPolicy.modeFor(settings.hasMasterPassword, settings.biometricAuthEnabled)) {
+            DekAtRestMode.PASSWORD_ONLY -> security.clearDek()
+            DekAtRestMode.BIOMETRIC_GATED_AUTH_COPY -> {
+                val dek = repository.encryptionKey
+                if (dek != null) security.storeDek(dek, authRequired = true)
+            }
+            DekAtRestMode.DEVICE_WRAPPED_NOT_AUTHGATED -> {
+                // No master password: the passwordless-boot path owns the device copy.
+            }
+        }
+    }
+
     suspend fun setMasterPassword(password: String): Boolean {
         // B2-CRYPTO-07 (phase-113): length and emptiness are judged on the
         // NFKC-NORMALIZED password, in grapheme clusters — this is exactly the
@@ -1928,6 +1952,9 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
             _hasMasterPassword.value = true
             _authenticated.value = true
             _failedUnlockAttempts.value = 0
+            // B1-CRYPTO-02 (phase-45): the device-wrapped DEK copy must not survive
+            // the transition to password protection when biometrics are off.
+            enforceDekAtRestPolicy()
             viewModelScope.launch {
                 repository.reencryptPlaintextFields(dek)
                 repository.checkpointWal()
@@ -1963,13 +1990,13 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
             settings.masterPasswordSalt = android.util.Base64.encodeToString(newSalt, android.util.Base64.NO_WRAP)
             settings.masterPasswordWrappedDek = newWrappedDek
 
-            if (settings.biometricAuthEnabled) {
-                security.storeDek(currentDek, authRequired = true)
-            }
-
             _hasMasterPassword.value = true
             _authenticated.value = true
             _failedUnlockAttempts.value = 0
+            // B1-CRYPTO-02 (phase-45): biometrics OFF ⇒ the device copy is removed
+            // (never re-wrapped under the non-auth keystore key); biometrics ON ⇒
+            // re-wrapped auth-gated only.
+            enforceDekAtRestPolicy()
             true
         } catch (e: Exception) {
             false
@@ -2019,6 +2046,10 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
             settings.lockoutUntilEpochMs = 0L
             _lockoutRemainingMs.value = 0L
             initializeData()
+            // B1-CRYPTO-02 (phase-45): every password unlock enforces the at-rest
+            // DEK policy (remove the non-auth device copy; keep only the auth-gated
+            // one when biometrics are enabled).
+            enforceDekAtRestPolicy()
             true
         } catch (e: Exception) {
             val newCount = _failedUnlockAttempts.value + 1
@@ -2086,13 +2117,17 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
 
     suspend fun setBiometricEnabled(enabled: Boolean, password: String): Boolean {
         if (!verifyMasterPassword(password)) return false
-        val dek = repository.encryptionKey ?: return false
-        
-        try {
-            security.storeDek(dek, authRequired = enabled)
+        if (repository.encryptionKey == null) return false
+
+        return try {
             settings.biometricAuthEnabled = enabled
             _biometricEnabled.value = enabled
-            return true
+            // B1-CRYPTO-02 (phase-45): enabling persists the device copy ONLY as the
+            // auth-required (biometric-gated) blob; disabling removes it entirely.
+            // Pre-fix, disabling stored a NON-auth copy — a second instantiation of
+            // the bypass.
+            enforceDekAtRestPolicy()
+            true
         } catch (e: Exception) {
             return false
         }
@@ -2114,6 +2149,10 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         settings.lockoutUntilEpochMs = 0L
         _lockoutRemainingMs.value = 0L
         initializeData()
+        // B1-CRYPTO-02 (phase-45): re-assert the policy after a biometric unlock so
+        // a stale non-auth wrapper (if any survived an old-version connect) is purged
+        // and the biometric-gated copy is pinned to the current DEK.
+        enforceDekAtRestPolicy()
         return true
     }
 

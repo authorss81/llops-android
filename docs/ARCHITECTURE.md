@@ -58,6 +58,21 @@
     by `SettingsManager.noteBodyPlaintextMigrated`, `fieldAadMigrated` pattern) sweeps pre-fix
     file bodies into the encrypted column then deletes the files; WAL is checkpointed + the DB
     HMAC re-stamped afterwards.
+  - **Implemented in phase-45** (B1-CRYPTO-02, see `workspace/phase-45/REPORT.md`): the vault DEK
+    is no longer obtainable without the password. `services/SecurityService.kt` now isolates the
+    device-wrapped DEK copy behind an internal `DekDeviceStore` seam
+    (`SharedPrefsDekDeviceStore` = `noteflow_keystore`/`noteflow_sec_dek`, `clear()` uses
+    `commit()` so the removal is disk-acknowledged) and `readDek()` fails closed (absent OR
+    `authRequired=true` blob ⇒ null; `getOrCreateDek` never mints over an auth-gated blob). New
+    pure-JVM `services/DekAtRestPolicy.kt` is the decision table, wired as
+    `NoteflowViewModel.enforceDekAtRestPolicy()` in `setMasterPassword`, `changeMasterPassword`,
+    `verifyMasterPassword` (every password unlock), `verifyBiometricsAndUnlock` and
+    `setBiometricEnabled`: biometrics OFF ⇒ `security.clearDek()` (only at-rest wrapper = the
+    password-derived KEK in settings); biometrics ON ⇒ repersist ONLY `authRequired = true`
+    (biometric-gated). The pre-fix `setBiometricEnabled(false,…)` path that re-wrapped non-auth is
+    gone. `SecurityService(context)` call sites now use `SecurityService.forDevice(context)`.
+    Tests: `DekAtRestPolicyTest` (4) + `B1Crypto02DekAtRestTest` (9, incl. a source-level wiring
+    pin); 978 unit tests green + `assembleDebug` green.
 - **Canvas**: `ui/components/AnnotationCanvas.kt:83` (ink canvas, gestures, layers, `pointerInteropFilter`);
   `services/WetBrushEngine.kt:13` (AGSL wet-mixing gating); `ui/components/ShaderCapabilityHelper.kt:5`
   (`isAgslSupported` = SDK ≥ 33); `services/ShapeRecognitionHelper.kt:13` (`trySnapShape()` :27).
