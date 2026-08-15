@@ -159,6 +159,12 @@ interface NotePageDao {
 
     @Query("UPDATE pages SET title = :title, extractedText = :extractedText WHERE id = :id")
     suspend fun updateEncryptedFields(id: String, title: String, extractedText: String?)
+
+    // B1-DB-4 (phase-44): body-only update used by saveMarkdownNoteBody and the
+    // legacy plaintext-body migration. The column holds an AEAD ciphertext; this
+    // query is the only place a note body may be persisted at rest.
+    @Query("UPDATE pages SET extractedText = :extractedText, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun updatePageBody(id: String, extractedText: String?, updatedAt: Long = System.currentTimeMillis())
 }
 
 @Dao

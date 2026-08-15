@@ -64,6 +64,7 @@ import com.authorss81.noteflow.plugins.TtsChunk
 import com.authorss81.noteflow.services.DatabaseSecurityHelper
 import com.authorss81.noteflow.services.EncryptionService
 import com.authorss81.noteflow.services.ImportExportService
+import com.authorss81.noteflow.services.NoteBodyVaultPolicy
 import com.authorss81.noteflow.services.SecurityService
 import com.authorss81.noteflow.services.SettingsManager
 import com.authorss81.noteflow.services.SettingsPluginEnableStore
@@ -1189,6 +1190,32 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
                     }
                 }
             }
+            if (!settings.noteBodyPlaintextMigrated) {
+                // B1-DB-4 (phase-44): pre-fix vaults kept a note's body as a
+                // plaintext .md/.txt file under filesDir/noteflow/imports — only
+                // the DB copy was field-encrypted. Sweep every text page's body
+                // into the encrypted column and delete the plaintext file so no
+                // note body remains at rest in the clear. The file's content is
+                // written (encrypted) BEFORE the file is deleted and undecryptable
+                // pages are left untouched (see migrateLegacyPlaintextNoteBodies).
+                try {
+                    val result = repository.migrateLegacyPlaintextNoteBodies()
+                    // B1-DB-6: WAL content is outside the DB-file HMAC, so flush it
+                    // and re-stamp the baseline (a later verify must not flag the
+                    // migrated rows as tampered). Re-arms even on a partial run so
+                    // already-written rows are covered; the flag stays unset while
+                    // any file remains, re-running the sweep on a later unlock.
+                    if (result.rowsMigrated + result.filesDeleted > 0) {
+                        repository.checkpointWal()
+                        repository.stampDatabaseChecksum(appContext)
+                    }
+                    if (result.isComplete) {
+                        settings.noteBodyPlaintextMigrated = true
+                    }
+                } catch (e: Exception) {
+                    // Keep the flag unset; re-run on the next unlock.
+                }
+            }
             val lastNbId = settings.activeNotebookId
             val lastSecId = settings.activeSectionId
             var restoredNb: NotebookEntity? = null
@@ -1796,11 +1823,13 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
                     *Linked Notes: [[Home]]*
                 """.trimIndent()
 
-                val filePath = ImportExportService.persistFile(context, targetTitle, journalTemplate.toByteArray())
+                // phase-44 (B1-DB-4): the body is stored ONLY in the
+                // field-encrypted extractedText column — never persisted to a
+                // plaintext .md/.txt file under filesDir/noteflow/imports.
                 val newPage = repository.createPage(
                     sectionId = sec.id,
                     title = targetTitle,
-                    sourceFilePath = filePath,
+                    sourceFilePath = null,
                     sourceFileType = "text",
                     template = "blank",
                     extractedText = journalTemplate
@@ -1826,17 +1855,41 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
                 val sec = selectedSection.value ?: repository.ensureDefaultNotebookAndSection().second
                 val targetFileName = "$cleanTarget.md"
                 val initialContent = "# $cleanTarget\n\nCreated via WikiLink `[[$cleanTarget]]`."
-                val filePath = ImportExportService.persistFile(context, targetFileName, initialContent.toByteArray())
+                // phase-44 (B1-DB-4): body stored ONLY in the field-encrypted
+                // extractedText column — never a plaintext .md/.txt file.
                 val newPage = repository.createPage(
                     sectionId = sec.id,
                     title = targetFileName,
-                    sourceFilePath = filePath,
+                    sourceFilePath = null,
                     sourceFileType = "text",
                     template = "blank",
                     extractedText = initialContent
                 )
                 selectPage(newPage)
                 onOpen(newPage)
+            }
+        }
+    }
+
+    /**
+     * B1-DB-4 (phase-44): front-door save for a markdown/text note body. The
+     * body is written ONLY to the field-encrypted `pages.extractedText` column
+     * — never to a plaintext `.md`/`.txt` file. Any legacy companion plaintext
+     * file is deleted AFTER the column write. Runs in the ViewModel scope so
+     * the write survives the editor composable's teardown (the Phase-05
+     * NonCancellable race the old file-write carried). No fallback to plaintext
+     * on failure — the failure is surfaced so the user can retry.
+     */
+    fun saveMarkdownNoteBody(page: NotePageEntity, body: String) {
+        val pageId = page.id
+        val legacyPath = page.sourceFilePath
+        val legacyType = page.sourceFileType
+        viewModelScope.launch {
+            try {
+                repository.updatePageBody(pageId, body)
+                NoteBodyVaultPolicy.deleteLegacyNoteTextBody(legacyPath, legacyType)
+            } catch (e: Exception) {
+                showSnackbar("Failed to save note body", isLong = true)
             }
         }
     }

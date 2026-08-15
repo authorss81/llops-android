@@ -58,6 +58,7 @@ import androidx.compose.material.icons.outlined.ViewColumn
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.authorss81.noteflow.data.model.NotePageEntity
+import com.authorss81.noteflow.services.ImportExportService
 import com.authorss81.noteflow.services.WikiLinkParser
 import com.authorss81.noteflow.theme.serifBodyStyle
 import com.authorss81.noteflow.ui.components.BacklinksInspectorBottomSheet
@@ -152,6 +153,16 @@ fun MarkdownPreviewScreen(
         mutableStateOf(viewModel.settings.serifReadingEnabled)
     }
     var contentText by remember { mutableStateOf(initialContent) }
+
+    // B1-DB-4 (phase-44): a text page no longer has a source file to anchor
+    // relative markdown images (its body lives in the encrypted column). Fall
+    // back to the imports directory — the same single folder imported
+    // attachments were always written to — so `![alt](img.png)` /
+    // `![[img.png]]` keep resolving for imported HTML/Obsidian vaults.
+    val baseDir = page.sourceFilePath?.let { File(it).parentFile }
+        ?: (if (page.sourceFileType == "text") {
+            runCatching { ImportExportService.getImportsDir(LocalContext.current) }.getOrNull()
+        } else null)
 
     // 22.9: never silently discard edits — flush content before navigating back.
     // Dedupe: only write when the content actually changed, and never twice for the
@@ -547,7 +558,7 @@ fun MarkdownPreviewScreen(
                             onValueChange = { contentText = it },
                             modifier = Modifier.weight(1f).fillMaxWidth().imePadding(),
                             primaryColor = primaryColor,
-                            baseDir = page.sourceFilePath?.let { File(it).parentFile },
+                            baseDir = baseDir,
                             onOpenWikiLink = onOpenWikiLink,
                             serif = serifReadingMode
                         )
@@ -558,7 +569,7 @@ fun MarkdownPreviewScreen(
                     MarkdownRenderedContent(
                         content = contentText,
                         primaryColor = primaryColor,
-                        baseDir = page.sourceFilePath?.let { File(it).parentFile },
+                        baseDir = baseDir,
                         onOpenWikiLink = onOpenWikiLink,
                         serif = serifReadingMode
                     )
@@ -589,7 +600,7 @@ fun MarkdownPreviewScreen(
                                     onValueChange = { contentText = it },
                                     modifier = Modifier.weight(1f).fillMaxWidth(),
                                     primaryColor = primaryColor,
-                                    baseDir = page.sourceFilePath?.let { File(it).parentFile },
+                                    baseDir = baseDir,
                                     onOpenWikiLink = onOpenWikiLink,
                                     serif = serifReadingMode
                                 )
@@ -608,7 +619,7 @@ fun MarkdownPreviewScreen(
                                         MarkdownRenderedContent(
                                             content = contentText,
                                             primaryColor = primaryColor,
-                                            baseDir = page.sourceFilePath?.let { File(it).parentFile },
+                                            baseDir = baseDir,
                                             onOpenWikiLink = onOpenWikiLink,
                                             serif = serifReadingMode
                                         )
@@ -640,7 +651,7 @@ fun MarkdownPreviewScreen(
                                     onValueChange = { contentText = it },
                                     modifier = Modifier.weight(1f).fillMaxWidth(),
                                     primaryColor = primaryColor,
-                                    baseDir = page.sourceFilePath?.let { File(it).parentFile },
+                                    baseDir = baseDir,
                                     onOpenWikiLink = onOpenWikiLink,
                                     serif = serifReadingMode
                                 )
@@ -659,7 +670,7 @@ fun MarkdownPreviewScreen(
                                         MarkdownRenderedContent(
                                             content = contentText,
                                             primaryColor = primaryColor,
-                                            baseDir = page.sourceFilePath?.let { File(it).parentFile },
+                                            baseDir = baseDir,
                                             onOpenWikiLink = onOpenWikiLink,
                                             serif = serifReadingMode
                                         )

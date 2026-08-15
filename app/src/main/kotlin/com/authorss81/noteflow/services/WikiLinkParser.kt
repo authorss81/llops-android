@@ -245,9 +245,14 @@ object WikiLinkParser {
             val sb = StringBuilder()
             sb.append(page.title).append("\n")
             page.extractedText?.let { sb.append(it).append("\n") }
+            // B1-DB-4 (phase-44): after the one-time body migration a text page
+            // has no source file at all — its body lives only in the (decrypted)
+            // extractedText column above. A legacy plaintext file is coalesced
+            // only if it STILL exists (pre-migration vault, or a direct disk edit
+            // made before the epoch bump); it is never a new storage location.
             page.sourceFilePath?.let { path ->
                 val f = File(path)
-                val isTextFile = page.sourceFileType == "text" || path.endsWith(".md") || path.endsWith(".txt")
+                val isTextFile = NoteBodyVaultPolicy.isNoteTextBodySource(path, page.sourceFileType)
                 if (isTextFile && f.exists() && f.canRead()) {
                     try {
                         metricsFileReads++

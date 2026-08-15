@@ -45,6 +45,19 @@
     `NoteflowViewModel` surfaces the `CorruptionRecoveryScreen` in-session, gates the six
     Room-backed note flows on `authenticated && !corruptionBlocked`, re-initializes after
     start-fresh, and clears the flag after a successful restore.
+  - **Implemented in phase-44** (B1-DB-4 + B1-AUTH-06, see `workspace/phase-44/REPORT.md`): note
+    bodies no longer live as PLAINTEXT files. The field-encrypted `pages.extractedText` column is
+    now the ONLY body store. `services/NoteBodyVaultPolicy.kt` (pure JVM) classifies note-body
+    sources (text/-typed pages and `.md`/`.txt` files only; PDF/image/attachment artifacts are
+    never treated as bodies) and provides `resolveBodyForDisplay` + `deleteLegacyNoteTextBody`.
+    Single write path: `NotePageDao.updatePageBody` + `NoteRepository.updatePageBody` (AES-GCM,
+    per-record AAD). The markdown editor opens/saves via `viewModel.saveMarkdownNoteBody`
+    (`MainActivity.kt` both layouts); `File.writeText` body writes are gone. `.md`/`.txt`/DOCX/
+    HTML/Obsidian imports and journal/daily/wiki page creation store `sourceFilePath = null` +
+    body in `extractedText`. One-time `NoteRepository.migrateLegacyPlaintextNoteBodies` (flagged
+    by `SettingsManager.noteBodyPlaintextMigrated`, `fieldAadMigrated` pattern) sweeps pre-fix
+    file bodies into the encrypted column then deletes the files; WAL is checkpointed + the DB
+    HMAC re-stamped afterwards.
 - **Canvas**: `ui/components/AnnotationCanvas.kt:83` (ink canvas, gestures, layers, `pointerInteropFilter`);
   `services/WetBrushEngine.kt:13` (AGSL wet-mixing gating); `ui/components/ShaderCapabilityHelper.kt:5`
   (`isAgslSupported` = SDK ≥ 33); `services/ShapeRecognitionHelper.kt:13` (`trySnapShape()` :27).

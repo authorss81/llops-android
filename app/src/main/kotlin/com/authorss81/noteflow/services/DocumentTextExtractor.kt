@@ -18,6 +18,14 @@ import java.util.regex.Pattern
  */
 object DocumentTextExtractor {
     fun extractTextFromDocument(context: Context, page: NotePageEntity): String {
+        // B1-DB-4 (phase-44): a text page's body lives ONLY in the encrypted
+        // extractedText column — never as a plaintext .md/.txt companion file.
+        // A legacy plaintext source is coalesced transiently if it still exists.
+        if (NoteBodyVaultPolicy.isNoteTextBodySource(page.sourceFilePath, page.sourceFileType)) {
+            return NoteBodyVaultPolicy.resolveBodyForDisplay(
+                page.extractedText, page.sourceFilePath, page.sourceFileType
+            )
+        }
         val path = page.sourceFilePath ?: return ""
         val file = File(path)
         return extractText(file, page.sourceFileType)

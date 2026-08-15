@@ -218,21 +218,24 @@ fun HomeScreen(
                 } else if (ext == "docx") {
                     val markdownText = ImportExportService.convertDocxToMarkdown(bytes)
                     val mdTitle = fileName.replace(".docx", ".md")
-                    val path = ImportExportService.persistFile(context, mdTitle, markdownText.toByteArray())
+                    // phase-44 (B1-DB-4): the note body is stored ONLY in the
+                    // field-encrypted extractedText column — never persisted as a
+                    // plaintext .md/.txt file under filesDir/noteflow/imports.
                     viewModel.addPage(
                         title = mdTitle,
-                        sourceFilePath = path,
+                        sourceFilePath = null,
                         sourceFileType = "text",
                         extractedText = markdownText,
                         onCreated = if (isSingleImport) onOpenPage else null
                     )
                     importedCount++
                 } else if (ext == "md" || ext == "txt") {
-                    val path = ImportExportService.persistFile(context, fileName, bytes)
+                    // phase-44 (B1-DB-4): body goes to the field-encrypted
+                    // extractedText column only — no plaintext companion file.
                     val textContent = String(bytes, Charsets.UTF_8)
                     viewModel.addPage(
                         title = fileName,
-                        sourceFilePath = path,
+                        sourceFilePath = null,
                         sourceFileType = "text",
                         extractedText = textContent,
                         onCreated = if (isSingleImport) onOpenPage else null

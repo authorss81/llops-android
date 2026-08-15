@@ -5,6 +5,7 @@ import com.authorss81.noteflow.data.db.NoteflowDatabase
 import com.authorss81.noteflow.data.model.*
 import com.authorss81.noteflow.services.DatabaseSecurityHelper
 import com.authorss81.noteflow.services.EncryptionService
+import com.authorss81.noteflow.services.NoteBodyVaultPolicy
 import com.authorss81.noteflow.services.VaultKeyHolder
 import com.authorss81.noteflow.services.WikiLinkParser
 import kotlinx.coroutines.Dispatchers
@@ -377,6 +378,79 @@ class NoteRepository(private var db: NoteflowDatabase) {
 
     suspend fun updatePageSource(id: String, sourceFilePath: String?, sourceFileType: String?) = withContext(Dispatchers.Default) {
         db.pageDao().updatePageSource(id, sourceFilePath, sourceFileType)
+    }
+
+    /**
+     * B1-DB-4 (phase-44): the SINGLE write path for a markdown/text note body.
+     * The body is stored ONLY in the field-encrypted `pages.extractedText`
+     * column (AES-256-GCM under the DEK) — never in a plaintext `.md`/`.txt`
+     * file. Callers that previously persisted text to `filesDir/noteflow/imports`
+     * (MainActivity's file save, text/markdown imports, journal/daily/wiki page
+     * creation) must route here instead. A blank body is still stored as a real
+     * AEAD payload so even an empty note carries an integrity tag.
+     */
+    suspend fun updatePageBody(id: String, body: String) = withContext(Dispatchers.Default) {
+        val storedBody = encryptionKey?.let {
+            EncryptionService.encryptField(body.toByteArray(), it, "pages", id, "extractedText")
+        } ?: body
+        db.pageDao().updatePageBody(id, storedBody)
+        invalidateSearchCorpus()
+    }
+
+    /**
+     * B1-DB-4 (phase-44): one-time sweep of legacy plaintext note-body files.
+     * Pre-phase-44 builds kept the authoritative body of a text page as a
+     * plaintext `.md`/`.txt` file under `filesDir/noteflow/imports` (the DB
+     * column was field-encrypted but could be stale). Runs once at unlock: for
+     * every text page with a surviving file, the FILE's body is written into the
+     * encrypted column FIRST, then the plaintext file is deleted. Safe:
+     *  - a page whose column cannot be decrypted is skipped and its file is left
+     *    in place (the migration flag stays unset → retried on the next unlock);
+     *  - if any delete fails, [LegacyBodyMigrationResult.filesRemainingCount] is
+     *    > 0 and the flag stays unset so the sweep re-runs later.
+     */
+    suspend fun migrateLegacyPlaintextNoteBodies(): LegacyBodyMigrationResult = withContext(Dispatchers.IO) {
+        var rowsMigrated = 0
+        var filesDeleted = 0
+        var filesRemaining = 0
+        val key = encryptionKey
+        db.pageDao().getAllPagesForReencrypt().forEach { page ->
+            if (!NoteBodyVaultPolicy.isNoteTextBodySource(page.sourceFilePath, page.sourceFileType)) return@forEach
+            val path = page.sourceFilePath ?: return@forEach
+            val file = File(path)
+            if (!file.exists()) return@forEach
+
+            val dbBody = when {
+                key == null -> page.extractedText
+                page.extractedText.isNullOrEmpty() -> ""
+                else -> try {
+                    String(EncryptionService.decryptField(page.extractedText, key, "pages", page.id, "extractedText"))
+                } catch (e: Exception) {
+                    null
+                }
+            }
+            if (dbBody == null) {
+                // Undecryptable column — never overwrite, never delete the file.
+                filesRemaining++
+                return@forEach
+            }
+
+            val fileBody = try { file.readText() } catch (e: Exception) { return@forEach }
+            if (fileBody != dbBody) {
+                val storedBody = key?.let {
+                    EncryptionService.encryptField(fileBody.toByteArray(), it, "pages", page.id, "extractedText")
+                } ?: fileBody
+                db.pageDao().updatePageBody(page.id, storedBody)
+                rowsMigrated++
+            }
+            if (try { file.delete() } catch (e: Exception) { false }) {
+                filesDeleted++
+            } else {
+                filesRemaining++
+            }
+        }
+        if (rowsMigrated + filesDeleted > 0) invalidateSearchCorpus()
+        LegacyBodyMigrationResult(rowsMigrated, filesDeleted, filesRemaining)
     }
 
     suspend fun getPagesForSectionOnce(sectionId: String): List<NotePageEntity> = withContext(Dispatchers.IO) {
@@ -949,4 +1023,20 @@ class NoteRepository(private var db: NoteflowDatabase) {
             page
         }
     }
+}
+
+/**
+ * B1-DB-4 (phase-44): outcome of the one-time legacy plaintext-body sweep
+ * ([NoteRepository.migrateLegacyPlaintextNoteBodies]). [rowsMigrated] counts
+ * bodies copied from a plaintext file into the encrypted column, [filesDeleted]
+ * the plaintext source files removed, [filesRemaining] files that could not be
+ * deleted (or whose column was undecryptable) — the migration flag stays unset
+ * while this is > 0 so the sweep re-runs on a later unlock.
+ */
+data class LegacyBodyMigrationResult(
+    val rowsMigrated: Int,
+    val filesDeleted: Int,
+    val filesRemaining: Int
+) {
+    val isComplete: Boolean get() = filesRemaining == 0
 }

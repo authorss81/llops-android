@@ -317,15 +317,16 @@ class MainActivity : FragmentActivity() {
                                     } else {
                                         com.authorss81.noteflow.ui.components.FluidPageReveal(pageKey = page.id) {
                                         if (page.title.endsWith(".md") || page.title.endsWith(".txt")) {
-                                            val contentText by produceState(initialValue = "", page.sourceFilePath) {
-                                                value = page.sourceFilePath?.let { path ->
-                                                    withContext(Dispatchers.IO) {
-                                                        val f = File(path)
-                                                        if (f.exists()) f.readText() else ""
-                                                    }
-                                                } ?: ""
+                                            val contentText by produceState(initialValue = "", page.id) {
+                                                // B1-DB-4 (phase-44): the body is read from the field-encrypted
+                                                // extractedText column; a legacy plaintext source file is only
+                                                // coalesced transiently if it still exists (and is deleted on save).
+                                                value = withContext(Dispatchers.IO) {
+                                                    com.authorss81.noteflow.services.NoteBodyVaultPolicy.resolveBodyForDisplay(
+                                                        page.extractedText, page.sourceFilePath, page.sourceFileType
+                                                    )
+                                                }
                                             }
-                                            val contentSaveScope = rememberCoroutineScope()
                                             MarkdownPreviewScreen(
                                                 page = page,
                                                 initialContent = contentText,
@@ -338,16 +339,12 @@ class MainActivity : FragmentActivity() {
                                                 },
                                                 onOpenPage = { targetPage -> setActivePage(targetPage) },
                                                 onSaveContent = { newText ->
-                                                    page.sourceFilePath?.let { path ->
-                                                        // Phase-05 fix: the composable scope is torn down on
-                                                        // back-navigation — use NonCancellable so the final
-                                                        // flush is never cancelled mid-write (data-loss race).
-                                                        contentSaveScope.launch {
-                                                            withContext(NonCancellable + Dispatchers.IO) {
-                                                                File(path).writeText(newText)
-                                                            }
-                                                        }
-                                                    }
+                                                    // B1-DB-4 (phase-44): the body is written ONLY to the
+                                                    // field-encrypted extractedText column — never to a plaintext
+                                                    // .md/.txt file. This runs in the ViewModel scope so it survives
+                                                    // the editor's composition teardown (the Phase-05 race the old
+                                                    // NonCancellable file-write carried).
+                                                    viewModel.saveMarkdownNoteBody(page, newText)
                                                     // Phase 15 (Language Detection): auto-tag
                                                     // lang:<iso> on save, honouring any override.
                                                     viewModel.autoTagLanguageOnSave(
@@ -418,15 +415,16 @@ class MainActivity : FragmentActivity() {
                                                     val page = activePage
                                                     if (page != null) {
                                                         if (page.title.endsWith(".md") || page.title.endsWith(".txt")) {
-                                                            val contentText by produceState(initialValue = "", page.sourceFilePath) {
-                                                                value = page.sourceFilePath?.let { path ->
-                                                                    withContext(Dispatchers.IO) {
-                                                                        val f = File(path)
-                                                                        if (f.exists()) f.readText() else ""
-                                                                    }
-                                                                } ?: ""
+                                                            val contentText by produceState(initialValue = "", page.id) {
+                                                                // B1-DB-4 (phase-44): body read from the field-encrypted
+                                                                // extractedText column; legacy plaintext source files are
+                                                                // only coalesced transiently (and deleted on save).
+                                                                value = withContext(Dispatchers.IO) {
+                                                                    com.authorss81.noteflow.services.NoteBodyVaultPolicy.resolveBodyForDisplay(
+                                                                        page.extractedText, page.sourceFilePath, page.sourceFileType
+                                                                    )
+                                                                }
                                                             }
-                                                            val contentSaveScope = rememberCoroutineScope()
                                                             MarkdownPreviewScreen(
                                                                 page = page,
                                                                 initialContent = contentText,
@@ -438,18 +436,14 @@ class MainActivity : FragmentActivity() {
                                                                     }
                                                                 },
                                                                 onOpenPage = { targetPage -> setActivePage(targetPage) },
-onSaveContent = { newText ->
-                                                                     page.sourceFilePath?.let { path ->
-                                                                         // Phase-05 fix: NonCancellable so the back-flush
-                                                                         // write is never cancelled on composition teardown.
-                                                                         contentSaveScope.launch {
-                                                                             withContext(NonCancellable + Dispatchers.IO) {
-                                                                                 File(path).writeText(newText)
-                                                                             }
-                                                                         }
-                                                                     }
-                                                                 }
-                                                             )
+                                                                onSaveContent = { newText ->
+                                                                    // B1-DB-4 (phase-44): body written ONLY to the
+                                                                    // field-encrypted extractedText column — never a
+                                                                    // plaintext .md/.txt file. ViewModel-scoped so the
+                                                                    // write survives composition teardown.
+                                                                    viewModel.saveMarkdownNoteBody(page, newText)
+                                                                }
+                                                            )
                                                         } else {
                                                             EditorScreen(
                                                                 page = page,

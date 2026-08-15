@@ -39,6 +39,15 @@ class SettingsManager(context: Context) {
         get() = prefs.getBoolean("field_aad_migrated", false)
         set(value) = prefs.edit().putBoolean("field_aad_migrated", value).apply()
 
+    // B1-DB-4 (phase-44): one-time migration of legacy plaintext note-body
+    // files. Set after NoteRepository.migrateLegacyPlaintextNoteBodies has
+    // moved every pre-fix .md/.txt body into the encrypted extractedText column
+    // and deleted the plaintext source files, so the O(rows) pass is not re-run
+    // on every unlock. Stays unset while any file remains.
+    var noteBodyPlaintextMigrated: Boolean
+        get() = prefs.getBoolean("note_body_plaintext_migrated", false)
+        set(value) = prefs.edit().putBoolean("note_body_plaintext_migrated", value).apply()
+
     var activeNotebookId: String?
         get() = prefs.getString("active_notebook_id", null)
         set(value) = prefs.edit().putString("active_notebook_id", value).apply()

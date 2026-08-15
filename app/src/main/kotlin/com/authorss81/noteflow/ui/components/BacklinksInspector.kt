@@ -221,22 +221,22 @@ fun BacklinksInspectorBottomSheet(
                                     }
                                     IconButton(
                                         onClick = {
-                                            match.page.sourceFilePath?.let { path ->
-                                                scope.launch {
-                                                    withContext(Dispatchers.IO) {
-                                                        val file = File(path)
-                                                        if (file.exists()) {
-                                                            val oldText = file.readText()
-                                                            val newText = oldText.replace(cleanTitle, "[[$cleanTitle]]")
-                                                            file.writeText(newText)
-                                                        }
-                                                    }
-                                                    viewModel.showSnackbar("Converted to [[WikiLink]]!")
-                                                    // Direct file edit bypasses the repository, so drop the stale cached
-                                                    // full-text for that page before forcing a fresh scan.
-                                                    WikiLinkParser.invalidateTextCache(match.page.id)
-                                                    refreshBacklinks(forceRefresh = true)
-                                                }
+                                            // B1-DB-4 (phase-44): the body is edited in the
+                                            // field-encrypted extractedText column, never by rewriting a
+                                            // plaintext .md/.txt file. The resolved body may coalesce a
+                                            // legacy plaintext source file if one still exists; the save
+                                            // writes the encrypted column and deletes that file.
+                                            val body = com.authorss81.noteflow.services.NoteBodyVaultPolicy.resolveBodyForDisplay(
+                                                match.page.extractedText, match.page.sourceFilePath, match.page.sourceFileType
+                                            )
+                                            val newText = body.replace(cleanTitle, "[[$cleanTitle]]")
+                                            if (newText != body) {
+                                                viewModel.saveMarkdownNoteBody(match.page, newText)
+                                                viewModel.showSnackbar("Converted to [[WikiLink]]!")
+                                                // The repository write bumps the epoch, dropping the stale cached
+                                                // full-text for that page before forcing a fresh scan.
+                                                WikiLinkParser.invalidateTextCache(match.page.id)
+                                                refreshBacklinks(forceRefresh = true)
                                             }
                                         }
                                     ) {

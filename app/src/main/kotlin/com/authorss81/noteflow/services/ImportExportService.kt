@@ -1897,19 +1897,18 @@ object ImportExportService {
             val htmlContent = String(bytes, Charsets.UTF_8)
             val (title, markdown) = HtmlToMarkdownConverter.convertHtmlToMarkdown(htmlContent)
 
-            val safeTitle = sanitizeImportFileName(title)
-            val mdFileName = "${safeTitle}_${System.currentTimeMillis()}.md"
-            val savedPath = persistFile(context, mdFileName, markdown.toByteArray(Charsets.UTF_8))
-
-            val page = repository.createPage(
+            // B1-DB-4 (phase-44): the body is stored ONLY in the field-encrypted
+            // extractedText column — never written to a plaintext .md file under
+            // filesDir/noteflow/imports. sourceFilePath stays null for text pages
+            // (imported images are still files and reference via their own paths).
+            repository.createPage(
                 sectionId = sectionId,
                 title = title,
-                sourceFilePath = savedPath,
+                sourceFilePath = null,
                 sourceFileType = "text",
                 extractedText = markdown,
                 tags = "imported_html"
             )
-            page
         } catch (e: Exception) {
             Log.e("ImportExportService", "Failed to import HTML file", e)
             null
@@ -1936,14 +1935,12 @@ object ImportExportService {
 
                         val entryName = entry.name.substringAfterLast('/').substringBeforeLast('.')
                         val finalTitle = title.ifBlank { entryName }
-                        val safeTitle = sanitizeImportFileName(finalTitle)
-                        val mdFileName = "${safeTitle}_${System.currentTimeMillis()}.md"
-                        val savedPath = persistFile(context, mdFileName, markdown.toByteArray(Charsets.UTF_8))
-
+                        // B1-DB-4 (phase-44): body stored ONLY in the field-encrypted
+                        // extractedText column — no plaintext .md companion file.
                         repository.createPage(
                             sectionId = sectionId,
                             title = finalTitle,
-                            sourceFilePath = savedPath,
+                            sourceFilePath = null,
                             sourceFileType = "text",
                             extractedText = markdown,
                             tags = "imported_html"
@@ -2128,14 +2125,14 @@ object ImportExportService {
                         val title = entry.name.substringAfterLast('/').substringBeforeLast('.')
                         val tags = WikiLinkParser.extractTags(rawContent).joinToString(",")
 
-                        val safeTitle = sanitizeImportFileName(title)
-                        val mdFileName = "${safeTitle}_${System.currentTimeMillis()}.md"
-                        val savedPath = persistFile(context, mdFileName, rawContent.toByteArray(Charsets.UTF_8))
-
+                        // B1-DB-4 (phase-44): the markdown body is stored ONLY in
+                        // the field-encrypted extractedText column — never as a
+                        // plaintext .md file. Attachments imported in pass 1 remain
+                        // real files (they are media, not note bodies).
                         repository.createPage(
                             sectionId = sectionId,
                             title = title,
-                            sourceFilePath = savedPath,
+                            sourceFilePath = null,
                             sourceFileType = "text",
                             extractedText = rawContent,
                             tags = tags.ifBlank { "obsidian_import" }
