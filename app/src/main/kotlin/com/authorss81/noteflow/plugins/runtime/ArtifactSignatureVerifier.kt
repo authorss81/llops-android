@@ -3,6 +3,7 @@ package com.authorss81.noteflow.plugins.runtime
 import com.authorss81.noteflow.utils.ConstantTime
 import java.io.File
 import java.io.OutputStream
+import java.security.cert.Certificate
 import java.security.cert.X509Certificate
 import java.util.jar.JarFile
 
@@ -23,12 +24,18 @@ import java.util.jar.JarFile
  *    bytes were untouched.
  *
  * The signer check binds the FULL archive signer set (B1-CRYPTO-08): every
- * non-`META-INF` entry must carry exactly the one pinned cert — an unsigned
- * entry, a multi-signer entry, or an archive mixing different certs is
- * rejected, never "passes if iteration happens to end on the genuine entry" —
- * and the pinned cert must be currently valid with digital-signature key
- * usage ([SignerCertificatePolicy]), so an expired/revoked pinned cert is
- * never silently accepted.
+ * non-`META-INF` entry must be covered by exactly the one pinned signer —
+ * an unsigned entry, a multi-signer entry, or an archive mixing different
+ * signers is rejected, never "passes if iteration happens to end on the
+ * genuine entry" — and the pinned cert must be currently valid with
+ * digital-signature key usage ([SignerCertificatePolicy]), so an
+ * expired/revoked pinned cert is never silently accepted.
+ *
+ * "Exactly one signer" is judged per SIGNER, not per certificate: the JAR
+ * verifier reports the signer's whole certificate chain in `JarEntry
+ * .getCertificates()` (leaf first), so a single signer using a CA-issued
+ * chain is still accepted — only an archive carrying MORE THAN ONE signer
+ * chain, or signer chains that differ between entries, is rejected.
  *
  * Any failure is a hard [Result.Invalid] with a user-facing reason — a
  * tampered artifact is NEVER loaded, never partially executed. Signature
@@ -90,17 +97,13 @@ class ArtifactSignatureVerifier {
         when (val signer = collectSignerSet(file)) {
             is SignerSetResult.Rejected -> return Result.Invalid(signer.reason)
             is SignerSetResult.Unified -> {
-                // B1-CRYPTO-08: a cert whose hash matches the pin is STILL not
-                // usable as the archive signer unless it is currently valid and
+                // B1-CRYPTO-08: pin compare FIRST (a wrong key is the most
+                // likely cause of failure — report it accurately instead of a
+                // coincidental cert-validity complaint), then the usability
+                // policy: a cert whose hash matches the pin is STILL not usable
+                // as the archive signer unless it is currently valid and
                 // permitted to sign. An expired / not-yet-valid / non-signing
                 // cert must fail here, never be silently accepted.
-                when (val certCheck = SignerCertificatePolicy.validate(signer.cert)) {
-                    is SignerCertificatePolicy.Validation.Reject -> return Result.Invalid(
-                        "the artifact's signing certificate is not valid: ${certCheck.reason}. " +
-                            "It will not be loaded."
-                    )
-                    is SignerCertificatePolicy.Validation.Accept -> Unit
-                }
                 val actualPin = PinnedCertHash.base64Sha256(signer.cert)
                 if (!PinnedCertHash.matches(signer.cert, expectedPinnedCertHash)) {
                     return Result.Invalid(
@@ -108,6 +111,13 @@ class ArtifactSignatureVerifier {
                             "(pinned $expectedPinnedCertHash, actual $actualPin). " +
                             "It will not be loaded."
                     )
+                }
+                when (val certCheck = SignerCertificatePolicy.validate(signer.cert)) {
+                    is SignerCertificatePolicy.Validation.Reject -> return Result.Invalid(
+                        "the artifact's signing certificate is not valid: ${certCheck.reason}. " +
+                            "It will not be loaded."
+                    )
+                    is SignerCertificatePolicy.Validation.Accept -> Unit
                 }
                 return Result.Verified(sha256, actualPin)
             }
@@ -124,17 +134,17 @@ class ArtifactSignatureVerifier {
      * - every non-`META-INF` entry MUST carry certificates — an unsigned entry
      *   inside an otherwise-verified jar is a hard rejection, so no entry can
      *   hide behind a signed sibling (the "attacker key on `classes.dex`" case);
-     * - every entry's FULL certificate set must be a single-element set — a
-     *   multi-signer entry (two signature blocks covering the same entry) is a
-     *   hard rejection;
-     * - the distinct signer across all entries must be exactly ONE — an
-     *   archive mixing different signing certs anywhere fails, never "passes if
+     * - every entry must be covered by exactly ONE signer chain (see
+     *   [singleSignerChain]) — a multi-signer entry (two signature blocks
+     *   covering the same entry) is a hard rejection;
+     * - the distinct signer chain across all entries must be exactly ONE — an
+     *   archive mixing different signers anywhere fails, never "passes if
      *   iteration happens to end on the genuine entry";
      * - an EMPTY verified signer set is a hard rejection, never a silent
      *   fallback to a last-seen value.
      */
     private sealed class SignerSetResult {
-        /** Every non-`META-INF` entry is signed by exactly this one cert. */
+        /** Every non-`META-INF` entry is signed by exactly this one signer (leaf cert). */
         data class Unified(val cert: X509Certificate) : SignerSetResult()
 
         /** A multi-signer / unsigned-entry / mixed-signer / empty-set archive. */
@@ -151,7 +161,7 @@ class ArtifactSignatureVerifier {
      */
     private fun collectSignerSet(file: File): SignerSetResult = try {
         JarFile(file, true).use { jar ->
-            var unified: X509Certificate? = null
+            var unified: List<X509Certificate>? = null
             val entries = jar.entries()
             while (entries.hasMoreElements()) {
                 val entry = entries.nextElement()
@@ -165,26 +175,26 @@ class ArtifactSignatureVerifier {
                         "the artifact entry '$entry' is not signed — every non-META-INF entry must be signed by the pinned certificate. It will not be loaded."
                     )
                 }
-                if (certs.size != 1) {
+                if (certs.any { it !is X509Certificate }) {
                     return@use SignerSetResult.Rejected(
-                        "the artifact entry '$entry' is signed by ${certs.size} certificates — " +
-                            "only a single pinned signer is accepted. It will not be loaded."
-                    )
-                }
-                val cert = certs[0] as? X509Certificate
-                    ?: return@use SignerSetResult.Rejected(
                         "the artifact entry '$entry' carries a non-X.509 signer certificate. " +
                             "It will not be loaded."
                     )
+                }
+                val chain = singleSignerChain(certs)
+                    ?: return@use SignerSetResult.Rejected(
+                        "the artifact entry '$entry' is signed by multiple signers (${certs.size} " +
+                            "certificates) — only a single pinned signer is accepted. It will not be loaded."
+                    )
                 val existing = unified
-                if (existing != null && !sameCert(existing, cert)) {
+                if (existing != null && !sameChain(existing, chain)) {
                     return@use SignerSetResult.Rejected(
                         "the artifact mixes different signing certificates across its entries — " +
                             "every entry must be signed by the single pinned certificate. " +
                             "It will not be loaded."
                     )
                 }
-                unified = cert
+                unified = chain
             }
             val signer = unified
             if (signer == null) {
@@ -193,7 +203,7 @@ class ArtifactSignatureVerifier {
                         "It will not be loaded."
                 )
             } else {
-                SignerSetResult.Unified(signer)
+                SignerSetResult.Unified(signer.first())
             }
         }
     } catch (_: SecurityException) {
@@ -208,7 +218,46 @@ class ArtifactSignatureVerifier {
         )
     }
 
-    /** Byte-for-byte equality of two certificates' DER encodings. */
-    private fun sameCert(a: X509Certificate, b: X509Certificate): Boolean =
-        a.encoded.contentEquals(b.encoded)
+    /**
+     * Pure decision-table helper (test seam for B1-CRYPTO-08): the [certs] the
+     * JAR verifier attributes to ONE entry are a CONCATENATION of the chains of
+     * every signer that covered that entry, each chain ordered leaf-to-root
+     * (this is what `JarEntry.getCertificates()` actually returns — verified
+     * against real keytool/jarsigner output on JDK 21). A single signer's
+     * chain — including a CA-issued chain, where the pinned leaf is followed by
+     * its issuers — yields exactly one chain; a multi-signer entry yields two
+     * or more and returns null. Consecutive certificates belong to the same
+     * chain when the earlier is issued by the later (issuer DN equality AND a
+     * verifiable signature over the earlier cert with the later cert's public
+     * key), so unrelated certificates can never be mistaken for a chain — even
+     * when they share a DN.
+     */
+    internal fun singleSignerChain(certs: Array<Certificate>): List<X509Certificate>? {
+        if (certs.isEmpty()) return null
+        val chain = certs.map { it as X509Certificate }
+        for (i in 1 until chain.size) {
+            if (!issuedBy(chain[i - 1], chain[i])) return null
+        }
+        return chain
+    }
+
+    /** True when [cert] was issued by [issuer] (DN match AND valid signature). */
+    private fun issuedBy(cert: X509Certificate, issuer: X509Certificate): Boolean {
+        if (cert.issuerX500Principal != issuer.subjectX500Principal) return false
+        return try {
+            cert.verify(issuer.publicKey)
+            true
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    /** Byte-for-byte (DER) equality of two whole signer chains, element-wise. */
+    internal fun sameChain(a: List<X509Certificate>, b: List<X509Certificate>): Boolean {
+        if (a.size != b.size) return false
+        for (i in a.indices) {
+            if (!a[i].encoded.contentEquals(b[i].encoded)) return false
+        }
+        return true
+    }
 }

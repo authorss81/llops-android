@@ -283,18 +283,23 @@
     Native (`System.loadLibrary`) / `sun.misc.Unsafe` gating and a separate `:remote` process remain
     out-of-scope (future isolation phases), noted in the phase-46 REPORT. Tests: `PluginBytecodeIsolationTest` (20).
   - **Implemented in phase-66** (B1-CRYPTO-08, see `workspace/phase-66/REPORT.md`): the artifact-signer
-    pin binds the FULL signer certificate set, not a "last signed entry seen" cert, and the pinned cert
-    must be currently usable. `ArtifactSignatureVerifier.collectSignerSet`
-    (`ArtifactSignatureVerifier.kt:152`, replacing `findSignerCertificate`) force-verifies the JAR
-    (`JarFile(verify=true)`) and rejects ANY unsigned non-META-INF entry (`:163`), any multi-signer
-    entry (`certs.size != 1`, `:169`), any archive mixing different certs across entries (`sameCert`,
-    `:181`), and an EMPTY verified signer set (`:191`) — never a fallback to a last-seen value. New
+    pin binds the FULL signer set — not a "last signed entry seen" cert — and the pinned cert must be
+    currently usable. `ArtifactSignatureVerifier.collectSignerSet` (`ArtifactSignatureVerifier.kt:162`,
+    replacing `findSignerCertificate`) force-verifies the JAR (`JarFile(verify=true)`) and rejects ANY
+    unsigned non-META-INF entry (`:173`), any multi-signer entry, any archive mixing different signers
+    across entries (`:189`, whole-chain comparison), and an EMPTY verified signer set (`:199`) — never
+    a fallback to a last-seen value. "One signer" is judged PER SIGNER CHAIN, not per certificate:
+    `singleSignerChain` (`:235`) splits the JAR verifier's leaf-first chain list on certificate
+    boundaries (issuer-DN match AND a verifiable signature), so a single CA-issued signer (leaf +
+    issuers) is accepted while a second signer's chain is detected as a boundary and rejected. New
     pure-JVM `plugins/runtime/SignerCertificatePolicy.kt` is the single decision table run by `verify()`
-    (`:97`) BEFORE the pin compare: `checkValidity(now)` rejects expired/not-yet-valid certs and a
-    `KeyUsage` extension lacking the digitalSignature bit (bit 0) is rejected (absent extension =
-    unrestricted, RFC 5280); a key-usage-invalid cert is also refused by the signer-set gate when the
-    platform JAR verifier surfaces such entries with `null` certificates. Pure JVM, API 26+ floor, no
-    new deps. Tests: `B1Crypto08SignerSetTest` (12).
+    (`:115`): `checkValidity(now)` rejects expired/not-yet-valid certs and a `KeyUsage` extension
+    lacking the digitalSignature bit (bit 0) is rejected (absent extension = unrestricted, RFC 5280); a
+    key-usage-invalid cert is also refused by the signer-set gate when the platform JAR verifier
+    surfaces such entries with `null` certificates. Pin compare runs first (`:107`) so a wrong key
+    reports the accurate "pinned certificate hash" reason. Pure JVM, API 26+ floor, no new deps. Tests:
+    `B1Crypto08SignerSetTest` (19 — includes a CA-chain-signed positive control and synthetic
+    `singleSignerChain`/`sameChain` decision-table tests).
   - **Implemented in phase-39**: update-manifest + artifact transports share
     `plugins/runtime/PinnedTlsConnector.kt` (`open` pins the leaf via constant-time
     `PinnedCertHash.matches`, `instanceFollowRedirects = false`; 3xx refused in both

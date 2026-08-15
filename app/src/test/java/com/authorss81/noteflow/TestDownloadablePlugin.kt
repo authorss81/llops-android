@@ -144,6 +144,78 @@ internal object TestArtifactBuilder {
     }
 
     /**
+     * Generate a fresh two-certificate signing chain (B1-CRYPTO-08): a throwaway
+     * CA signs a leaf key, and the returned keystore's `leaf` private-key entry
+     * carries the full chain [leaf, CA]. Signing a jar with the returned
+     * [Keystore] produces an artifact whose `JarEntry.getCertificates()` is the
+     * whole chain — the shape a chain-signed artifact has in the wild and the
+     * one the verifier must ACCEPT (a single signer is one chain, regardless of
+     * how many certificates make up that chain).
+     */
+    fun newChainKeystore(workDir: File, name: String): Keystore {
+        val pass = "noteflow-test-pass"
+        val keytool = keytoolBinary()
+        val caFile = File(workDir, "$name-ca.p12")
+        val leafFile = File(workDir, "$name-leaf.p12")
+        val csrFile = File(workDir, "$name-leaf.csr")
+        val certPem = File(workDir, "$name-leaf.pem")
+        val caPem = File(workDir, "$name-ca.pem")
+
+        fun run(vararg args: String) {
+            val process = ProcessBuilder(listOf(keytool) + args).redirectErrorStream(true).start()
+            val output = process.inputStream.bufferedReader().readText()
+            check(process.waitFor() == 0) { "keytool failed: $output" }
+        }
+
+        run(
+            "-genkeypair", "-alias", "ca", "-keyalg", "RSA", "-keysize", "2048",
+            "-sigalg", "SHA256withRSA", "-validity", "3650",
+            "-dname", "CN=$name CA, O=Noteflow",
+            "-keystore", caFile.absolutePath, "-storetype", "PKCS12",
+            "-storepass", pass, "-keypass", pass, "-noprompt"
+        )
+        run(
+            "-genkeypair", "-alias", "leaf", "-keyalg", "RSA", "-keysize", "2048",
+            "-sigalg", "SHA256withRSA", "-validity", "3650",
+            "-dname", "CN=$name Leaf, O=Noteflow",
+            "-keystore", leafFile.absolutePath, "-storetype", "PKCS12",
+            "-storepass", pass, "-keypass", pass, "-noprompt"
+        )
+        run(
+            "-certreq", "-alias", "leaf", "-keystore", leafFile.absolutePath,
+            "-storetype", "PKCS12", "-storepass", pass, "-keypass", pass,
+            "-file", csrFile.absolutePath
+        )
+        run(
+            "-gencert", "-alias", "ca", "-keystore", caFile.absolutePath,
+            "-storetype", "PKCS12", "-storepass", pass, "-keypass", pass,
+            "-infile", csrFile.absolutePath, "-outfile", certPem.absolutePath,
+            "-validity", "1825"
+        )
+        run(
+            "-exportcert", "-alias", "ca", "-keystore", caFile.absolutePath,
+            "-storetype", "PKCS12", "-storepass", pass, "-rfc", "-file", caPem.absolutePath
+        )
+        // CA as a trusted cert FIRST, then the leaf reply — keytool then installs
+        // the leaf with its full chain ([leaf, CA]) instead of a lone self-signed
+        // entry (a reply whose CA is not yet trusted fails to build the chain).
+        run(
+            "-importcert", "-alias", "ca", "-keystore", leafFile.absolutePath,
+            "-storetype", "PKCS12", "-storepass", pass, "-keypass", pass,
+            "-file", caPem.absolutePath, "-noprompt"
+        )
+        run(
+            "-importcert", "-alias", "leaf", "-keystore", leafFile.absolutePath,
+            "-storetype", "PKCS12", "-storepass", pass, "-keypass", pass,
+            "-file", certPem.absolutePath, "-noprompt"
+        )
+        csrFile.delete()
+        certPem.delete()
+        caPem.delete()
+        return Keystore(leafFile, "leaf", pass.toCharArray())
+    }
+
+    /**
      * Build a signed artifact whose JAR holds [pluginClassName]'s class bytes
      * plus the `META-INF/plugin-entry.properties` descriptor declaring
      * [pluginId]/[pluginClassName].
