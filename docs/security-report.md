@@ -830,7 +830,7 @@ No DB schema, workflow, or dependency changes were made.
 | B1-CRYPTO-02 | HIGH | phase-45 | `FIXED` 2026-08-15 (commit `2fc44e0`, see `workspace/phase-45/REPORT.md`) |
 | B1-AUTH-01 | HIGH | phase-46 | `FIXED` (classloader sandbox + verify-time static scan; `workspace/phase-46/REPORT.md`) |
 | B1-AUTH-02 | HIGH | phase-47 | `FIXED` 2026-08-15 (lock() disposes the SQLCipher connection + factory fails closed on a locked open; `workspace/phase-47/REPORT.md`) |
-| B2-LOG-01 | HIGH | phase-48 | `NOT STARTED` (planned) |
+| B2-LOG-01 | HIGH | phase-48 | `FIXED` (AppStartupLogger is event-only: crash handler + raw `printStackTrace` dump removed; PrivacyCrashReporter sole owner via pure-JVM `crashLogEntry`; `workspace/phase-48/REPORT.md`) |
 | B2-UI-1 | HIGH | phase-49 | `NOT STARTED` (planned) |
 | B2-DOS-01 | HIGH | phase-50 | `NOT STARTED` (planned) |
 | B1-NET-04 | MEDIUM | phase-51 | `NOT STARTED` (planned) |

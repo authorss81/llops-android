@@ -96,6 +96,15 @@
     dbGate flows flip on, and an open failure there is zeroized — never counted as a wrong
     password. `onCleared()` also disposes. `databaseDisposedByLock` + `dataInitialized=false` let
     the next unlock re-establish observers against the fresh connection.
+  - **Implemented in phase-48** (B2-LOG-01, see `workspace/phase-48/REPORT.md`): crash logging is
+    single-owner. `utils/AppStartupLogger.kt` is a startup-EVENT timer only — it no longer installs
+    an `UncaughtExceptionHandler` and its raw `logCrash` (`printStackTrace` → `Log.e` = unredacted
+    vault paths / note-title filenames to logcat) is deleted; its `Log.e` failure paths no longer pass
+    the exception object. `services/PrivacyCrashReporter.kt` is the SOLE crash handler; every crash
+    entry flows through the pure-JVM `PrivacyCrashReporter.crashLogEntry` (`:64`, sanitized message +
+    scrubbed `class.method(file:line)` frames) and the uncaught path writes to the local file only —
+    never logcat. Repo-wide pin: `setDefaultUncaughtExceptionHandler` appears only in
+    `PrivacyCrashReporter.kt`. Tests: `B2Log01CrashReportingTest` (6) — 1019 unit tests green.
 - **Canvas**: `ui/components/AnnotationCanvas.kt:83` (ink canvas, gestures, layers, `pointerInteropFilter`);
   `services/WetBrushEngine.kt:13` (AGSL wet-mixing gating); `ui/components/ShaderCapabilityHelper.kt:5`
   (`isAgslSupported` = SDK ≥ 33); `services/ShapeRecognitionHelper.kt:13` (`trySnapShape()` :27).

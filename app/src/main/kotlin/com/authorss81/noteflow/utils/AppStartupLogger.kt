@@ -4,24 +4,28 @@ import android.content.Context
 import android.util.Log
 import java.io.File
 import java.io.FileWriter
-import java.io.PrintWriter
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
+/**
+ * B2-LOG-01 (phase-48): startup EVENT timing logger only. It must NEVER install
+ * an uncaught-exception handler nor dump stack traces — the raw trace of a
+ * crash embeds app-private paths (vault layout, note-title filenames) and was
+ * written VERBATIM to logcat, defeating the app's privacy-first crash reporter.
+ * PrivacyCrashReporter is the SOLE owner of uncaught-exception logging.
+ */
 object AppStartupLogger {
 
     private const val TAG = "AppStartupLogger"
     private const val LOG_FILE_NAME = "app_startup.log"
-    private var defaultHandler: Thread.UncaughtExceptionHandler? = null
     private var isInitialized = false
 
     // Phase 08: startup event logging must not do file I/O on the main thread
-    // (cold-start on a low-end device). Event writes go through a single
-    // daemon executor; crash logs stay synchronous so they survive the dying
-    // process.
+    // (cold-start on a low-end device). Event writes go through a single daemon
+    // executor.
     private val logWriterExecutor: ExecutorService by lazy {
         Executors.newSingleThreadExecutor { runnable ->
             Thread(runnable, "AppStartupLogger").apply { isDaemon = true }
@@ -34,12 +38,6 @@ object AppStartupLogger {
 
         val appContext = context.applicationContext
         logEvent(appContext, "AppStartupLogger initialized")
-
-        defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
-        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
-            logCrash(appContext, thread, throwable)
-            defaultHandler?.uncaughtException(thread, throwable)
-        }
     }
 
     fun logEvent(context: Context, event: String) {
@@ -52,30 +50,6 @@ object AppStartupLogger {
         }
     }
 
-    private fun logCrash(context: Context, thread: Thread, throwable: Throwable) {
-        val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US).format(Date())
-        val writer = java.io.StringWriter()
-        throwable.printStackTrace(PrintWriter(writer))
-        val stackTrace = writer.toString()
-
-        val logBlock = """
-            |==================================================
-            |CRASH DETECTED
-            |Time: $timestamp
-            |Thread: ${thread.name} (${thread.id})
-            |Exception: ${throwable.javaClass.name}
-            |Message: ${throwable.message}
-            |
-            |StackTrace:
-            |$stackTrace
-            |==================================================
-            |
-        """.trimMargin()
-
-        Log.e(TAG, logBlock)
-        appendToFile(context, logBlock)
-    }
-
     private fun appendToFile(context: Context, text: String) {
         try {
             val logFile = File(context.filesDir, LOG_FILE_NAME)
@@ -83,7 +57,8 @@ object AppStartupLogger {
                 fileWriter.append(text)
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to write log to file", e)
+            // Never pass the exception (its stack can embed app-private paths) to logcat.
+            Log.e(TAG, "Failed to write log to file")
         }
     }
 
@@ -107,7 +82,8 @@ object AppStartupLogger {
                 logFile.delete()
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to clear logs", e)
+            // Never pass the exception to logcat (see appendToFile).
+            Log.e(TAG, "Failed to clear logs")
         }
     }
 }

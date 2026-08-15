@@ -11,6 +11,11 @@ import java.util.concurrent.atomic.AtomicBoolean
 /**
  * Privacy-First Crash and Exception Reporter for NoteFlow.
  * Guarantees zero leak of decrypted note content, passwords, or personal data.
+ *
+ * B2-LOG-01 (phase-48): this is the SOLE uncaught-exception handler. AppStartupLogger
+ * no longer installs one (it had run FIRST and dumped the RAW, unsanitized trace to
+ * logcat). Every crash entry is produced by the pure-JVM [crashLogEntry] builder —
+ * sanitized message + scrubbed stack frames only, never the raw `printStackTrace` form.
  */
 object PrivacyCrashReporter {
     private const val TAG = "PrivacyCrashReporter"
@@ -46,14 +51,23 @@ object PrivacyCrashReporter {
     }
 
     private fun logUncaughtException(context: Context, thread: Thread, throwable: Throwable) {
+        writeLogToFile(context, crashLogEntry(thread.name, throwable))
+    }
+
+    /**
+     * Pure-JVM crash-entry builder (B2-LOG-01, phase-48): the ONLY crash format in
+     * the app. The message runs through [sanitizeMessage] and the stack is scrubbed
+     * down to `class.method(file:line)` frame strings — never the raw trace with
+     * exception messages / app-private paths. No logcat write happens here: the
+     * uncaught path persists to the local file only.
+     */
+    fun crashLogEntry(threadName: String, throwable: Throwable, maxFrames: Int = 20, now: Long = System.currentTimeMillis()): String {
         val sanitizedMsg = sanitizeMessage(throwable.message)
-        val stackTraceScrubbed = throwable.stackTrace.take(20).joinToString("\n") { element ->
+        val stackTraceScrubbed = throwable.stackTrace.take(maxFrames).joinToString("\n") { element ->
             "   at ${element.className}.${element.methodName}(${element.fileName}:${element.lineNumber})"
         }
-        val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date())
-        val logEntry = "CRASH [$timestamp] Thread: ${thread.name} - ${throwable.javaClass.simpleName}: $sanitizedMsg\n$stackTraceScrubbed\n\n"
-
-        writeLogToFile(context, logEntry)
+        val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date(now))
+        return "CRASH [$timestamp] Thread: $threadName - ${throwable.javaClass.simpleName}: $sanitizedMsg\n$stackTraceScrubbed\n\n"
     }
 
     private fun writeLogToFile(context: Context, entry: String) {
