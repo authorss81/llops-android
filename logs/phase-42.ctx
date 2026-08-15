@@ -1,0 +1,292 @@
+# PIPELINE CONTEXT (injected by phase_runner.sh — do not delete)
+
+## Hard rules (AGENTS.md)
+## Hard rules
+- **MAJOR ARCHITECTURAL CHANGE → ASK THE USER FIRST.** Any change that restructures packages, replaces the navigation model (e.g., migrating away from `mutableStateOf` navigation to Navigation Compose), adds a new DB schema/migration, introduces SQLCipher, adds new dependencies with broad impact, or rewrites a subsystem (canvas renderer, encryption layer) MUST be proposed to the user and get explicit approval BEFORE writing code. Tell the user what's changing, why, and the risk. Do not silently refactor architecture.
+  - **USER APPROVED (2026-08-14): hybrid downloadable-plugin architecture** — the plugin model change (base-APK-size constraint, downloadable signature-verified plugins for heavy native features, compile-time for lightweight plugins, user-approved dynamic updates) was proposed to the user with risks and explicitly approved (commit `9292978`). Implementation proceeds per phases 22–26; the approved design doc is `docs/plugin-architecture.md`.
+- **Android hardware reality**: this is a native Kotlin app targeting API 26+. Every feature must ship with a fallback for older/lower-end devices (API 33- for AGSL, API 31- for dynamic color, low-RAM behavior for 2-core devices). Never silent degradation — one-time non-alarming message + settings re-enable. See ROADMAP Phase 33 + `docs/COMPATIBILITY.md` (to be created).
+- **Kali Linux pentest findings → write to a FILE immediately, not just the agent reply.** Security/pentest agents (running in opencode on the Kali VM) MUST append findings incrementally to `docs/pentest-findings-<YYYY-MM-DD>.md` as they work (one block per finding: severity, evidence, file/line or command output, reproducer), and commit/push after each agent batch. This prevents detail loss when a report grows long or context is truncated. The pentest plan lives in `docs/pentest-plan.md`; the summary report goes to `docs/pentest-report.md`.
+- `allowBackup="false"` + `data_extraction_rules.xml` — never re-enable backup.
+- **Base-APK size is a hard constraint.** Heavy/native features (ML Kit OCR, ML Kit
+  barcode/QR, the MediaPipe `tasks-genai` LLM) MUST NOT be baked into the base APK.
+  They ship as **downloadable, signature-verified plugins** (Phase 23 runtime:
+  HTTPS download → pinned-cert-hash verify → `DexClassLoader` load → capability
+  facade, never direct DB/keystore handles). Lightweight pure-JVM plugins stay
+  compile-time. Do NOT add large native deps to the base app; use a separate
+  plugin module instead. Plan: Phase 22 = architecture skeleton, Phase 23 =
+  downloadable runtime, Phase 24 = user-approved updates, Phase 25 = ink→shape,
+  Phase 26 = lightweight ecosystem, Phase 29 = move the LLM out of the base APK
+  into a downloadable plugin.
+- PBKDF2WithHmacSHA256 600k iterations, AES-256-GCM (12-byte IV, 128-bit tag), AndroidKeyStore-wrapped DEK, in-memory zeroization on lock (`NoteRepository.kt`, `EncryptionService.kt`, `SecurityService.kt`).
+- Never log keys, passwords, or decrypted note content. Never add `INTERNET` usage without a real feature.
+- Known broken things (do NOT trust ROADMAP [x] claims — see ROADMAP.md "POST-AUDIT TRUTH TABLE" @ commit ac781de):
+  - ~~Checksum hashes `noteflow.db`~~ — FIXED: `DatabaseSecurityHelper` HMACs the real `noteflow.sqlite` (`DatabaseSecurityHelper.kt:26`) and the result is surfaced as the `databaseTampered` banner in MainActivity (`NoteflowViewModel.kt:35-55`). This stale claim was corrected in Phase 09.
+  - `pointsJson` (stroke geometry) is FIELD-ENCRYPTED at rest now — title/extractedText/textContent/pointsJson are all encrypted fields (`saveStrokesForPage`, NoteRepository.kt); the Phase 02 restore re-key gap is closed.
+  - "Sync" = WebDAV upload/download of ENCRYPTED backup archives to/from the user's own server (`WebDavSyncService.kt`, HTTPS enforced, HTTP only with explicit opt-in for local-network hosts), reachable from HomeScreen's ⋮ menu via `WebDavSyncDialog` — Phase 14 FIXED the previously-dead menu trigger; AGSL wet-mixing is WIRED through `WetBrushEngine` in `AnnotationCanvas` (gated by `ShaderCapabilityHelper.isAgslSupported` + the `gpuWetBrushesEnabled` setting, verified in the Phase 14 audit); pressure/tilt/timestamp are captured via the official raw-MotionEvent bridge (`pointerInteropFilter`, no reflection); FLAG_SECURE is applied in non-debug builds; R8 minify is ON in release; baseline profiles are NOT wired (deferred — the dead `baseline-prof.txt` was deleted in the Phase 03 honesty audit).
+  - WAL checkpoint DOES execute — `checkpointWal()` fully steps the cursor (`NoteRepository.kt:136-144`).
+  - **Phase 14 (2026-08-13) production readiness + LocalSend**: full per-phase audit lives in `workspace/phase-14/AUDIT_REPORT.md`. LocalSend sender (Protocol v2.2, sender-only, local-network only, no new permissions) is implemented in `services/localsend/` (`LocalSendProtocol.kt` pure-JVM + `LocalSendSender.kt` network) and reachable from HomeScreen's ⋮ menu → "Send to Nearby Device (LocalSend)". It sends a single note as HTML, the encrypted vault backup, or the Obsidian/HTML vault archives; the receiving device must human-accept before bytes move. Unit tests: `LocalSendProtocolTest` (18 tests, no network). Release signing: the release APK falls back to the auto-generated debug keystore when `KEYSTORE_FILE` is unset; see `docs/RELEASE.md` for how to wire a real keystore.
+  - **Phase 21 (2026-08-14) added the Plugin Store + verified the execution path** (see `docs/PLUGINS.md` "Plugin Store — install/uninstall lifecycle"): `PluginStoreCatalog` (bundled catalog, no network) + `PluginStoreController` (pure-JVM download/delete) + `PluginRegistry.installPlugin/uninstallPlugin` (install-aware registry; `compiledPlugins` = full shipped set, `allPlugins` = installed set) + `SettingsPluginInstallStore`/`SettingsManager.plugin_uninstalled_<id>` (default installed = backward compatible). Delete wipes opt-in + ever-enabled + all `plugins.<id>.*` settings and deletes downloaded assets (`NoteflowPlugin.deleteDownloadedAssets`); Disable keeps data. `CaseChangePlugin` is the store's OPTIONAL plugin (not in `defaultPlugins()`). UI: `PluginStoreDialog` reachable from HomeScreen ⋮ menu → "Plugin Store". Tests: `PluginStoreLifecycleTest` (8), `PluginExecutionSimulationTest` (4). Also fixed a pre-existing `PaletteCatalog.familyFor` hue-band bug (curated swatches misclassified) — `PaletteCatalogTest` is green again.
+  - **Phase 10 (2026-08-13) added a REAL plugin framework** (`app/src/main/kotlin/com/authorss81/noteflow/plugins/`): `NoteflowPlugin` + `PluginCapability` sealed type (`TextTransform`, `OCR`, `WebSearch`, `FileTransfer`, `Assistant`, `Export`), compile-time `PluginRegistry` (no dynamic APK loading), `PluginManager` routing that fails loudly via `PluginResult.Failure`, per-plugin opt-in persisted in `SettingsManager` (`plugin_enabled_<id>`, off by default), a Settings → Plugins dialog (`PluginSettingsDialog`, reachable from HomeScreen's ⋮ menu), and `Rot13TransformPlugin` served through the `TextTransformPlugin` interface and wired into the Markdown editor's Plugins menu (`MarkdownPreviewScreen`). Covered by `PluginFrameworkTest` (10 tests). **Phase 12 made OCR + Web Search real**: `OnDeviceOcrPlugin` (ML Kit text-recognition, offline, no API key) and `DuckDuckGoWebSearchPlugin` (HTTPS, keyless) are registered (`PluginRegistry.kt`) and wired into `EditorScreen` (OCR result dialog) and `MarkdownPreviewScreen` (web-search dialog). The still-unserved capabilities are `FileTransfer`, `Assistant`, `Export` — requests for those fail loudly with `NO_PLUGIN_INSTALLED`. See `docs/PLUGINS.md`.
+  - **Phase 09 (2026-08-13) fixed the two Phase-02 data-loss defects that were still live** (see workspace/phase-09/REPORT.md): (1) H2 — a corrupt/wrong-key DB open no longer DELETES the vault files; `SafeSupportSQLiteOpenHelper` now quarantines them as `*.corrupt-<timestamp>` (bytes preserved), sets a persistent corruption flag, and MainActivity shows `CorruptionRecoveryScreen` (restore-from-backup or explicit start-fresh) before any normal vault UI (`NoteflowDatabase.kt` `quarantineCorruptDatabase`, `DatabaseSecurityHelper.kt` corruption flags, `MainActivity.kt` `CorruptionRecoveryScreen`). (2) H1 — a failed restore no longer bricks the app: the backup password is validated BEFORE `closeDatabase()` (`ImportExportService.validateBackupPassword` now called from `HomeScreen.performRestore` and `NoteflowViewModel.attemptRecoveryFromBackup`), and on any post-close failure the Room instance is reopened (`NoteflowDatabase.dispose()` + `NoteRepository.reopenDatabase`) and the process restarts via the existing restart dialog. (3) C1 — `reencryptPlaintextFields` now also re-encrypts `note_versions.{title,extractedText}`, matching the cross-device migrate map.
+  - **Phase 03 (2026-08-13) removed these dead/fake features**: the LibMyPaint C++ stub + whole engine-selector stack (`mypaint_jni.cpp`/`CMakeLists.txt`, `LibMyPaintJni`, `BrushEngine`/`BrushEngineFactory`, `HardwareProfiler`/`RenderingEngineTier`, `BrushEngineSettingsDialog`, `SettingsManager.renderingEngineOverride` — all deleted; the canvas renders via `WetBrushEngine`); `HandwritingRecognitionService` + `HandwritingToTextDialog` (dictionary-hash stub, unreachable — deleted); `FtsSearchEngine` (misnamed in-memory loop — deleted; vault search now uses a cached decrypted corpus in `NoteRepository`). Shape auto-snap is now WIRED (`ShapeRecognitionHelper.trySnapShape` runs on freehand draw-end in `AnnotationCanvas`, gated by the `shapeAutoSnapEnabled` setting; wet tools, LASER, DOTTED and NEON are excluded, and the RECT/ARROW/LINE detectors require real geometry fits so plain handwriting isn't snapped).
+
+## Roadmap state (August 2026)
+
+## Architecture map (docs/ARCHITECTURE.md — living doc, read + update)
+# InkFlow (Noteflow) — Architecture Map for AI Agents
+
+> **Living document.** Read this first in any phase. It is injected as context at the
+> start of every pipeline phase. After you implement something, append a 3-5 line
+> "Implemented in <phase>:" note to the relevant section below AND update
+> `docs/phase-status.md` — so the next phase reads fresh facts instead of re-exploring.
+> Root: `app/src/main/kotlin/com/authorss81/noteflow/`. Read `AGENTS.md` for hard rules.
+
+## Package layout
+
+| Subpackage | Key files | Purpose |
+|---|---|---|
+| `data/model/` | `Entities.kt`, `StrokeModels.kt` | Room entities (8) + stroke/ink types |
+| `data/db/` | `NoteflowDatabase.kt`, `Daos.kt` | Room DB (schema v9, 8 DAOs), corrupt-DB quarantine |
+| `data/repository/` | `NoteRepository.kt`, `LruBoundedMap.kt` | Encrypted read/write, search corpus, WAL checkpoint, re-key |
+| `services/` | `EncryptionService.kt`, `SecurityService.kt`, `DatabaseSecurityHelper.kt`, `VaultKeyHolder.kt`, `WetBrushEngine.kt`, `WebDavSyncService.kt`, `ImportExportService.kt`, `PaletteCatalog.kt`, `ShapeRecognitionHelper.kt` | Non-UI: crypto/vault, brush math, sync, import/export, palette |
+| `services/localsend/` | `LocalSendProtocol.kt`, `LocalSendSender.kt`, `LocalSendPairing.kt`, `SettingsLocalSendPairedDeviceStore.kt` | Pure-JVM LocalSend v2.2 + real network sender + TOFU pairing gate (B1-NET-02) |
+| `plugins/` | `NoteflowPlugin.kt`, `PluginRegistry.kt`, `PluginManager.kt`, `PluginDiagnostics.kt`, `PluginLifecycle.kt` | Compile-time plugin framework + typed serving interfaces |
+| `plugins/runtime/` | `RuntimePluginLoader.kt`, `SignatureVerifiedPluginRuntime.kt`, `ArtifactSignatureVerifier.kt`, `PinnedCertHash.kt`, `PinnedTlsConnector.kt`, `PluginManifestFetcher.kt`, `HttpsPluginDownloadTransport.kt`, `PluginDownloader.kt`, `PluginUpdateEngine.kt` | Downloadable-plugin runtime: pinned-cert verify (manifest + artifact transports, no redirects), DexClassLoader, updates |
+| `plugins/store/` | `PluginStoreCatalog.kt`, `PluginStoreController.kt`, `RemotePluginInstaller.kt`, `PluginInstallStore.kt` | Plugin Store lifecycle (bundled catalog + remote install) |
+| `plugins/<capability>/` | `ocr/MlKitOcrEngine.kt`, `websearch/DuckDuckGoWebSearchPlugin.kt`, `translation/MlKitTranslatorEngine.kt`, `inktos/InkToShapePlugin.kt`, `weather/`, `dictation/`, `readaloud/`, `citation/`, ... | One impl per capability, registered in `PluginRegistry` |
+| `ui/components/` | `AnnotationCanvas.kt` (4535 lines), `AgslShaders.kt`, `ShaderCapabilityHelper.kt`, `PenNibVisualPreview.kt`, `LayerBitmapCache.kt`, `BrushStudioDialog.kt`, `PluginStoreDialog.kt` | Compose components: canvas, AGSL shaders, dialogs |
+| `ui/screens/` | `EditorScreen.kt` (4805), `MarkdownPreviewScreen.kt`, `HomeScreen.kt`, `KnowledgeGraphScreen.kt`, `LockScreen.kt` | Top-level screens |
+| `ui/viewmodel/` | `NoteflowViewModel.kt` (~1500) | God-ViewModel: DB, security, plugins, all state flows |
+| `theme/` | `Theme.kt`, `GlassSurfaces.kt`, `GlassThemeMath.kt`, `Motion.kt`, `Type.kt`, `Color.kt` | Material3 + frosted-glass design system |
+| `utils/` | `ConstantTime.kt`, `BitmapPool.kt`, `DeviceCompatibilityManager.kt`, `WikiLinkParser.kt` (dup, see notes) | Pure helpers |
+
+## Core subsystem anchors (file:line)
+
+- **Encryption/vault**: `services/EncryptionService.kt:18` (PBKDF2 600k, AES-256-GCM, NFKC-normalized password);
+  `services/SecurityService.kt:14` (AndroidKeyStore-wrapped DEK `noteflow_dek_key`);
+  `data/repository/NoteRepository.kt:18` (encrypted field r/w, `zeroizeKey()`, `checkpointWal()`);
+  `services/DatabaseSecurityHelper.kt:21` (HMAC tamper checksum over `noteflow.sqlite`);
+  `data/db/NoteflowDatabase.kt:43` (schema v9, quarantine);
+  `services/VaultKeyHolder.kt:11` (in-memory DEK, zeroized on lock).
+- **Canvas**: `ui/components/AnnotationCanvas.kt:83` (ink canvas, gestures, layers, `pointerInteropFilter`);
+  `services/WetBrushEngine.kt:13` (AGSL wet-mixing gating); `ui/components/ShaderCapabilityHelper.kt:5`
+  (`isAgslSupported` = SDK ≥ 33); `services/ShapeRecognitionHelper.kt:13` (`trySnapShape()` :27).
+  Supporting math: `WetCanvasEngine.kt`, `WetMixingMath.kt`, `BrushStrokeMath.kt`, `StrokeStabilizer.kt`.
+- **Plugins**: `plugin-sdk` → `plugins/FrameworkPlugin.kt:58` (`interface NoteflowPlugin`),
+  `plugins/PluginCapability.kt:28` (sealed capability set); `plugins/PluginRegistry.kt:75`,
+  `plugins/PluginManager.kt:83`; store: `plugins/store/PluginStoreCatalog.kt:57`, `PluginStoreController.kt:45`.
+- **Downloadable runtime**: `plugins/runtime/RuntimePluginLoader.kt:68`; `services/AppClassLoaderFactory.kt:23`
+  (`DexClassLoader`); `services/AppFacadeHost.kt:27` (deny-by-default facade, NO direct DB/keystore handles);
+  `plugins/runtime/PinnedCertHash.kt:25`; `plugins/runtime/ArtifactSignatureVerifier.kt:52`.
+  - **Implemented in phase-39**: update-manifest + artifact transports share
+    `plugins/runtime/PinnedTlsConnector.kt` (`open` pins the leaf via constant-time
+    `PinnedCertHash.matches`, `instanceFollowRedirects = false`; 3xx refused in both
+    `PluginManifestFetcher.kt` `HttpsManifestTransport:109` and
+    `HttpsPluginDownloadTransport.kt:55`). The manifest host is allow-listed
+    (`HostedPluginManifest.kt:197 DEFAULT_MANIFEST_HOST`) and pinned to the
+    compile-time `PLUGIN_MANIFEST_CERT_PIN` (`:220`, placeholder pending operator
+    substitution; fails closed without it), so update offers can never redefine
+    `downloadUrl`/`sha256`/`pinnedCertHash` from an unauthenticated source
+    (closes B1-CRYPTO-01, commit `4d72a6a`).
+- **Markdown**: `ui/screens/MarkdownPreviewScreen.kt:137` (renders via **commonmark 0.29.0 +
+  gfm-tables**). Phase 37 hybrid-editor slice: pure-JVM block tokenizer
+  `services/MarkdownBlockTokenizer.kt` (exact source round-trip), code-span-aware
+  inline-math scanner `services/MarkdownInlineMath.kt`, waveform decimation
+  `services/WaveformPeakMath.kt`, and the shared renderer + editor
+  `ui/components/markdown/MarkdownRenderer.kt` + `HybridMarkdownEditor.kt`
+  (replaces the raw text field in EDIT/SPLIT panes; typed callouts + interactive
+  checkboxes; `AnimatedCheckmark.kt` respects reduce-motion).
+- **Knowledge graph**: `ui/screens/KnowledgeGraphScreen.kt`
+  (Phase 38 rewrite — deterministic force-directed layout, cluster colouring, tag
+  filter chips, link pulses, collision bounding, low-RAM cull + notice) built on
+  `services/graph/GraphLayoutMath.kt` (forces `GraphPhysicsConfig`, layout +
+  collision `GraphLayoutMath`, clusters `assignClusters`, tiers
+  `GraphTierSelector`) and `services/WikiLinkParser.kt:66` `buildWikiLinkEdges`
+  + `:373` `buildTagHierarchy`. Serverless tier detection: `utils/DeviceCompatibilityManager.kt`.
+- **Command Palette (Phase 38 HUD)**: `ui/components/CommandPaletteOverlay.kt`
+  (global quick-switcher; two-finger swipe down in `MainActivity.kt`
+  `detectTwoFingerSwipeDown`, keyboard icon in `HomeScreen.kt`), ranking/tag
+  combination/action routing in `services/graph/CommandPaletteMath.kt`, search +
+  plugin-action execution in `NoteflowViewModel.commandPaletteSearch` /
+  `runPaletteAction` over the cached decrypted corpus
+  (`NoteRepository.cachedCorpus`, generation `currentSearchCorpusGeneration`).
+- **WebDAV sync**: `services/WebDavSyncService.kt:28` (encrypted vault archives, HTTPS enforced).
+  - **Implemented in phase-40**: server-supplied PROPFIND hrefs are re-resolved against the
+    configured server origin by the new pure-JVM `services/WebDavHrefResolver.kt`
+    (`resolveDownloadHref`), and EVERY connection is origin-gated in `createConnection`
+    (`WebDavSyncService.kt:147`) before the `Authorization: Basic` header is attached
+    (`:164`), with `instanceFollowRedirects=false` (`:158`). Off-origin/private-IP hrefs
+    and 3xx redirects are refused with a clear `SyncResult(false, "Sync refused: ...")` —
+    closes B1-NET-01 + the WebDAV slice of B1-NET-05 (see `workspace/phase-40/REPORT.md`).
+- **LocalSend**: `services/localsend/LocalSendProtocol.kt:29`, `LocalSendSender.kt:48`.
+  - **Implemented in phase-41**: confirmed-pairing gate for sends. Pure-JVM
+    `services/localsend/LocalSendPairing.kt` (`gate` = HTTPS-only +
+    fingerprint-present + TOFU-paired, `startPairing` derives a 6-digit out-of-band
+    code + formatted fingerprint, `confirmPairing`/`pair` persist a constant-time
+    verified TOFU anchor), stores `InMemoryLocalSendPairedDeviceStore` (tests) +
+    `SettingsLocalSendPairedDeviceStore` (SharedPreferences `localsend_paired_<fp>`).
+    `LocalSendSender.sendFile` refuses unpaired/http receivers before any I/O
+    (`:313-326`) and pins every payload connection to the STORED paired
+    fingerprint (`trustedFingerprint` `:325`), never the wire-announced one;
+    `openConnection` refuses non-https payload URLs; the announce never says
+    `protocol:"http"`. `LocalSendSendDialog` shows a pairing sub-view that
+    requires either a verification code typed from the receiving device
+    (constant-time checked, mismatch refuses) or an explicit "fingerprints match"
+    acknowledgement, plus a per-send confirmation; `200` to `/prepare-upload` is
+    zero evidence of consent.
+- **Palette**: `services/PaletteCatalog.kt:131` (swatches + `familyFor`), `PaletteMath` :24.
+- **Brush preview**: `ui/components/PenNibVisualPreview.kt:50` (driven by `services/NibPreviewMath.kt`).
+- **Glass theme**: `theme/GlassSurfaces.kt:44` (`GlassBlurGate`), :80 (`GlassSurfaceMath`), :140
+  (`FrostedGlassSurface`), :192 (`innerLuminescence`); `theme/Motion.kt:50` (`MotionSystem`, `LocalReduceMotion` :16);
+  `theme/Type.kt:70`; `theme/Theme.kt:239` (`NoteflowTheme`, dynamic + paper/sepia/dark/AMOLED).
+- **ViewModel/nav**: `ui/viewmodel/NoteflowViewModel.kt:105` (builds SecurityService/NoteRepository/PluginRegistry
+  :121/PluginManager :131/PluginRuntime :170/PluginStoreController :196; ~60 capability suspend fns);
+  `MainActivity.kt:73` (single activity, **`mutableStateOf` nav** — NOT Navigation Compose).
+- **Import/export**: `services/ImportExportService.kt:30` (encrypted backup/restore, `validateBackupPassword`,
+  PDF/HTML/image export).
+
+## Build / CI essentials
+
+- `app/build.gradle.kts`: `namespace = "com.authorss81.noteflow"` (:11),
+  `applicationId = "com.aistudio.inkflow.app.bkxjrz"` (:15), compileSdk 36, minSdk 26, JVM 17,
+  Room schema → `app/schemas`, R8 minify on for release, `jniLibs.useLegacyPackaging = true`.
+- **No Gradle wrapper** — use system `gradle`. Tests: `gradle testDebugUnitTest`; build: `gradle assembleDebug`
+  / `assembleRelease`. Runs in GitHub Actions (gradle 8.13, JDK 17).
+- Tests: `app/src/test/java/com/authorss81/noteflow/` (~110 unit tests, pure JVM, no androidTest).
+- **Do NOT run Gradle on the Windows dev machine** (no SDK; CI-only builds).
+- Version: `VERSION_CODE`/`VERSION_NAME` env (default 2 / "1.0.0"); release falls back to debug keystore.
+  - **Implemented in phase-32** (APK attack, see `workspace/phase-32/REPORT.md`): the release APK was built and audited with apktool/jadx/androguard/APKiD/strings/apksigner/readelf. Confirmed at binary level: release release signing is the well-known Android **debug** cert (`CN=Android Debug`, SHA-256 `81a2980a…`, v2-only scheme — B1-PLAT-1 + new Phase-32-NEW-03); base APK bundles an **80.2 MB packed `language-models/` n-gram pack (~199 MB raw = 56% of the 142 MB release APK) that is the compile-time `lingua` language-detection library's corpus** (Phase-32-NEW-01 — identical byte-for-byte to the lingua JAR; note the review corrected the initial "ML Kit translation models" attribution: ML Kit translate models are runtime-downloaded, only its `libtranslate_jni.so`/`libmlkit_google_ocr_pipeline.so` natives are baked in) despite the downloadable-plugin hard rule; no ABI splits (Phase-32-NEW-02); plugin-manifest cert pin is still the placeholder `sha256/AAECAwQFBgcI…` so hosted plugin updates fail closed until the operator substitutes the real pin (Phase-32-NEW-04, B1-CRYPTO-01 fix wiring verified). Positives re-verified: release not debuggable, FLAG_SECURE wired, allowBackup=false, R8 ON, no tasks-genai/GGUF in base, no hardcoded secrets in 1M+ strings.
+- **Implemented in phase-32 review fix (2026-08-15)**: `scripts/phase_runner.sh` only writes a phase's `.done` if the `opencode run` left working-tree changes outside `logs/` + the phase's own markers (`tree_work`/`has_new_work` in `phase_runner.sh`). A zero-work run (opencode exit 0 with no delta — the phase-32 false completion at commit `6b17422`) counts as a failed attempt and leaves a `.no_work` marker; phase-32's bogus `.done` was removed so the pipeline re-selects it. **Second fix (same day)**: normal-run mode now also short-circuits when `.done` already exists (`phase_runner.sh` "Already-done guard") and clears stale failure markers (`.deferred`/`.no_work`/`.session`/`.deferred_attempts`/`.attempts`), so a completed phase is never re-run — phase-32 had been re-selected after completion, leaving contradictory `.no_work`+`.deferred` alongside `.done` (commits `44a7210`+`27b93fd`); those stale markers are now removed.
+
+## Libraries
+
+AGP 8.7.3 · Kotlin 2.0.21 · KSP · Compose BOM 2024.12.01 · Room 2.6.1 over SQLCipher 4.9.0 ·
+androidx.ink 1.0.0 · ML Kit text-recognition 16.0.1 + translate 17.0.3 (base) ·
+**MediaPipe tasks-genai 0.10.25 = downloadable plugin only, NEVER base APK** ·
+commonmark 0.29.0 + gfm-tables · Lingua 1.2.2 · jsoup 1.17.2 · Coil 2.7.0 · Gson 2.11.0 ·
+androidx.biometric 1.1.0 · coroutines 1.9.0.
+
+## Known broken / gotchas (agent must know)
+
+1. `applicationId = "com.aistudio.inkflow.app.bkxjrz"` vs `namespace = "com.authorss81.noteflow"`
+   (intentional mismatch; AGENTS.md's applicationId value is stale — trust the build file).
+2. No Gradle wrapper; CI pins gradle 8.13. Local machine can't build.
+3. ROADMAP.md `[x]` claims are not all true — trust `AGENTS.md` + `docs/phase-status.md` truth tables.
+4. **Base-APK size is a hard constraint**: heavy native libs (tasks-genai LLM, heavy OCR) MUST stay
+   downloadable plugins. Never add them to the base app.
+5. `extractNativeLibs="true"` (`useLegacyPackaging=true`) required for SQLCipher `.so` on SDK 36 (16KB pages).
+6. `allowBackup="false"` + data-extraction rules — never re-enable. FLAG_SECURE in non-debug.
+7. Baseline profiles disabled (AGP bug); unit tests use `isReturnDefaultValues = true` (no Robolectric).
+8. `INTERNET` used only by WebDAV sync + LocalSend. WebDAV HTTPS-only unless local-network opt-in.
+9. Duplicate `WikiLinkParser` (`utils/` vs `services/`) — `services/` is the one screens use.
+10. Two plugin-state persistence layers exist (`SettingsPlugin*Store.kt` vs `plugins/runtime/Plugin*Store.kt`) —
+    keep them in sync when changing install/update state.
+
+## Phase status truth table
+See `docs/phase-status.md` — per-phase `DONE`/`PARTIAL`/`NOT STARTED` with verified commit evidence.
+`docs/phase-status-gaps.md` lists deferred sub-items.
+## Phase status truth table (docs/phase-status.md — read + update your row)
+# Phase Status — Verified Truth Table
+
+> Generated by Phase 20 (doc-fix). Every workspace phase and every ROADMAP phase heading
+> now carries a status marker verified against code/commits (5-parallel-subagent audit
+> + direct cross-checks, 2026-08-14). Status vocabulary: `DONE` / `PARTIAL` /
+> `BLOCKED` / `DEFERRED` / `NOT STARTED` / `CANCELLED`. `BLOCKED` and `DEFERRED` are
+> reserved for whole-phase statuses and currently no phase heading carries either —
+> deferred sub-items (20.5, 21.3, 21.8, 21.10, 22.4, 22.5, 23.3, 26.1, 26.7, 32.9, 34.9)
+> are called out in prose below and keep their phase at `PARTIAL`.
+
+## Workspace pipeline phases (`workspace/phase-NN`)
+
+| Phase | Status | Verified evidence |
+|-------|--------|-------------------|
+| phase-01 | `DONE` | App scaffold = the InkFlow source; `.done` marker committed (d31c23d). |
+| phase-02 | `PARTIAL` | Commit 338e457 delivered C1/H3/H4 (`validateBackupPassword`, `checkRestoredSchemaNotNewer`). H1 (failed-restore reopen+restart) and H2 (quarantine `*.corrupt-<ts>`) only landed later in phase-09 (89697ee). All five fixes present in the current tree. |
+| phase-03 | `DONE` | 92b26b0 + review fixes d68fd21: removed libmypaint JNI stub + engine-selector stack, HandwritingRecognitionService stub, FtsSearchEngine; wired shape auto-snap; deleted dead baseline-prof.txt. |
+| phase-04 | `DONE` | Commit 22cc99c was marker-only, but the real implementation shipped in 7854551 ("phase-04 review fixes"): `AgslShaders.kt` (+47), `WetMixingMath.kt` (new), `WetMixingMathTest.kt` (new), `AnnotationCanvas.kt` (+108), `WetCanvasEngine.kt` (+230). |
+| phase-05 | `DONE` | 9e2aadc + d84c359: markdown back-save data-loss, 48dp touch targets, Snackbars, reduce-motion, haptics, status-bar polarity. |
+| phase-06 | `DONE` | 9400725: real WebDAV/Nextcloud E2EE sync (HTTPS enforced, `WebDavSyncService.kt:61-155,196-301`), WAL checkpoint before upload, transactional restore; `INTERNET` permission added. |
+| phase-07 | `DONE` | 41eb71a + 018736c: stabilizer, pressure curve, symmetry, color harmony, paper textures, WebP. Reference-image layer (encouraged item 5) NOT shipped — see `docs/phase-status-gaps.md`. |
+| phase-08 | `DONE` | 3ede568 + `workspace/phase-08/PERF_REPORT.md` (10,252 B): RDP simplification, bitmap pooling, layer caching, thermal fallback, off-main-thread graph sim. |
+| phase-09 | `PARTIAL` | 89697ee shipped the Phase-02 H1/H2 + C1 fixes and the corruption-recovery flow (`NoteflowDatabase.kt` quarantine, `CorruptionRecoveryScreen`), `.done` present — BUT the PROMPT-required deliverable `workspace/phase-09/REPORT.md` was never created (verified via `git log --all -- workspace/phase-09/REPORT.md` = empty). |
+| phase-10 | `DONE` | 9d5df18 + 4ccac2c: real plugin framework (`plugins/`), `PluginRegistry`, `PluginManager` routing, per-plugin opt-in, `PluginSettingsDialog`, Rot13 plugin; `PluginFrameworkTest` (10 tests). |
+| phase-11 | `DONE` | 3fc3aed + 20cb73b: plugin lifecycle + crash isolation; `docs/PLUGIN_SDK.md`. |
+| phase-12 | `DONE` | 7483f2d + 8520449: real ML Kit OCR (`OnDeviceOcrPlugin`) + DuckDuckGo web search, wired into EditorScreen + MarkdownPreviewScreen. |
+| phase-13 | `PARTIAL` | 1f0b6db shipped brush presets/stickers/sticky-note styling/rotation. Required androidTest "persist→load→render round-trip test" NOT delivered — `app/src/androidTest` does not exist (confirmed by `phase-14/AUDIT_REPORT.md`). |
+| phase-14 | `DONE` | aff27cf + `workspace/phase-14/AUDIT_REPORT.md`: full production audit, LocalSend sender (`services/localsend/`, `LocalSendProtocolTest` 18 tests), release keystore fallback + `docs/RELEASE.md`. |
+| phase-15 | `DONE` | d680d24: 5 pure-JVM plugins (Export, ClipShare, TextTools, LanguageDetection, WebCapture); Lingua+jsoup deps (`libs.versions.toml:27-28,72-73`, `app/build.gradle.kts:156-157`); ACTION_SEND filters (`AndroidManifest.xml:43-67`). |
+| phase-16 | `DONE` | cc1ed8b: 5 keyless/on-device plugins (Dictation, ReadAloud, Translation, Assistant, Screenshot). |
+| phase-17 | `CANCELLED` | libmypaint native engine. Rubber-stamped `.done` (942b5ed) → `.blocked`+REPORT (0fa97af) → **deleted** in commit 4112eb8 ("cancel phase-17 (libmypaint)"). No code exists (`app/src/main/cpp` absent, zero mypaint references). |
+| phase-18 | `DONE` | 9194b42 + 8addded: six new brush tools + enhanced existing brushes (`docs/brush-styles.md`). |
+| phase-19 | `DONE` | e624b6e + `docs/phase-19-erasers-vibrancy.md`: dual erasers, vibrant color palette. |
+| phase-20 | `DONE` | Doc-fix phase — **this phase**. Commit 0c07c26 shipped `docs/phase-status.md` + `docs/phase-status-gaps.md`, appended status markers to every ROADMAP/PROMPT heading, and committed the `.done` marker. |
+| phase-21 | `NOT STARTED` | Plugin store UI. PROMPT.md only (committed in 4112eb8). |
+| phase-22 | `NOT STARTED` | Plugin ecosystem expansion. PROMPT.md only. |
+| phase-23 | `NOT STARTED` | Brush rendering fixes (sharp edges, rainbow colors, color picking). PROMPT.md only. |
+| phase-24 | `NOT STARTED` | Sticker/emoji libraries + Glass theme. PROMPT.md only. |
+| phase-25 | `NOT STARTED` | API-key integration + local LLM + APK build. PROMPT.md only. |
+| phase-26 | `NOT STARTED` | Full security audit (2×5 subagents). PROMPT.md only. |
+| phase-27 | `NOT STARTED` | False-implementation audit. PROMPT.md only. |
+| phase-28 | `NOT STARTED` | APK pentest attack. PROMPT.md only. |
+| phase-29 | `NOT STARTED` | Security-fix phase generation + final doc-fix. PROMPT.md only. |
+| phase-32 | `DONE` | APK attack (see `workspace/phase-32/PROMPT.md` + `workspace/phase-32/REPORT.md`). **Rerun 2026-08-15** after the 2026-08-15 review-fix reset (the prior `.done` at `6b17422` was a zero-work false completion and was removed). This run built both APKs locally (`:app:assembleDebug` 173.5 MB, SHA-256 `056c3a67…` + `:app:assembleRelease` 142.0 MB R8-minified, SHA-256 `d7cdbebe…`) and bombarded the release/debug artifacts with apktool, jadx 1.5.1, androguard 4.1.4, APKiD 3.1.0, `strings` (947k dex + 118k native), `apksigner`, `aapt`, `readelf`. NEW findings: Phase-32-NEW-01 (MEDIUM, `language-models/` n-gram pack = 80.2 MB packed = 56% of APK baked into base via the compile-time **lingua** language-detection lib, plus ML Kit OCR/translate natives — violates the downloadable-plugin hard rule; **2026-08-15 review corrected the attribution**: the pack is lingua's, not "ML Kit translation models" — ML Kit translate models are runtime-downloaded, `MlKitTranslatorEngine.kt:22-24`), -02 (LOW, no ABI splits), -03 (INFO, v2-only signing), -04 (INFO, placeholder manifest cert pin ⇒ plugin-update channel fail-closed until operator substitution). CONFIRMED on the APK: B1-PLAT-1 (debug-keystore release signing), B1-PLAT-2, B1-PLAT-6, B1-PLAT-7, B1-NET-02/06, B1-NET-03/B1-CRYPTO-01 (phase-39 fix wiring), B1-AUTH-01, B2-CRYPTO-06. Positives: release not debuggable, allowBackup=false, FLAG_SECURE wired, R8 ON, minimal perms, cleartext platform-deny, no tasks-genai in base, no hardcoded secrets, native RELRO/NX/PIE. Full evidence appended to `docs/security-report.md` "Phase 32 — APK dynamic/static analysis". No code/schema/workflow changes (gradle state unchanged). Dynamic/instrumented tooling deferred to PHASE 34.9 (no AVD on CI runner). |
+| phase-35 | `DONE` | Canvas & scribe ergonomics (FloatingToolDock replacing FloatingBottomToolbarPill: draggable edge-snap pill via new `services/DockSnapMath.kt`, ≤2 taps for all tools, auto-tuck on pen); live nib previews (`services/NibPreviewMath.kt` driving enhanced `PenNibVisualPreview` + live sliders in the width picker); minimap spatial HUD (zoom%/layers/viewport, spring/snap, zoom controls, toggled from persisted `minimap_hud_enabled`); palette studio (`DesignerPalettes` — nordic/botanical/cyberpunk/terra, family-invariant preserved) + `services/HarmonicContrastMath.kt` contrast studio row + eyedropper magnifier loupe. `workspace/phase-35/REPORT.md`. New tests: NibPreviewMathTest (23), DockSnapMathTest (15), DesignerPalettesTest (10), HarmonicContrastMathTest (18); PaletteCatalogTest + ColorHarmonyHelperTest still green; `gradle testDebugUnitTest` 805 green, `gradle assembleDebug` green. |
+| phase-37 | `DONE` | Markdown & hybrid editor slice. HybridMarkdownEditor (`ui/components/markdown/`) now REPLACES the raw OutlinedTextField in MarkdownPreviewScreen EDIT + split SPLIT panes (`MarkdownPreviewScreen.kt:544,583,631`): live inline rendering of headings/bold/italic/code/lists/links; tap-to-edit raw block; typed callout cards (NOTEWARNING/TIP/IMPORTANT/QUOTE); interactive checkboxes via `AnimatedCheckmark` (respects reduce-motion + haptics policy). Pure-JVM block tokenizer (`services/MarkdownBlockTokenizer.kt`, exact source round-trip) + inline math scanner (`services/MarkdownInlineMath.kt`, code-span aware) + `WaveformPeakMath.downsample` bounds AudioPlaybackCard's draw budget to 220 bars (B2-DOS-03). **Note: initial commit `eec811c` DID NOT COMPILE + was unwired; review fixes landed here (see `workspace/phase-37/REPORT.md`)**. Tests: MarkdownBlockTokenizerTest (12), MarkdownInlineMathTest (6), WaveformPeakMathTest (6); `gradle testDebugUnitTest` 838 green, `gradle assembleDebug` green. |
+| phase-38 | `DONE` | Knowledge Graph & Spatial Navigation (see `workspace/phase-38/REPORT.md`). `services/graph/GraphLayoutMath.kt` (deterministic force layout + collision bounding + clusters via `assignClusters`, tier caps via `GraphTierSelector`) drives the rewritten `ui/screens/KnowledgeGraphScreen.kt` — cluster colouring, tag FilterChips (AND/OR), moving particle pulses on selected links (reduce-motion aware), push-apart collision + world-box bounds, and an explicit non-alarming low-RAM notice. Global Command Palette HUD (`ui/components/CommandPaletteOverlay.kt`) opens via two-finger swipe down (`MainActivity.detectTwoFingerSwipeDown`) or the Home-bar keyboard icon; searches the cached decrypted corpus (`NoteRepository.currentSearchCorpusGeneration`) + tag filter + plugin quick-actions via `NoteflowViewModel.commandPaletteSearch`/`runPaletteAction`; keyb'oard Arrow/Enter/Escape; 250ms debounce, ranking ≈2.9ms/1500-doc corpus. Tests: GraphLayoutMathTest (21) + CommandPaletteMathTest (16); `gradle testDebugUnitTest` 875 green, `gradle assembleDebug` green. |
+| phase-39 | `DONE` | B1-CRYPTO-01 (CRITICAL) fixed (see `workspace/phase-39/REPORT.md` + `docs/security-report.md:813`). Plugin update manifest transport (`plugins/runtime/PluginManifestFetcher.kt` `HttpsManifestTransport` `:109`) now fetches over a chain-validating, **compile-time leaf-pinned** TLS connection via the new shared `plugins/runtime/PinnedTlsConnector.kt` (also refactored `HttpsPluginDownloadTransport.kt:55` onto it): host allow-list (`DEFAULT_MANIFEST_HOST`, `HostedPluginManifest.kt:197`), fail-closed when `PLUGIN_MANIFEST_CERT_PIN` (`:220`, placeholder until operator supplies the real host-leaf hash) is missing/malformed, `instanceFollowRedirects=false` + explicit 3xx refusal in both transports (3xx incl. HTTPS→HTTP downgrades are `Failed`, never followed), 256 KiB size cap, JDK-21 `SSLHandshakeException` cause-chain pin-failure surfacing. Plugins' `downloadUrl`/`sha256`/`pinnedCertHash` can no longer be redefined by a forged/unpinned manifest. Tests: HttpsManifestTransportTest (8, JDK-only local TLS over a private `TinyHttpsServer`); `gradle testDebugUnitTest` 884 green (0 failures), `gradle assembleDebug` green. |
+| phase-40 | `DONE` | B1-NET-01 (HIGH) fixed (see `workspace/phase-40/REPORT.md` + `docs/security-report.md:814`). New pure-JVM `services/WebDavHrefResolver.kt` origin-resolves every server-supplied PROPFIND `href` (normalized scheme+host+port, default ports materialized, case + trailing-dot folded) and rejects anything that escapes the configured WebDAV server; `WebDavSyncService.kt:147` additionally gates EVERY connection through `requireConfiguredServerOrigin` before the `Authorization: Basic` header is attached (`:164`), and `:158` sets `instanceFollowRedirects=false` so 3xx never forwards credentials/backup bytes (closes the WebDAV slice of B1-NET-05 as well). Off-origin/private-IP/cleartext-downgrade hrefs are `SyncResult(false, "Sync refused: ...")` with a clear message; relative hrefs resolve per RFC 3986 under the request URL. `docs/security-report.md` B1-NET-01 row flipped to `FIXED`. Tests: `WebDavHrefResolverTest` (19, incl. end-to-end PROPFIND-XML cases); `gradle :app:testDebugUnitTest` green in isolation and 900/902 green in the full run (2 unrelated flaky failures — `WikiLinkParserCacheUnitTest` + `PluginUpdateEngineTest` timing/cancel cases that pass on re-run and are untouched by this diff), `gradle :app:assembleDebug` green. |
+| phase-41 | `DONE` | B1-NET-02 (HIGH) fixed (see `workspace/phase-41/REPORT.md` + `docs/security-report.md:815`). Confirmed-pairing gate for LocalSend sends. New pure-JVM `services/localsend/LocalSendPairing.kt`: `LocalSendPairing.gate` refuses any receiver that announces `protocol:"http"` (or no TLS fingerprint) and any device whose fingerprint was never paired; `LocalSendPairing.startPairing` derives a deterministic 6-digit out-of-band code (`LocalSendPairingCodes.pairingCode`) + formatted fingerprint; `confirmPairing`/`pair` persist a TOFU anchor (constant-time code compare, `ConstantTime.stringEqual`) into a `LocalSendPairedDeviceStore` (`InMemoryLocalSendPairedDeviceStore` for tests; `SettingsLocalSendPairedDeviceStore` + `SettingsManager.localsend_paired_<fp>` for production). `LocalSendSender` now gates `sendFile` BEFORE any network I/O (`LocalSendSender.kt:313-326`) and pins every payload to the stored paired fingerprint, refuses non-`https` payload URLs in `openConnection`, and the announce never advertises `protocol:"http"` (`LocalSendMessages.senderIdentity` = `"https"`, `LocalSendProtocol.kt:107`). `LocalSendSendDialog` requires an explicit pairing (code typed from the receiver — verified constant-time, mismatch refuses — OR an explicit "fingerprints match" acknowledgement, `LocalSendSendDialog.kt:158-199`) before a device is sendable, and a per-send confirmation before every transmission — a `200` to `/prepare-upload` is documented + treated as ZERO evidence of human consent. Tests: `LocalSendPairingTest` (19) + `LocalSendProtocolTest` (25); `gradle testDebugUnitTest` 924 green + `gradle assembleDebug` green (1 pre-existing flaky `PluginUpdateEngineTest` timing failure that passes in isolation — unrelated to this diff, per phase-40 report). |
+
+## ROADMAP.md phases (the app's own feature roadmap, 1-35)
+
+| ROADMAP phase | Status | Verified evidence / notes |
+|---------------|--------|---------------------------|
+| PHASE 1 | `DONE` | Collapsible/floating toolbars, search buttons in panels, sticky notes, minimap, tutorial all present and reachable. |
+| PHASE 2 | `DONE` | 21-tool brush suite + stylus guard/pressure sensitivity verified in code. |
+| PHASE 3 | `DONE` | Wikilinks, force-directed graph, backlinks/unlinked mentions, tag explorer, daily notes verified. |
+| PHASE 4 | `PARTIAL` | Pressure/tilt/timestamp capture FIXED via official `pointerInteropFilter` bridge (truth-table row 4). Sync-badge + tap-stroke-to-jump claim still unverified; image embeds fixed in 21.6. |
+| PHASE 5 | `PARTIAL` | Encryption/zeroization/backup rows fixed. Row 16 "master key rotation" still re-wraps the same DEK (MED); biometric non-auth fallback path remains (row 10). |
+| PHASE 6 | `DONE` | Cornell template (`EditorScreen.kt:3012`, `AnnotationCanvas.kt:1841`, `ImportExportService.kt:403`), batch vault/section export (`NoteflowViewModel.kt:1072,1082`, `HomeScreen.kt:618,656`). |
+| PHASE 7 | `PARTIAL` | 20.1-20.4/20.6-20.9 done (R8 on, RDP, bitmap pool, layer cache, off-main-thread). Baseline profiles deferred (20.5). |
+| PHASE 8 | `DONE` | Kanban/Calendar/Gallery/Spreadsheet all wired (`HomeScreen.kt:981-984`). |
+| PHASE 9 | `DONE` | Slash command menu (`MarkdownPreviewScreen.kt:544`), callout banners, collapsible headings verified. |
+| PHASE 10 | `PARTIAL` | On-device assistant exists; multi-workspace isolation NOT present (no workspaceId/isolation grep hits). |
+| PHASE 11 | `DONE` | `FloatingBottomToolbarPill` verified (`EditorScreen.kt:1456,1820`). |
+| PHASE 12 | `DONE` | Pressure/tilt captured via official MotionEvent bridge (20.7). |
+| PHASE 13 | `DONE` | androidx.ink deps present (`app/build.gradle.kts:129-133`). |
+| PHASE 14 | `DONE` | Palette manager + brush presets verified. |
+| PHASE 15 | `DONE` | Serialization, export compatibility, fallback rendering verified. |
+| PHASE 16 | `DONE` | Layer system + cached layer bitmaps verified (`LayerBitmapCache` wired in 20.3). |
+| PHASE 17 | `DONE` | `ShaderCapabilityHelper.isAgslSupported` gating verified. |
+| PHASE 18 | `DONE` | `WetBrushEngine` + `WetMixingEffect` wired into AnnotationCanvas (gated by capability + setting). |
+| PHASE 19 | `DONE` | Security/honesty recovery shipped (phases 2/3/9): field encryption, real WebDAV sync, FLAG_SECURE, quarantine + corruption recovery, honest relabeling. |
+| PHASE 20 | `PARTIAL` | 20.1-20.4, 20.6-20.9 shipped; **20.5 (FTS5 search) deferred — needs user approval (new DB schema)**. |
+| PHASE 21 | `PARTIAL` | 21.1/21.2/21.4-21.7/21.9 shipped. **21.3 baseline profiles, 21.8 syntax highlighting (highlighted-kt), 21.10 applicationId/namespace unification deferred — each needs user approval/dependency.** |
+| PHASE 22 | `PARTIAL` | 22.1-22.3, 22.6 shipped. **22.4 adaptive 3-pane layout deferred (needs tablet device); 22.5 share-sheet capture + widget still to do.** |
+| PHASE 23 | `PARTIAL` | 23.1/23.2/23.4/23.5 verified (continuous canvas branch, shared coordinate space). **23.3 persisting mode choice in `NotePageEntity` deferred — needs Room migration.** |
+| PHASE 24 | `PARTIAL` | PDF import fixes + HTML/import + image paths shipped. **24.6 Notion interop explicitly not prioritized/deferred.** |
+| PHASE 25 | `PARTIAL` | 25.1-25.6, 25.9-25.10 shipped. **25.7 LaTeX/katex NOT present** (zero katex/MathView hits); **25.8 multi-workspace isolation NOT present.** |
+| PHASE 26 | `PARTIAL` | 26.2-26.6 shipped (live markdown, transcription, WebDAV, version history, shape snap). **26.1 handwriting-to-text removed (stub deleted in phase-03) — real impl deferred; 26.7 FTS+OCR deferred.** |
+| PHASE 27 | `DONE` | All 27.x bug-fix queue items shipped/refuted (incl. 27.1 refuted by Kali pentest). |
+| PHASE 28 | `DONE` | Release engineering shipped: signing config, CI gates, schema export, test foundation, PrivacyCrashReporter, privacy policy docs, targetSdk 36. |
+| PHASE 29 | `DONE` | UI bug-fix queue shipped (graph loop, back handler, edge-to-edge, imePadding, 48dp targets, debounce, layer cache, undo O(N²), confetti, polish). |
+| PHASE 30 | `DONE` | Theme v2, dynamic color, typography/shapes, motion, adaptive panes, component upgrades, micro-interactions shipped (30.8 is a process note, not a feature). |
+| PHASE 31 | `DONE` | Real AGSL wet-mixing wired (see PHASE 18 + phase-04 workspace evidence). |
+| PHASE 32 | `PARTIAL` | 32.1-32.8, 32.10 shipped. **32.9 baseline profiles not wired (deferred; old dead file deleted in phase-03).** |
+| PHASE 33 | `DONE` | `docs/COMPATIBILITY.md` + `docs/TUTORIAL.md` exist, tier system + fallback rules + config-changes cleanup shipped. |
+| PHASE 34 | `PARTIAL` | 34.0-34.8 shipped (restore hardening, re-key, lock-zeroization, relabel, zip-bomb, FileProvider, ClipboardGuard, HMAC re-arm). **34.9 dynamic re-run with device/emulator still open.** |
+| PHASE 35 | `CANCELLED` | Shelved then removed in the phase-03 honesty audit (HardwareProfiler/RenderingEngineTier/BrushEngine facade/JNI stub all deleted). |
+| PHASE 36 | `DONE` | Micro-interactions & fluid motion shipped: shared-element card→editor morph (`ui/components/FluidPageReveal.kt`, `HomeScreen.kt` card-bounds capture, `MainActivity.kt:350`), milestone haptics gated by new `SettingsManager.hapticsEnabled` + reduce-motion (`services/MotionPolicy.kt`, AnnotationCanvas snap tick, `ColorSwatch` detent, width-slider notch), tuned springs (`MotionSystem.SpringReveal/SpringDismiss/SpringCanvasPan/SpringSheet`). `MotionPolicyTest` = 10 tests. See `workspace/phase-36/REPORT.md`. |
+
+## Cross-cutting facts
+
+- All `.done` markers in `workspace/` live in `phase-01`..`phase-16`, `phase-18`..`phase-20`, plus `phase-35`..`phase-41` (verified by directory listing). No `.deferred`/`.blocked`/`.attempts`/`.no_work`/`.session` markers exist anywhere. `phase-39`, `phase-40` and `phase-41` also ship their PROMPT-required `REPORT.md`.
+  - **2026-08-15 (phase-32 review fix): `workspace/phase-32/.done` was removed — a false completion (marked `.done` with no code/docs/findings; commits `1ce5a44` reset + `6b17422` re-added). `scripts/phase_runner.sh` now gates `.done` on a working-tree evidence check (changes outside `logs/` + the phase's own markers), so a phase can no longer self-certify DONE with only logs; a zero-work run is counted as a failed attempt and leaves a `.no_work` marker for diagnosis.**
+  - **2026-08-15 (phase-32 already-done guard): commits `44a7210`+`27b93fd` re-selected the completed phase-32 and left contradictory `.no_work`/`.deferred`/`.deferred_attempts`/`.session` alongside its legitimate `.done`. `phase_runner.sh` now short-circuits normal-run mode when `.done` exists and clears those stale markers; the stale phase-32 markers were removed here so select-phase stops re-selecting it.**
+- `phase-17` is the only phase whose directory no longer exists (deleted 4112eb8) and is therefore marked `CANCELLED` and excluded from heading marking.
+- ROADMAP/workspace numbering differ: workspace `phase-NN` (audit pipeline) ≠ ROADMAP `PHASE N` (app feature roadmap). Do not confuse them.
+- `phase-20` (this doc-fix) is `DONE`; `phase-21`..`phase-29` have PROMPT.md only — no implementation, no marker.
+- Sources: `workspace/phase-14/AUDIT_REPORT.md`, `workspace/phase-08/PERF_REPORT.md`, `ROADMAP.md` POST-AUDIT TRUTH TABLE + per-phase checklists, git history (`git log -S` / `git show --stat`), direct source inspection.
+
+## Current phase PROMPT
+
