@@ -1583,15 +1583,26 @@ object ImportExportService {
             return@withContext
         }
 
-        // Legacy paths: plain zip, or zip encrypted with the device DEK.
-        val isPkZip = rawBytes.size >= 4 && rawBytes[0] == 'P'.code.toByte() && rawBytes[1] == 'K'.code.toByte()
-        if (!isPkZip) {
-            if (key == null) {
-                throw IllegalStateException("This backup is encrypted. Please set and verify your Master Password first.")
-            }
-            val encryptedStr = String(rawBytes, Charsets.UTF_8)
-            rawBytes = EncryptionService.decrypt(encryptedStr, key)
+        // Legacy path: zip encrypted with the device DEK.
+        // B1-DB-7 (phase-56): a raw PK-headed payload is a legacy PLAIN
+        // (unencrypted, unsigned) backup and is REJECTED outright. The app has
+        // not produced keyless plain backups since the H4 fix, and the inner
+        // SQLCipher DB of such a zip is openable with the empty passphrase —
+        // exactly the vector that let an attacker-crafted vault swap through
+        // (validate-pass, re-key to the victim's DEK, HMAC-rearm, move over the
+        // live vault). Only NFLB2 password-protected (v2) or device-DEK-encrypted
+        // backups are restoreable; both are authenticated by unguessable keys.
+        if (isPlainPkBackupBytes(rawBytes)) {
+            throw IllegalStateException(
+                "Restore rejected: this is an unencrypted (unsigned) backup. " +
+                    "Only password-protected or device-keyed backups can be restored."
+            )
         }
+        if (key == null) {
+            throw IllegalStateException("This backup is encrypted. Please set and verify your Master Password first.")
+        }
+        val encryptedStr = String(rawBytes, Charsets.UTF_8)
+        rawBytes = EncryptionService.decrypt(encryptedStr, key)
 
         val currentDekHex = key?.toHexString()
         restoreFromZip(context, rawBytes, null, currentDekHex)
@@ -1679,7 +1690,13 @@ object ImportExportService {
      * (34.2) so cross-device restores never double-encrypt.
      */
     private fun validateAndPrepareRestoredDb(context: Context, tempDb: File, backupDekHex: String?, currentDekHex: String?, tempVoiceNotes: File) {
-        val candidates = listOfNotNull(backupDekHex, currentDekHex, "").distinct()
+        // B1-DB-7 (phase-56): the empty-passphrase SQLCipher candidate is GONE.
+        // A plaintext/keyless SQLite is only openable with `""` — with just the
+        // backup's own wrapped DEK (v2) or this device's DEK (device-keyed)
+        // permitted, an attacker-chosen DB can never pass integrity_check and be
+        // re-keyed + HMAC-rearmed into the live vault. The helper also strips any
+        // empty string a future caller might pass in, fail-closed.
+        val candidates = backupRestoreOpenCandidates(backupDekHex, currentDekHex)
         var openedWith: String? = null
         var userVersion: Long = -1L
         for (candidate in candidates) {
@@ -2443,3 +2460,25 @@ object ImportExportService {
     }
 
 }
+
+/**
+ * B1-DB-7 (phase-56): true when [bytes] look like a raw PK zip — the signature
+ * of a legacy PLAIN (unencrypted, unsigned) backup. Pure JVM so the restore
+ * gate and the picker UI share one check and the unit tests can pin it.
+ */
+internal fun isPlainPkBackupBytes(bytes: ByteArray): Boolean =
+    bytes.size >= 4 && bytes[0] == 'P'.code.toByte() && bytes[1] == 'K'.code.toByte()
+
+/**
+ * B1-DB-7 (phase-56): the ONLY keys allowed to open a restored backup database.
+ *
+ * The historical candidate list was `listOfNotNull(backupDekHex, currentDekHex, "")`
+ * — the `""` empty-passphrase SQLCipher entry let an attacker-crafted plaintext
+ * `noteflow.sqlite` pass PRAGMA integrity_check, get re-keyed to the victim's
+ * DEK and swapped over the live vault. Only the backup's own wrapped DEK (v2)
+ * or this device's DEK (device-keyed legacy) may open a backup; both are
+ * unguessable. Any empty string is stripped fail-closed so a future caller can
+ * never re-introduce the empty-key candidate.
+ */
+internal fun backupRestoreOpenCandidates(backupDekHex: String?, currentDekHex: String?): List<String> =
+    listOfNotNull(backupDekHex, currentDekHex).filter { it.isNotBlank() }.distinct()

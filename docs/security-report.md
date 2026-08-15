@@ -845,7 +845,7 @@ No DB schema, workflow, or dependency changes were made.
 | B1-DB-2 | MEDIUM | phase-53 | `FIXED` 2026-08-15 (`migratePlaintextIfNeeded` never deletes the original plaintext DB: atomic `tempFile.renameTo(dbFile)` swap after verifying the encrypted scratch file, and the catch preserves db+wal+shm+journal as `*.migrate-failed-<ts>` via pure-JVM `quarantineMigrateFailed`, raises the corruption flag → recovery screen, and rethrows — see `workspace/phase-53/REPORT.md`) |
 | B1-DB-3 | MEDIUM | phase-54 | FIXED (`workspace/phase-54/REPORT.md`) |
 | B1-DB-5 | MEDIUM | phase-55 | `FIXED` (phase-55 commit …; see `workspace/phase-55/REPORT.md`) |
-| B1-DB-7 | MEDIUM | phase-56 | `NOT STARTED` (planned) |
+| B1-DB-7 | MEDIUM | phase-56 | `FIXED` 2026-08-15 (plain-zip + empty-key restore closed — see `workspace/phase-56/REPORT.md`) |
 | B1-PLAT-1 | MEDIUM | phase-57 | `NOT STARTED` (planned) |
 | B1-PLAT-2 | MEDIUM | phase-58 | `NOT STARTED` (planned) |
 | B1-PLAT-3 | MEDIUM | phase-59 | `NOT STARTED` (planned) |

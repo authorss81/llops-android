@@ -33,6 +33,7 @@ import com.authorss81.noteflow.services.DocumentTextExtractor
 import com.authorss81.noteflow.services.EncryptionService
 import com.authorss81.noteflow.services.ImportArchivePolicy
 import com.authorss81.noteflow.services.ImportExportService
+import com.authorss81.noteflow.services.isPlainPkBackupBytes
 import com.authorss81.noteflow.theme.AppThemeMode
 import com.authorss81.noteflow.ui.components.*
 import com.authorss81.noteflow.ui.viewmodel.NoteflowViewModel
@@ -156,8 +157,17 @@ fun HomeScreen(
                         backupPasswordInput = ""
                         backupPasswordError = null
                         showBackupPasswordDialog = true
+                    } else if (isPlainPkBackupBytes(bytes)) {
+                        // B1-DB-7 (phase-56): an unencrypted (unsigned) plain zip is
+                        // never restoreable — refuse before any confirm dialog, the
+                        // same gate importBackup enforces.
+                        viewModel.showSnackbar(
+                            "Restore rejected: this is an unencrypted (unsigned) backup. " +
+                                "Only password-protected or device-keyed backups can be restored.",
+                            isLong = true
+                        )
                     } else {
-                        // B4/34.1: legacy (unauthenticated) restores replace the whole vault —
+                        // B4/34.1: legacy (device-keyed) restores replace the whole vault —
                         // require explicit user confirmation instead of silently doing it.
                         pendingRestoreBytes = bytes
                         showLegacyRestoreConfirmDialog = true
@@ -1128,7 +1138,9 @@ fun HomeScreen(
                 title = { Text("Restore legacy backup?") },
                 text = {
                     Text(
-                        "This backup is NOT protected by a backup password. " +
+                        "This is an older device-keyed backup that is NOT protected by a backup " +
+                            "password and carries NO digital signature — treat it as an UNTRUSTED, " +
+                            "UNSIGNED backup and verify it came from your own device. " +
                             "Restoring it will REPLACE ALL pages, strokes and settings on this device " +
                             "with the backup's contents. Continue?"
                     )

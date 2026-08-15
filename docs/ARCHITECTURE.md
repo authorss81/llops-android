@@ -333,6 +333,16 @@
     single-pass) route every entry through `claimEntry`/`readEntryBounded`; wholesale `zis.readBytes()`
     is gone. Restore callers keep the 400MB `MAX_BACKUP_INPUT_BYTES` cap; HomeScreen surfaces a
     non-alarming `"Import skipped: …"` snackbar. Tests: `B1Db05ImportZipBombTest` (13) — 1142 green.
+  - **Implemented in phase-56** (B1-DB-7, see `workspace/phase-56/REPORT.md`): restore can no longer
+    accept a legacy PLAIN (unencrypted) zip nor open a backup's SQLCipher DB with the empty
+    passphrase. Two pure-JVM file-level helpers in `ImportExportService.kt`:
+    `isPlainPkBackupBytes` (raw `PK`-header classifier) + `backupRestoreOpenCandidates`
+    (`listOfNotNull(backupDekHex, currentDekHex).filter { it.isNotBlank() }.distinct()`, the
+    historic `""` empty-key entry is gone AND stripped fail-closed). `importBackup` rejects a raw
+    plain zip BEFORE any decrypt/extract; the authenticated device-DEK-encrypted legacy path and
+    the NFLB2 password-v2 path are untouched. `HomeScreen` picker refuses a PK zip with a
+    snackbar before any confirm dialog; the device-keyed legacy dialog warns UNTRUSTED/UNSIGNED.
+    Tests: `B1Db07PlainZipRestoreRejectedTest` (12) — 1154 green.
 
 ## Build / CI essentials
 
