@@ -821,7 +821,7 @@ No DB schema, workflow, or dependency changes were made.
 | B1-DB-1 | HIGH | phase-43 | `FIXED` 2026-08-15 (commit `5015e6b`, see `workspace/phase-43/REPORT.md`) |
 | B1-DB-4 | HIGH | phase-44 | `FIXED` (commit `c23a11c`, see `workspace/phase-44/REPORT.md`) |
 | B1-AUTH-06 | MEDIUM | phase-44 (grouped with B1-DB-4, same root cause) | `FIXED` (commit `c23a11c`, see `workspace/phase-44/REPORT.md`) |
-| B1-CRYPTO-02 | HIGH | phase-45 | `FIXED` (commit pending at close, see `workspace/phase-45/REPORT.md`) |
+| B1-CRYPTO-02 | HIGH | phase-45 | `FIXED` 2026-08-15 (commit `2fc44e0`, see `workspace/phase-45/REPORT.md`) |
 | B1-AUTH-01 | HIGH | phase-46 | `NOT STARTED` (planned) |
 | B1-AUTH-02 | HIGH | phase-47 | `NOT STARTED` (planned) |
 | B2-LOG-01 | HIGH | phase-48 | `NOT STARTED` (planned) |
