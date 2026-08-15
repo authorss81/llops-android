@@ -5,10 +5,12 @@ import com.authorss81.noteflow.plugins.InMemoryPluginSettingsStore
 import com.authorss81.noteflow.plugins.PluginCapability
 import com.authorss81.noteflow.plugins.PluginInstallResult
 import com.authorss81.noteflow.plugins.PluginRegistry
+import com.authorss81.noteflow.plugins.runtime.CompileTimePluginPinStore
 import com.authorss81.noteflow.plugins.runtime.HostedPluginManifest
 import com.authorss81.noteflow.plugins.runtime.HostedPluginVersion
 import com.authorss81.noteflow.plugins.runtime.InMemoryPluginEntryStore
 import com.authorss81.noteflow.plugins.runtime.ManifestFetchResult
+import com.authorss81.noteflow.plugins.runtime.PinnedPluginRelease
 import com.authorss81.noteflow.plugins.runtime.PluginEntry
 import com.authorss81.noteflow.plugins.runtime.PluginEntrySource
 import com.authorss81.noteflow.plugins.runtime.PluginVersion
@@ -35,6 +37,19 @@ class PluginUpdateStoreFlowTest {
 
     private val remoteId = "com.authorss81.noteflow.plugins.remote.ocr"
 
+    private val testPin = "sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+
+    /** A pin store that pins [remoteId] at every version these tests offer,
+     *  at the digests [offer] uses, allowing the test artifact host. */
+    private fun testPins(): CompileTimePluginPinStore = CompileTimePluginPinStore(
+        PinnedPluginRelease(remoteId, PluginVersion(1, 0, 0), "sha-1.0.0", testPin),
+        PinnedPluginRelease(remoteId, PluginVersion(1, 2, 0), "sha-1.2.0", testPin),
+        PinnedPluginRelease(remoteId, PluginVersion(2, 0, 0), "sha-2.0.0", testPin),
+        PinnedPluginRelease(remoteId, PluginVersion(3, 0, 0), "sha-3.0.0", testPin),
+        PinnedPluginRelease(remoteId, PluginVersion(9, 0, 0), "sha-9.0.0", testPin),
+        allowedDownloadHosts = setOf("plugins.example.com")
+    )
+
     private fun remoteEntry(version: PluginVersion = PluginVersion(1, 0, 0)) = PluginEntry(
         id = remoteId,
         name = "Remote OCR",
@@ -44,7 +59,7 @@ class PluginUpdateStoreFlowTest {
         category = "Vision",
         downloadUrl = "https://plugins.example.com/ocr-$version.apk",
         sha256 = "sha-${version}",
-        pinnedCertHash = "sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        pinnedCertHash = testPin,
         source = PluginEntrySource.REMOTE
     )
 
@@ -53,7 +68,7 @@ class PluginUpdateStoreFlowTest {
         version = version,
         downloadUrl = "https://plugins.example.com/ocr-$version.apk",
         sha256 = "sha-$version",
-        pinnedCertHash = "sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        pinnedCertHash = testPin,
         updateChannel = "stable"
     )
 
@@ -96,7 +111,8 @@ class PluginUpdateStoreFlowTest {
     private fun newController(
         entryStore: InMemoryPluginEntryStore = InMemoryPluginEntryStore(),
         coordinator: PluginUpdateCoordinator? = null,
-        remoteInstaller: RemotePluginInstaller? = null
+        remoteInstaller: RemotePluginInstaller? = null,
+        pins: CompileTimePluginPinStore = testPins()
     ): Pair<PluginRegistry, PluginStoreController> {
         val registry = PluginRegistry(
             enableStore = InMemoryEnableStore(),
@@ -109,7 +125,8 @@ class PluginUpdateStoreFlowTest {
         val controller = PluginStoreController(
             registry, catalog,
             remoteInstaller = remoteInstaller,
-            updateCoordinator = coordinator
+            updateCoordinator = coordinator,
+            pins = pins
         )
         return registry to controller
     }
@@ -277,6 +294,24 @@ class PluginUpdateStoreFlowTest {
         assertEquals(1, coordinator.updateCalls.size)
         // The current version handed to the coordinator is the ACTIVE v2, never the stale catalog v1.
         assertEquals(PluginVersion(2, 0, 0), coordinator.updateCalls.first().first.version)
+    }
+
+    @Test
+    fun `checkForUpdates refuses a forged offer even when it is strictly newer - B1-NET-03`() = runBlocking {
+        val entryStore = InMemoryPluginEntryStore()
+        entryStore.save(remoteEntry())
+        // The offer is structurally valid and strictly newer, but its sha256 does
+        // NOT match the compile-time pin — the store must not list it.
+        val forged = offer(PluginVersion(1, 2, 0)).copy(sha256 = "f00d")
+        val (registry, controller) = newController(
+            entryStore = entryStore,
+            coordinator = FakeCoordinator(HostedPluginManifest(listOf(forged)), PluginStoreController.UpdateOutcome.Failed(remoteId, "unused"))
+        )
+        installRemote(registry)
+
+        val outcome = controller.checkForUpdates(null)
+
+        assertTrue(outcome is PluginStoreController.UpdateCheckOutcome.UpToDate)
     }
 
     @Test

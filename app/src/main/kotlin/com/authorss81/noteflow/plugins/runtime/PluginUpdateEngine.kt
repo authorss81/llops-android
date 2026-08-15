@@ -54,6 +54,9 @@ import java.io.File
  * @param updateStore the previous-version record (rollback root).
  * @param verifier the security gate ([ArtifactSignatureVerifier]).
  * @param loader materializes + smoke-tests a verified artifact.
+ * @param pins the compile-time per-plugin release pins + download-host
+ *   allow-list ([CompileTimePluginPinStore]) — the trust anchor updates are
+ *   verified against (B1-NET-03); defaults to the secure production table.
  * @param logger ids/names + exception class names only.
  */
 class PluginUpdateEngine(
@@ -64,6 +67,7 @@ class PluginUpdateEngine(
     private val updateStore: PluginUpdateStore,
     private val verifier: ArtifactSignatureVerifier,
     private val loader: RuntimePluginLoader,
+    private val pins: CompileTimePluginPinStore = CompileTimePluginPins.defaultStore,
     private val logger: PluginLogger = PluginLogger.NoOp
 ) {
 
@@ -97,6 +101,17 @@ class PluginUpdateEngine(
         if (!target.version.isNewerThan(entry.version)) {
             return RuntimeOutcome.Failed(
                 "Update of '${entry.id}' to ${target.version} was refused: it is not newer than the installed ${entry.version} (no downgrades, no no-op updates)."
+            )
+        }
+        // B1-NET-03: the target's trust anchor must be the COMPILE-TIME pin,
+        // never the manifest. Re-verify here (defense in depth — a caller that
+        // bypassed PluginUpdateChecker still cannot install an unpinned or
+        // re-pinned offer), BEFORE any byte moves or rollback-root write.
+        when (val verdict = pins.verifyEntry(target)) {
+            is PinVerdict.Verified -> Unit
+            is PinVerdict.Rejected -> return RuntimeOutcome.Failed(
+                "Update of '${entry.id}' to ${target.version} was refused: ${verdict.reason} " +
+                    "The previous verified version v${entry.version} is still active."
             )
         }
         // Record the previously-active version BEFORE any byte moves, so a

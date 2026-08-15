@@ -51,24 +51,36 @@ data class PluginUpdateInfo(
  *   never sees "beta" offers).
  * - **Downloadable only.** Bundled (compile-time) plugins are excluded —
  *   they are updated by the normal app release, never by this mechanism.
+ * - **Compile-time pinned (B1-NET-03).** An offer is reported ONLY when its
+ *   `sha256` and `pinnedCertHash` MATCH the compile-time per-plugin release
+ *   table ([CompileTimePluginPinStore]) and its `downloadUrl` host is on that
+ *   store's download-host allow-list. The manifest can never define an
+ *   unpinned release: its values are compared, never trusted. The
+ *   [PluginUpdateInfo] that survives carries the COMPILE-TIME pin's digests,
+ *   so even the persisted target's trust anchor comes from the APK, not the
+ *   wire.
  *
  * Deterministic output, ordered by plugin id. Pure JVM, unit-tested.
  *
- * Trust note (B1-CRYPTO-01): [PluginUpdateInfo] copies the offer's
- * `downloadUrl`/`sha256`/`pinnedCertHash` verbatim into the target entry, and
- * that is safe ONLY because the [HostedPluginManifest] arrived through the
- * compile-time-pinned [HttpsManifestTransport] — an unauthenticated manifest
- * can never reach this comparator.
+ * Trust note (B1-CRYPTO-01 + B1-NET-03): [PluginUpdateInfo] carries
+ * `downloadUrl`/`sha256`/`pinnedCertHash` only after [CompileTimePluginPinStore]
+ * verified the offer against the compile-time anchor. The pinned
+ * [HttpsManifestTransport] stops a MITM forging the manifest; the compile-time
+ * per-plugin pins stop even a COMPROMISED manifest host from re-keying the
+ * trust anchor. Both gates must pass for an update to be offered.
  */
 object PluginUpdateChecker {
 
     /**
      * The updates available for [installed], or an empty list when everything
-     * is current (or the manifest offers nothing newer). Never throws.
+     * is current, the manifest offers nothing newer, or an offer fails the
+     * compile-time pin verification ([pins], default the secure production
+     * table). Never throws.
      */
     fun check(
         installed: Collection<PluginEntry>,
-        manifest: HostedPluginManifest
+        manifest: HostedPluginManifest,
+        pins: CompileTimePluginPinStore = CompileTimePluginPins.defaultStore
     ): List<PluginUpdateInfo> =
         installed.asSequence()
             .filter { it.isDownloadable }
@@ -76,13 +88,16 @@ object PluginUpdateChecker {
                 val offer = manifest.offerFor(entry.id) ?: return@mapNotNull null
                 if (offer.updateChannel != entry.updateChannel) return@mapNotNull null
                 if (!offer.version.isNewerThan(entry.version)) return@mapNotNull null
+                val verdict = pins.verifyOffer(offer)
+                val pinned = (verdict as? PinVerdict.Verified)?.pin
+                    ?: return@mapNotNull null // B1-NET-03: never offer an unpinned/mismatched release
                 PluginUpdateInfo(
                     pluginId = entry.id,
                     currentVersion = entry.version,
                     newVersion = offer.version,
                     downloadUrl = offer.downloadUrl,
-                    sha256 = offer.sha256,
-                    pinnedCertHash = offer.pinnedCertHash,
+                    sha256 = pinned.sha256,
+                    pinnedCertHash = pinned.pinnedCertHash,
                     installSizeBytes = offer.installSizeBytes,
                     updateNotes = offer.updateNotes,
                     updateChannel = offer.updateChannel

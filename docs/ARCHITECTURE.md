@@ -16,7 +16,7 @@
 | `services/` | `EncryptionService.kt`, `SecurityService.kt`, `DatabaseSecurityHelper.kt`, `VaultKeyHolder.kt`, `WetBrushEngine.kt`, `WebDavSyncService.kt`, `ImportExportService.kt`, `PaletteCatalog.kt`, `ShapeRecognitionHelper.kt` | Non-UI: crypto/vault, brush math, sync, import/export, palette |
 | `services/localsend/` | `LocalSendProtocol.kt`, `LocalSendSender.kt`, `LocalSendPairing.kt`, `SettingsLocalSendPairedDeviceStore.kt` | Pure-JVM LocalSend v2.2 + real network sender + TOFU pairing gate (B1-NET-02) |
 | `plugins/` | `NoteflowPlugin.kt`, `PluginRegistry.kt`, `PluginManager.kt`, `PluginDiagnostics.kt`, `PluginLifecycle.kt` | Compile-time plugin framework + typed serving interfaces |
-| `plugins/runtime/` | `RuntimePluginLoader.kt`, `SignatureVerifiedPluginRuntime.kt`, `ArtifactSignatureVerifier.kt`, `PinnedCertHash.kt`, `PinnedTlsConnector.kt`, `PluginManifestFetcher.kt`, `HttpsPluginDownloadTransport.kt`, `PluginDownloader.kt`, `PluginUpdateEngine.kt` | Downloadable-plugin runtime: pinned-cert verify (manifest + artifact transports, no redirects), DexClassLoader, updates |
+| `plugins/runtime/` | `RuntimePluginLoader.kt`, `SignatureVerifiedPluginRuntime.kt`, `ArtifactSignatureVerifier.kt`, `PinnedCertHash.kt`, `PinnedTlsConnector.kt`, `PluginManifestFetcher.kt`, `HttpsPluginDownloadTransport.kt`, `PluginDownloader.kt`, `PluginUpdateEngine.kt`, `CompileTimePluginPinStore.kt` | Downloadable-plugin runtime: pinned-cert verify (manifest + artifact transports, no redirects), DexClassLoader, updates |
 | `plugins/store/` | `PluginStoreCatalog.kt`, `PluginStoreController.kt`, `RemotePluginInstaller.kt`, `PluginInstallStore.kt` | Plugin Store lifecycle (bundled catalog + remote install) |
 | `plugins/<capability>/` | `ocr/MlKitOcrEngine.kt`, `websearch/DuckDuckGoWebSearchPlugin.kt`, `translation/MlKitTranslatorEngine.kt`, `inktos/InkToShapePlugin.kt`, `weather/`, `dictation/`, `readaloud/`, `citation/`, ... | One impl per capability, registered in `PluginRegistry` |
 | `ui/components/` | `AnnotationCanvas.kt` (4535 lines), `AgslShaders.kt`, `ShaderCapabilityHelper.kt`, `PenNibVisualPreview.kt`, `LayerBitmapCache.kt`, `BrushStudioDialog.kt`, `PluginStoreDialog.kt` | Compose components: canvas, AGSL shaders, dialogs |
@@ -53,6 +53,20 @@
     substitution; fails closed without it), so update offers can never redefine
     `downloadUrl`/`sha256`/`pinnedCertHash` from an unauthenticated source
     (closes B1-CRYPTO-01, commit `4d72a6a`).
+  - **Implemented in phase-42** (B1-NET-03, see `workspace/phase-42/REPORT.md`): the
+    per-plugin **update trust anchor now lives in the APK**, not the manifest.
+    `plugins/runtime/CompileTimePluginPinStore.kt` (`CompileTimePluginPinStore`,
+    `PinnedPluginRelease`, `PinVerdict`, `CompileTimePluginPins`, `isHostAllowListed`)
+    carries `id → version → {sha256, pinnedCertHash}` release pins + a download-host
+    allow-list (`DEFAULT_DOWNLOAD_HOSTS = {DEFAULT_MANIFEST_HOST}`); the production
+    `CompileTimePluginPins.RELEASES` is empty ⇒ **fail closed** (publishing a
+    downloadable plugin REQUIRES adding its pin rows here + an app bump). Enforced at
+    three independent gates: `PluginUpdateChecker.check` offers only compile-time-pinned
+    values (`PluginUpdateChecker.kt`, new `pins` arg), `PluginUpdateEngine.update`
+    re-verifies the persisted target before any byte moves / rollback-root write
+    (`PluginUpdateEngine.kt:110-116`), and `PluginDownloader` refuses artifact hosts off
+    the allow-list before connecting (`PluginDownloader.kt`, `allowedDownloadHosts`).
+    `PluginStoreController` threads the pins into both check calls.
 - **Markdown**: `ui/screens/MarkdownPreviewScreen.kt:137` (renders via **commonmark 0.29.0 +
   gfm-tables**). Phase 37 hybrid-editor slice: pure-JVM block tokenizer
   `services/MarkdownBlockTokenizer.kt` (exact source round-trip), code-span-aware

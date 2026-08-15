@@ -79,11 +79,15 @@ fun interface DownloadTransport {
  * @param transport where bytes come from (pinned HTTPS in production).
  * @param freeSpace available-bytes probe for [targetDir] (production uses
  *   `StatFs`; tests inject a constant). Default: unknown ⇒ assume OK.
+ * @param allowedDownloadHosts the ONLY hosts artifacts may be fetched from
+ *   (B1-NET-03; default [DEFAULT_DOWNLOAD_HOSTS] = the manifest host). A
+ *   `downloadUrl` naming any other host is refused before a connection opens.
  * @param logger ids/names + exception class names only.
  */
 class PluginDownloader(
     private val transport: DownloadTransport,
     private val freeSpace: (File) -> Long = { Long.MAX_VALUE },
+    private val allowedDownloadHosts: Set<String> = DEFAULT_DOWNLOAD_HOSTS,
     private val logger: PluginLogger = PluginLogger.NoOp
 ) {
 
@@ -134,6 +138,15 @@ class PluginDownloader(
         if (!url.startsWith("https://")) {
             return DownloadOutcome.Failed(
                 "refusing to download '${entry.id}': only HTTPS (TLS) downloads are allowed (got '$url')."
+            )
+        }
+        // B1-NET-03: artifacts only ever come from the allow-listed download
+        // hosts (the manifest host). A re-pointed downloadUrl (compromised
+        // manifest, or a catalog entry with a hostile URL) is refused here as
+        // the final gate, before a connection opens.
+        if (!isHostAllowListed(url, allowedDownloadHosts)) {
+            return DownloadOutcome.Failed(
+                "refusing to download '${entry.id}': the artifact host is not on the allow-listed plugin download hosts."
             )
         }
         val expectedBytes = entry.installSizeBytes

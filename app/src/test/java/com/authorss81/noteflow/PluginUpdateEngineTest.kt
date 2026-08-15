@@ -3,11 +3,14 @@ package com.authorss81.noteflow
 import com.authorss81.noteflow.plugins.PluginCapability
 import com.authorss81.noteflow.plugins.runtime.ArtifactSignatureVerifier
 import com.authorss81.noteflow.plugins.runtime.ClassLoaderFactory
+import com.authorss81.noteflow.plugins.runtime.CompileTimePluginPinStore
+import com.authorss81.noteflow.plugins.runtime.CompileTimePluginPins
 import com.authorss81.noteflow.plugins.runtime.DownloadRequest
 import com.authorss81.noteflow.plugins.runtime.DownloadTransport
 import com.authorss81.noteflow.plugins.runtime.DownloadTransportResult
 import com.authorss81.noteflow.plugins.runtime.InMemoryPluginEntryStore
 import com.authorss81.noteflow.plugins.runtime.InMemoryPluginUpdateStore
+import com.authorss81.noteflow.plugins.runtime.PinnedPluginRelease
 import com.authorss81.noteflow.plugins.runtime.PluginArtifactResolver
 import com.authorss81.noteflow.plugins.runtime.PluginContextFactory
 import com.authorss81.noteflow.plugins.runtime.PluginDownloader
@@ -61,6 +64,17 @@ class PluginUpdateEngineTest {
         source = PluginEntrySource.REMOTE
     )
 
+    /** The compile-time pin table for the two signed test releases, gated to
+     *  the test artifact host (B1-NET-03). */
+    private fun pinsFor(
+        v1: TestArtifactBuilder.SignedArtifact,
+        v2: TestArtifactBuilder.SignedArtifact
+    ): CompileTimePluginPinStore = CompileTimePluginPinStore(
+        PinnedPluginRelease(installedId, PluginVersion(1, 0, 0), v1.sha256Hex, v1.pinnedCertHash),
+        PinnedPluginRelease(installedId, PluginVersion(2, 0, 0), v2.sha256Hex, v2.pinnedCertHash),
+        allowedDownloadHosts = setOf("plugins.example.com")
+    )
+
     /** A transport that "downloads" into [request.target] by copying [payload]. */
     private class PayloadTransport(
         private val payload: File,
@@ -82,12 +96,16 @@ class PluginUpdateEngineTest {
         transport: PayloadTransport
     )
 
-    private fun newEngine(payload: File, failMessage: String? = null): EngineFixture {
+    private fun newEngine(
+        payload: File,
+        failMessage: String? = null,
+        pins: CompileTimePluginPinStore = CompileTimePluginPins.defaultStore
+    ): EngineFixture {
         val storageDir = File(tmp.root, "plugins").apply { mkdirs() }
         val entryStore = InMemoryPluginEntryStore()
         val updateStore = InMemoryPluginUpdateStore()
         val transport = PayloadTransport(payload, failMessage)
-        val downloader = PluginDownloader(transport, freeSpace = { Long.MAX_VALUE })
+        val downloader = PluginDownloader(transport, freeSpace = { Long.MAX_VALUE }, allowedDownloadHosts = setOf("plugins.example.com"))
         val loader = RuntimePluginLoader(
             classLoaderFactory = ClassLoaderFactory { artifactPath, parent ->
                 URLClassLoader(arrayOf(File(artifactPath).toURI().toURL()), parent)
@@ -105,7 +123,8 @@ class PluginUpdateEngineTest {
             entryStore = entryStore,
             updateStore = updateStore,
             verifier = ArtifactSignatureVerifier(),
-            loader = loader
+            loader = loader,
+            pins = pins
         )
         return EngineFixture(storageDir, entryStore, updateStore, engine, transport)
     }
@@ -116,7 +135,7 @@ class PluginUpdateEngineTest {
         val v2 = TestArtifactBuilder.build(tmp.root, ks)
         val entry = entryFor(PluginVersion(1, 0, 0), v1.sha256Hex, v1.pinnedCertHash, v1)
         val target = entryFor(PluginVersion(2, 0, 0), v2.sha256Hex, v2.pinnedCertHash, v2)
-        return newEngine(payload = v2.file) to Triple(v1, v2, entry)
+        return newEngine(payload = v2.file, pins = pinsFor(v1, v2)) to Triple(v1, v2, entry)
     }
 
     /** Simulate a previously-installed version: its artifact is already on disk. */
@@ -196,7 +215,7 @@ class PluginUpdateEngineTest {
     @Test
     fun `a download failure keeps the previous version active`() = runBlocking {
         val (_v1, _v2, entry) = signedFixture().second
-        val fixture = newEngine(payload = _v2.file, failMessage = "no bytes from server")
+        val fixture = newEngine(payload = _v2.file, failMessage = "no bytes from server", pins = pinsFor(_v1, _v2))
         fixture.entryStore.save(entry)
         val target = entryFor(PluginVersion(2, 0, 0), _v2.sha256Hex, _v2.pinnedCertHash, _v2)
 
@@ -214,8 +233,17 @@ class PluginUpdateEngineTest {
     @Test
     fun `a hash mismatch on the downloaded artifact is never applied`() = runBlocking {
         val (_v1, _v2, entry) = signedFixture().second
-        // Serve the v1 bytes while the target promises v2's digests → SHA-256 mismatch.
-        val fixture = newEngine(payload = _v1.file)
+        // Serve bytes while the target promises v2's digests → SHA-256 mismatch.
+        // The raw v1 artifact is NOT used as the served payload: v1 and v2 are
+        // built from the same keystore/class and can be byte-identical (same ZIP
+        // entry timestamps when both builds land in one clock tick), which made
+        // this test flaky both directions. Tamper a copy so the served sha can
+        // NEVER equal v2's pin — the mismatch is deterministic.
+        val mismatchPayload = java.io.File(tmp.root, "hash-mismatch-served.jar").apply {
+            _v1.file.copyTo(this)
+            appendBytes(byteArrayOf(0x42))
+        }
+        val fixture = newEngine(payload = mismatchPayload, pins = pinsFor(_v1, _v2))
         fixture.entryStore.save(entry)
         val target = entryFor(PluginVersion(2, 0, 0), _v2.sha256Hex, _v2.pinnedCertHash, _v2)
 
@@ -235,7 +263,13 @@ class PluginUpdateEngineTest {
         val broken = TestArtifactBuilder.build(tmp.root, ks, pluginClassName = NotAPlugin::class.java.name)
         val _v1 = TestArtifactBuilder.build(tmp.root, ks)
         val entry = entryFor(PluginVersion(1, 0, 0), _v1.sha256Hex, _v1.pinnedCertHash, _v1)
-        val fixture = newEngine(payload = broken.file)
+        // The compile-time table must ALSO pin the broken release, or the engine
+        // would refuse it at the B1-NET-03 gate before ever reaching the smoke-test.
+        val pins = CompileTimePluginPinStore(
+            PinnedPluginRelease(installedId, PluginVersion(2, 0, 0), broken.sha256Hex, broken.pinnedCertHash),
+            allowedDownloadHosts = setOf("plugins.example.com")
+        )
+        val fixture = newEngine(payload = broken.file, pins = pins)
         fixture.entryStore.save(entry)
         val target = entryFor(PluginVersion(2, 0, 0), broken.sha256Hex, broken.pinnedCertHash, broken)
 
@@ -315,7 +349,7 @@ class PluginUpdateEngineTest {
         val _v1 = artifacts.first
         val _v2 = artifacts.second
         val entry = artifacts.third
-        val fixture = newEngine(payload = _v2.file, failMessage = "server error")
+        val fixture = newEngine(payload = _v2.file, failMessage = "server error", pins = pinsFor(_v1, _v2))
         fixture.entryStore.save(entry)
         val target = entryFor(PluginVersion(2, 0, 0), _v2.sha256Hex, _v2.pinnedCertHash, _v2)
         assertTrue(fixture.engine.update(entry, target, userApproved = true, onProgress = {}) is RuntimeOutcome.Failed)
@@ -327,5 +361,30 @@ class PluginUpdateEngineTest {
 
         assertTrue(result is RuntimeOutcome.Success)
         assertEquals(PluginVersion(1, 0, 0), (result as RuntimeOutcome.Success).value.restoredVersion)
+    }
+
+    @Test
+    fun `an unpinned or re-pinned target is refused before any byte moves - B1-NET-03`() = runBlocking {
+        val (fixture, artifacts) = signedFixture()
+        val v2 = artifacts.second
+        val entry = artifacts.third
+        fixture.entryStore.save(entry)
+        // The manifest would offer v2 but re-pins it to an ATTACKER certificate.
+        val rePinned = entryFor(PluginVersion(2, 0, 0), v2.sha256Hex, "sha256/BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=", v2)
+        // A version this build never shipped (no compile-time pin exists).
+        val unPinned = entryFor(PluginVersion(3, 0, 0), v2.sha256Hex, v2.pinnedCertHash, v2)
+
+        val rePinnedResult = fixture.engine.update(entry, rePinned, userApproved = true, onProgress = {})
+        val unPinnedResult = fixture.engine.update(entry, unPinned, userApproved = true, onProgress = {})
+
+        assertTrue(rePinnedResult is RuntimeOutcome.Failed)
+        assertTrue((rePinnedResult as RuntimeOutcome.Failed).message.contains("certificate pin"))
+        assertTrue(unPinnedResult is RuntimeOutcome.Failed)
+        assertTrue((unPinnedResult as RuntimeOutcome.Failed).message.contains("no compile-time pinned identity"))
+        // Nothing moved: no download, no swap, no rollback root, no artifact.
+        assertEquals(PluginVersion(1, 0, 0), fixture.entryStore.find(installedId)?.version)
+        assertNull(fixture.updateStore.previousFor(installedId))
+        assertTrue(File(fixture.storageDir, PluginDownloader.artifactFileNameFor(rePinned)).isFile.not())
+        assertTrue(File(fixture.storageDir, PluginDownloader.artifactFileNameFor(unPinned)).isFile.not())
     }
 }

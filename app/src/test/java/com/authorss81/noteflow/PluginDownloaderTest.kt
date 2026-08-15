@@ -1,6 +1,8 @@
 package com.authorss81.noteflow
 
 import com.authorss81.noteflow.plugins.PluginCapability
+import com.authorss81.noteflow.plugins.runtime.DEFAULT_DOWNLOAD_HOSTS
+import com.authorss81.noteflow.plugins.runtime.DEFAULT_MANIFEST_HOST
 import com.authorss81.noteflow.plugins.runtime.DownloadRequest
 import com.authorss81.noteflow.plugins.runtime.DownloadTransport
 import com.authorss81.noteflow.plugins.runtime.DownloadTransportResult
@@ -53,10 +55,12 @@ class PluginDownloaderTest {
             DownloadTransportResult.Completed(bytes.size.toLong())
         }
 
+    private val testHosts = setOf("plugins.example.com")
+
     @Test
     fun `a consented HTTPS download writes the artifact into the app-private dir`() = runBlocking {
         val dir = tmp.newFolder("plugins")
-        val downloader = PluginDownloader(writingTransport())
+        val downloader = PluginDownloader(writingTransport(), allowedDownloadHosts = testHosts)
         val progress = mutableListOf<Float>()
 
         val outcome = downloader.download(remoteEntry(), dir, userConsented = true, onProgress = { progress.add(it) })
@@ -73,11 +77,11 @@ class PluginDownloaderTest {
     fun `a download without explicit user consent is refused before any bytes move`() = runBlocking {
         val dir = tmp.newFolder("plugins")
         var touched = false
-        val downloader = PluginDownloader(DownloadTransport { request ->
+        val downloader = PluginDownloader(transport = DownloadTransport { request ->
             touched = true
             request.target.writeBytes("nope".toByteArray())
             DownloadTransportResult.Completed(4)
-        })
+        }, allowedDownloadHosts = testHosts)
 
         val outcome = downloader.download(remoteEntry(), dir, userConsented = false)
 
@@ -90,11 +94,11 @@ class PluginDownloaderTest {
     fun `a non-HTTPS url is refused`() = runBlocking {
         val dir = tmp.newFolder("plugins")
         var touched = false
-        val downloader = PluginDownloader(DownloadTransport { request ->
+        val downloader = PluginDownloader(transport = DownloadTransport { request ->
             touched = true
             request.target.writeBytes("nope".toByteArray())
             DownloadTransportResult.Completed(4)
-        })
+        }, allowedDownloadHosts = testHosts)
 
         val outcome = downloader.download(remoteEntry(url = "http://plugins.example.com/ocr.apk"), dir, userConsented = true)
 
@@ -107,11 +111,11 @@ class PluginDownloaderTest {
     fun `a bundled entry is never downloaded`() = runBlocking {
         val dir = tmp.newFolder("plugins")
         var touched = false
-        val downloader = PluginDownloader(DownloadTransport { request ->
+        val downloader = PluginDownloader(transport = DownloadTransport { request ->
             touched = true
             request.target.writeBytes("nope".toByteArray())
             DownloadTransportResult.Completed(4)
-        })
+        }, allowedDownloadHosts = testHosts)
         val bundled = remoteEntry().copy(source = PluginEntrySource.BUNDLED, downloadUrl = null, sha256 = null, pinnedCertHash = null)
 
         val outcome = downloader.download(bundled, dir, userConsented = true)
@@ -125,11 +129,11 @@ class PluginDownloaderTest {
     fun `an artifact above the hard cap is refused`() = runBlocking {
         val dir = tmp.newFolder("plugins")
         var touched = false
-        val downloader = PluginDownloader(DownloadTransport { request ->
+        val downloader = PluginDownloader(transport = DownloadTransport { request ->
             touched = true
             request.target.writeBytes("nope".toByteArray())
             DownloadTransportResult.Completed(4)
-        })
+        }, allowedDownloadHosts = testHosts)
         val huge = remoteEntry(sizeBytes = PluginDownloader.MAX_ARTIFACT_BYTES + 1)
 
         val outcome = downloader.download(huge, dir, userConsented = true)
@@ -149,7 +153,8 @@ class PluginDownloaderTest {
                 request.target.writeBytes("nope".toByteArray())
                 DownloadTransportResult.Completed(4)
             },
-            freeSpace = { 10L } // far below the 100-byte entry
+            freeSpace = { 10L }, // far below the 100-byte entry
+            allowedDownloadHosts = testHosts
         )
 
         val outcome = downloader.download(remoteEntry(), dir, userConsented = true)
@@ -162,10 +167,10 @@ class PluginDownloaderTest {
     @Test
     fun `a transport failure reports the failure and removes the partial file`() = runBlocking {
         val dir = tmp.newFolder("plugins")
-        val downloader = PluginDownloader(DownloadTransport { request ->
+        val downloader = PluginDownloader(transport = DownloadTransport { request ->
             request.target.writeBytes("partial".toByteArray())
             DownloadTransportResult.Failed("server 503")
-        })
+        }, allowedDownloadHosts = testHosts)
 
         val outcome = downloader.download(remoteEntry(), dir, userConsented = true)
 
@@ -177,10 +182,10 @@ class PluginDownloaderTest {
     @Test
     fun `a cancelled download removes the partial file and does not report success`() = runBlocking {
         val dir = tmp.newFolder("plugins")
-        val downloader = PluginDownloader(DownloadTransport { request ->
+        val downloader = PluginDownloader(transport = DownloadTransport { request ->
             request.target.writeBytes("partial".toByteArray())
             DownloadTransportResult.Completed(7)
-        })
+        }, allowedDownloadHosts = testHosts)
 
         val outcome = downloader.download(remoteEntry(), dir, userConsented = true, isActive = { false })
 
@@ -192,10 +197,10 @@ class PluginDownloaderTest {
     @Test
     fun `a coroutine cancellation rethrows and removes the partial file`() {
         val dir = tmp.newFolder("plugins")
-        val downloader = PluginDownloader(DownloadTransport { request ->
+        val downloader = PluginDownloader(transport = DownloadTransport { request ->
             request.target.writeBytes("partial".toByteArray())
             throw CancellationException("stopped")
-        })
+        }, allowedDownloadHosts = testHosts)
 
         try {
             runBlocking { downloader.download(remoteEntry(), dir, userConsented = true) }
@@ -215,11 +220,11 @@ class PluginDownloaderTest {
         val expectedResume = partial.length()
 
         var resumedFrom = -1L
-        val downloader = PluginDownloader(DownloadTransport { request ->
+        val downloader = PluginDownloader(transport = DownloadTransport { request ->
             resumedFrom = request.resumeFromBytes
             request.target.appendText("more")
             DownloadTransportResult.Completed(request.resumeFromBytes + 4)
-        })
+        }, allowedDownloadHosts = testHosts)
 
         val outcome = downloader.download(remoteEntry(), dir, userConsented = true)
 
@@ -235,5 +240,60 @@ class PluginDownloaderTest {
             "com.authorss81.noteflow.plugins.test.remote-1.0.0.apk",
             PluginDownloader.artifactFileNameFor(entry)
         )
+    }
+
+    // ---- B1-NET-03 (Phase 42): artifacts come from allow-listed hosts only ----
+
+    @Test
+    fun `a download whose host is not on the allow-list is refused before any bytes move`() = runBlocking {
+        val dir = tmp.newFolder("plugins")
+        var touched = false
+        val downloader = PluginDownloader(
+            transport = DownloadTransport { request ->
+                touched = true
+                request.target.writeBytes("nope".toByteArray())
+                DownloadTransportResult.Completed(4)
+            },
+            allowedDownloadHosts = testHosts
+        )
+
+        val outcome = downloader.download(
+            remoteEntry(url = "https://attacker.example/ocr-1.0.0.apk"),
+            dir,
+            userConsented = true
+        )
+
+        assertTrue(outcome is PluginDownloader.DownloadOutcome.Failed)
+        assertTrue((outcome as PluginDownloader.DownloadOutcome.Failed).message.contains("allow-listed"))
+        assertFalse("the unallow-listed host must never be contacted", touched)
+    }
+
+    @Test
+    fun `the production default download hosts include the manifest host and refuse everything else`() = runBlocking {
+        val dir = tmp.newFolder("plugins")
+        val downloader = PluginDownloader(
+            DownloadTransport { request ->
+                request.target.writeBytes("artifact".toByteArray())
+                DownloadTransportResult.Completed(8)
+            }
+        )
+
+        // The default allow-list hosts every artifact on the manifest host...
+        assertTrue(DEFAULT_DOWNLOAD_HOSTS.contains(DEFAULT_MANIFEST_HOST))
+        val allowed = downloader.download(
+            remoteEntry(url = "https://$DEFAULT_MANIFEST_HOST/ocr-1.0.0.apk"),
+            dir,
+            userConsented = true
+        )
+        assertTrue("manifest-host artifact -> ${(allowed as? PluginDownloader.DownloadOutcome.Failed)?.message}", allowed is PluginDownloader.DownloadOutcome.Success)
+
+        // ...and nothing else.
+        val elsewhere = downloader.download(
+            remoteEntry(url = "https://plugins.example.com/ocr-1.0.0.apk"),
+            dir,
+            userConsented = true
+        )
+        assertTrue(elsewhere is PluginDownloader.DownloadOutcome.Failed)
+        assertTrue((elsewhere as PluginDownloader.DownloadOutcome.Failed).message.contains("allow-listed"))
     }
 }

@@ -7,6 +7,8 @@ import com.authorss81.noteflow.plugins.PluginLogger
 import com.authorss81.noteflow.plugins.PluginRegistry
 import com.authorss81.noteflow.plugins.PluginStateInfo
 import com.authorss81.noteflow.plugins.PluginUninstallResult
+import com.authorss81.noteflow.plugins.runtime.CompileTimePluginPinStore
+import com.authorss81.noteflow.plugins.runtime.CompileTimePluginPins
 import com.authorss81.noteflow.plugins.runtime.ManifestFetchResult
 import com.authorss81.noteflow.plugins.runtime.PluginUpdateChecker
 import com.authorss81.noteflow.plugins.runtime.PluginUpdateInfo
@@ -47,7 +49,8 @@ class PluginStoreController(
     private val catalog: PluginStoreCatalog,
     private val logger: PluginLogger = PluginLogger.NoOp,
     private val remoteInstaller: RemotePluginInstaller? = null,
-    private val updateCoordinator: PluginUpdateCoordinator? = null
+    private val updateCoordinator: PluginUpdateCoordinator? = null,
+    private val pins: CompileTimePluginPinStore = CompileTimePluginPins.defaultStore
 ) {
 
     /** Outcome of a store "Download". */
@@ -255,7 +258,7 @@ class PluginStoreController(
                 val installedRemote = rows(context)
                     .filter { !it.entry.bundled && it.installed }
                     .map { it.entry.entry }
-                val updates = PluginUpdateChecker.check(installedRemote, fetched.manifest)
+                val updates = PluginUpdateChecker.check(installedRemote, fetched.manifest, pins)
                 if (updates.isEmpty()) UpdateCheckOutcome.UpToDate
                 else UpdateCheckOutcome.UpdatesAvailable(updates)
             }
@@ -300,7 +303,7 @@ class PluginStoreController(
             is ManifestFetchResult.Failed -> return UpdateOutcome.Failed(pluginId, fetched.message)
             is ManifestFetchResult.Loaded -> fetched.manifest
         }
-        val info = PluginUpdateChecker.check(listOf(entry), manifest)
+        val info = PluginUpdateChecker.check(listOf(entry), manifest, pins)
             .firstOrNull { it.pluginId == pluginId }
             ?: return UpdateOutcome.Failed(
                 pluginId,

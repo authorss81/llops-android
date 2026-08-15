@@ -13,10 +13,9 @@ import com.google.gson.GsonBuilder
  * - [id] must match the installed plugin's [PluginEntry.id].
  * - [version] is the latest published version (semver; the update is only
  *   offered when [version] is strictly newer than what is installed).
- * - [downloadUrl] is the HTTPS artifact URL; the pinned-cert + SHA-256 gate
- *   below is the trust anchor, so the URL host itself never needs to be a
- *   fixed allow-list (the manifest itself is authenticated by the
- *   compile-time-pinned [HttpsManifestTransport] — B1-CRYPTO-01).
+ * - [downloadUrl] is the HTTPS artifact URL, restricted to the allow-listed
+ *   download hosts ([DEFAULT_DOWNLOAD_HOSTS], which includes the manifest host)
+ *   and served over the pinned TLS transport.
  * - [sha256] is the hex SHA-256 of the NEW artifact (re-verified on download).
  * - [pinnedCertHash] is the `sha256/<base64>` pin of the NEW artifact's signing
  *   certificate AND of the TLS session that serves [downloadUrl].
@@ -26,6 +25,12 @@ import com.google.gson.GsonBuilder
  *   ("what changed").
  * - [updateChannel] must equal the installed entry's channel; a plugin only
  *   sees offers from the channel it was installed from ("stable" default).
+ *
+ * Trust note (B1-NET-03): NONE of `downloadUrl`/`sha256`/`pinnedCertHash` are
+ * trusted off the wire. [CompileTimePluginPinStore] verifies every offer
+ * against the compile-time per-plugin release table BEFORE it becomes an
+ * update; these fields only carry what the pinned manifest HAPPENS to claim,
+ * and any mismatch with the compiled-in anchor is rejected.
  */
 data class HostedPluginVersion(
     val id: String,

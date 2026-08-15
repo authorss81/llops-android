@@ -1,8 +1,10 @@
 package com.authorss81.noteflow
 
 import com.authorss81.noteflow.plugins.PluginCapability
+import com.authorss81.noteflow.plugins.runtime.CompileTimePluginPinStore
 import com.authorss81.noteflow.plugins.runtime.HostedPluginManifest
 import com.authorss81.noteflow.plugins.runtime.HostedPluginVersion
+import com.authorss81.noteflow.plugins.runtime.PinnedPluginRelease
 import com.authorss81.noteflow.plugins.runtime.PluginEntry
 import com.authorss81.noteflow.plugins.runtime.PluginEntrySource
 import com.authorss81.noteflow.plugins.runtime.PluginUpdateChecker
@@ -17,10 +19,24 @@ import org.junit.Test
  * manifest lists the installed downloadable plugin, on the same channel, with a
  * version STRICTLY newer than installed — never an equal no-op, never a
  * downgrade, and never for a bundled (compile-time) plugin.
+ *
+ * Phase 42 (B1-NET-03): an offer is additionally only offered when its
+ * sha256/pinnedCertHash match the compile-time per-plugin release pin and its
+ * download host is allow-listed — the manifest can never introduce an unpinned
+ * release.
  */
 class PluginUpdateCheckerTest {
 
     private val installedId = "com.authorss81.noteflow.plugins.remote.ocr"
+    private val testHost = "plugins.example.com"
+
+    /** A pin store that pins [installedId]@each version at the digests the
+     *  [offer] helpers use, and allows the test artifact host. */
+    private fun pinsFor(vararg versions: PluginVersion): CompileTimePluginPinStore =
+        CompileTimePluginPinStore(
+            *versions.map { PinnedPluginRelease(installedId, it, "sha-$it", "sha256/pin") }.toTypedArray(),
+            allowedDownloadHosts = setOf(testHost)
+        )
 
     private fun remoteEntry(version: PluginVersion, channel: String = "stable"): PluginEntry =
         PluginEntry(
@@ -30,7 +46,7 @@ class PluginUpdateCheckerTest {
             version = version,
             capabilities = setOf(PluginCapability.OCR),
             category = "Vision",
-            downloadUrl = "https://plugins.example.com/ocr-$version.apk",
+            downloadUrl = "https://$testHost/ocr-$version.apk",
             sha256 = "sha-${version}",
             pinnedCertHash = "sha256/pin",
             updateChannel = channel,
@@ -55,7 +71,7 @@ class PluginUpdateCheckerTest {
         HostedPluginVersion(
             id = id,
             version = version,
-            downloadUrl = "https://plugins.example.com/$id-$version.apk",
+            downloadUrl = "https://$testHost/$id-$version.apk",
             sha256 = "sha-$version",
             pinnedCertHash = "sha256/pin",
             updateChannel = channel
@@ -67,7 +83,8 @@ class PluginUpdateCheckerTest {
 
         val updates = PluginUpdateChecker.check(
             listOf(installed),
-            HostedPluginManifest(listOf(offer(PluginVersion(1, 2, 0))))
+            HostedPluginManifest(listOf(offer(PluginVersion(1, 2, 0)))),
+            pinsFor(PluginVersion(1, 2, 0))
         )
 
         assertEquals(1, updates.size)
@@ -83,7 +100,8 @@ class PluginUpdateCheckerTest {
 
         val updates = PluginUpdateChecker.check(
             listOf(installed),
-            HostedPluginManifest(listOf(offer(PluginVersion(1, 0, 0))))
+            HostedPluginManifest(listOf(offer(PluginVersion(1, 0, 0)))),
+            pinsFor(PluginVersion(1, 0, 0))
         )
 
         assertTrue(updates.isEmpty())
@@ -95,7 +113,8 @@ class PluginUpdateCheckerTest {
 
         val updates = PluginUpdateChecker.check(
             listOf(installed),
-            HostedPluginManifest(listOf(offer(PluginVersion(1, 5, 0))))
+            HostedPluginManifest(listOf(offer(PluginVersion(1, 5, 0)))),
+            pinsFor(PluginVersion(1, 5, 0))
         )
 
         assertTrue(updates.isEmpty())
@@ -107,7 +126,8 @@ class PluginUpdateCheckerTest {
 
         val updates = PluginUpdateChecker.check(
             listOf(installed),
-            HostedPluginManifest(listOf(offer(PluginVersion(1, 1, 0), channel = "beta")))
+            HostedPluginManifest(listOf(offer(PluginVersion(1, 1, 0), channel = "beta"))),
+            pinsFor(PluginVersion(1, 1, 0))
         )
 
         assertTrue(updates.isEmpty())
@@ -119,7 +139,8 @@ class PluginUpdateCheckerTest {
 
         val updates = PluginUpdateChecker.check(
             listOf(bundled),
-            HostedPluginManifest(listOf(offer(PluginVersion(1, 1, 0), id = bundled.id)))
+            HostedPluginManifest(listOf(offer(PluginVersion(1, 1, 0), id = bundled.id))),
+            pinsFor(PluginVersion(1, 1, 0))
         )
 
         assertTrue(updates.isEmpty())
@@ -131,7 +152,8 @@ class PluginUpdateCheckerTest {
 
         val updates = PluginUpdateChecker.check(
             listOf(installed),
-            HostedPluginManifest(listOf(offer(PluginVersion(9, 0, 0), id = "some.other.plugin")))
+            HostedPluginManifest(listOf(offer(PluginVersion(9, 0, 0), id = "some.other.plugin"))),
+            pinsFor(PluginVersion(9, 0, 0))
         )
 
         assertTrue(updates.isEmpty())
@@ -141,6 +163,11 @@ class PluginUpdateCheckerTest {
     fun `the offer list is deterministic and ordered by plugin id`() {
         val a = remoteEntry(PluginVersion(1, 0, 0)).copy(id = "aaa.plugin")
         val b = remoteEntry(PluginVersion(1, 0, 0)).copy(id = "bbb.plugin")
+        val pins = CompileTimePluginPinStore(
+            PinnedPluginRelease("aaa.plugin", PluginVersion(1, 1, 0), "sha-1.1.0", "sha256/pin"),
+            PinnedPluginRelease("bbb.plugin", PluginVersion(1, 1, 0), "sha-1.1.0", "sha256/pin"),
+            allowedDownloadHosts = setOf(testHost)
+        )
 
         val updates = PluginUpdateChecker.check(
             listOf(b, a),
@@ -149,7 +176,8 @@ class PluginUpdateCheckerTest {
                     offer(PluginVersion(1, 1, 0), id = "bbb.plugin"),
                     offer(PluginVersion(1, 1, 0), id = "aaa.plugin")
                 )
-            )
+            ),
+            pins
         )
 
         assertEquals(listOf("aaa.plugin", "bbb.plugin"), updates.map { it.pluginId })
@@ -159,7 +187,7 @@ class PluginUpdateCheckerTest {
     fun `an empty manifest reports no updates`() {
         val installed = remoteEntry(PluginVersion(1, 0, 0))
 
-        val updates = PluginUpdateChecker.check(listOf(installed), HostedPluginManifest(emptyList()))
+        val updates = PluginUpdateChecker.check(listOf(installed), HostedPluginManifest(emptyList()), pinsFor())
 
         assertTrue(updates.isEmpty())
     }
@@ -177,7 +205,8 @@ class PluginUpdateCheckerTest {
         )
         val update = PluginUpdateChecker.check(
             listOf(installed),
-            HostedPluginManifest(listOf(offer(PluginVersion(2, 0, 0))))
+            HostedPluginManifest(listOf(offer(PluginVersion(2, 0, 0)))),
+            pinsFor(PluginVersion(2, 0, 0))
         ).first()
 
         val target = update.toTargetEntry(installed)
@@ -187,8 +216,88 @@ class PluginUpdateCheckerTest {
         assertEquals(installed.description, target.description)
         assertEquals(installed.capabilities, target.capabilities)
         assertEquals(PluginVersion(2, 0, 0), target.version)
-        assertEquals("https://plugins.example.com/$installedId-2.0.0.apk", target.downloadUrl)
+        assertEquals("https://$testHost/$installedId-2.0.0.apk", target.downloadUrl)
         assertEquals("sha-2.0.0", target.sha256)
         assertEquals(PluginEntrySource.REMOTE, target.source)
+    }
+
+    // ---- B1-NET-03 (Phase 42): the manifest can never set the trust anchor ----
+
+    @Test
+    fun `an offer whose sha256 differs from the compile-time pin is not offered`() {
+        val installed = remoteEntry(PluginVersion(1, 0, 0))
+        val forged = offer(PluginVersion(1, 2, 0), id = installedId)
+            .copy(sha256 = "f00d") // structurally valid offer, wrong digest
+
+        val updates = PluginUpdateChecker.check(
+            listOf(installed),
+            HostedPluginManifest(listOf(forged)),
+            pinsFor(PluginVersion(1, 2, 0))
+        )
+
+        assertTrue(updates.isEmpty())
+    }
+
+    @Test
+    fun `an offer whose certificate pin differs from the compile-time pin is not offered`() {
+        val installed = remoteEntry(PluginVersion(1, 0, 0))
+        val forged = offer(PluginVersion(1, 2, 0), id = installedId)
+            .copy(pinnedCertHash = "sha256/BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=")
+
+        val updates = PluginUpdateChecker.check(
+            listOf(installed),
+            HostedPluginManifest(listOf(forged)),
+            pinsFor(PluginVersion(1, 2, 0))
+        )
+
+        assertTrue(updates.isEmpty())
+    }
+
+    @Test
+    fun `an offer for a version with no compile-time pin is not offered - fail closed`() {
+        val installed = remoteEntry(PluginVersion(1, 0, 0))
+
+        val updates = PluginUpdateChecker.check(
+            listOf(installed),
+            HostedPluginManifest(listOf(offer(PluginVersion(1, 2, 0)))),
+            // The pin table only knows about 1.0.0 — 1.2.0 was never shipped in this build.
+            pinsFor(PluginVersion(1, 0, 0))
+        )
+
+        assertTrue(updates.isEmpty())
+    }
+
+    @Test
+    fun `an offer whose download host is not allow-listed is not offered`() {
+        val installed = remoteEntry(PluginVersion(1, 0, 0))
+        val forged = offer(PluginVersion(1, 2, 0), id = installedId)
+            .copy(downloadUrl = "https://attacker.example/ocr-1.2.0.apk")
+
+        val updates = PluginUpdateChecker.check(
+            listOf(installed),
+            HostedPluginManifest(listOf(forged)),
+            pinsFor(PluginVersion(1, 2, 0))
+        )
+
+        assertTrue(updates.isEmpty())
+    }
+
+    @Test
+    fun `a pinned offer carries the compile-time pin values not the manifest text`() {
+        val installed = remoteEntry(PluginVersion(1, 0, 0))
+        // The offer's digests match the pin, but are written in UPPERCASE hex to
+        // prove the surviving PluginUpdateInfo uses the COMPILE-TIME values.
+        val uppercase = offer(PluginVersion(1, 2, 0), id = installedId)
+            .copy(sha256 = "SHA-1.2.0")
+
+        val updates = PluginUpdateChecker.check(
+            listOf(installed),
+            HostedPluginManifest(listOf(uppercase)),
+            pinsFor(PluginVersion(1, 2, 0))
+        )
+
+        assertEquals(1, updates.size)
+        // The fingerprint is the compile-time pin (lowercase), never the wire text.
+        assertEquals("sha-1.2.0", updates.first().sha256)
     }
 }
