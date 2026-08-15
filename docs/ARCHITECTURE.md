@@ -73,6 +73,15 @@
     gone. `SecurityService(context)` call sites now use `SecurityService.forDevice(context)`.
     Tests: `DekAtRestPolicyTest` (4) + `B1Crypto02DekAtRestTest` (9, incl. a source-level wiring
     pin); 978 unit tests green + `assembleDebug` green.
+  - **Phase-45 review fixes** (see `workspace/phase-45/REPORT.md` "Addendum 2"): a locked open
+    never reaches the mint path — `NoteflowSqlcipherFactory.create` reads
+    `SettingsManager.hasMasterPassword` and calls `getOrCreateDek(allowPasswordlessMint = !…)`
+    (`data/db/NoteflowDatabase.kt:345-362`), so no fresh non-auth DEK is ever minted/dropped into
+    prefs over a password-protected vault (which would also open with the wrong SQLCipher key and
+    trip the phase-43 quarantiner). `storeDek`/`clearDek`/`DekDeviceStore.clear` now report
+    success/failure; `enforceDekAtRestPolicy()` returns it and `setBiometricEnabled` commits the
+    setting only when the at-rest blob was actually written/cleared (reverts on failure). Tests:
+    B1Crypto02DekAtRestTest now 12 (+3); 981 unit tests green + `assembleDebug` green.
 - **Canvas**: `ui/components/AnnotationCanvas.kt:83` (ink canvas, gestures, layers, `pointerInteropFilter`);
   `services/WetBrushEngine.kt:13` (AGSL wet-mixing gating); `ui/components/ShaderCapabilityHelper.kt:5`
   (`isAgslSupported` = SDK ≥ 33); `services/ShapeRecognitionHelper.kt:13` (`trySnapShape()` :27).

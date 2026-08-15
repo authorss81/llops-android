@@ -15,27 +15,28 @@
 
 ### `app/src/main/kotlin/com/authorss81/noteflow/services/SecurityService.kt`
 - The device-wrapped DEK copy now lives behind an internal **`DekDeviceStore`** seam:
-  - `DekDeviceStore` (interface) + `DekDeviceBlob(encoded, authRequired)` (:150-166);
-  - `SharedPrefsDekDeviceStore` (production impl, prefs `noteflow_keystore`/`noteflow_sec_dek` + `dek_auth_required`). **`clear()` uses `commit()`** (disk-sync-acknowledged), not `.apply()`, so a process kill right after "password set" can never resurrect the non-auth blob; it also removes the stale `dek_auth_required` flag (:168-201).
-  - `class SecurityService internal constructor(dekStore)` + `SecurityService.forDevice(context)` factory (blocks Android-only construction in tests; all device call sites use it) (:32-47).
-- **`readDek()` fails closed** (:150-159): absent blob **or** `authRequired=true` blob ⇒ `null` — no passwordless unwrap is even attempted.
-- **`getOrCreateDek()` never mints over an auth-gated blob** (:161-174): if a biometric-gated copy exists it returns null rather than re-persisting a fresh non-auth key.
+  - `DekDeviceStore` (interface) + `DekDeviceBlob(encoded, authRequired)` (:216-224);
+  - `SharedPrefsDekDeviceStore` (production impl, prefs `noteflow_keystore`/`noteflow_sec_dek` + `dek_auth_required`). **`clear()` uses `commit()`** (disk-sync-acknowledged, returns the result), not `.apply()`, so a process kill right after "password set" can never resurrect the non-auth blob; it also removes the stale `dek_auth_required` flag (:236-262).
+  - `class SecurityService internal constructor(dekStore)` + `SecurityService.forDevice(context)` factory (blocks Android-only construction in tests; all device call sites use it) (:32-45).
+- **`readDek()` fails closed** (:155-173): absent blob **or** `authRequired=true` blob ⇒ `null` — no passwordless unwrap is even attempted.
+- **`getOrCreateDek()` never mints over an auth-gated blob** (:177-195): if a biometric-gated copy exists it returns null rather than re-persisting a fresh non-auth key. Post-review it also takes `allowPasswordlessMint` (default true) and refuses to mint ANYTHING when the vault is password-protected (see the factory gate below).
 
 ### `app/src/main/kotlin/com/authorss81/noteflow/services/DekAtRestPolicy.kt` (new, pure JVM)
 - `DekAtRestMode` (`DEVICE_WRAPPED_NOT_AUTHGATED` / `PASSWORD_ONLY` / `BIOMETRIC_GATED_AUTH_COPY`) + `DekAtRestPolicy.modeFor(hasMasterPassword, biometricAuthEnabled)` — the single decision table for where the DEK may live at rest.
 
 ### `app/src/main/kotlin/com/authorss81/noteflow/ui/viewmodel/NoteflowViewModel.kt`
-- `enforceDekAtRestPolicy()` (:1913-1924): `PASSWORD_ONLY` ⇒ `security.clearDek()`; `BIOMETRIC_GATED_AUTH_COPY` ⇒ `storeDek(dek, authRequired = true)` only.
+- `enforceDekAtRestPolicy()` (:1918-1936) returns `Boolean` (phase-45 review fix): `PASSWORD_ONLY` ⇒ `security.clearDek()` → the durable `commit()` result; `BIOMETRIC_GATED_AUTH_COPY` ⇒ `storeDek(dek, authRequired = true)` → its success (subscript failure surfaces instead of silently claiming "enabled"); `DEVICE_WRAPPED_NOT_AUTHGATED` ⇒ `true`.
 - Wired into:
-  - `setMasterPassword` (:1957) — after the wrapped-DEK + settings commit;
-  - `changeMasterPassword` (:1999) — replaced the inline `if (biometricAuthEnabled) storeDek(auth=true)` with the policy (also now clears any stale non-auth copy when biometrics are off);
-  - `verifyMasterPassword` (:2052) — **every password unlock** re-asserts the policy (clear non-auth; keep auth-gated only when biometrics on);
-  - `verifyBiometricsAndUnlock` (:2155) — heals any stale wrapper + pins the auth-gated copy to the current DEK;
-  - `setBiometricEnabled` (:2118-2134) — enabling ⇒ auth-gated store only; **disabling ⇒ `clearDek()`** (the pre-fix `storeDek(dek, authRequired = enabled)` non-auth re-wrap is deleted).
+  - `setMasterPassword` (:1963) — after the wrapped-DEK + settings commit;
+  - `changeMasterPassword` (:2005) — replaced the inline `if (biometricAuthEnabled) storeDek(auth=true)` with the policy (also now clears any stale non-auth copy when biometrics are off);
+  - `verifyMasterPassword` (:2058) — **every password unlock** re-asserts the policy (clear non-auth; keep auth-gated only when biometrics on);
+  - `verifyBiometricsAndUnlock` (:2171) — heals any stale wrapper + pins the auth-gated copy to the current DEK;
+  - `setBiometricEnabled` (:2124-2152) — phase-45 review fix: the TARGET state is applied first, then the policy; the setting is only persisted once the at-rest state was actually achieved (a failed auth-gated store now returns `false` and reverts `settings.biometricAuthEnabled`). The pre-fix `storeDek(dek, authRequired = enabled)` non-auth re-wrap (on disabling) is deleted.
 - Constructor call site `SecurityService(appContext)` → `SecurityService.forDevice(appContext)` (:115).
 
 ### `app/src/main/kotlin/com/authorss81/noteflow/data/db/NoteflowDatabase.kt`
 - `NoteflowSqlcipherFactory` call site `SecurityService(context)` → `SecurityService.forDevice(context)` (:345). The factory's `getOrCreateDek()` fallback can no longer resurrect the *real* DEK from prefs (that blob is gone once a password exists).
+- **Phase-45 review fix** (:345-362): a locked open (`VaultKeyHolder.dek == null`) on a password-protected vault now fails closed instead of reaching `getOrCreateDek()`. The factory reads `SettingsManager.hasMasterPassword` and calls `getOrCreateDek(allowPasswordlessMint = !passwordProtected)`. Before this, a locked open would mint a FRESH non-auth DEK — recreating the bypass blob AND opening the real vault with the wrong SQLCipher passphrase (`SQLiteNotADatabaseException` → the phase-43 classifier quarantines a healthy vault).
 
 ## Verification output
 
@@ -116,3 +117,53 @@ in `ba74d5d`) and phase-43 (`55671e1`): `.no_work` renamed to `.done`,
 `.attempts` deleted, everything committed + pushed so `select-phase` stops
 re-selecting this completed phase. No code, schema, dependencies, or
 `.github/workflows/` changed in this addendum.
+
+---
+
+## Addendum 2 — review FINDINGS fixed (2026-08-15)
+
+The phase-45 review raised eight findings; all actionable ones are fixed here.
+
+1. **HIGH — locked open could mint a fresh non-auth DEK over a password-protected
+   vault.** `NoteflowSqlcipherFactory.create` now reads
+   `SettingsManager.hasMasterPassword` and calls
+   `security.getOrCreateDek(allowPasswordlessMint = !passwordProtected)`
+   (`NoteflowDatabase.kt:345-362`); `getOrCreateDek` itself also refuses to mint
+   when the gate is off (`SecurityService.kt:177-195`). A locked open now fails
+   closed (`VaultKeyHolder.dek == null` → the existing "Vault is locked" throw)
+   instead of minting a wrong-key DEK that would both recreate the non-auth blob
+   and trip the phase-43 quarantiner via `SQLiteNotADatabaseException`.
+2. **MEDIUM — `setBiometricEnabled(true, …)` could report success with no usable
+   blob.** `storeDek` (`SecurityService.kt:127-150`) and `clearDek`/`DekDeviceStore.clear`
+   (`SecurityService.kt:206-212`, `:216-220`, `:251-256`) now return success/failure;
+   `enforceDekAtRestPolicy()` (`NoteflowViewModel.kt:1918-1936`) propagates it;
+   `setBiometricEnabled` applies the target state first, persists the setting only
+   when the at-rest state was actually achieved, and reverts on failure
+   (`NoteflowViewModel.kt:2124-2152`).
+3. (folded into 2) the enable path no longer swallows a failed auth-gated store.
+4. (kept as-is) unlock flows re-assert the policy best-effort; the durable success
+   contract lives in the factory gate + `setBiometricEnabled`, which are the user-
+   and attacker-reachable guarantees.
+5. **NEW TESTS** (981 total, +3 over 978): `locked open never mints a fresh DEK
+   over a password-protected vault`, `passwordless vault may still mint when a
+   device copy is missing`, `db factory must gate passwordless minting on the
+   master-password state` (source-level wiring pin for `NoteflowDatabase.kt`).
+   The passwordless-boot test now asserts the non-gated copy is *preserved*
+   (formerly asserted against an empty fake store).
+6. **Marker hygiene corrected again**: the review run re-created `.no_work`,
+   `.deferred`, `.deferred_attempts`, `.session` alongside `.done`; all stale
+   markers removed, `.done` kept.
+7. **REPORT `file:line` anchors refreshed** to the current tree (fed from the
+   post-fix line numbers above).
+8. (cosmetic) trailing newlines added to `SecurityService.kt` and
+   `DekAtRestPolicy.kt`.
+
+Verified on this tree: `gradle :app:testDebugUnitTest` → **981 tests / 0
+failures / 0 errors / 0 skipped** (94 suites). One unrelated pre-existing flaky
+test (`WikiLinkParserCacheUnitTest#a cancelled scan propagates cancellation…`,
+coroutine-cancellation timing) failed on one full-suite run, then passed in
+isolation and on the final full-suite run; it is untouched by this diff.
+`gradle :app:assembleDebug` → **BUILD SUCCESSFUL**.
+
+Scope remains tight: no schema change, no migration, no new dependencies,
+`.github/workflows/` untouched.

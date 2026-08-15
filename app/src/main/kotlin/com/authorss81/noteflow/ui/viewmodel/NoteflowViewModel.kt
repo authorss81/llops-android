@@ -1909,16 +1909,22 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
      * KEK. When biometrics are explicitly ON, the device copy is (re)persisted with
      * `authRequired = true` (biometric-gated) — the pre-fix code re-wrapped the DEK
      * under the NON-auth keystore key here, a second instantiation of the bypass.
+     *
+     * Returns true only when the at-rest DEK state was actually achieved (the
+     * device copy is durably absent in PASSWORD_ONLY mode, or the auth-gated blob
+     * was successfully written in BIOMETRIC_GATED mode) — phase-45 review fix so
+     * callers never report success over a failed keystore write or failed clear.
      */
-    private fun enforceDekAtRestPolicy() {
-        when (DekAtRestPolicy.modeFor(settings.hasMasterPassword, settings.biometricAuthEnabled)) {
+    private fun enforceDekAtRestPolicy(): Boolean {
+        return when (DekAtRestPolicy.modeFor(settings.hasMasterPassword, settings.biometricAuthEnabled)) {
             DekAtRestMode.PASSWORD_ONLY -> security.clearDek()
             DekAtRestMode.BIOMETRIC_GATED_AUTH_COPY -> {
                 val dek = repository.encryptionKey
-                if (dek != null) security.storeDek(dek, authRequired = true)
+                if (dek != null) security.storeDek(dek, authRequired = true) else false
             }
             DekAtRestMode.DEVICE_WRAPPED_NOT_AUTHGATED -> {
                 // No master password: the passwordless-boot path owns the device copy.
+                true
             }
         }
     }
@@ -2119,17 +2125,27 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         if (!verifyMasterPassword(password)) return false
         if (repository.encryptionKey == null) return false
 
+        val previous = settings.biometricAuthEnabled
         return try {
+            // B1-CRYPTO-02 (phase-45): the pre-fix code flipped the setting and
+            // wrote the device copy with authRequired bound to the `enabled` flag —
+            // which, on disabling, wrote a NON-auth copy (a second instantiation of
+            // the bypass), and on ANY store failure returned success anyway. Apply the
+            // TARGET state FIRST so enforceDekAtRestPolicy evaluates the new mode,
+            // then only persist the setting once the at-rest state was actually
+            // achieved: enabling stores the device copy ONLY as the auth-required
+            // (biometric-gated) blob, disabling removes it entirely.
             settings.biometricAuthEnabled = enabled
+            val enforced = enforceDekAtRestPolicy()
+            if (!enforced) {
+                settings.biometricAuthEnabled = previous
+                return false
+            }
             _biometricEnabled.value = enabled
-            // B1-CRYPTO-02 (phase-45): enabling persists the device copy ONLY as the
-            // auth-required (biometric-gated) blob; disabling removes it entirely.
-            // Pre-fix, disabling stored a NON-auth copy — a second instantiation of
-            // the bypass.
-            enforceDekAtRestPolicy()
             true
         } catch (e: Exception) {
-            return false
+            settings.biometricAuthEnabled = previous
+            false
         }
     }
 

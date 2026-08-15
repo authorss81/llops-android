@@ -343,7 +343,20 @@ abstract class NoteflowDatabase : RoomDatabase() {
                 var dek = VaultKeyHolder.dek
                 if (dek == null) {
                     val security = com.authorss81.noteflow.services.SecurityService.forDevice(context)
-                    dek = security.getOrCreateDek()
+                    // B1-CRYPTO-02 (phase-45 review fix): when a master password
+                    // exists the ONLY at-rest wrapping of the vault DEK is the
+                    // password-derived KEK — there is deliberately NO device copy.
+                    // A locked open (VaultKeyHolder.dek == null) must fail closed
+                    // here instead of calling getOrCreateDek(), which would mint a
+                    // FRESH non-auth DEK: that both re-creates the bypass blob and,
+                    // used as the SQLCipher passphrase against the real vault,
+                    // throws SQLiteNotADatabaseException → the phase-43 classifier
+                    // quarantines a perfectly healthy vault. The run-time flows are
+                    // gated on auth (dbGate), this is defense-in-depth for any
+                    // un-gated open.
+                    val passwordProtected =
+                        com.authorss81.noteflow.services.SettingsManager(context.applicationContext).hasMasterPassword
+                    dek = security.getOrCreateDek(allowPasswordlessMint = !passwordProtected)
                     if (dek != null) {
                         VaultKeyHolder.dek = dek
                     }

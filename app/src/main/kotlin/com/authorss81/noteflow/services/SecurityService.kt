@@ -113,22 +113,35 @@ class SecurityService internal constructor(
         }
     }
 
-    fun storeDek(dek: ByteArray, authRequired: Boolean = false) {
-        try {
+    /**
+     * Wraps [dek] under the AndroidKeyStore key and persists it as the device
+     * copy. Returns true only when the wrap + persistence both succeeded.
+     *
+     * B1-CRYPTO-02 (phase-45 review fix): the previous implementation swallowed
+     * every keystore/AEAD exception and returned Unit, so the master-password
+     * flows could report "biometrics enabled / device copy written" while the
+     * at-rest state was actually absent or stale. Failures now surface to the
+     * caller ([NoteflowViewModel.enforceDekAtRestPolicy]) so the biometrics
+     * setting is only committed when the auth-gated blob demonstrably exists.
+     */
+    fun storeDek(dek: ByteArray, authRequired: Boolean = false): Boolean {
+        return try {
             val secretKey = getOrCreateKey(authRequired)
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.ENCRYPT_MODE, secretKey)
             val iv = cipher.iv
             val encryptedDek = cipher.doFinal(dek)
-     
+
             val combined = ByteArray(iv.size + encryptedDek.size)
             System.arraycopy(iv, 0, combined, 0, iv.size)
             System.arraycopy(encryptedDek, 0, combined, iv.size, encryptedDek.size)
-     
+
             val encoded = Base64.encodeToString(combined, Base64.NO_WRAP)
             dekStore.write(DekDeviceBlob(encoded, authRequired))
+            true
         } catch (e: Exception) {
-            // Log/ignore keystore failure to avoid crashing app startup
+            // Return the failure to the caller instead of crashing app startup.
+            false
         }
     }
  
@@ -161,13 +174,22 @@ class SecurityService internal constructor(
         }
     }
 
-    fun getOrCreateDek(): ByteArray? {
+    fun getOrCreateDek(allowPasswordlessMint: Boolean = true): ByteArray? {
         val existing = readDek()
         if (existing != null) return existing
         val blob = dekStore.read()
         // A biometric-gated device copy exists but was not unlockable without the
         // biometric flow: never silently mint/re-persist a fresh fallback key.
         if (blob != null && blob.authRequired) return null
+        // B1-CRYPTO-02 (phase-45 review fix): when a master password exists the
+        // ONLY at-rest wrapping of the DEK is the password-derived KEK. A locked
+        // open (VaultKeyHolder.dek == null) must NOT mint a fresh non-auth DEK —
+        // that would both recreate the bypass blob AND open the vault with the
+        // wrong SQLCipher passphrase (SQLiteNotADatabaseException → phase-43
+        // quarantine). The DB factory gates this with
+        // `allowPasswordlessMint = !settings.hasMasterPassword`; belt-and-braces
+        // here so no future caller can re-open the mint path on a protected vault.
+        if (!allowPasswordlessMint) return null
 
         val newDek = EncryptionService.generateDek()
         storeDek(newDek, authRequired = false)
@@ -177,10 +199,12 @@ class SecurityService internal constructor(
     /**
      * Removes the device-wrapped DEK copy completely (B1-CRYPTO-02). After this,
      * [readDek] returns null with no credential and the ONLY at-rest wrapping of
-     * the vault DEK is the password-derived KEK in settings.
+     * the vault DEK is the password-derived KEK in settings. Returns the durable
+     * clear result so the caller only reports success once the blob is
+     * disk-acknowledged-gone.
      */
-    fun clearDek() {
-        dekStore.clear()
+    fun clearDek(): Boolean {
+        return dekStore.clear()
     }
 }
 
@@ -192,7 +216,8 @@ class SecurityService internal constructor(
 internal interface DekDeviceStore {
     fun read(): DekDeviceBlob?
     fun write(blob: DekDeviceBlob)
-    fun clear()
+    /** True when the device copy was durably removed. */
+    fun clear(): Boolean
 }
 
 /** The persisted wrapper: Base64(iv + AES-GCM(DEK)) plus the auth-gating flag. */
@@ -223,8 +248,8 @@ internal class SharedPrefsDekDeviceStore(context: Context) : DekDeviceStore {
             .apply()
     }
 
-    override fun clear() {
-        prefs.edit()
+    override fun clear(): Boolean {
+        return prefs.edit()
             .remove(KEY_DEK)
             .remove(KEY_AUTH_REQUIRED)
             .commit()

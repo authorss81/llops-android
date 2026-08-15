@@ -7,6 +7,7 @@ import com.authorss81.noteflow.services.DekDeviceStore
 import com.authorss81.noteflow.services.EncryptionService
 import com.authorss81.noteflow.services.SecurityService
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -41,18 +42,19 @@ class B1Crypto02DekAtRestTest {
             this.blob = blob
             writes++
         }
-        override fun clear() {
+        override fun clear(): Boolean {
             blob = null
             clears++
+            return true
         }
     }
 
     /** Mirror of `NoteflowViewModel.enforceDekAtRestPolicy`. */
-    private fun enforce(security: SecurityService, hasPassword: Boolean, biometrics: Boolean, dek: ByteArray?) {
-        when (DekAtRestPolicy.modeFor(hasPassword, biometrics)) {
+    private fun enforce(security: SecurityService, hasPassword: Boolean, biometrics: Boolean, dek: ByteArray?): Boolean {
+        return when (DekAtRestPolicy.modeFor(hasPassword, biometrics)) {
             DekAtRestMode.PASSWORD_ONLY -> security.clearDek()
-            DekAtRestMode.BIOMETRIC_GATED_AUTH_COPY -> if (dek != null) security.storeDek(dek, authRequired = true)
-            DekAtRestMode.DEVICE_WRAPPED_NOT_AUTHGATED -> Unit
+            DekAtRestMode.BIOMETRIC_GATED_AUTH_COPY -> if (dek != null) security.storeDek(dek, authRequired = true) else false
+            DekAtRestMode.DEVICE_WRAPPED_NOT_AUTHGATED -> true
         }
     }
 
@@ -144,13 +146,49 @@ class B1Crypto02DekAtRestTest {
     @Test
     fun `passwordless boot keeps a readable device copy`() {
         val store = FakeDekDeviceStore()
+        // The passwordless init path (NoteflowViewModel.init) mints + persists the
+        // non-gated device copy; the policy must leave it untouched so the vault
+        // boots without a credential.
+        store.blob = DekDeviceBlob("cHJlLXZhdWx0LmRldmljZS1jb3B5", authRequired = false)
         val security = SecurityService(store)
 
-        enforce(security, hasPassword = false, biometrics = false, dek = ByteArray(32) { 4 })
-        // DEVICE_WRAPPED_NOT_AUTHGATED does not touch the store — the init path
-        // owns it — but readDek must not be blocked by the policy.
-        assertEquals(0, store.clears)
-        assertNull(security.readDek())
+        val enforced = enforce(security, hasPassword = false, biometrics = false, dek = ByteArray(32) { 4 })
+
+        assertTrue("passwordless mode must enforce successfully", enforced)
+        assertEquals("the passwordless device copy must not be cleared", 0, store.clears)
+        assertEquals("nothing may be re-written either", 0, store.writes)
+        assertNotNull("the device copy stays at rest for the boot credential", store.read())
+    }
+
+    // ---------- phase-45 review fix: locked open must never mint a DEK ----------
+
+    @Test
+    fun `locked open never mints a fresh DEK over a password-protected vault`() {
+        val store = FakeDekDeviceStore()
+        // Master password + biometrics OFF: the device copy was cleared at
+        // setMasterPassword, so a locked open (VaultKeyHolder.dek == null) hits
+        // getOrCreateDek with an empty store.
+        val security = SecurityService(store)
+
+        val minted = security.getOrCreateDek(allowPasswordlessMint = false)
+
+        assertNull("a locked open must fail closed instead of minting a fresh DEK", minted)
+        assertNull("and must not leave a fresh non-auth blob at rest", store.read())
+        assertEquals("no write may be emitted for a password-protected vault", 0, store.writes)
+    }
+
+    @Test
+    fun `passwordless vault may still mint when a device copy is missing`() {
+        val store = FakeDekDeviceStore()
+        val security = SecurityService(store)
+
+        val minted = security.getOrCreateDek(allowPasswordlessMint = true)
+
+        assertNotNull(
+            "passwordless boot is allowed to mint its own DEK (storeDek persistence is " +
+                "device-runtime-only and needs AndroidKeyStore, unavailable on the JVM)",
+            minted
+        )
     }
 
     @Test
@@ -217,6 +255,29 @@ class B1Crypto02DekAtRestTest {
                 .substringBefore("fun getBiometricCipher", "END")
                 .contains("storeDek(dek, authRequired = enabled)")
         )
+    }
+
+    @Test
+    fun `db factory must gate passwordless minting on the master-password state`() {
+        val source = readNoteflowDatabaseSource()
+        val factoryBlock = source.substringAfter("NoteflowSqlcipherFactory", "END")
+        assertTrue(
+            "NoteflowSqlcipherFactory must never mint a DEK when a master password exists",
+            factoryBlock.contains("allowPasswordlessMint")
+        )
+        assertTrue(
+            "the gate must read the master-password state from settings",
+            factoryBlock.contains("hasMasterPassword")
+        )
+    }
+
+    private fun readNoteflowDatabaseSource(): String {
+        val file = java.io.File(
+            repoRoot(),
+            "app/src/main/kotlin/com/authorss81/noteflow/data/db/NoteflowDatabase.kt"
+        )
+        assertTrue("NoteflowDatabase.kt must exist", file.isFile)
+        return file.readText()
     }
 
     private fun readNoteflowViewModelSource(): String {
