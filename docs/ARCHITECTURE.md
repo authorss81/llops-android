@@ -13,7 +13,7 @@
 | `data/model/` | `Entities.kt`, `StrokeModels.kt` | Room entities (8) + stroke/ink types |
 | `data/db/` | `NoteflowDatabase.kt`, `Daos.kt` | Room DB (schema v9, 8 DAOs), corrupt-DB quarantine |
 | `data/repository/` | `NoteRepository.kt`, `LruBoundedMap.kt` | Encrypted read/write, search corpus, WAL checkpoint, re-key |
-| `services/` | `EncryptionService.kt`, `SecurityService.kt`, `DatabaseSecurityHelper.kt`, `VaultKeyHolder.kt`, `WetBrushEngine.kt`, `WebDavSyncService.kt`, `ImportExportService.kt`, `PaletteCatalog.kt`, `ShapeRecognitionHelper.kt` | Non-UI: crypto/vault, brush math, sync, import/export, palette |
+| `services/` | `EncryptionService.kt`, `SecurityService.kt`, `DatabaseSecurityHelper.kt`, `VaultKeyHolder.kt`, `WetBrushEngine.kt`, `WebDavSyncService.kt`, `ImportExportService.kt`, `PaletteCatalog.kt`, `ShapeRecognitionHelper.kt`, `SsrfHostPolicy.kt` | Non-UI: crypto/vault, brush math, sync, import/export, palette, SSRF blocklist (B1-NET-04) |
 | `services/localsend/` | `LocalSendProtocol.kt`, `LocalSendSender.kt`, `LocalSendPairing.kt`, `SettingsLocalSendPairedDeviceStore.kt` | Pure-JVM LocalSend v2.2 + real network sender + TOFU pairing gate (B1-NET-02) |
 | `plugins/` | `NoteflowPlugin.kt`, `PluginRegistry.kt`, `PluginManager.kt`, `PluginDiagnostics.kt`, `PluginLifecycle.kt` | Compile-time plugin framework + typed serving interfaces |
 | `plugins/runtime/` | `RuntimePluginLoader.kt`, `SignatureVerifiedPluginRuntime.kt`, `ArtifactSignatureVerifier.kt`, `PinnedCertHash.kt`, `PinnedTlsConnector.kt`, `PluginManifestFetcher.kt`, `HttpsPluginDownloadTransport.kt`, `PluginDownloader.kt`, `PluginUpdateEngine.kt`, `CompileTimePluginPinStore.kt`, `PluginFrameworkClassLoader.kt`, `ArtifactStaticScan.kt` | Downloadable-plugin runtime: pinned-cert verify (manifest + artifact transports, no redirects), DexClassLoader (scoped `plugins.*`-only parent), verify-time static content scan (B1-AUTH-01), updates |
@@ -254,6 +254,18 @@
     (constant-time checked, mismatch refuses) or an explicit "fingerprints match"
     acknowledgement, plus a per-send confirmation; `200` to `/prepare-upload` is
     zero evidence of consent.
+- **Web Capture / Citation fetch (SSRF)**: `services/SsrfHostPolicy.kt:30` (shared pure-JVM host
+  blocklist — loopback/RFC-1918/link-local-metadata/CGNAT/ULA/`.local`/embedded-IPv4, structural, no DNS),
+  `plugins/webcapture/WebPageFetchPolicy.kt:31` (`validateUrl`) + `:80` (`rejectHop`),
+  `plugins/webcapture/WebPageFetcher.kt:22` (every-hop revalidation + redirect-advance fix),
+  `plugins/citation/HttpsTitleFetcher.kt:39` (manual 5-hop redirect loop, hop-scheme+blocklist
+  revalidation, `instanceFollowRedirects=false`), `plugins/citation/CitationFormatterCore.kt:26`.
+  - **Implemented in phase-51**: B1-NET-04 closed — Web Capture and Citation title-fetch can no
+    longer reach localhost/LAN/cloud-metadata endpoints, either directly or via a redirect hop:
+    entry gates refuse blocked hosts (`WebPageFetchPolicy.validateUrl`,
+    `CitationFormatterCore.validateUrl`) and every redirect `Location` is re-parsed and re-validated
+    against the same scheme allow-list + `SsrfHostPolicy` before connecting (incl. an HTTPS→HTTP
+    downgrade refusal under the citation fetcher's default `httpsOnly`). See `workspace/phase-51/REPORT.md`.
 - **Palette**: `services/PaletteCatalog.kt:131` (swatches + `familyFor`), `PaletteMath` :24.
 - **Brush preview**: `ui/components/PenNibVisualPreview.kt:50` (driven by `services/NibPreviewMath.kt`).
 - **Glass theme**: `theme/GlassSurfaces.kt:44` (`GlassBlurGate`), :80 (`GlassSurfaceMath`), :140

@@ -21,12 +21,13 @@ class WebPageFetcher {
 
     private fun doFetch(url: String): String {
         var cur = URI(url)
-        repeat(MAX_REDIRECTS + 1) { hop ->
-            if (hop > 0) {
-                val scheme = cur.scheme?.lowercase()
-                if (scheme != "http" && scheme != "https") {
-                    throw IOException("Redirected to a non-http(s) address — blocked.")
-                }
+        repeat(MAX_REDIRECTS + 1) { _ ->
+            // Re-apply the entry policy to EVERY hop (B1-NET-04): a redirect
+            // target is parsed and validated against the same scheme
+            // allow-list + SSRF host blocklist before any connection is made.
+            val hopError = WebPageFetchPolicy.rejectHop(cur.toString())
+            if (hopError != null) {
+                throw IOException(hopError)
             }
             val conn = (cur.toURL().openConnection() as? HttpURLConnection)
                 ?: throw IOException("Unsupported protocol.")
@@ -41,9 +42,15 @@ class WebPageFetcher {
                 if (status in 300..399) {
                     val loc = conn.getHeaderField("Location")
                         ?: throw IOException("Redirect without a Location.")
-                    if (cur.resolve(loc).toString() == cur.toString()) {
+                    val resolved = cur.resolve(loc)
+                    if (resolved.toString() == cur.toString()) {
                         throw IOException("Redirect loop detected.")
                     }
+                    val nextError = WebPageFetchPolicy.rejectHop(resolved.toString())
+                    if (nextError != null) {
+                        throw IOException(nextError)
+                    }
+                    cur = resolved
                     return@repeat
                 }
                 if (status !in 200..299) {

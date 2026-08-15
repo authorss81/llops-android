@@ -1,5 +1,8 @@
 package com.authorss81.noteflow.plugins.citation
 
+import com.authorss81.noteflow.services.SsrfHostPolicy
+import java.net.URI
+
 /**
  * PURE JVM citation core for the Citation Formatter plugin (Phase 26).
  *
@@ -17,7 +20,10 @@ object CitationFormatterCore {
 
     /**
      * Normalise + validate a user-pasted URL. Only `http(s)` schemes are
-     * accepted; a bare hostname (`example.com`) is upgraded to https.
+     * accepted; a bare hostname (`example.com`) is upgraded to https. The host
+     * is additionally checked against [SsrfHostPolicy], so loopback / private /
+     * link-local / `.local` destinations are refused before any title fetch
+     * (B1-NET-04) — same policy the title fetcher re-applies on every hop.
      */
     fun validateUrl(input: String): UrlCheck {
         var candidate = input.trim()
@@ -29,10 +35,15 @@ object CitationFormatterCore {
         if (scheme != "https" && scheme != "http") {
             return UrlCheck.Invalid("Only http(s) URLs can be cited (got \"$scheme://…\").")
         }
-        val rest = candidate.substringAfter("://")
-        val host = rest.substringBefore("/").substringBefore("?").substringBefore("#")
-        if (host.isBlank() || !host.contains('.')) {
+        val uri = runCatching { URI(candidate) }.getOrNull()
+            ?: return UrlCheck.Invalid("That doesn't look like a valid URL.")
+        val host = uri.host
+        if (host.isNullOrBlank() || !host.contains('.')) {
             return UrlCheck.Invalid("That doesn't look like a valid URL.")
+        }
+        val blocked = SsrfHostPolicy.blockedReason(host)
+        if (blocked != null) {
+            return UrlCheck.Invalid(blocked)
         }
         return UrlCheck.Valid(candidate)
     }
