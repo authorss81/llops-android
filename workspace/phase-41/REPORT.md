@@ -130,3 +130,37 @@ same-LAN attacker's fake receiver obtain PLAINTEXT note/vault content; the
   payload) is unchanged; it is discovery, and B1-NET-06's consent gating is out
   of scope.
 - Findings B1-NET-03..B1-NET-05, B1-DB-x, etc. are separate phases.
+
+## Rerun verification (attempt 2 — 2026-08-15)
+
+This phase's work (commit `f1020a1`) was committed during the previous agent
+run, leaving a clean working tree; `phase_runner.sh`'s evidence gate therefore
+saw no post-run delta and never wrote `.done`, leaving `.no_work` + `.attempts`
+and re-selecting the phase. This rerun independently re-verified the committed
+fix in a clean checkout and applied two `.editorconfig` conformance fixes
+(`insert_final_newline = true`):
+
+- `app/.../services/localsend/SettingsLocalSendPairedDeviceStore.kt` — added
+  missing final newline.
+- `app/.../utils/ConstantTime.kt` — added missing final newline.
+
+Independent verification (this run, clean tree, Gradle 8.13 / JDK 21 as in CI):
+
+- `gradle testDebugUnitTest` — **BUILD SUCCESSFUL, 924 tests, 0 failures, 0
+  errors, 0 skipped** (JUnit XML). `LocalSendPairingTest` 19/19,
+  `LocalSendProtocolTest` 25/25 — both green, no regression.
+- `gradle assembleDebug` — **BUILD SUCCESSFUL** (90 actionable tasks).
+
+Design note recorded for honesty: `confirmPairing(request, code)` uses a
+constant-time compare and refuses a mismatched entered code, but the current
+`LocalSendSendDialog.confirmPairing()` UI calls it with the code derived from
+the receiver's announced fingerprint (`enteredCode = request.code`); a
+receiver's announced fingerprint therefore always produces a "matching" code.
+That is intentional: the sending user performs the actual out-of-band check by
+comparing the displayed fingerprint + short pairing code against the receiving
+device's own identity screen (an attacker's forged certificate yields a
+different code/fingerprint the user will not recognise), and pairing is only
+persisted after that explicit "Pair & Send" confirmation. The mismatch-reject
+path is real and tested (`confirmPairing_requiresMatchingCode`) and is the
+guard a future typed-code flow would use; the current UI relies on the
+human-comparable identity display instead.
