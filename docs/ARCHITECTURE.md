@@ -343,6 +343,18 @@
     the NFLB2 password-v2 path are untouched. `HomeScreen` picker refuses a PK zip with a
     snackbar before any confirm dialog; the device-keyed legacy dialog warns UNTRUSTED/UNSIGNED.
     Tests: `B1Db07PlainZipRestoreRejectedTest` (12) — 1154 green.
+  - **Implemented in phase-59** (B1-PLAT-3, see `workspace/phase-59/REPORT.md`): no export
+    auto-writes to public Downloads. New pure-JVM `services/ExportDestinationPolicy.kt` classifies
+    every `ExportKind` (`ENCRYPTED_BACKUP`, `OBSIDIAN_VAULT`, `HTML_SITE`, `VAULT_ZIP`, `PAGE_PNG`,
+    `PAGE_WEBP`, `PAGE_PDF`, `DOCUMENT_PDF`, `NOTE_HTML`, `LAYERED_PSD`) — MIME + suggested name +
+    `requiresPlaintextWarning` (true only for the whole-vault plaintext kinds). New
+    `ui/components/SaFExporter.kt` (`rememberSaFExporter`) is the SINGLE route for every user-facing
+    export: `ACTION_CREATE_DOCUMENT` picker (API 19+, below minSdk 26, no fallback) with a bold
+    "Export is NOT encrypted" consent dialog ahead of the picker for the 3 whole-vault plaintext
+    kinds, and transfer-then-delete of the cacheDir staging copy on success. All 6 public-Downloads
+    copies in `ImportExportService.kt` + the PSD copy are removed; HomeScreen (5 flows) +
+    EditorScreen (7 flows) route through the exporter; LocalSend's cacheDir payload path unchanged.
+    Tests: `ExportDestinationPolicyTest` (11) + `B1Plat03ExportConsentTest` (5) — 1196 total.
 
 ## Build / CI essentials
 

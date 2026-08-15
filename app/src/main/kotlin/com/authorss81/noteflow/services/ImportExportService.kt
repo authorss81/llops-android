@@ -281,16 +281,9 @@ object ImportExportService {
             }
             bitmap.recycle()
 
-            try {
-                val downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
-                if (downloadsDir.exists()) {
-                    val publicFile = File(downloadsDir, outFile.name)
-                    outFile.copyTo(publicFile, overwrite = true)
-                }
-            } catch (e: Exception) {
-                Log.w("ImportExportService", "Failed to copy export file to Downloads", e)
-            }
-
+            // B1-PLAT-3 (phase-59): NO auto-copy to public Downloads. The file stays
+            // app-private in cacheDir; the UI delivers it to a user-picked SAF
+            // destination (see SaFExporter + ExportDestinationPolicy).
             outFile
         } catch (e: Exception) {
             Log.e("ImportExportService", "Failed to export annotated page", e)
@@ -370,16 +363,8 @@ object ImportExportService {
             FileOutputStream(outFile).use { pdfDoc.writeTo(it) }
             pdfDoc.close()
 
-            try {
-                val downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
-                if (downloadsDir.exists()) {
-                    val publicFile = File(downloadsDir, outFile.name)
-                    outFile.copyTo(publicFile, overwrite = true)
-                }
-            } catch (e: Exception) {
-                Log.w("ImportExportService", "Failed to copy document PDF to Downloads", e)
-            }
-
+            // B1-PLAT-3 (phase-59): no auto-copy to public Downloads — the document
+            // PDF stays app-private in cacheDir until the user picks a destination.
             outFile
         } catch (e: Exception) {
             Log.e("ImportExportService", "Failed to export document as PDF", e)
@@ -2025,16 +2010,8 @@ object ImportExportService {
                 zos.closeEntry()
             }
 
-            try {
-                val downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
-                if (downloadsDir.exists()) {
-                    val publicFile = File(downloadsDir, zipFile.name)
-                    zipFile.copyTo(publicFile, overwrite = true)
-                }
-            } catch (e: Exception) {
-                Log.w("ImportExportService", "Failed to copy vault ZIP to Downloads", e)
-            }
-
+            // B1-PLAT-3 (phase-59): no auto-copy to public Downloads — the vault zip
+            // stays app-private in cacheDir until the user picks a destination.
             zipFile
         } catch (e: Exception) {
             Log.e("ImportExportService", "Failed to export vault to ZIP", e)
@@ -2193,14 +2170,8 @@ object ImportExportService {
 
             FileOutputStream(htmlFile).use { it.write(htmlDocument.toByteArray(Charsets.UTF_8)) }
 
-            try {
-                val downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
-                if (downloadsDir.exists()) {
-                    val publicFile = File(downloadsDir, htmlFile.name)
-                    htmlFile.copyTo(publicFile, overwrite = true)
-                }
-            } catch (_: Exception) {}
-
+            // B1-PLAT-3 (phase-59): no auto-copy to public Downloads — the HTML note
+            // stays app-private in cacheDir until the user picks a destination.
             htmlFile
         } catch (e: Exception) {
             Log.e("ImportExportService", "Failed to export note to HTML", e)
@@ -2247,14 +2218,8 @@ object ImportExportService {
                 zos.closeEntry()
             }
 
-            try {
-                val downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
-                if (downloadsDir.exists()) {
-                    val publicFile = File(downloadsDir, zipFile.name)
-                    zipFile.copyTo(publicFile, overwrite = true)
-                }
-            } catch (_: Exception) {}
-
+            // B1-PLAT-3 (phase-59): no auto-copy to public Downloads — the HTML site
+            // zip stays app-private in cacheDir until the user picks a destination.
             zipFile
         } catch (e: Exception) {
             Log.e("ImportExportService", "Failed to export vault HTML site", e)
@@ -2387,14 +2352,8 @@ object ImportExportService {
                 zos.closeEntry()
             }
 
-            try {
-                val downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
-                if (downloadsDir.exists()) {
-                    val publicFile = File(downloadsDir, zipFile.name)
-                    zipFile.copyTo(publicFile, overwrite = true)
-                }
-            } catch (_: Exception) {}
-
+            // B1-PLAT-3 (phase-59): no auto-copy to public Downloads — the Obsidian
+            // vault zip stays app-private in cacheDir until the user picks a destination.
             zipFile
         } catch (e: Exception) {
             Log.e("ImportExportService", "Failed to export Obsidian Vault ZIP", e)

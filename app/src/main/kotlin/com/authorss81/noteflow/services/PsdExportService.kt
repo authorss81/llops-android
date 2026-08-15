@@ -92,15 +92,8 @@ object PsdExportService {
                 }
             }
 
-            // Copy to public Downloads
-            try {
-                val downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
-                if (downloadsDir.exists()) {
-                    val publicFile = File(downloadsDir, psdFile.name)
-                    psdFile.copyTo(publicFile, overwrite = true)
-                }
-            } catch (_: Exception) {}
-
+            // B1-PLAT-3 (phase-59): no auto-copy to public Downloads — the PSD stays
+            // app-private in cacheDir until the user picks a destination.
             psdFile
         } catch (e: Exception) {
             null

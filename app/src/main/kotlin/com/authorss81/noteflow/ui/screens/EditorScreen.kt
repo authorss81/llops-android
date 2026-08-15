@@ -69,6 +69,7 @@ import com.authorss81.noteflow.plugins.ShapeFromInkOutcome
 import com.authorss81.noteflow.plugins.export.mimeType
 import com.authorss81.noteflow.plugins.inktos.InkToShapePlugin
 import com.authorss81.noteflow.services.ImportExportService
+import com.authorss81.noteflow.services.ExportDestinationPolicy
 import com.authorss81.noteflow.services.HarmonyScheme
 import com.authorss81.noteflow.services.PaletteCatalog
 import com.authorss81.noteflow.services.PaletteMath
@@ -76,6 +77,7 @@ import com.authorss81.noteflow.services.PressureCurve
 import com.authorss81.noteflow.services.SymmetryMode
 import com.authorss81.noteflow.services.VoiceNoteManager
 import com.authorss81.noteflow.ui.components.AnnotationCanvas
+import com.authorss81.noteflow.ui.components.rememberSaFExporter
 import com.authorss81.noteflow.ui.components.BacklinksInspectorBottomSheet
 import com.authorss81.noteflow.ui.components.OcrResultDialog
 import com.authorss81.noteflow.ui.components.PromptNameDialog
@@ -148,6 +150,9 @@ fun EditorScreen(
     var ocrTargetPath by remember { mutableStateOf<String?>(null) }
 
     val context = LocalContext.current
+    // B1-PLAT-3 (phase-59): every export goes to a user-picked SAF destination —
+    // never straight into public Downloads.
+    val exporter = rememberSaFExporter(scope)
     // Phase 12: OCR is offered on attached photos only while an OCR plugin is
     // actually enabled and device-available (never a dead button).
     val ocrAvailable = viewModel.pluginRegistry
@@ -1153,7 +1158,14 @@ fun EditorScreen(
                                         pageIndex = currentPdfPage
                                     )
                                     if (file != null) {
-                                        viewModel.showSnackbar("Exported Page PNG to Downloads: ${file.name}", isLong = true)
+                                        exporter.export(
+                                            ExportDestinationPolicy.ExportKind.PAGE_PNG,
+                                            file
+                                        ) { ok ->
+                                            if (!ok) {
+                                                viewModel.showSnackbar("Export cancelled")
+                                            }
+                                        }
                                     } else {
                                         viewModel.showSnackbar("Export failed")
                                     }
@@ -1181,7 +1193,14 @@ fun EditorScreen(
                                         exportImageFormat = com.authorss81.noteflow.services.ImportExportService.ExportImageFormat.WEBP
                                     )
                                     if (file != null) {
-                                        viewModel.showSnackbar("Exported Page WebP to Downloads: ${file.name}", isLong = true)
+                                        exporter.export(
+                                            ExportDestinationPolicy.ExportKind.PAGE_WEBP,
+                                            file
+                                        ) { ok ->
+                                            if (!ok) {
+                                                viewModel.showSnackbar("Export cancelled")
+                                            }
+                                        }
                                     } else {
                                         viewModel.showSnackbar("Export failed")
                                     }
@@ -1208,7 +1227,14 @@ fun EditorScreen(
                                         pageIndex = currentPdfPage
                                     )
                                     if (file != null) {
-                                        viewModel.showSnackbar("Exported Page PDF to Downloads: ${file.name}", isLong = true)
+                                        exporter.export(
+                                            ExportDestinationPolicy.ExportKind.PAGE_PDF,
+                                            file
+                                        ) { ok ->
+                                            if (!ok) {
+                                                viewModel.showSnackbar("Export cancelled")
+                                            }
+                                        }
                                     } else {
                                         viewModel.showSnackbar("Export failed")
                                     }
@@ -1235,7 +1261,14 @@ fun EditorScreen(
                                         mediaEmbeds = mediaEmbeds
                                     )
                                     if (file != null) {
-                                        viewModel.showSnackbar("Exported Full PDF ($totalPages pgs) to Downloads: ${file.name}", isLong = true)
+                                        exporter.export(
+                                            ExportDestinationPolicy.ExportKind.DOCUMENT_PDF,
+                                            file
+                                        ) { ok ->
+                                            if (!ok) {
+                                                viewModel.showSnackbar("Export cancelled")
+                                            }
+                                        }
                                     } else {
                                         viewModel.showSnackbar("Document PDF export failed")
                                     }
@@ -1250,7 +1283,14 @@ fun EditorScreen(
                                 scope.launch {
                                     val file = ImportExportService.exportNoteToHtml(context, page, viewModel.repository)
                                     if (file != null) {
-                                        viewModel.showSnackbar("Exported HTML to Downloads: ${file.name}", isLong = true)
+                                        exporter.export(
+                                            ExportDestinationPolicy.ExportKind.NOTE_HTML,
+                                            file
+                                        ) { ok ->
+                                            if (!ok) {
+                                                viewModel.showSnackbar("Export cancelled")
+                                            }
+                                        }
                                     } else {
                                         viewModel.showSnackbar("HTML export failed")
                                     }
@@ -1302,7 +1342,14 @@ fun EditorScreen(
                                 scope.launch {
                                     val file = ImportExportService.exportPageToPsd(context, page, viewModel.repository)
                                     if (file != null) {
-                                        viewModel.showSnackbar("Exported Layered PSD to Downloads: ${file.name}", isLong = true)
+                                        exporter.export(
+                                            ExportDestinationPolicy.ExportKind.LAYERED_PSD,
+                                            file
+                                        ) { ok ->
+                                            if (!ok) {
+                                                viewModel.showSnackbar("Export cancelled")
+                                            }
+                                        }
                                     } else {
                                         viewModel.showSnackbar("PSD export failed")
                                     }
@@ -1317,7 +1364,14 @@ fun EditorScreen(
                                 viewModel.showSnackbar("Packaging Section Vault ZIP...")
                                 viewModel.exportSectionVaultZip(context, page.sectionId) { zipFile ->
                                     if (zipFile != null) {
-                                        viewModel.showSnackbar("Exported Section Vault ZIP to Downloads: ${zipFile.name}", isLong = true)
+                                        exporter.export(
+                                            ExportDestinationPolicy.ExportKind.VAULT_ZIP,
+                                            zipFile
+                                        ) { ok ->
+                                            if (!ok) {
+                                                viewModel.showSnackbar("Export cancelled")
+                                            }
+                                        }
                                     } else {
                                         viewModel.showSnackbar("Section Vault export failed")
                                     }

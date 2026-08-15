@@ -31,6 +31,7 @@ import com.authorss81.noteflow.data.model.NotebookEntity
 import com.authorss81.noteflow.data.model.SectionEntity
 import com.authorss81.noteflow.services.DocumentTextExtractor
 import com.authorss81.noteflow.services.EncryptionService
+import com.authorss81.noteflow.services.ExportDestinationPolicy
 import com.authorss81.noteflow.services.ImportArchivePolicy
 import com.authorss81.noteflow.services.ImportExportService
 import com.authorss81.noteflow.services.isPlainPkBackupBytes
@@ -52,6 +53,10 @@ fun HomeScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+
+    // B1-PLAT-3 (phase-59): every export/backup goes to a user-picked SAF
+    // destination — never straight into public Downloads.
+    val exporter = rememberSaFExporter(scope)
 
     val notebooks by viewModel.notebooks.collectAsState()
     val selectedNotebook by viewModel.selectedNotebook.collectAsState()
@@ -519,12 +524,14 @@ fun HomeScreen(
                                                 viewModel.repository.stampDatabaseChecksum(context)
                                             }
                                             val cacheFile = ImportExportService.exportBackup(context, viewModel.repository.encryptionKey)
-                                            val downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
-                                            val destFile = File(downloadsDir, cacheFile.name)
-                                            withContext(Dispatchers.IO) {
-                                                cacheFile.copyTo(destFile, overwrite = true)
+                                            exporter.export(
+                                                ExportDestinationPolicy.ExportKind.ENCRYPTED_BACKUP,
+                                                cacheFile
+                                            ) { ok ->
+                                                if (!ok) {
+                                                    viewModel.showSnackbar("Backup cancelled")
+                                                }
                                             }
-                                            viewModel.showSnackbar("Backup saved to Downloads: ${destFile.name}", isLong = true)
                                         } catch (e: Exception) {
                                             viewModel.showSnackbar("Backup failed: ${e.message}")
                                         }
@@ -539,7 +546,14 @@ fun HomeScreen(
                                     val pages = viewModel.pages.value
                                     val zipFile = ImportExportService.exportObsidianVaultZip(context, "SmoothNotes_Vault", pages, viewModel.repository)
                                     if (zipFile != null && zipFile.exists()) {
-                                        viewModel.showSnackbar("Obsidian Vault saved to Downloads: ${zipFile.name}", isLong = true)
+                                        exporter.export(
+                                            ExportDestinationPolicy.ExportKind.OBSIDIAN_VAULT,
+                                            zipFile
+                                        ) { ok ->
+                                            if (!ok) {
+                                                viewModel.showSnackbar("Obsidian vault export cancelled")
+                                            }
+                                        }
                                     } else {
                                         viewModel.showSnackbar("Failed to export Obsidian vault")
                                     }
@@ -550,7 +564,14 @@ fun HomeScreen(
                                     val pages = viewModel.pages.value
                                     val zipFile = ImportExportService.exportVaultToHtmlZip(context, "SmoothNotes_Site", pages, viewModel.repository)
                                     if (zipFile != null && zipFile.exists()) {
-                                        viewModel.showSnackbar("HTML Site saved to Downloads: ${zipFile.name}", isLong = true)
+                                        exporter.export(
+                                            ExportDestinationPolicy.ExportKind.HTML_SITE,
+                                            zipFile
+                                        ) { ok ->
+                                            if (!ok) {
+                                                viewModel.showSnackbar("HTML site export cancelled")
+                                            }
+                                        }
                                     } else {
                                         viewModel.showSnackbar("Failed to export HTML site")
                                     }
@@ -677,7 +698,14 @@ fun HomeScreen(
                                 viewModel.showSnackbar("Exporting Notebook Vault ZIP...")
                                 viewModel.exportNotebookVaultZip(context, nb.id) { zipFile ->
                                     if (zipFile != null) {
-                                        viewModel.showSnackbar("Exported Vault ZIP to Downloads: ${zipFile.name}", isLong = true)
+                                        exporter.export(
+                                            ExportDestinationPolicy.ExportKind.VAULT_ZIP,
+                                            zipFile
+                                        ) { ok ->
+                                            if (!ok) {
+                                                viewModel.showSnackbar("Vault export cancelled")
+                                            }
+                                        }
                                     } else {
                                         viewModel.showSnackbar("Vault export failed")
                                     }
@@ -715,7 +743,14 @@ fun HomeScreen(
                                 viewModel.showSnackbar("Exporting Section Vault ZIP...")
                                 viewModel.exportSectionVaultZip(context, sec.id) { zipFile ->
                                     if (zipFile != null) {
-                                        viewModel.showSnackbar("Exported Vault ZIP to Downloads: ${zipFile.name}", isLong = true)
+                                        exporter.export(
+                                            ExportDestinationPolicy.ExportKind.VAULT_ZIP,
+                                            zipFile
+                                        ) { ok ->
+                                            if (!ok) {
+                                                viewModel.showSnackbar("Vault export cancelled")
+                                            }
+                                        }
                                     } else {
                                         viewModel.showSnackbar("Vault export failed")
                                     }
@@ -1233,13 +1268,15 @@ fun HomeScreen(
                                                 viewModel.repository.encryptionKey,
                                                 backupPasswordInput
                                             )
-                                            val downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
-                                            val destFile = File(downloadsDir, cacheFile.name)
-                                            withContext(Dispatchers.IO) {
-                                                cacheFile.copyTo(destFile, overwrite = true)
-                                            }
                                             showBackupPasswordDialog = false
-                                            viewModel.showSnackbar("Password-protected backup saved to Downloads: ${destFile.name}", isLong = true)
+                                            exporter.export(
+                                                ExportDestinationPolicy.ExportKind.ENCRYPTED_BACKUP,
+                                                cacheFile
+                                            ) { ok ->
+                                                if (!ok) {
+                                                    viewModel.showSnackbar("Backup cancelled")
+                                                }
+                                            }
                                         } catch (e: Exception) {
                                             backupPasswordError = "Backup failed: ${e.message}"
                                         } finally {
