@@ -1259,6 +1259,22 @@ object ImportExportService {
                         zos.closeEntry()
                     }
                 }
+
+                // B1-DB-3 (phase-54): the ENCRYPTED voice-note blobs ride in the
+                // backup too, so a restore round-trip carries the audio. Only
+                // `.enc` blobs are packed — any surviving plaintext `.m4a` (a
+                // not-yet-migrated pre-fix recording) is explicitly EXCLUDED so a
+                // backup never transports raw audio bytes.
+                val voiceNotesDir = File(context.filesDir, "voice_notes")
+                if (voiceNotesDir.exists()) {
+                    voiceNotesDir.listFiles()?.filter { it.isFile && VoiceNoteCrypto.isEncryptedBlobName(it.name) }
+                        ?.sortedBy { it.name }
+                        ?.forEach { file ->
+                            zos.putNextEntry(ZipEntry("voice_notes/${file.name}"))
+                            FileInputStream(file).use { fis -> fis.copyTo(zos) }
+                            zos.closeEntry()
+                        }
+                }
             }
             baos.toByteArray()
         }
@@ -1545,8 +1561,6 @@ object ImportExportService {
         restoreFromZip(context, rawBytes, null, currentDekHex)
     }
 
-    private data class RestoredEntries(val tempRoot: File, val dbFile: File, val importsDir: File)
-
     /**
      * 34.1: Restore is now transactional. The backup is fully extracted to a
      * temp dir, the SQLCipher database copy is integrity-checked, re-keyed and
@@ -1558,9 +1572,10 @@ object ImportExportService {
         tempRoot.mkdirs()
         val tempDb = File(tempRoot, "noteflow.sqlite")
         val tempImports = File(tempRoot, "imports")
+        val tempVoiceNotes = File(tempRoot, "voice_notes")
         try {
-            extractBackupEntriesTo(rawBytes, tempDb, tempImports)
-            validateAndPrepareRestoredDb(context, tempDb, backupDekHex, currentDekHex)
+            extractBackupEntriesTo(rawBytes, tempDb, tempImports, tempVoiceNotes)
+            validateAndPrepareRestoredDb(context, tempDb, backupDekHex, currentDekHex, tempVoiceNotes)
             // B2/34.1 + 34.8: re-arm the tamper baseline to the restored DB copy
             // BEFORE it swaps into place. A DB we cannot checksum must never
             // become the live vault — escalate to the hard restore-block.
@@ -1568,13 +1583,15 @@ object ImportExportService {
                 DatabaseSecurityHelper.setRestoreBlock(context)
                 throw IllegalStateException("Restore rejected: could not verify the restored database.")
             }
-            commitRestoredFiles(context, tempDb, tempImports)
+            commitRestoredFiles(context, tempDb, tempImports, tempVoiceNotes)
         } finally {
             tempRoot.deleteRecursively()
         }
     }
 
-    private fun extractBackupEntriesTo(rawBytes: ByteArray, tempDb: File, tempImports: File) {
+    private data class RestoredEntries(val tempRoot: File, val dbFile: File, val importsDir: File, val voiceNotesDir: File)
+
+    private fun extractBackupEntriesTo(rawBytes: ByteArray, tempDb: File, tempImports: File, tempVoiceNotes: File) {
         val maxSingleFileBytes = 50 * 1024 * 1024L // 50 MB
         val maxTotalBytes = 200 * 1024 * 1024L // 200 MB
         var totalWritten = 0L
@@ -1599,6 +1616,17 @@ object ImportExportService {
                         FileOutputStream(targetFile).use { fos ->
                             totalWritten += copyWithLimit(zis, fos, maxSingleFileBytes, totalWritten, maxTotalBytes, entry)
                         }
+                    } else if (entryName.startsWith("voice_notes/")) {
+                        // B1-DB-3 (phase-54): encrypted voice blobs ride in the
+                        // backup by name; same traversal/zip-bomb protection as
+                        // imports.
+                        val relPath = safeImportRelativePath(entryName.substring("voice_notes/".length))
+                            ?: throw IllegalStateException("Backup contains unsafe relative path: $entryName")
+                        val targetFile = File(tempVoiceNotes, relPath)
+                        targetFile.parentFile?.mkdirs()
+                        FileOutputStream(targetFile).use { fos ->
+                            totalWritten += copyWithLimit(zis, fos, maxSingleFileBytes, totalWritten, maxTotalBytes, entry)
+                        }
                     }
                 }
                 entry = zis.nextEntry
@@ -1614,7 +1642,7 @@ object ImportExportService {
      * SQLCipher layer to the current DEK and migrates field-level ciphertexts
      * (34.2) so cross-device restores never double-encrypt.
      */
-    private fun validateAndPrepareRestoredDb(context: Context, tempDb: File, backupDekHex: String?, currentDekHex: String?) {
+    private fun validateAndPrepareRestoredDb(context: Context, tempDb: File, backupDekHex: String?, currentDekHex: String?, tempVoiceNotes: File) {
         val candidates = listOfNotNull(backupDekHex, currentDekHex, "").distinct()
         var openedWith: String? = null
         var userVersion: Long = -1L
@@ -1661,7 +1689,31 @@ object ImportExportService {
             rekeySqlcipherDb(context, tempDb, openedWith, currentDekHex)
             if (!openedWith.isNullOrEmpty() && openedWith != currentDekHex) {
                 migrateFieldCiphertexts(context, tempDb, currentDekHex, openedWith)
+                // B1-DB-3 (phase-54): the voice `.enc` blobs were encrypted with
+                // the BACKUP device's DEK — re-encrypt them in place to the
+                // restoring device's DEK so the retargeted media_embeds rows keep
+                // playing after a cross-device restore.
+                rekeyVoiceNoteBlobs(tempVoiceNotes, openedWith.fromHex(), currentDekHex.fromHex())
             }
+        }
+    }
+
+    /**
+     * B1-DB-3 (phase-54): re-keys every encrypted `.enc` blob under [tempVoiceNotes]
+     * from [oldDek] to [newDek] in place (pure [VoiceNoteCrypto.reencryptAudioBlobInPlace],
+     * blobs whose AAD/DEK no longer opens are left untouched — the embed row keeps
+     * the raw path either way and fails back to a playback error rather than data
+     * loss). Zeroizes both keys on exit.
+     */
+    private fun rekeyVoiceNoteBlobs(dir: File, oldDek: ByteArray, newDek: ByteArray) {
+        try {
+            if (!dir.isDirectory) return
+            for (file in dir.listFiles()?.filter { it.isFile && VoiceNoteCrypto.isEncryptedBlobName(it.name) } ?: emptyList()) {
+                VoiceNoteCrypto.reencryptAudioBlobInPlace(file, oldDek, newDek)
+            }
+        } finally {
+            oldDek.fill(0.toByte())
+            newDek.fill(0.toByte())
         }
     }
 
@@ -1757,7 +1809,7 @@ object ImportExportService {
      * succeeded. WAL/SHM are deleted just before the swap, and the restored DB
      * is moved into place with Files.move (atomic rename on the same filesystem).
      */
-    private fun commitRestoredFiles(context: Context, tempDb: File, tempImports: File) {
+    private fun commitRestoredFiles(context: Context, tempDb: File, tempImports: File, tempVoiceNotes: File) {
         val dbFile = context.getDatabasePath("noteflow.sqlite")
         val walFile = context.getDatabasePath("noteflow.sqlite-wal")
         val shmFile = context.getDatabasePath("noteflow.sqlite-shm")
@@ -1772,6 +1824,21 @@ object ImportExportService {
             tempImports.walkTopDown().filter { it.isFile }.forEach { file ->
                 val relPath = file.relativeTo(tempImports).path.replace('\\', '/')
                 val target = File(importsDir, relPath)
+                target.parentFile?.mkdirs()
+                file.copyTo(target, overwrite = true)
+            }
+        }
+
+        // B1-DB-3 (phase-54): swap the encrypted voice blobs into place too —
+        // a restore that carries the audio must actually land it, or the
+        // retargeted media_embeds rows would point at nothing.
+        val voiceNotesDir = File(context.filesDir, "voice_notes")
+        if (voiceNotesDir.exists()) voiceNotesDir.deleteRecursively()
+        voiceNotesDir.mkdirs()
+        if (tempVoiceNotes.exists()) {
+            tempVoiceNotes.walkTopDown().filter { it.isFile }.forEach { file ->
+                val relPath = file.relativeTo(tempVoiceNotes).path.replace('\\', '/')
+                val target = File(voiceNotesDir, relPath)
                 target.parentFile?.mkdirs()
                 file.copyTo(target, overwrite = true)
             }

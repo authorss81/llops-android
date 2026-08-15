@@ -30,6 +30,8 @@ class VoiceNoteManager(private val context: Context) {
     val waveformAmplitudes: StateFlow<List<Float>> = _waveformAmplitudes.asStateFlow()
 
     private var currentOutputFile: File? = null
+    private var currentBlobFile: File? = null
+    private var currentPlaybackTempFile: File? = null
 
     // Playback State
     private val _isPlaying = MutableStateFlow(false)
@@ -62,9 +64,21 @@ class VoiceNoteManager(private val context: Context) {
     fun startRecording(pageId: String): File? {
         stopPlayback()
 
+        // B1-DB-3 (phase-54): MediaRecorder must stream to a real file, but that
+        // raw AAC is PLAINTEXT — so it is written to a transient cacheDir temp
+        // (the OS-scrubbed, never-backed-up location) and AES-GCM-encrypted with
+        // the vault DEK into `filesDir/voice_notes/*.enc` the moment recording
+        // stops. At rest the voice dir holds ONLY encrypted blobs; the raw audio
+        // exists on disk no longer than the recording itself. Any stale plaintext
+        // temp from an interrupted pre-fix session is swept first.
+        VoiceNoteCrypto.sweepPlaintextTemps(context.cacheDir)
+
+        val stamp = System.currentTimeMillis()
+        val tempFile = File(context.cacheDir, "voice_rec_${pageId}_${stamp}.m4a.tmp")
         val voiceDir = File(context.filesDir, "voice_notes").apply { if (!exists()) mkdirs() }
-        val file = File(voiceDir, "voice_${pageId}_${System.currentTimeMillis()}.m4a")
-        currentOutputFile = file
+        val blobFile = File(voiceDir, "voice_${pageId}_${stamp}.${VoiceNoteCrypto.ENCRYPTED_EXTENSION}")
+        currentOutputFile = tempFile
+        currentBlobFile = blobFile
 
         _recordingError.value = null
         _waveformAmplitudes.value = emptyList()
@@ -84,7 +98,7 @@ class VoiceNoteManager(private val context: Context) {
                 setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
                 setAudioEncodingBitRate(128000)
                 setAudioSamplingRate(44100)
-                setOutputFile(file.absolutePath)
+                setOutputFile(tempFile.absolutePath)
                 prepare()
                 start()
             }
@@ -110,7 +124,7 @@ class VoiceNoteManager(private val context: Context) {
                     delay(100)
                 }
             }
-            return file
+            return blobFile
         } catch (e: Exception) {
             Log.e("VoiceNoteManager", "Error starting audio recording: ${e.message}")
             _isRecording.value = false
@@ -121,7 +135,8 @@ class VoiceNoteManager(private val context: Context) {
             }
             mediaRecorder = null
             currentOutputFile = null
-            if (file.exists()) file.delete()
+            currentBlobFile = null
+            if (tempFile.exists()) tempFile.delete()
             return null
         }
     }
@@ -143,19 +158,38 @@ class VoiceNoteManager(private val context: Context) {
         }
         mediaRecorder = null
 
-        val file = currentOutputFile ?: return null
-        if (!file.exists() || file.length() < 44L) {
+        val tempFile = currentOutputFile ?: return null
+        val blobFile = currentBlobFile
+        if (!tempFile.exists() || tempFile.length() < 44L) {
             // Log WITHOUT the absolute path: the path reveals the private vault
             // file layout in logcat (low risk but unnecessary).
             Log.w("VoiceNoteManager", "Recording produced no audio data (file too small)")
+            try { tempFile.delete() } catch (_: Exception) {}
+            currentOutputFile = null
+            currentBlobFile = null
             _recordingError.value = "No audio was captured — the microphone may be busy or permission was revoked."
             return null
         }
         val duration = _recordingElapsedMs.value
         val amplitudes = _waveformAmplitudes.value
 
+        // B1-DB-3 (phase-54): encrypt the finished AAC into the vault-DEK-wrapped
+        // `.enc` blob NOW and destroy the plaintext temp. A locked vault (DEK
+        // zeroized mid-recording) fails closed: the plaintext temp is deleted and
+        // nothing is persisted rather than leaking raw audio at rest.
+        val dek = VaultKeyHolder.dek
+        val encrypted = blobFile != null && dek != null &&
+            VoiceNoteCrypto.encryptRecordingFile(tempFile, blobFile, dek)
+        currentOutputFile = null
+        currentBlobFile = null
+        if (!encrypted) {
+            Log.w("VoiceNoteManager", "Recording could not be encrypted — plaintext temp destroyed")
+            _recordingError.value = "The recording could not be saved securely. Please try again."
+            return null
+        }
+
         return VoiceRecordingResult(
-            filePath = file.absolutePath,
+            filePath = blobFile!!.absolutePath,
             durationMs = duration,
             waveformAmplitudes = amplitudes
         )
@@ -163,53 +197,82 @@ class VoiceNoteManager(private val context: Context) {
 
     fun startPlayback(filePath: String, speed: Float = 1.0f) {
         stopPlayback()
-        val file = File(filePath)
+        val blob = File(filePath)
 
         _playbackError.value = null
         _activePlayingFilePath.value = filePath
         _playbackSpeed.value = speed
 
-        if (!file.exists() || file.length() < 200L) {
+        // B1-DB-3 (phase-54): the stored path is an AES-GCM `.enc` blob — the
+        // raw AAC only exists on disk as a transient cacheDir temp while the
+        // user is actively listening (deleted on stop/completion/release).
+        // Decrypt off the main thread so a slow read never janks the UI.
+        if (!VoiceNoteCrypto.isEncryptedBlobName(blob.name) || !blob.isFile || blob.length() < 2L) {
             _isPlaying.value = false
             _activePlayingFilePath.value = null
             _playbackError.value = "Audio file is missing or empty — it can't be played."
             return
         }
 
-        try {
-            val player = MediaPlayer().apply {
-                setDataSource(filePath)
-                prepare()
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    playbackParams = PlaybackParams().apply { this.speed = speed }
-                }
-                start()
+        playbackJob?.cancel()
+        playbackJob = scope.launch {
+            val tempPlayback = File(context.cacheDir, "voice_pb_${System.currentTimeMillis()}.m4a")
+            val playFilePath = withContext(Dispatchers.Default) {
+                val dek = VaultKeyHolder.dek
+                if (dek == null || !VoiceNoteCrypto.decryptRecordingFile(blob, tempPlayback, dek)) null
+                else tempPlayback.absolutePath
             }
-            mediaPlayer = player
-            _isPlaying.value = true
-            _playbackDurationMs.value = player.duration.toLong()
-
-            player.setOnCompletionListener {
-                stopPlayback()
+            if (playFilePath == null) {
+                try { tempPlayback.delete() } catch (_: Exception) {}
+                _isPlaying.value = false
+                _activePlayingFilePath.value = null
+                _playbackError.value = "Audio file is missing or empty — it can't be played."
+                return@launch
+            }
+            currentPlaybackTempFile = tempPlayback
+            if (!isActive) {
+                // A stop() raced the decryption — never start a player the user
+                // already asked to stop.
+                deletePlaybackTemp()
+                return@launch
             }
 
-            // Track progress
-            playbackJob?.cancel()
-            playbackJob = scope.launch {
-                while (isActive && _isPlaying.value) {
-                    try {
-                        _playbackPositionMs.value = player.currentPosition.toLong()
-                    } catch (e: Exception) {
-                        break
+            try {
+                val player = MediaPlayer().apply {
+                    setDataSource(playFilePath)
+                    prepare()
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                        playbackParams = PlaybackParams().apply { this.speed = speed }
                     }
-                    delay(50)
+                    start()
                 }
+                mediaPlayer = player
+                _isPlaying.value = true
+                _playbackDurationMs.value = player.duration.toLong()
+
+                player.setOnCompletionListener {
+                    stopPlayback()
+                }
+
+                // Track progress
+                playbackJob?.cancel()
+                playbackJob = scope.launch {
+                    while (isActive && _isPlaying.value) {
+                        try {
+                            _playbackPositionMs.value = player.currentPosition.toLong()
+                        } catch (e: Exception) {
+                            break
+                        }
+                        delay(50)
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w("VoiceNoteManager", "Playback failed: ${e.message}")
+                _isPlaying.value = false
+                _activePlayingFilePath.value = null
+                deletePlaybackTemp()
+                _playbackError.value = "Playback failed — the audio file may be corrupted."
             }
-        } catch (e: Exception) {
-            Log.w("VoiceNoteManager", "Playback failed: ${e.message}")
-            _isPlaying.value = false
-            _activePlayingFilePath.value = null
-            _playbackError.value = "Playback failed — the audio file may be corrupted."
         }
     }
 
@@ -276,12 +339,24 @@ class VoiceNoteManager(private val context: Context) {
         _isPlaying.value = false
         _playbackPositionMs.value = 0L
         _activePlayingFilePath.value = null
+        deletePlaybackTemp()
+    }
+
+    private fun deletePlaybackTemp() {
+        val temp = currentPlaybackTempFile ?: return
+        currentPlaybackTempFile = null
+        try {
+            if (temp.exists()) temp.delete()
+        } catch (e: Exception) {
+            Log.e("VoiceNoteManager", "Error removing playback temp: ${e.message}")
+        }
     }
 
     fun release() {
         stopRecording()
         stopPlayback()
         scope.cancel()
+        VoiceNoteCrypto.sweepPlaintextTemps(context.cacheDir)
     }
 }
 

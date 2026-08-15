@@ -232,6 +232,12 @@ interface MediaEmbedDao {
 
     @Query("UPDATE media_embeds SET textContent = :textContent WHERE id = :id")
     suspend fun updateTextContent(id: String, textContent: String?)
+
+    // B1-DB-3 (phase-54): the voice-note legacy migration retargets an embed's
+    // contentUrlOrPath from its old plaintext `.m4a` path to the AES-GCM `.enc`
+    // blob path after the audio is encrypted at rest.
+    @Query("UPDATE media_embeds SET contentUrlOrPath = :path WHERE id = :id")
+    suspend fun updateContentUrlOrPath(id: String, path: String?)
 }
 @Dao
 interface PaletteDao {

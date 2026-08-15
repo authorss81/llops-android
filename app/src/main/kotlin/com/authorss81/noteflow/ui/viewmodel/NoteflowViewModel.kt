@@ -75,6 +75,7 @@ import com.authorss81.noteflow.services.SettingsPluginInstallStore
 import com.authorss81.noteflow.services.SettingsPluginSettingsStore
 import com.authorss81.noteflow.services.VaultLockedWriteException
 import com.authorss81.noteflow.services.VaultWriteGate
+import com.authorss81.noteflow.services.VoiceNoteCrypto
 import com.authorss81.noteflow.plugins.runtime.PluginRuntime
 import com.authorss81.noteflow.plugins.runtime.PluginRuntimeRegistry
 import com.authorss81.noteflow.plugins.runtime.RuntimeOutcome
@@ -1239,6 +1240,33 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
                     }
                     if (result.isComplete) {
                         settings.noteBodyPlaintextMigrated = true
+                    }
+                } catch (e: Exception) {
+                    // Keep the flag unset; re-run on the next unlock.
+                }
+            }
+            if (!settings.voiceNotesEncryptedMigrated) {
+                // B1-DB-3 (phase-54): pre-fix builds recorded voice memos as
+                // PLAINTEXT .m4a under filesDir/voice_notes. Sweep every
+                // referenced recording into an AES-GCM `.enc` blob (DEK) and
+                // delete the plaintext so no private memo remains at rest in
+                // the clear; the DB rows (media_embeds.contentUrlOrPath) are
+                // retargeted to the blob. Also clear any stale plaintext
+                // recording/playback temps in cacheDir from an interrupted
+                // pre-fix session. The plaintext is never deleted before its
+                // encryption completed; rows that could not be encrypted keep
+                // their file and the flag stays unset for a later unlock.
+                try {
+                    VoiceNoteCrypto.sweepPlaintextTemps(appContext.cacheDir)
+                    val result = repository.migrateLegacyPlaintextVoiceNotes()
+                    // B1-DB-6: WAL content is outside the DB-file HMAC, so flush
+                    // and re-stamp after the media_embeds row mutations.
+                    if (result.rowsMigrated + result.orphansDeleted > 0) {
+                        repository.checkpointWal()
+                        repository.stampDatabaseChecksum(appContext)
+                    }
+                    if (result.isComplete) {
+                        settings.voiceNotesEncryptedMigrated = true
                     }
                 } catch (e: Exception) {
                     // Keep the flag unset; re-run on the next unlock.

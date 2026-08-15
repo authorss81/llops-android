@@ -13,7 +13,7 @@
 | `data/model/` | `Entities.kt`, `StrokeModels.kt` | Room entities (8) + stroke/ink types |
 | `data/db/` | `NoteflowDatabase.kt`, `Daos.kt` | Room DB (schema v9, 8 DAOs), corrupt-DB quarantine |
 | `data/repository/` | `NoteRepository.kt`, `LruBoundedMap.kt` | Encrypted read/write, search corpus, WAL checkpoint, re-key |
-| `services/` | `EncryptionService.kt`, `SecurityService.kt`, `DatabaseSecurityHelper.kt`, `VaultKeyHolder.kt`, `WetBrushEngine.kt`, `WebDavSyncService.kt`, `ImportExportService.kt`, `PaletteCatalog.kt`, `ShapeRecognitionHelper.kt`, `SsrfHostPolicy.kt` | Non-UI: crypto/vault, brush math, sync, import/export, palette, SSRF blocklist (B1-NET-04) |
+| `services/` | `EncryptionService.kt`, `SecurityService.kt`, `DatabaseSecurityHelper.kt`, `VaultKeyHolder.kt`, `WetBrushEngine.kt`, `WebDavSyncService.kt`, `ImportExportService.kt`, `PaletteCatalog.kt`, `ShapeRecognitionHelper.kt`, `SsrfHostPolicy.kt`, `VoiceNoteCrypto.kt` | Non-UI: crypto/vault, brush math, sync, import/export, palette, SSRF blocklist (B1-NET-04), voice-note audio cryptor (B1-DB-3) |
 | `services/localsend/` | `LocalSendProtocol.kt`, `LocalSendSender.kt`, `LocalSendPairing.kt`, `SettingsLocalSendPairedDeviceStore.kt` | Pure-JVM LocalSend v2.2 + real network sender + TOFU pairing gate (B1-NET-02) |
 | `plugins/` | `NoteflowPlugin.kt`, `PluginRegistry.kt`, `PluginManager.kt`, `PluginDiagnostics.kt`, `PluginLifecycle.kt` | Compile-time plugin framework + typed serving interfaces |
 | `plugins/runtime/` | `RuntimePluginLoader.kt`, `SignatureVerifiedPluginRuntime.kt`, `ArtifactSignatureVerifier.kt`, `PinnedCertHash.kt`, `PinnedTlsConnector.kt`, `PluginManifestFetcher.kt`, `HttpsPluginDownloadTransport.kt`, `PluginDownloader.kt`, `PluginUpdateEngine.kt`, `CompileTimePluginPinStore.kt`, `PluginFrameworkClassLoader.kt`, `ArtifactStaticScan.kt` | Downloadable-plugin runtime: pinned-cert verify (manifest + artifact transports, no redirects), DexClassLoader (scoped `plugins.*`-only parent), verify-time static content scan (B1-AUTH-01), updates |
@@ -165,6 +165,18 @@
     `noteflow.sqlite.migrate-failed-<ts>`, and returns a timestamp so the caller raises the persistent
     corruption flag (`DatabaseSecurityHelper.setCorruptionDetected`) — the phase-43 recovery screen
     surfaces instead of silent data loss — then `throw e`.
+  - **Implemented in phase-54** (B1-DB-3, see `workspace/phase-54/REPORT.md`): voice-note audio is
+    encrypted at rest. `services/VoiceNoteCrypto.kt` (pure JVM): `*.enc` AES-256-GCM blobs under
+    `filesDir/voice_notes/`, DEK + blob-name AAD `Noteflow-Voice-Note-v1|<name>` (blob-bound, never
+    renamable), fail-closed encrypt/decrypt (`isEncryptedBlobName` on both paths), in-place re-key,
+    legacy `.m4a` migration, orphan/temp sweeps, 40 MB blob cap. `VoiceNoteManager` records to a
+    cacheDir temp → encrypt at stop; locked vault fails closed; playback decrypts to a transient
+    cacheDir scratch deleted on stop/complete/release. `deletePagePermanently` (`NoteRepository.kt:635`)
+    deletes AUDIO_NOTE blobs; `migrateLegacyPlaintextVoiceNotes` (`:667`) retargets rows via
+    `MediaEmbedDao.updateContentUrlOrPath` (no schema change), gated on
+    `SettingsManager.voiceNotesEncryptedMigrated`, WAL-checkpoints + re-stamps the DB HMAC first.
+    `exportBackup` packs only `.enc`; restore re-keys blobs to the restoring device's DEK
+    (`ImportExportService.kt:1708`). Tests: `B1Db03VoiceNoteEncryptionTest` (18) — 1129 green.
 - **Canvas**: `ui/components/AnnotationCanvas.kt:83` (ink canvas, gestures, layers, `pointerInteropFilter`);
   `services/WetBrushEngine.kt:13` (AGSL wet-mixing gating); `ui/components/ShaderCapabilityHelper.kt:5`
   (`isAgslSupported` = SDK ≥ 33); `services/ShapeRecognitionHelper.kt:13` (`trySnapShape()` :27).

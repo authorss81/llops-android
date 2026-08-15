@@ -48,6 +48,15 @@ class SettingsManager(context: Context) {
         get() = prefs.getBoolean("note_body_plaintext_migrated", false)
         set(value) = prefs.edit().putBoolean("note_body_plaintext_migrated", value).apply()
 
+    // B1-DB-3 (phase-54): one-time migration of legacy PLAINTEXT voice notes.
+    // Set after NoteRepository.migrateLegacyPlaintextVoiceNotes has encrypted
+    // every referenced pre-fix `.m4a` into `.enc` blobs and deleted the
+    // plaintext, so the O(rows) pass is not re-run on every unlock. Stays unset
+    // while any referenced plaintext remains.
+    var voiceNotesEncryptedMigrated: Boolean
+        get() = prefs.getBoolean("voice_notes_encrypted_migrated", false)
+        set(value) = prefs.edit().putBoolean("voice_notes_encrypted_migrated", value).apply()
+
     var activeNotebookId: String?
         get() = prefs.getString("active_notebook_id", null)
         set(value) = prefs.edit().putString("active_notebook_id", value).apply()

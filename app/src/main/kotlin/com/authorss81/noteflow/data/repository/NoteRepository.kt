@@ -10,6 +10,7 @@ import com.authorss81.noteflow.services.StrokeGeometryGateResult
 import com.authorss81.noteflow.services.StrokeGeometryPolicy
 import com.authorss81.noteflow.services.VaultKeyHolder
 import com.authorss81.noteflow.services.VaultWriteGate
+import com.authorss81.noteflow.services.VoiceNoteCrypto
 import com.authorss81.noteflow.services.WikiLinkParser
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -621,11 +622,91 @@ class NoteRepository(private var db: NoteflowDatabase) {
                 try { File(path).delete() } catch (e: Exception) {}
             }
         }
+        // B1-DB-3 (phase-54): a page delete must also destroy its voice
+        // recordings. Deleted pages previously left orphaned plaintext audio
+        // under filesDir/voice_notes (neither encrypted, backed up, nor ever
+        // removed) — now the AUDIO_NOTE embeds' `.enc` blobs (and any surviving
+        // legacy plaintext) are removed with the page. PHOTO/STICKER/CODE embeds
+        // are intentionally untouched (their contentUrlOrPath is not audio).
+        val embeds = db.mediaEmbedDao().getMediaEmbedsForPage(id)
+        for (embed in embeds) {
+            if (embed.typeName == MediaEmbedType.AUDIO_NOTE.name) {
+                val audioPath = embed.contentUrlOrPath
+                if (audioPath != null && VoiceNoteCrypto.isEncryptedBlobName(File(audioPath).name)) {
+                    try { File(audioPath).delete() } catch (e: Exception) {}
+                }
+            }
+        }
         db.strokeDao().deleteStrokesForPage(id)
         db.layerDao().deleteLayersForPage(id)
         db.mediaEmbedDao().deleteMediaEmbedsForPage(id)
         db.pageDao().deletePagePermanently(id)
         invalidateSearchCorpus()
+    }
+
+    /**
+     * B1-DB-3 (phase-54): one-time sweep of legacy PLAINTEXT voice recordings.
+     *
+     * Pre-phase-54 builds recorded to `filesDir/voice_notes` as raw MPEG-4/AAC
+     * `.m4a` files with no encryption. For every AUDIO_NOTE embed whose
+     * `contentUrlOrPath` still points at a `.m4a`, the audio is encrypted to
+     * `<name>.enc` with the DEK,
+     * the embed row is retargeted to the blob path, and the plaintext is
+     * deleted (never before the encryption completed). Legacy recordings keep
+     * playing[^1] and no private memo remains at rest in the clear. Orphaned
+     * plaintext `.m4a` files with no DB row (pre-fix crash leftovers) are
+     * deleted too. The flag (`SettingsManager.voiceNotesEncryptedMigrated`)
+     * only sets when every referenced legacy file is gone.
+     *
+     * [^1]: playback path = [com.authorss81.noteflow.services.VoiceNoteManager]
+     * decrypts `.enc` blobs transparently.
+     *
+     * Returns a [VoiceNoteMigrationResult]; `isComplete` == no plaintext `.m4a`
+     * survived.
+     */
+    suspend fun migrateLegacyPlaintextVoiceNotes(): VoiceNoteMigrationResult = withContext(Dispatchers.IO) {
+        var rowsMigrated = 0
+        val retainedPlaintext = mutableSetOf<String>()
+        val dek = encryptionKey
+
+        val legacyEmbeds = db.mediaEmbedDao().getAllEmbedsForReencrypt()
+            .filter { embed ->
+                embed.typeName == MediaEmbedType.AUDIO_NOTE.name &&
+                    VoiceNoteCrypto.isPlaintextRecordingName(File(embed.contentUrlOrPath ?: "").name)
+            }
+
+        for (embed in legacyEmbeds) {
+            val legacyPath = embed.contentUrlOrPath ?: continue
+            val legacyFile = File(legacyPath)
+            if (!legacyFile.isFile) continue // dead path — nothing plaintext on disk
+            val blob = if (dek == null) {
+                retainedPlaintext.add(legacyPath)
+                null
+            } else {
+                VoiceNoteCrypto.migrateLegacyRecordingFile(legacyFile, dek) ?: run {
+                    retainedPlaintext.add(legacyPath)
+                    null
+                }
+            }
+            if (blob != null) {
+                db.mediaEmbedDao().updateContentUrlOrPath(embed.id, blob.absolutePath)
+                rowsMigrated++
+            }
+        }
+
+        // Orphan sweep — delete leftover plaintext with no row (only the dirs we
+        // actually looked at, and never a retained/failed file).
+        val dirs = legacyEmbeds
+            .mapNotNull { File(it.contentUrlOrPath ?: "").parentFile }
+            .distinct()
+        val orphansDeleted = dirs.sumOf { VoiceNoteCrypto.deleteOrphanPlaintext(it, retainedPlaintext) }
+
+        if (rowsMigrated > 0 || orphansDeleted > 0) invalidateSearchCorpus()
+        VoiceNoteMigrationResult(
+            rowsMigrated = rowsMigrated,
+            orphansDeleted = orphansDeleted,
+            plaintextRemaining = retainedPlaintext.size
+        )
     }
 
     suspend fun emptyTrash() {
@@ -1111,4 +1192,21 @@ data class LegacyBodyMigrationResult(
     val filesRemaining: Int
 ) {
     val isComplete: Boolean get() = filesRemaining == 0
+}
+
+/**
+ * B1-DB-3 (phase-54): outcome of the one-time legacy plaintext voice-note sweep
+ * ([NoteRepository.migrateLegacyPlaintextVoiceNotes]) and the record path that
+ * produced it. [rowsMigrated] counts embeds retargeted `.m4a` → `.enc`,
+ * [orphansDeleted] plaintext recordings with no DB row that were removed,
+ * [plaintextRemaining] referenced `.m4a` files that could not yet be encrypted
+ * (locked vault / IO failure) — the migration flag stays unset while this is >
+ * 0 so the sweep re-runs on a later unlock.
+ */
+data class VoiceNoteMigrationResult(
+    val rowsMigrated: Int,
+    val orphansDeleted: Int,
+    val plaintextRemaining: Int
+) {
+    val isComplete: Boolean get() = plaintextRemaining == 0
 }
