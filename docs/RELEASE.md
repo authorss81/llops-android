@@ -19,20 +19,34 @@ gradle assembleRelease       # shrink + obfuscate + sign
   `app/proguard-rules.pro` (Room/Gson/Ink keep-rules).
 - Baseline profiles are intentionally NOT wired (deferred; see ROADMAP 21.3/32.9).
 
-## Release signing — the honest state
+## Release signing — fail-closed (B1-PLAT-1)
 
-The `release` build type tries, in order:
+The `release` build type is bound **only** to the `releaseConfig` signing
+config, which reads its identity **exclusively** from build-environment
+variables:
 
-1. **A real release keystore** when the `KEYSTORE_FILE` env var points at an
-   existing file. Credentials come from `KEYSTORE_PASSWORD`, `KEY_ALIAS`,
-   `KEY_PASSWORD` (defaults `android`/`key0`/`android` — set them explicitly!).
-2. **`debug.keystore`** generated from an optional `debug.keystore.base64`
-   blob at the repo root (password `android`). This is a CI/dev fallback only.
-3. **AGP's auto-generated debug keystore** (`~/.android/debug.keystore`).
+| Variable | Meaning |
+|---|---|
+| `KEYSTORE_FILE` | path to an existing release keystore (`.jks`/`.keystore`) |
+| `KEYSTORE_PASSWORD` | keystore (store) password |
+| `KEY_ALIAS` | alias of the signing key inside the keystore |
+| `KEY_PASSWORD` | password of the signing key |
 
-This means a plain `gradle assembleRelease` today produces an APK **signed with
-a debug key** — fine for internal/beta distribution and CI verification, but
-**NOT publishable**. Do not upload it to a store as-is.
+**There is no fallback.** If `KEYSTORE_FILE` is unset (or points at a missing
+file), the `releaseConfig` has no `storeFile` and `gradle assembleRelease`
+**FAILS** at AGP's `:app:validateSigningRelease` task with `Keystore file not
+set for signing config 'releaseConfig'` (or a similar `packageRelease` signing
+error). A plain `gradle assembleRelease` with no keystore **cannot produce an
+APK at all** — the old `debug.keystore` / `debug.keystore.base64` fallbacks and
+the "auto-generated debug keystore" release path were **removed** in phase-57.
+
+> **Hard rule: never distribute a debug-signed build.** Debug-signing a release
+> uses the publicly known Android debug key (password `android`) — anyone who
+> obtains that keystore can sign a same-signature malicious update that Android
+> installs with no signature warning. Release builds that fail the
+> `validateSigningRelease` gate are **not** a workaround: they are the build
+> loudly refusing to ship an unverifiable artifact. `gradle assembleDebug`
+> keeps using AGP's auto-generated debug keystore and is unaffected.
 
 ### Wire a real release keystore (one-time, per maintainer)
 
@@ -48,6 +62,19 @@ keytool -genkey -v \
 # 2. Never commit the keystore. Delete it locally after upload if it is only
 #    used from CI, or store it encrypted in your company vault.
 ```
+
+### Build the release with the keystore
+
+```bash
+KEYSTORE_FILE=./release.keystore \
+KEYSTORE_PASSWORD='<keystore password>' \
+KEY_ALIAS=inkflow \
+KEY_PASSWORD='<key password>' \
+gradle assembleRelease
+```
+
+Any of the four variables missing, or `KEYSTORE_FILE` pointing at a missing
+file, is an immediate loud `assembleRelease` failure (B1-PLAT-1).
 
 ### Wire it into GitHub Actions
 

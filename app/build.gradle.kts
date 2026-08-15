@@ -1,5 +1,3 @@
-import java.util.Base64
-
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -25,30 +23,36 @@ android {
         }
     }
 
+    // B1-PLAT-1 (phase-57): the release APK may ONLY be signed by a real,
+    // externally-supplied release keystore. There is NO debug-keystore fallback
+    // and NO in-repo base64 keystore blob. When `KEYSTORE_FILE`/credentials are
+    // unset the signing config stays empty (storeFile = null), and AGP's
+    // `:app:validateSigningRelease` (wired below as the release signingConfig)
+    // fails the release build loudly instead of emitting a debug-signed "release"
+    // APK. `gradle assembleDebug` is untouched — the debug variant keeps AGP's
+    // auto-generated debug keystore.
     signingConfigs {
         create("releaseConfig") {
             val ksFilePath = System.getenv("KEYSTORE_FILE")
-            val debugKs = file("${rootDir}/debug.keystore")
-            val base64Ks = file("${rootDir}/debug.keystore.base64")
+            val ksPassword = System.getenv("KEYSTORE_PASSWORD")
+            val ksAlias = System.getenv("KEY_ALIAS")
+            val ksKeyPass = System.getenv("KEY_PASSWORD")
 
-            if (ksFilePath != null && file(ksFilePath).exists()) {
-                storeFile = file(ksFilePath)
-                storePassword = System.getenv("KEYSTORE_PASSWORD") ?: "android"
-                keyAlias = System.getenv("KEY_ALIAS") ?: "key0"
-                keyPassword = System.getenv("KEY_PASSWORD") ?: "android"
-            } else {
-                if (!debugKs.exists() && base64Ks.exists()) {
-                    try {
-                        val decodedBytes = Base64.getDecoder().decode(base64Ks.readText().trim())
-                        debugKs.writeBytes(decodedBytes)
-                    } catch (_: Exception) {}
-                }
-                if (debugKs.exists()) {
-                    storeFile = debugKs
-                    storePassword = "android"
-                    keyAlias = "androiddebugkey"
-                    keyPassword = "android"
-                }
+            // All-or-nothing: only a real, complete, existing keystore qualifies.
+            // If any of the four variables is missing/blank, or the file is absent,
+            // the config stays EMPTY (storeFile = null) and the release build is
+            // refused — never a debug-signed "release" APK. Paths are resolved
+            // against the REPO ROOT (so `./release.keystore` = `rootDir/release.keystore`).
+            if (ksFilePath != null &&
+                !ksPassword.isNullOrBlank() &&
+                !ksAlias.isNullOrBlank() &&
+                !ksKeyPass.isNullOrBlank() &&
+                rootProject.file(ksFilePath).exists()
+            ) {
+                storeFile = rootProject.file(ksFilePath)
+                storePassword = ksPassword
+                keyAlias = ksAlias
+                keyPassword = ksKeyPass
             }
         }
     }
@@ -62,14 +66,12 @@ android {
         }
         release {
             isMinifyEnabled = true
-            val relConfig = signingConfigs.getByName("releaseConfig")
-            if (relConfig.storeFile != null && relConfig.storeFile?.exists() == true) {
-                signingConfig = relConfig
-            } else {
-                // No release keystore: fall back to AGP's built-in debug config
-                // (auto-generated keystore) so CI can still assemble a release APK.
-                signingConfig = signingConfigs.getByName("debug")
-            }
+            // B1-PLAT-1: the release variant is ALWAYS bound to `releaseConfig`.
+            // When its storeFile is null (KEYSTORE_FILE/credentials unset), AGP's
+            // `:app:validateSigningRelease` task throws "Keystore file not set for
+            // signing config 'releaseConfig'" and the build FAILS — no silent
+            // fallback to the debug keystore. See `signingConfigs.releaseConfig`.
+            signingConfig = signingConfigs.getByName("releaseConfig")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -117,6 +119,36 @@ tasks.configureEach {
         enabled = false
     }
 }
+
+// B1-PLAT-1 (phase-57) fail-fast gate: whenever a task that produces a SIGNED
+// RELEASE artifact is requested while the release keystore is not configured,
+// abort before R8/minify burns minutes. Only release signing/packaging task names
+// trigger it (assembleRelease, bundleRelease, packageRelease, installRelease,
+// validateSigningRelease) so quality-only release tasks like `lintRelease` stay
+// runnable without a keystore. Debug builds never carry these task names and are
+// unaffected. AGP's `:app:validateSigningRelease` is the second, always-on
+// backstop even if a caller somehow bypasses this early gate.
+gradle.taskGraph.whenReady {
+    if (allTasks.any { task ->
+            task.project == project && task.name in RELEASE_SIGNING_TASK_NAMES
+        }
+    ) {
+        val releaseSigning = android.signingConfigs.getByName("releaseConfig")
+        if (releaseSigning.storeFile == null || releaseSigning.storeFile?.exists() != true) {
+            throw GradleException(
+                "Release build refused: no release keystore configured (B1-PLAT-1). " +
+                    "Set KEYSTORE_FILE (existing keystore), KEYSTORE_PASSWORD, KEY_ALIAS and " +
+                    "KEY_PASSWORD, then run the release task again. The debug-keystore/repo-blob " +
+                    "fallbacks were removed — a release APK can no longer be produced signed with " +
+                    "the well-known Android debug key. See docs/RELEASE.md."
+            )
+        }
+    }
+}
+private val RELEASE_SIGNING_TASK_NAMES = setOf(
+    "assembleRelease", "bundleRelease", "packageRelease", "installRelease",
+    "validateSigningRelease"
+)
 
 kotlin {
     compilerOptions {
