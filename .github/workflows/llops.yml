@@ -50,7 +50,7 @@ jobs:
           gh api "repos/${GITHUB_REPOSITORY}/git/trees/HEAD?recursive=1" --jq '.tree[].path' > /tmp/tree.txt
           mkdir -p /tmp/phases
           # Collect distinct phase names: workspace/phase-NN
-          grep -E '^workspace/phase-[0-9]+/' /tmp/tree.txt | cut -d/ -f2 | sort -u > /tmp/phase_names.txt
+          grep -E '^workspace/phase-[0-9]+/' /tmp/tree.txt | cut -d/ -f2 | sort -V -u > /tmp/phase_names.txt
           while read -r name; do
             [ -n "$name" ] || continue
             grep -qx "workspace/${name}/.done"     /tmp/tree.txt && touch "/tmp/phases/${name}.done"
