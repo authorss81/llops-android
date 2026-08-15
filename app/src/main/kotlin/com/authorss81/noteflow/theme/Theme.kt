@@ -260,8 +260,17 @@ fun NoteflowTheme(
         }
     }
 
+    // 36.0: app haptics setting (default ON). Individual haptics additionally
+    // require !reduceMotion via MotionPolicy.hapticsAllowed.
+    var hapticsEnabled by remember {
+        mutableStateOf(
+            com.authorss81.noteflow.services.SettingsManager(context).hapticsEnabled
+        )
+    }
+
     androidx.compose.runtime.CompositionLocalProvider(
-        LocalReduceMotion provides reduceMotion
+        LocalReduceMotion provides reduceMotion,
+        LocalHapticsEnabled provides hapticsEnabled
     ) {
         MaterialTheme(
             colorScheme = colorScheme,

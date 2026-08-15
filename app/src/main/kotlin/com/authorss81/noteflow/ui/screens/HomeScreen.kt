@@ -20,6 +20,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -2150,9 +2152,19 @@ private fun NotePageCard(
     onDeletePermanent: () -> Unit,
     onEditTags: () -> Unit = {}
 ) {
+    // 36.0: record the tapped card's window bounds so the editor can morph from
+    // it (shared-element reveal). Fall back to a plain fade when reduce-motion.
+    var cardWindowBounds by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
     Card(
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
+        onClick = {
+            cardWindowBounds?.let { com.authorss81.noteflow.ui.components.SharedElementState.rememberCard(it) }
+            onClick()
+        },
+        modifier = Modifier
+            .fillMaxWidth()
+            .onGloballyPositioned { coords ->
+                cardWindowBounds = coords.boundsInWindow()
+            },
         shape = RoundedCornerShape(16.dp)
     ) {
         Row(

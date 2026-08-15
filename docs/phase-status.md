@@ -82,6 +82,7 @@
 | PHASE 33 | `DONE` | `docs/COMPATIBILITY.md` + `docs/TUTORIAL.md` exist, tier system + fallback rules + config-changes cleanup shipped. |
 | PHASE 34 | `PARTIAL` | 34.0-34.8 shipped (restore hardening, re-key, lock-zeroization, relabel, zip-bomb, FileProvider, ClipboardGuard, HMAC re-arm). **34.9 dynamic re-run with device/emulator still open.** |
 | PHASE 35 | `CANCELLED` | Shelved then removed in the phase-03 honesty audit (HardwareProfiler/RenderingEngineTier/BrushEngine facade/JNI stub all deleted). |
+| PHASE 36 | `DONE` | Micro-interactions & fluid motion shipped: shared-element card→editor morph (`ui/components/FluidPageReveal.kt`, `HomeScreen.kt` card-bounds capture, `MainActivity.kt:350`), milestone haptics gated by new `SettingsManager.hapticsEnabled` + reduce-motion (`services/MotionPolicy.kt`, AnnotationCanvas snap tick, `ColorSwatch` detent, width-slider notch), tuned springs (`MotionSystem.SpringReveal/SpringDismiss/SpringCanvasPan/SpringSheet`). `MotionPolicyTest` = 10 tests. See `workspace/phase-36/REPORT.md`. |
 
 ## Cross-cutting facts
 

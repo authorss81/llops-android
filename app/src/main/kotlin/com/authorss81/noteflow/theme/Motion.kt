@@ -15,6 +15,10 @@ import androidx.compose.runtime.compositionLocalOf
 
 val LocalReduceMotion = compositionLocalOf { false }
 
+/** 36.0: true when the app haptics setting is on (haptics are additionally gated
+ *  by [LocalReduceMotion] — see `MotionPolicy.hapticsAllowed`). Defaults to ON. */
+val LocalHapticsEnabled = compositionLocalOf { true }
+
 /**
  * 22.9: true when the OS-level "remove animations"/reduce-motion setting is on.
  *
@@ -56,6 +60,45 @@ object MotionSystem {
     val SpringMediumBouncy: AnimationSpec<Float> = spring(
         dampingRatio = Spring.DampingRatioMediumBouncy,
         stiffness = Spring.StiffnessLow
+    )
+
+    // 36.0: tuned constants — the single source of truth for gesture springs.
+    // The numeric tuning lives in the pure-JVM MotionPolicy (testable); these
+    // specs are the Compose glue, so the UI never hardcodes magic damping numbers.
+    val SpringSheet: AnimationSpec<Float> = spring(
+        dampingRatio = com.authorss81.noteflow.services.MotionPolicy.springFor(
+            com.authorss81.noteflow.services.MotionPolicy.SpringKind.SHEET
+        ).dampingRatio,
+        stiffness = com.authorss81.noteflow.services.MotionPolicy.springFor(
+            com.authorss81.noteflow.services.MotionPolicy.SpringKind.SHEET
+        ).stiffness
+    )
+
+    val SpringDismiss: AnimationSpec<Float> = spring(
+        dampingRatio = com.authorss81.noteflow.services.MotionPolicy.springFor(
+            com.authorss81.noteflow.services.MotionPolicy.SpringKind.DISMISS
+        ).dampingRatio,
+        stiffness = com.authorss81.noteflow.services.MotionPolicy.springFor(
+            com.authorss81.noteflow.services.MotionPolicy.SpringKind.DISMISS
+        ).stiffness
+    )
+
+    val SpringCanvasPan: AnimationSpec<Float> = spring(
+        dampingRatio = com.authorss81.noteflow.services.MotionPolicy.springFor(
+            com.authorss81.noteflow.services.MotionPolicy.SpringKind.CANVAS_PAN
+        ).dampingRatio,
+        stiffness = com.authorss81.noteflow.services.MotionPolicy.springFor(
+            com.authorss81.noteflow.services.MotionPolicy.SpringKind.CANVAS_PAN
+        ).stiffness
+    )
+
+    val SpringReveal: AnimationSpec<Float> = spring(
+        dampingRatio = com.authorss81.noteflow.services.MotionPolicy.springFor(
+            com.authorss81.noteflow.services.MotionPolicy.SpringKind.REVEAL
+        ).dampingRatio,
+        stiffness = com.authorss81.noteflow.services.MotionPolicy.springFor(
+            com.authorss81.noteflow.services.MotionPolicy.SpringKind.REVEAL
+        ).stiffness
     )
 
     const val DurationFast = 150

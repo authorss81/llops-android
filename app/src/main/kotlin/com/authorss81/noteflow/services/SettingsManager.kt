@@ -78,6 +78,13 @@ class SettingsManager(context: Context) {
         get() = prefs.getBoolean("gpu_wet_brushes_enabled", true)
         set(value) = prefs.edit().putBoolean("gpu_wet_brushes_enabled", value).apply()
 
+    // 36.0: master haptics toggle. All gesture-milestone haptics (shape snap, color
+    // detents, slider notches) are additionally gated by reduce-motion via
+    // MotionPolicy.hapticsAllowed.
+    var hapticsEnabled: Boolean
+        get() = prefs.getBoolean("haptics_enabled", true)
+        set(value) = prefs.edit().putBoolean("haptics_enabled", value).apply()
+
     // 26.6: automatic shape snapping/straightening of freehand strokes.
     var shapeAutoSnapEnabled: Boolean
         get() = prefs.getBoolean("shape_auto_snap_enabled", true)

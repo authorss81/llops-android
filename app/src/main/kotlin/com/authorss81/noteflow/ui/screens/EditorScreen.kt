@@ -331,6 +331,7 @@ fun EditorScreen(
     var divideIntoPages by remember { mutableStateOf(true) }
     var gpuWetBrushesEnabled by remember { mutableStateOf(viewModel.settings.gpuWetBrushesEnabled) }
     var shapeAutoSnapEnabled by remember { mutableStateOf(viewModel.settings.shapeAutoSnapEnabled) }
+    var hapticsEnabled by remember { mutableStateOf(viewModel.settings.hapticsEnabled) }
 
     // Phase 19: dual eraser mode + render-time vibrancy. Stored in SharedPreferences
     // (SettingsManager), no DB schema change. OFF by default.
@@ -517,7 +518,9 @@ fun EditorScreen(
     }
 
     fun onAddLayer() {
-        if (!reduceMotion) haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+        if (com.authorss81.noteflow.services.MotionPolicy.hapticsAllowed(hapticsEnabled, reduceMotion)) {
+            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+        }
         val nextZ = (layers.maxOfOrNull { it.zOrder } ?: -1) + 1
         val newLayerId = "layer_" + java.util.UUID.randomUUID().toString()
         val newLayer = LayerEntity(
@@ -542,7 +545,9 @@ fun EditorScreen(
 
     fun onDeleteLayer(deletedLayerId: String) {
         if (layers.size <= 1) return
-        if (!reduceMotion) haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+        if (com.authorss81.noteflow.services.MotionPolicy.hapticsAllowed(hapticsEnabled, reduceMotion)) {
+            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+        }
         val remainingLayers = layers.filter { it.id != deletedLayerId }
         val targetLayerId = remainingLayers.firstOrNull()?.id ?: "layer_default"
 
@@ -783,7 +788,9 @@ fun EditorScreen(
             redoStack = redoStack + listOf(strokes)
             strokes = previousState
             triggerAutoSave(previousState)
-            if (!reduceMotion) haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+            if (com.authorss81.noteflow.services.MotionPolicy.hapticsAllowed(hapticsEnabled, reduceMotion)) {
+                haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+            }
         }
     }
 
@@ -794,7 +801,9 @@ fun EditorScreen(
             undoStack = undoStack + listOf(strokes)
             strokes = nextState
             triggerAutoSave(nextState)
-            if (!reduceMotion) haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+            if (com.authorss81.noteflow.services.MotionPolicy.hapticsAllowed(hapticsEnabled, reduceMotion)) {
+                haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+            }
         }
     }
 
@@ -917,7 +926,9 @@ fun EditorScreen(
                     FilterChip(
                         selected = isRecordingVoice,
                         onClick = {
-                            if (!reduceMotion) haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                            if (com.authorss81.noteflow.services.MotionPolicy.hapticsAllowed(hapticsEnabled, reduceMotion)) {
+                                haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                            }
                             if (isRecordingVoice) {
                                 val result = voiceNoteManager.stopRecording()
                                 if (result != null) {
@@ -1424,6 +1435,7 @@ fun EditorScreen(
                 activeVoiceSpeed = activeVoiceSpeed,
                 gpuWetBrushesEnabled = gpuWetBrushesEnabled,
                 shapeAutoSnapEnabled = shapeAutoSnapEnabled,
+                hapticsEnabled = hapticsEnabled,
                 stabilizerEnabled = stabilizerEnabled,
                 pressureCurve = pressureCurve,
                 symmetryMode = symmetryMode,
@@ -1779,6 +1791,11 @@ fun EditorScreen(
                 onShapeAutoSnapToggle = { enabled ->
                     shapeAutoSnapEnabled = enabled
                     viewModel.settings.shapeAutoSnapEnabled = enabled
+                },
+                hapticsEnabled = hapticsEnabled,
+                onHapticsToggle = { enabled ->
+                    hapticsEnabled = enabled
+                    viewModel.settings.hapticsEnabled = enabled
                 },
                 inkToShapeAvailable = inkToShapeAvailable,
                 inkToShapeKeepOriginal = inkToShapeKeepOriginal,
@@ -3200,6 +3217,13 @@ private fun ColorSwatch(
     size: Dp,
     onClick: () -> Unit
 ) {
+    // 36.0: color-picker detent — a subtle tick when a swatch is chosen, gated by
+    // the merged haptics + reduce-motion policy.
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+    val gate = com.authorss81.noteflow.services.MotionPolicy.hapticsAllowed(
+        com.authorss81.noteflow.theme.LocalHapticsEnabled.current,
+        com.authorss81.noteflow.theme.LocalReduceMotion.current
+    )
     Box(
         modifier = Modifier
             .size(size)
@@ -3210,7 +3234,10 @@ private fun ColorSwatch(
                 color = if (isSelected) MaterialTheme.colorScheme.primary else Color.Gray.copy(alpha = 0.4f),
                 shape = CircleShape
             )
-            .clickable { onClick() },
+            .clickable {
+                if (gate) haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                onClick()
+            },
         contentAlignment = Alignment.Center
     ) {
         if (isSelected) {
@@ -3299,6 +3326,14 @@ private fun WidthPickerBottomSheet(
     onDismiss: () -> Unit
 ) {
     var newPresetName by remember { mutableStateOf("") }
+    // 36.0: slider-notch haptics — a subtle tick whenever the width crosses a whole
+    // point, gated by the merged haptics + reduce-motion policy.
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+    val notchGate = com.authorss81.noteflow.services.MotionPolicy.hapticsAllowed(
+        com.authorss81.noteflow.theme.LocalHapticsEnabled.current,
+        com.authorss81.noteflow.theme.LocalReduceMotion.current
+    )
+    var lastWidthNotch by remember { androidx.compose.runtime.mutableFloatStateOf(currentWidth) }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -3537,7 +3572,13 @@ private fun WidthPickerBottomSheet(
 
             Slider(
                 value = currentWidth,
-                onValueChange = onWidthSelect,
+                onValueChange = { w ->
+                    if (notchGate && com.authorss81.noteflow.services.MotionPolicy.sliderNotchTriggered(lastWidthNotch, w, granularity = 1f)) {
+                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                    }
+                    lastWidthNotch = w
+                    onWidthSelect(w)
+                },
                 valueRange = 1f..36f,
                 modifier = Modifier.fillMaxWidth()
             )
@@ -3565,6 +3606,8 @@ private fun CanvasSettingsBottomSheet(
     onGpuWetBrushesToggle: (Boolean) -> Unit = {},
     shapeAutoSnapEnabled: Boolean = true,
     onShapeAutoSnapToggle: (Boolean) -> Unit = {},
+    hapticsEnabled: Boolean = true,
+    onHapticsToggle: (Boolean) -> Unit = {},
     inkToShapeAvailable: Boolean = true,
     inkToShapeKeepOriginal: Boolean = false,
     onInkToShapeKeepOriginalChange: (Boolean) -> Unit = {},
@@ -3908,6 +3951,31 @@ private fun CanvasSettingsBottomSheet(
                 Switch(
                     checked = shapeAutoSnapEnabled,
                     onCheckedChange = onShapeAutoSnapToggle
+                )
+            }
+
+            // 36.0: haptics master toggle (gesture-milestone ticks — shape snap,
+            // color detents, slider notches). Still gated by reduce-motion.
+            Spacer(modifier = Modifier.height(16.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Icon(Icons.Outlined.Vibration, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    Column {
+                        Text("Haptic Feedback", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "Subtle ticks on shape snap, color swatches & slider notches",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                Switch(
+                    checked = hapticsEnabled,
+                    onCheckedChange = onHapticsToggle
                 )
             }
 

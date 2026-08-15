@@ -1,4 +1,4 @@
-# Phase 36: Micro-Interactions & Fluid Motion [NOT STARTED]
+# Phase 36: Micro-Interactions & Fluid Motion [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with a Glass theme and a `theme/Motion.kt` (existing motion primitives),

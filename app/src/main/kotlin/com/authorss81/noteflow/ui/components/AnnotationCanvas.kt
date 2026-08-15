@@ -130,6 +130,7 @@ fun AnnotationCanvas(
     onExtractOcr: ((String) -> Unit)? = null,
     gpuWetBrushesEnabled: Boolean = true,
     shapeAutoSnapEnabled: Boolean = true,
+    hapticsEnabled: Boolean = true,
     stabilizerEnabled: Boolean = false,
     pressureCurve: PressureCurve = PressureCurve.LINEAR,
     symmetryMode: SymmetryMode = SymmetryMode.OFF,
@@ -900,7 +901,16 @@ fun AnnotationCanvas(
                                             activeStrokeList.add(newStroke)
                                             val otherStrokes = if (isContinuousMode) emptyList() else strokes.filter { it.pdfPage != pdfPageFilter }
                                             onStrokesChanged(otherStrokes + activeStrokeList)
-                                            if (!reduceMotion) hapticFeedback.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                                            // 36.0: stroke-commit tick + distinct shape-snap tick,
+                                            // both gated by the haptics setting AND reduce-motion.
+                                            val hapticGate = com.authorss81.noteflow.services.MotionPolicy.hapticsAllowed(hapticsEnabled, reduceMotion)
+                                            if (hapticGate) {
+                                                if (snappedShape != null) {
+                                                    hapticFeedback.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                                } else {
+                                                    hapticFeedback.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -1619,10 +1629,7 @@ Stroke(
                                 animationSpec = if (reduceMotion) {
                                     androidx.compose.animation.core.snap()
                                 } else {
-                                    androidx.compose.animation.core.spring(
-                                        dampingRatio = androidx.compose.animation.core.Spring.DampingRatioNoBouncy,
-                                        stiffness = androidx.compose.animation.core.Spring.StiffnessMedium
-                                    )
+                                    com.authorss81.noteflow.theme.MotionSystem.SpringCanvasPan
                                 },
                                 label = "minimapZoom"
                             )
@@ -3677,13 +3684,15 @@ private fun DraggableStickyNoteCard(
     val cardHeightDp = if (currentNote.isCollapsed) (38 * currentZoom).dp else (resizeHeight * currentZoom).dp
 
     val scaleAnim = remember { androidx.compose.animation.core.Animatable(0.7f) }
+    val stickyReduceMotion = com.authorss81.noteflow.theme.LocalReduceMotion.current
     LaunchedEffect(currentNote.id) {
         scaleAnim.animateTo(
             targetValue = 1f,
-            animationSpec = androidx.compose.animation.core.spring(
-                dampingRatio = androidx.compose.animation.core.Spring.DampingRatioMediumBouncy,
-                stiffness = androidx.compose.animation.core.Spring.StiffnessMediumLow
-            )
+            animationSpec = if (stickyReduceMotion) {
+                androidx.compose.animation.core.snap()
+            } else {
+                com.authorss81.noteflow.theme.MotionSystem.SpringReveal
+            }
         )
     }
 

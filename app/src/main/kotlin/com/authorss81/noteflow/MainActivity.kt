@@ -307,52 +307,56 @@ class MainActivity : FragmentActivity() {
                                             onOpenPage = { pageToOpen -> setActivePage(pageToOpen) },
                                             onOpenGraph = { showGraphView = true }
                                         )
-                                    } else if (page.title.endsWith(".md") || page.title.endsWith(".txt")) {
-                                        val contentText by produceState(initialValue = "", page.sourceFilePath) {
-                                            value = page.sourceFilePath?.let { path ->
-                                                withContext(Dispatchers.IO) {
-                                                    val f = File(path)
-                                                    if (f.exists()) f.readText() else ""
-                                                }
-                                            } ?: ""
-                                        }
-                                        val contentSaveScope = rememberCoroutineScope()
-                                        MarkdownPreviewScreen(
-                                            page = page,
-                                            initialContent = contentText,
-                                            viewModel = viewModel,
-                                            onBack = { setActivePage(null) },
-                                            onOpenWikiLink = { targetTitle ->
-                                                viewModel.openPageByTitle(targetTitle, this@MainActivity) { openedPage ->
-                                                    setActivePage(openedPage)
-                                                }
-                                            },
-                                            onOpenPage = { targetPage -> setActivePage(targetPage) },
-                                            onSaveContent = { newText ->
-                                                page.sourceFilePath?.let { path ->
-                                                    // Phase-05 fix: the composable scope is torn down on
-                                                    // back-navigation — use NonCancellable so the final
-                                                    // flush is never cancelled mid-write (data-loss race).
-                                                    contentSaveScope.launch {
-                                                        withContext(NonCancellable + Dispatchers.IO) {
-                                                            File(path).writeText(newText)
+                                    } else {
+                                        com.authorss81.noteflow.ui.components.FluidPageReveal(pageKey = page.id) {
+                                        if (page.title.endsWith(".md") || page.title.endsWith(".txt")) {
+                                            val contentText by produceState(initialValue = "", page.sourceFilePath) {
+                                                value = page.sourceFilePath?.let { path ->
+                                                    withContext(Dispatchers.IO) {
+                                                        val f = File(path)
+                                                        if (f.exists()) f.readText() else ""
+                                                    }
+                                                } ?: ""
+                                            }
+                                            val contentSaveScope = rememberCoroutineScope()
+                                            MarkdownPreviewScreen(
+                                                page = page,
+                                                initialContent = contentText,
+                                                viewModel = viewModel,
+                                                onBack = { setActivePage(null) },
+                                                onOpenWikiLink = { targetTitle ->
+                                                    viewModel.openPageByTitle(targetTitle, this@MainActivity) { openedPage ->
+                                                        setActivePage(openedPage)
+                                                    }
+                                                },
+                                                onOpenPage = { targetPage -> setActivePage(targetPage) },
+                                                onSaveContent = { newText ->
+                                                    page.sourceFilePath?.let { path ->
+                                                        // Phase-05 fix: the composable scope is torn down on
+                                                        // back-navigation — use NonCancellable so the final
+                                                        // flush is never cancelled mid-write (data-loss race).
+                                                        contentSaveScope.launch {
+                                                            withContext(NonCancellable + Dispatchers.IO) {
+                                                                File(path).writeText(newText)
+                                                            }
                                                         }
                                                     }
+                                                    // Phase 15 (Language Detection): auto-tag
+                                                    // lang:<iso> on save, honouring any override.
+                                                    viewModel.autoTagLanguageOnSave(
+                                                        page.id, page.title, page.tags, newText
+                                                    )
                                                 }
-                                                // Phase 15 (Language Detection): auto-tag
-                                                // lang:<iso> on save, honouring any override.
-                                                viewModel.autoTagLanguageOnSave(
-                                                    page.id, page.title, page.tags, newText
-                                                )
-                                            }
-                                        )
-                                    } else {
-                                        EditorScreen(
-                                            page = page,
-                                            viewModel = viewModel,
-                                            onBack = { setActivePage(null) },
-                                            onOpenPage = { targetPage -> setActivePage(targetPage) }
-                                        )
+                                            )
+                                        } else {
+                                            EditorScreen(
+                                                page = page,
+                                                viewModel = viewModel,
+                                                onBack = { setActivePage(null) },
+                                                onOpenPage = { targetPage -> setActivePage(targetPage) }
+                                            )
+                                        }
+                                        }
                                     }
                                 }
                             } else {
