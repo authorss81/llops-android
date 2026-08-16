@@ -302,6 +302,33 @@ class B1Auth07IsMasterPasswordOracleTest {
     }
 
     @Test
+    fun `the model backoff table is pinned to the production constants and formula`() {
+        val vm = readNoteflowViewModelSource()
+        assertTrue(
+            "production MAX_FAILED_ATTEMPTS must match the model threshold (5)",
+            vm.contains("const val MAX_FAILED_ATTEMPTS = 5")
+        )
+        val backoff = vm.substringAfter("private fun computeLockoutDelayMs(failures: Int): Long {")
+            .substringBefore("private fun startLockoutTicker", "END")
+        assertTrue(
+            "the 30s seed must match the model's computeLockoutDelayMs",
+            backoff.contains("30_000L")
+        )
+        assertTrue(
+            "the exponent base (failures - MAX_FAILED_ATTEMPTS) must match the model",
+            backoff.contains("(failures - MAX_FAILED_ATTEMPTS)")
+        )
+        assertTrue(
+            "the 2^5 shift cap must match the model's '2^5 reaches the ceiling'",
+            backoff.contains("exponent.coerceAtMost(5)")
+        )
+        assertTrue(
+            "the 15-minute cap must match the model's coerceAtMost ceiling",
+            backoff.contains("15 * 60 * 1000L")
+        )
+    }
+
+    @Test
     fun `the create-backup dialog verifies BEFORE exporting and surfaces lockout honestly`() {
         val home = java.io.File(
             repoRoot(),

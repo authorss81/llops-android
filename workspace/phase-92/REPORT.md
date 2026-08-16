@@ -154,7 +154,33 @@ Source-level wiring pins (same technique as `B1Auth02LockedOpenTest`):
   file, and offline brute force of a leaked backup is a documented B1-CRYPTO-04 /
   B1-PLAT-8 residual (mitigated by password strength, never by the on-device lockout).
   Not changed.
-- `verifyBiometricsAndUnlock` / `removeMasterPassword` still inline their own success
-  reset (functional no-ops, same values) — not an oracle surface (no free password
-  verification), untouched to keep the diff tight.
+- `verifyBiometricsAndUnlock` / `removeMasterPassword` inlined their own success
+  reset in the original phase commit (functional no-ops, same values) — not an
+  oracle surface (no free password verification). The review-fix commit routes both
+  through the shared `resetMasterPasswordVerificationCounters()` so they cannot
+  drift (and `removeMasterPassword` now also clears the stale lockout countdown it
+  used to omit) — see "Phase-92 review fixes" below.
 - No DB schema change, no migration, no `.github/workflows/` edit, no new dependencies.
+
+## Phase-92 review fixes (commit `llops: phase-92 review fixes`)
+
+- **Unlock-path behavioral note (review FINDING #2):** pre-fix, the 5th failed UNLOCK
+  attempt (`verifyMasterPassword`) only zeroized the DEK + started the ticker — the
+  SQLCipher connection was never disposed. Post-fix the shared failure helper's
+  `lock()` disposes the data layer on EVERY surface that trips the threshold (incl.
+  the create-backup dialog). Deliberate B1-AUTH-02 strengthen (no live keyed
+  connection behind the LockScreen); documented, not reverted.
+- **Delegated the two remaining inline success resets (review FINDING #4):**
+  `verifyBiometricsAndUnlock` (`NoteflowViewModel.kt:2991-2994` pre-fix) and
+  `removeMasterPassword` now call the shared `resetMasterPasswordVerificationCounters()`
+  instead of duplicating it. `removeMasterPassword` additionally gains the
+  `_lockoutRemainingMs.value = 0L` clear the old inline block omitted (previously a
+  stale lockout countdown could outlive a password removal). Semantics otherwise
+  identical — the shared reset writes the same four values the inline blocks wrote.
+- **Pinned the model's backoff table to production (review FINDING #3):**
+  `B1Auth07IsMasterPasswordOracleTest` gains `the model backoff table is pinned to the
+  production constants and formula`: `const val MAX_FAILED_ATTEMPTS = 5` plus
+  `computeLockoutDelayMs`'s `30_000L` seed, `(failures - MAX_FAILED_ATTEMPTS)`
+  exponent, `exponent.coerceAtMost(5)` shift cap and `15 * 60 * 1000L` cap are now
+  source-pinned, so a drift between the (tautological) behavioral model and the
+  production backoff is caught.

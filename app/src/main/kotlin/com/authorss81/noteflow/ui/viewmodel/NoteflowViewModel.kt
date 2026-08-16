@@ -2988,10 +2988,10 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
             return false
         }
         _authenticated.value = true
-        _failedUnlockAttempts.value = 0
-        settings.failedUnlockAttempts = 0
-        settings.lockoutUntilEpochMs = 0L
-        _lockoutRemainingMs.value = 0L
+        // B1-AUTH-07 (phase-92 review fix, FINDING #4): share the verified-password
+        // counter reset with every master-password verification surface — the inline
+        // block it replaces set the same four values.
+        resetMasterPasswordVerificationCounters()
         initializeData()
         // B1-AUTH-03 (phase-67): biometric unlock is equally a successful unlock —
         // boot the plugin layer here just like the password unlock path.
@@ -3021,9 +3021,10 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
             settings.clearSecuritySettings()
             _hasMasterPassword.value = false
             _authenticated.value = true
-            _failedUnlockAttempts.value = 0
-            settings.failedUnlockAttempts = 0
-            settings.lockoutUntilEpochMs = 0L
+            // B1-AUTH-07 (phase-92 review fix, FINDING #4): share the verified-password
+            // counter reset with every master-password verification surface — also
+            // clears the stale lockout countdown the old inline block omitted.
+            resetMasterPasswordVerificationCounters()
             true
         } catch (e: Exception) {
             false
