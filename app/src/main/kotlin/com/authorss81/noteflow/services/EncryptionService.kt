@@ -16,9 +16,9 @@ import javax.crypto.spec.PBEKeySpec
 import javax.crypto.spec.SecretKeySpec
 
 object EncryptionService {
-    private const val GCM_IV_LENGTH = 12
-    private const val GCM_TAG_LENGTH = 128
-    private const val PAYLOAD_VERSION: Byte = 1
+    internal const val GCM_IV_LENGTH = 12
+    internal const val GCM_TAG_LENGTH = 128
+    internal const val PAYLOAD_VERSION: Byte = 1
 
     // B2-CRYPTO-07 (phase-113): password length bounds, measured in extended
     // grapheme clusters (perceived characters), not UTF-16 code units. We store
@@ -29,7 +29,7 @@ object EncryptionService {
     const val MIN_PASSWORD_GRAPHEMES = 6
     const val MAX_PASSWORD_GRAPHEMES = 128
     // Domain separation AAD: binds ciphertext to this app's field-encryption context.
-    private val FIELD_AAD = "Noteflow-Vault-Field-Encryption-v1".toByteArray(Charsets.UTF_8)
+    internal val FIELD_AAD = "Noteflow-Vault-Field-Encryption-v1".toByteArray(Charsets.UTF_8)
     // B2-CRYPTO-09 (phase-107): per-record AAD prefix. Every field ciphertext now
     // authenticates under `v2|<table>|<recordId>|<fieldName>` instead of the single
     // global FIELD_AAD, so a ciphertext can never be relocated (transplanted) into a

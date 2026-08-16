@@ -1155,6 +1155,12 @@ object ImportExportService {
      * (magic|salt|payloadIv|wrappedDek) under the 'backup/payload' domain AAD,
      * binding every payload to its own header. Splice another export's header
      * onto a payload and the tag fails.
+     *
+     * B2-DOS-07 (phase-83): production export no longer calls this one-shot
+     * path — [BackupExportPolicy.encryptStreamGcm] streams the same AES-GCM
+     * payload file-to-file (whose output is byte-identical to this function's),
+     * so this helper survives ONLY as the single-shot format-compat reference
+     * pinned by the format tests.
      */
     internal fun encryptBackupPayload(zipData: ByteArray, kek: ByteArray, payloadIv: ByteArray, header: ByteArray): ByteArray {
         val cipher = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
@@ -1266,9 +1272,13 @@ object ImportExportService {
         // B2-CRYPTO-06 (phase-106): the temp name becomes the public Downloads
         // name verbatim (HomeScreen copies it with cacheFile.name), so it must
         // NOT carry epoch-millis — use the day-granular + random-token policy.
-        val tempBackupFile = File(context.cacheDir, BackupFileNamePolicy.localBackupFileName())
-        val zipData: ByteArray = ByteArrayOutputStream().use { baos ->
-            ZipOutputStream(baos).use { zos ->
+        val backupName = BackupFileNamePolicy.localBackupFileName()
+        val tempBackupFile = File(context.cacheDir, backupName)
+        // B2-DOS-07 (phase-83): the zip is staged to a transient app-private
+        // file (never a full in-heap archive), then encrypted file-to-file.
+        val stagingZip = File(context.cacheDir, BackupExportPolicy.stagingFileName(backupName))
+        try {
+            BackupExportPolicy.zipVaultEntriesToStream(FileOutputStream(stagingZip)) { zos ->
                 if (dbFile.exists()) {
                     zos.putNextEntry(ZipEntry("noteflow.sqlite"))
                     FileInputStream(dbFile).use { fis -> fis.copyTo(zos) }
@@ -1300,47 +1310,60 @@ object ImportExportService {
                         }
                 }
             }
-            baos.toByteArray()
-        }
 
-        if (backupPassword != null && key != null) {
-            // v2: password-derived portable backup carrying the wrapped DEK.
-            // B2-CRYPTO-07 (phase-113): min/max are measured in graphemes of the
-            // NFKC-normalized form (what deriveKey will actually hash) — a
-            // compatibility/normalization shift can never make a valid password
-            // silently exceed the bound or be rejected at restore time.
-            val graphemes = EncryptionService.normalizedGraphemeCount(backupPassword)
-            require(graphemes >= EncryptionService.MIN_PASSWORD_GRAPHEMES) {
-                "Backup password must be at least ${EncryptionService.MIN_PASSWORD_GRAPHEMES} characters"
-            }
-            require(graphemes <= EncryptionService.MAX_PASSWORD_GRAPHEMES) {
-                "Backup password must be at most ${EncryptionService.MAX_PASSWORD_GRAPHEMES} characters"
-            }
-            val salt = EncryptionService.generateSalt()
-            val kek = EncryptionService.deriveKey(backupPassword, salt)
-            try {
-                val wrappedDek = EncryptionService.encryptAad(key, kek, BACKUP_DEK_WRAP_AAD)
-                val payloadIv = ByteArray(BACKUP_IV_SIZE)
-                java.security.SecureRandom().nextBytes(payloadIv)
-                val header = buildBackupHeader(salt, payloadIv, wrappedDek)
-                val cipherText = encryptBackupPayload(zipData, kek, payloadIv, header)
-
-                FileOutputStream(tempBackupFile).use { fos ->
-                    fos.write(header)
-                    fos.write(cipherText)
+            if (backupPassword != null && key != null) {
+                // v2: password-derived portable backup carrying the wrapped DEK.
+                // B2-CRYPTO-07 (phase-113): min/max are measured in graphemes of the
+                // NFKC-normalized form (what deriveKey will actually hash) — a
+                // compatibility/normalization shift can never make a valid password
+                // silently exceed the bound or be rejected at restore time.
+                val graphemes = EncryptionService.normalizedGraphemeCount(backupPassword)
+                require(graphemes >= EncryptionService.MIN_PASSWORD_GRAPHEMES) {
+                    "Backup password must be at least ${EncryptionService.MIN_PASSWORD_GRAPHEMES} characters"
                 }
-            } finally {
-                kek.fill(0.toByte())
+                require(graphemes <= EncryptionService.MAX_PASSWORD_GRAPHEMES) {
+                    "Backup password must be at most ${EncryptionService.MAX_PASSWORD_GRAPHEMES} characters"
+                }
+                val salt = EncryptionService.generateSalt()
+                val kek = EncryptionService.deriveKey(backupPassword, salt)
+                try {
+                    val wrappedDek = EncryptionService.encryptAad(key, kek, BACKUP_DEK_WRAP_AAD)
+                    val payloadIv = ByteArray(BACKUP_IV_SIZE)
+                    java.security.SecureRandom().nextBytes(payloadIv)
+                    val header = buildBackupHeader(salt, payloadIv, wrappedDek)
+                    // B2-DOS-07 (phase-83): streamed file-to-file encryption — the
+                    // header, then each chunk's ciphertext, then the tag. Byte layout
+                    // identical to the pre-fix single-shot doFinal, never a full copy
+                    // in heap. On-disk format is unchanged; legacy restores read it.
+                    BackupExportPolicy.encryptStreamGcm(
+                        FileInputStream(stagingZip),
+                        FileOutputStream(tempBackupFile),
+                        kek,
+                        payloadIv,
+                        header,
+                        BACKUP_PAYLOAD_AAD
+                    )
+                } finally {
+                    kek.fill(0.toByte())
+                }
+            } else {
+                // H4: a backup must never silently be a plain zip containing
+                // journal/voice/image files. It is either password-encrypted (v2
+                // NFLB2 above) or device-keyed (legacy) — no unencrypted fallback.
+                require(key != null) {
+                    "Backup rejected: no encryption key is available and no backup password was provided. Unlock the vault before exporting."
+                }
+                // B2-DOS-07 (phase-83): streamed device-keyed encryption + Base64
+                // write with the SAME wire format (legacy `EncryptionService.encrypt`
+                // output), never the ~1.37x in-heap Base64 expansion.
+                BackupExportPolicy.encryptStreamDeviceKeyedBase64(
+                    FileInputStream(stagingZip),
+                    FileOutputStream(tempBackupFile),
+                    key
+                )
             }
-        } else {
-            // H4: a backup must never silently be a plain zip containing
-            // journal/voice/image files. It is either password-encrypted (v2
-            // NFLB2 above) or device-keyed (legacy) — no unencrypted fallback.
-            require(key != null) {
-                "Backup rejected: no encryption key is available and no backup password was provided. Unlock the vault before exporting."
-            }
-            val encryptedBase64 = EncryptionService.encrypt(zipData, key)
-            FileOutputStream(tempBackupFile).use { fos -> fos.write(encryptedBase64.toByteArray(Charsets.UTF_8)) }
+        } finally {
+            stagingZip.delete()
         }
         tempBackupFile
     }

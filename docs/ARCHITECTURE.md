@@ -726,6 +726,25 @@
     pure-JVM helpers `channelSizeFor`/`channelDataLength`/`layerSectionLength` keep the
     section length byte-identical.
     Tests: `B2Dos06PsdExportLayerCapTest` (16) — 1487 total green.
+  - **Implemented in phase-83** (B2-DOS-07, see `workspace/phase-83/REPORT.md`): backup EXPORT no
+    longer builds the ENTIRE vault zip in heap and then makes a second full-size AES-GCM copy
+    (pre-fix `baos.toByteArray()` + `cipher.doFinal(zipData)` / `encrypt(zipData, key)` → Base64 —
+    ~600 MB+ peak on a few-hundred-MB vault, OOM on every attempt). New pure-JVM
+    `services/BackupExportPolicy.kt` owns the bounded streamers: `zipVaultEntriesToStream`
+    (zip written entry-by-entry straight into a `ZipOutputStream(FileOutputStream)` staging FILE,
+    never a `ByteArrayOutputStream`), `encryptStreamGcm` (file-to-file AES-GCM: header, then a
+    bounded `ENCRYPT_CHUNK_BYTES`=64 KiB `Cipher.update` loop, then `doFinal` tail+tag — the JCE
+    stream-mode contract makes it BYTE-IDENTICAL to the old single `doFinal`, so the `NFLB2`
+    on-disk layout is unchanged and legacy restores read it unmodified), and
+    `encryptStreamDeviceKeyedBase64` (GCM chunked + `java.util.Base64.Encoder.wrap(NonClosingSink)`
+    — same legacy `[version][iv][ciphertext+tag]` wire format, no ~1.37x in-heap expansion).
+    `ImportExportService.exportBackup` (`:1268-1369`) stages the zip under
+    `File(context.cacheDir, BackupExportPolicy.stagingFileName(backupName))` (`.zip-staging`,
+    deleted in `finally` :1366) and encrypts file-to-file; all callers (HomeScreen device-keyed +
+    password, WebDAV C2b, LocalSend VAULT_BACKUP) consume the returned cacheDir `File` unchanged.
+    Peak heap is one 64 KiB chunk + one `Cipher.update` output + the tag, never the archive.
+    `EncryptionService` GCM constants flipped `private`→`internal` for the policy.
+    Tests: `B2Dos07BackupExportStreamingTest` (8) — full suite green + `assembleDebug` green.
 - **Update / self-install**: `services/UpdateService.kt:128` (`checkForDownloadedUpdates` — scans ONLY app-private
   `filesDir`/`cacheDir` through `UpdateTrustPolicy.isScanSafeDirectory`; public Downloads/external dirs are NEVER
   scanned, B1-PLAT-7), `:60` (`inspectApkFile` — classifies via the policy, trust-neutral copy), `:175`
