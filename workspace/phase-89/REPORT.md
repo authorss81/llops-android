@@ -66,7 +66,9 @@ Both mirror the finding's exploit scenario with the actual applicationId the dev
   (`crashLogEntry`) — every crash entry passes through `sanitizeMessage`; uncaught path
   `:53-55` writes the file copy only.
 - `app/build.gradle.kts:15` — applicationId `com.aistudio.inkflow.app.bkxjrz` (the real dir).
-- `docs/security-report.md:894` — B1-PLAT-5 row already `FIXED 2026-08-15` = this phase.
+- `docs/security-report.md:894` — B1-PLAT-5 row already `FIXED 2026-08-15`, i.e. annotated
+  at (and by) the phase-48 review fix, before this verify-only phase ran (2026-08-16). This
+  phase only re-confirmed that pre-existing closure; it did not change the row.
 
 ### 3.3 Command outcomes
 
@@ -75,7 +77,7 @@ Both mirror the finding's exploit scenario with the actual applicationId the dev
    documented pre-existing cancellation-timing flake (first flagged in phase-67, re-documented
    in 70/74/76/79/80/81/86/88; unrelated to this verify-only phase, which changed zero code).
 2. `gradle :app:testDebugUnitTest --tests B2Log01CrashReportingTest --tests WikiLinkParserCacheUnitTest`
-   (isolation): **BUILD SUCCESSFUL** — both the B1-PLAT-5 pin class (6 tests incl. the two
+   (isolation): **BUILD SUCCESSFUL** — both the B1-PLAT-5 pin class (7 tests incl. the two
    path-redaction tests) AND the flaky class pass in isolation, proving the flake classifies
    as environment/timing, not a regression.
 3. `gradle testDebugUnitTest` (re-run): **BUILD SUCCESSFUL** — 1561 tests green, the flake
@@ -95,12 +97,18 @@ Both mirror the finding's exploit scenario with the actual applicationId the dev
   design; the raw trace never reaches logcat, and B2-LOG-01 is a separate finding, phase-48).
 - `recordException`'s 500 KB log truncation is coarse (drop-and-recreate); proper cap +
   rotation is the B2-LOG-02 scope (phase-70).
+- Already beyond B1-PLAT-5's scope (internal data-dir redaction only): the two generic rules
+  do NOT cover the external-storage app dir `/storage/emulated/0/Android/data/<applicationId>/...`
+  (e.g. blob/voice-note paths), so a crash message referencing that tree is not masked. Not
+  fixed here (not part of the finding); documented for a future hardening phase if desired.
 
 ## 5. Checksum / secrets handling
 
 - No secrets touched. `sanitizeMessage` redaction order unchanged for hashes/passwords
   (`:89-90`); this phase only re-confirms the path rules. No new permissions, no new deps,
   no `.github/workflows/` edits, no DB schema change, `allowBackup=false`/FLAG_SECURE intact.
-- Working-tree diff for this phase: `workspace/phase-89/REPORT.md` only (plus the runner's
-  own `logs/phase-89.*` artifacts). No production code changed.
+- Working-tree diff for this phase: `workspace/phase-89/REPORT.md` plus the two docs files
+  updated alongside it (`docs/ARCHITECTURE.md`, `docs/phase-status.md`) — all of it
+  `8145588` — and the runner's own `logs/phase-89.*` artifacts (`037a00b`). No production
+  code changed.
 </content>
