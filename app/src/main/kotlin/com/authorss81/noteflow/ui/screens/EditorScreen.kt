@@ -227,26 +227,28 @@ fun EditorScreen(
         contract = ActivityResultContracts.GetContent()
     ) { uri: android.net.Uri? ->
         uri?.let {
-            try {
-                // B2-DOS-05 (phase-81): bound the read to the ingest cap so a
-                // huge picker source can never be fully slurped into heap and OOM
-                // the embed at pick time.
-                val bytes = context.contentResolver.openInputStream(it)
-                    ?.use { stream ->
-                        com.authorss81.noteflow.services.AttachmentIngestPolicy.boundedReadBytes(stream)
+            scope.launch {
+                try {
+                    // B2-DOS-05 (phase-81): bound the read to the ingest cap AND do it
+                    // off the main thread (review fix) so a huge picker source can never
+                    // be fully slurped into heap or jank the UI at pick time.
+                    val bytes = withContext(Dispatchers.IO) {
+                        context.contentResolver.openInputStream(it)
+                            ?.use { stream ->
+                                com.authorss81.noteflow.services.AttachmentIngestPolicy.boundedReadBytes(stream)
+                            }
                     }
-                if (bytes != null) {
-                    val fileName = "custom_bg_${System.currentTimeMillis()}.png"
-                    scope.launch {
+                    if (bytes != null) {
+                        val fileName = "custom_bg_${System.currentTimeMillis()}.png"
                         val savedPath = com.authorss81.noteflow.services.ImportExportService.persistFile(context, fileName, bytes)
                         viewModel.updatePageSource(page.id, savedPath, "image")
                         viewModel.showSnackbar("Custom paper background loaded!")
                     }
+                } catch (e: com.authorss81.noteflow.services.ImportArchivePolicy.ImportSizeLimitException) {
+                    viewModel.showSnackbar("Background image is too large (max 25 MB)")
+                } catch (e: Exception) {
+                    viewModel.showSnackbar("Failed to load custom background image")
                 }
-            } catch (e: com.authorss81.noteflow.services.ImportArchivePolicy.ImportSizeLimitException) {
-                viewModel.showSnackbar("Background image is too large (max 25 MB)")
-            } catch (e: Exception) {
-                viewModel.showSnackbar("Failed to load custom background image")
             }
         }
     }
@@ -256,27 +258,30 @@ fun EditorScreen(
         contract = ActivityResultContracts.GetContent()
     ) { uri: android.net.Uri? ->
         uri?.let {
-            try {
-                // B2-DOS-05 (phase-81): bound the read to the ingest cap.
-                val bytes = context.contentResolver.openInputStream(it)
-                    ?.use { stream ->
-                        com.authorss81.noteflow.services.AttachmentIngestPolicy.boundedReadBytes(stream)
+            scope.launch {
+                try {
+                    // B2-DOS-05 (phase-81): bound the read to the ingest cap AND do it
+                    // off the main thread (review fix).
+                    val bytes = withContext(Dispatchers.IO) {
+                        context.contentResolver.openInputStream(it)
+                            ?.use { stream ->
+                                com.authorss81.noteflow.services.AttachmentIngestPolicy.boundedReadBytes(stream)
+                            }
                     }
-                if (bytes != null) {
-                    val ext = paperTextureExtensionFromUri(context, uri)
-                    val fileName = "paper_texture_${System.currentTimeMillis()}.$ext"
-                    scope.launch {
+                    if (bytes != null) {
+                        val ext = paperTextureExtensionFromUri(context, uri)
+                        val fileName = "paper_texture_${System.currentTimeMillis()}.$ext"
                         deletePaperTextureFile(paperTexturePath)
                         val savedPath = com.authorss81.noteflow.services.ImportExportService.persistFile(context, fileName, bytes)
                         paperTexturePath = savedPath
                         viewModel.settings.setPaperTexturePathForPage(page.id, savedPath)
                         viewModel.showSnackbar("Paper texture applied (tiled)")
                     }
+                } catch (e: com.authorss81.noteflow.services.ImportArchivePolicy.ImportSizeLimitException) {
+                    viewModel.showSnackbar("Paper texture is too large (max 25 MB)")
+                } catch (e: Exception) {
+                    viewModel.showSnackbar("Failed to load paper texture")
                 }
-            } catch (e: com.authorss81.noteflow.services.ImportArchivePolicy.ImportSizeLimitException) {
-                viewModel.showSnackbar("Paper texture is too large (max 25 MB)")
-            } catch (e: Exception) {
-                viewModel.showSnackbar("Failed to load paper texture")
             }
         }
     }
@@ -824,9 +829,12 @@ fun EditorScreen(
                 try {
                     // B2-DOS-05 (phase-81): bound the read to the ingest cap so a
                     // huge picker source can never be fully slurped into heap and
-                    // OOM the embed at attach time.
-                    val bytes = context.contentResolver.openInputStream(uri)?.use { stream ->
-                        com.authorss81.noteflow.services.AttachmentIngestPolicy.boundedReadBytes(stream)
+                    // OOM the embed at attach time — and do it off the main thread
+                    // (review fix).
+                    val bytes = withContext(Dispatchers.IO) {
+                        context.contentResolver.openInputStream(uri)?.use { stream ->
+                            com.authorss81.noteflow.services.AttachmentIngestPolicy.boundedReadBytes(stream)
+                        }
                     }
                     if (bytes != null) {
                         val fileName = "photo_${System.currentTimeMillis()}.jpg"

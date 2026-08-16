@@ -3133,7 +3133,7 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
      * blind copy over the live vault. The DB is closed first and the caller
      * must restart the app (like the local restore flow).
      */
-    fun restoreEncryptedBackupFromZip(sourceZip: java.io.File, onComplete: (Boolean) -> Unit) {
+    fun restoreEncryptedBackupFromZip(sourceZip: java.io.File, onComplete: (Boolean, String?) -> Unit) {
         viewModelScope.launch {
             try {
                 // B2-DOS-05 (phase-81): never slurp the whole downloaded archive
@@ -3153,13 +3153,19 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
                 // B2-CRYPTO-09 (phase-107): re-migrate restored rows to per-record
                 // AAD on next launch (see attemptRecoveryFromBackup comment).
                 settings.fieldAadMigrated = false
-                onComplete(true)
+                onComplete(true, null)
+            } catch (e: com.authorss81.noteflow.services.ImportArchivePolicy.ImportSizeLimitException) {
+                // B2-DOS-05 (phase-81 review fix): an over-budget WebDAV archive
+                // fails CLOSED with a truthful, non-alarming message (never a
+                // generic "failed") — the vault is reopened untouched.
+                runCatching { repository.reopenDatabase(getApplication()) }
+                onComplete(false, "Backup is too large to restore (max 400 MB).")
             } catch (e: Exception) {
                 // H1 (phase-09): a failed WebDAV restore leaves the live DB closed —
                 // reopen it so the vault behind the dialog is not bricked. The caller
                 // (WebDavSyncDialog) tells the user to restart to fully re-initialize.
                 runCatching { repository.reopenDatabase(getApplication()) }
-                onComplete(false)
+                onComplete(false, null)
             }
         }
     }

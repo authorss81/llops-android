@@ -245,7 +245,7 @@ fun WebDavSyncDialog(
                             val res = syncService.downloadLatestEncryptedVault(cfg, targetZip)
                             if (res.success) {
                                 rememberCredentialsIfRequested()
-                                viewModel.restoreEncryptedBackupFromZip(targetZip) { restored ->
+                                viewModel.restoreEncryptedBackupFromZip(targetZip) { restored, failureMessage ->
                                     isLoading = false
                                     if (restored) {
                                         statusIsError = false
@@ -253,7 +253,8 @@ fun WebDavSyncDialog(
                                         onRestoreSuccess()
                                     } else {
                                         statusIsError = true
-                                        syncStatus = "Failed to restore the downloaded backup — your vault on disk is unchanged. Restart the app to reopen your vault."
+                                        syncStatus = failureMessage
+                                            ?: "Failed to restore the downloaded backup — your vault on disk is unchanged. Restart the app to reopen your vault."
                                     }
                                 }
                             } else {

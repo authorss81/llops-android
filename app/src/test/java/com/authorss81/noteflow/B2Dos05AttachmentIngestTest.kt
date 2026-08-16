@@ -167,10 +167,21 @@ class B2Dos05AttachmentIngestTest {
     @Test
     fun `EditorScreen pickers no longer readBytes the whole source`() {
         val source = File(repoRoot(), "app/src/main/kotlin/com/authorss81/noteflow/ui/screens/EditorScreen.kt").readText()
+        // A direct picker slurp reads the source through the opener — multiline regex
+        // matches `openInputStream(...)?.use { ... .readBytes() }` REGARDLESS of any
+        // policy reference elsewhere in the file (the pre-fix photo/bg/texture shape).
+        val rawPickerSlurp = Regex(
+            "openInputStream\\s*\\([^)]*\\)\\s*\\??\\.\\s*use\\s*\\{[^}]*\\.readBytes\\s*\\(\\)",
+            RegexOption.DOT_MATCHES_ALL
+        )
         assertFalse(
-            "photo embed / background / texture pickers must never call raw readBytes()",
-            source.contains("openInputStream(") && source.contains(".readBytes()") &&
-                !source.contains("AttachmentIngestPolicy")
+            "photo embed / background / texture pickers must never readBytes the picker stream directly",
+            rawPickerSlurp.containsMatchIn(source)
+        )
+        // Also forbid any `openInputStream(...)...readBytes()` that skips the `use` block.
+        assertFalse(
+            "no direct openInputStream(...)??.readBytes() slurp may remain in EditorScreen",
+            Regex("openInputStream\\s*\\([^)]*\\)\\s*\\??\\.\\s*readBytes\\s*\\(\\)").containsMatchIn(source)
         )
         assertEquals(
             "every picker ingest must route through the bounded reader",
@@ -230,6 +241,28 @@ class B2Dos05AttachmentIngestTest {
         assertTrue(
             "getFullTextForPage must route through the bounded head read",
             wikiSource.contains("AttachmentIngestPolicy.readTextHead")
+        )
+    }
+
+    @Test
+    fun `legacy body migration never slurps a whole legacy file`() {
+        val raw = File(repoRoot(), "app/src/main/kotlin/com/authorss81/noteflow/data/repository/NoteRepository.kt").readText()
+        // Phase-81 review fix (F1): the unlock-time migration previously read the WHOLE
+        // legacy plaintext body via file.readText() (then wrote it into the column and
+        // DELETED the file) — an oversized/attacker-supplied file OOM'd the migration.
+        // Drop comment lines so the pin checks real code, not the review comment text.
+        val source = raw.lineSequence().filterNot { it.trimStart().startsWith("//") }.joinToString("\n")
+        assertFalse(
+            "migrateLegacyPlaintextNoteBodies must never readText a whole legacy body",
+            source.contains("file.readText()")
+        )
+        assertTrue(
+            "the migration must route through the bounded head read",
+            source.contains("AttachmentIngestPolicy.readTextHead")
+        )
+        assertTrue(
+            "oversized legacy bodies must be refused (never read into the column, never deleted)",
+            source.contains("AttachmentIngestPolicy.MAX_ATTACHMENT_BYTES")
         )
     }
 

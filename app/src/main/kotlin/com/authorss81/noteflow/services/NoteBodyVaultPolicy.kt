@@ -57,12 +57,20 @@ object NoteBodyVaultPolicy {
             try {
                 val file = File(path)
                 if (file.exists() && file.canRead()) {
-                    // B2-DOS-05 (phase-81): the legacy body is read head-bounded so
-                    // a huge/attacker-supplied text file can never be fully
-                    // `readText()`-ed into heap — a capped prefix still resolves
-                    // (the column fallback keeps the full encrypted body).
-                    val fileBody = AttachmentIngestPolicy.readTextHead(file)
-                    if (fileBody.isNotBlank()) return fileBody
+                    // B2-DOS-05 (phase-81 review fix): a legacy body WITHIN the ingest
+                    // cap is read head-bounded (readTextHead yields its FULL content),
+                    // so a huge/attacker-supplied file can never be fully readText()-ed
+                    // into heap. A file LARGER than the cap is never silently truncated
+                    // into the display body — the head would be written back as the
+                    // authoritative column body on the next save and the full file
+                    // deleted. Instead we fall through to the full encrypted column and
+                    // leave the oversized legacy file untouched (the unlock migration
+                    // also refuses to read/delete oversized legacy bodies), so no
+                    // content is silently lost.
+                    if (file.length() <= AttachmentIngestPolicy.MAX_ATTACHMENT_BYTES) {
+                        val fileBody = AttachmentIngestPolicy.readTextHead(file)
+                        if (fileBody.isNotBlank()) return fileBody
+                    }
                 }
             } catch (e: Exception) {
                 // Fall through to the encrypted column.

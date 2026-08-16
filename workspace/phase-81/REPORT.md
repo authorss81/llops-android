@@ -28,8 +28,9 @@
   chunk, throwing `ImportArchivePolicy.ImportSizeLimitException` mid-stream on the first chunk
   that crosses the cap — the heap accumulator can never exceed the budget plus one read buffer.
   `readTextHead(file, maxBytes = MAX_ATTACHMENT_BYTES)` does a head-bounded, prefix-preserving
-  UTF-8 text read (explicitly avoids UTF-8 continuation over-read so a cut multibyte char is not
-  garbage-decoded), returning empty for missing/unreadable/empty files.
+  UTF-8 text read (a multi-byte character split at the boundary decodes lossily to a single
+  replacement char — the byte prefix is preserved, no over-read past the budget), returning
+  empty for missing/unreadable/empty files.
 - **`EditorScreen.kt`** — all 3 picker `readBytes()` sites now route through
   `AttachmentIngestPolicy.boundedReadBytes(stream)` (`:236`, `:263`, `:829`) with a dedicated
   `catch (ImportArchivePolicy.ImportSizeLimitException)` branch producing a truthful, non-alarming
@@ -119,3 +120,35 @@ New tests (`app/src/test/java/com/authorss81/noteflow/B2Dos05AttachmentIngestTes
   `ProtobufBrushLoader.loadFromInputStream/loadFromFile` have no external wired callers;
   `ImportExportService.readUriBytes` is already bounded during read (phase-55 B1-DB-5, 200 MB import
   / 400 MB backup caps); `WebDavSyncService` XML `readText()` is B1-NET-07 scope. None touched here.
+
+## Phase-81 review fixes (post-audit, same discovering lineage)
+
+Applied after the phase review (see FINDINGS): 
+
+1. **HIGH — `NoteRepository.migrateLegacyPlaintextNoteBodies` (`:515`)** still did a wholesale
+   `file.readText()` on legacy plaintext bodies (the SAME surface the phase claimed to have
+   bounded) — at unlock it read the full file, wrote it into the column, then DELETED the file.
+   Now: unreadable/empty files are skipped, files > `MAX_ATTACHMENT_BYTES` (25 MB) are refused
+   (never read into the column, never deleted — `filesRemaining++`), and within-cap bodies are read
+   head-bounded via `AttachmentIngestPolicy.readTextHead` (full content for files <= cap).
+2. **MEDIUM — WebDAV restore over-budget archives** (`restoreEncryptedBackupFromZip`) failed with a
+   generic "Failed to restore…" dialog message. The callback is now `(Boolean, String?) -> Unit` and
+   `ImportSizeLimitException` fails CLOSED with a truthful non-alarming "Backup is too large to
+   restore (max 400 MB)" message (`WebDavSyncDialog` surfaces it).
+3. **LOW — truthful docs**: "UTF-8-continuation-safe" overclaimed; a multi-byte char split at the
+   cap decodes lossily to one replacement char. Docs corrected (ARCHITECTURE / phase-status /
+   security-report / REPORT).
+4. **LOW — `NoteBodyVaultPolicy.resolveBodyForDisplay`**: a legacy body > `MAX_ATTACHMENT_BYTES`
+   previously returned a truncated head, and that head could be written back to the column (then the
+   full file deleted) on the next save. Now oversized bodies fall through to the full encrypted
+   column and the file is left untouched — consistent with the migration.
+5. **LOW — main-thread reads**: `EditorScreen`'s 3 picker bounded reads now run under
+   `withContext(Dispatchers.IO)`.
+6. **LOW — busy-spin guard**: `boundedReadBytes` no longer loops forever on a contract-breaking
+   stream that returns 0 from a non-empty read; it throws `IOException` after 16 idle reads.
+7. **LOW — stronger source pin**: the EditorScreen picker pin now regex-matches the raw
+   `openInputStream(...)?.use { ...readBytes() }` shape instead of the near-vacuous per-file
+   substring check; added a migration source pin.
+
+Verification: `gradle testDebugUnitTest` — 1471 tests, 0 failures (B2Dos05AttachmentIngestTest now
+15); `gradle :app:assembleDebug` green. No schema change, no new deps, `.github/workflows/` untouched.

@@ -93,10 +93,21 @@ object AttachmentIngestPolicy {
         val out = ByteArrayOutputStream()
         val buf = ByteArray(READ_BUFFER_BYTES)
         var total = 0L
+        var idleReads = 0
         while (true) {
             val n = input.read(buf)
             if (n < 0) break
-            if (n == 0) continue
+            if (n == 0) {
+                // B2-DOS-05 (phase-81 review fix): a stream returning 0 from a
+                // non-empty read() is out of contract; looping forever on it would
+                // busy-spin the calling thread. Fail loudly after a few consecutive
+                // empty reads instead of spinning without progress.
+                if (++idleReads > 16) {
+                    throw java.io.IOException("Stream made no progress; aborting bounded read")
+                }
+                continue
+            }
+            idleReads = 0
             total += n
             if (total > maxBytes) {
                 throw ImportArchivePolicy.ImportSizeLimitException(

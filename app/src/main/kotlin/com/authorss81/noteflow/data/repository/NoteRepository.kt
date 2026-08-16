@@ -3,6 +3,7 @@ package com.authorss81.noteflow.data.repository
 import androidx.room.withTransaction
 import com.authorss81.noteflow.data.db.NoteflowDatabase
 import com.authorss81.noteflow.data.model.*
+import com.authorss81.noteflow.services.AttachmentIngestPolicy
 import com.authorss81.noteflow.services.DatabaseSecurityHelper
 import com.authorss81.noteflow.services.EncryptionService
 import com.authorss81.noteflow.services.NoteBodyVaultPolicy
@@ -496,6 +497,21 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
             val readPath = SourceFilePathPolicy.confine(page.sourceFilePath, importsRoot) ?: return@forEach
             val file = File(readPath)
             if (!file.exists()) return@forEach
+            // B2-DOS-05 (phase-81 review fix): the unlock-time migration must never
+            // pin a whole legacy body in heap with an unbounded file.readText().
+            // A file within the ingest cap is read HEAD-BOUNDED (readTextHead
+            // yields the full content for files <= cap); a file LARGER than the cap
+            // is left untouched — never read into the column, never deleted — so an
+            // oversized legacy file can neither OOM the migration NOR be silently
+            // truncated into the column before its (delete) migration.
+            if (!file.canRead() || file.length() <= 0L) {
+                filesRemaining++
+                return@forEach
+            }
+            if (file.length() > AttachmentIngestPolicy.MAX_ATTACHMENT_BYTES) {
+                filesRemaining++
+                return@forEach
+            }
 
             val dbBody = when {
                 key == null -> page.extractedText
@@ -512,7 +528,15 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
                 return@forEach
             }
 
-            val fileBody = try { file.readText() } catch (e: Exception) { return@forEach }
+            // B2-DOS-05 (phase-81 review fix): the legacy body is read through the
+            // same bounded policy decision table as the display path — never a raw
+            // file.readText() that slurps the whole file into heap (the migration
+            // flag stays unset so an unreadable file is retried next unlock).
+            val fileBody = try {
+                AttachmentIngestPolicy.readTextHead(file)
+            } catch (e: Exception) {
+                return@forEach
+            }
             if (fileBody != dbBody) {
                 val storedBody = key?.let {
                     EncryptionService.encryptField(fileBody.toByteArray(), it, "pages", page.id, "extractedText")

@@ -677,7 +677,8 @@
     `boundedReadBytes(input, maxBytes)` streams over a fixed buffer and throws
     `ImportArchivePolicy.ImportSizeLimitException` mid-stream on the first chunk crossing the cap
     (heap never exceeds budget + one buffer); `readTextHead(file, maxBytes)` is a head-bounded,
-    prefix-preserving, UTF-8-continuation-safe text read (empty for missing/unreadable/empty).
+    prefix-preserving UTF-8 text head read (a multi-byte char split at the cap decodes lossily to a
+    single replacement char — no over-read past the budget; empty for missing/unreadable/empty).
     `EditorScreen`'s 3 pickers (`:236` custom-bg, `:263` paper-texture, `:829` photo embed) route
     through `boundedReadBytes` with a dedicated per-site size-limit snackbar;
     `NoteflowViewModel.restoreEncryptedBackupFromZip` (`:3145-3147`) replaced `sourceZip.readBytes()`
@@ -686,6 +687,22 @@
     (`MAX_EXTRACT_BYTES`) / 1 MB text-head (`MAX_TEXT_HEAD_BYTES`); legacy plaintext-file-body reads
     in `NoteBodyVaultPolicy.kt:64` and `WikiLinkParser.kt:274` use `readTextHead`. Tests:
     `B2Dos05AttachmentIngestTest` (14) — 1470 total green.
+    **Phase-81 review fixes** (same discovering commit lineage):
+    - `NoteRepository.migrateLegacyPlaintextNoteBodies` (`:515` pre-fix) — the last unbounded
+      `file.readText()` on the legacy-body surface — now refuses files > `MAX_ATTACHMENT_BYTES`
+      (never read into the column, never deleted) and reads within-cap bodies head-bounded;
+    - `restoreEncryptedBackupFromZip` over-budget archives now fail CLOSED with a truthful
+      "Backup is too large to restore (max 400 MB)" message (`(Boolean, String?) -> Unit`
+      callback consumed by `WebDavSyncDialog`); the pre-fix generic "Failed to restore…" only
+      remains for non-budget failures;
+    - `NoteBodyVaultPolicy.resolveBodyForDisplay` no longer returns a truncated head for a legacy
+      body > `MAX_ATTACHMENT_BYTES` — it falls through to the full encrypted column and leaves
+      the oversized file untouched (a truncated head would be written back on the next save and
+      the full file deleted);
+    - `EditorScreen`'s 3 picker reads moved off the main thread (`withContext(Dispatchers.IO)`);
+    - `AttachmentIngestPolicy.boundedReadBytes` guards a contract-breaking stream that returns 0
+      repeatedly (throws `IOException` after 16 idle reads instead of busy-spinning).
+    Tests: `B2Dos05AttachmentIngestTest` (15) — 1471 total green.
 - **Update / self-install**: `services/UpdateService.kt:128` (`checkForDownloadedUpdates` — scans ONLY app-private
   `filesDir`/`cacheDir` through `UpdateTrustPolicy.isScanSafeDirectory`; public Downloads/external dirs are NEVER
   scanned, B1-PLAT-7), `:60` (`inspectApkFile` — classifies via the policy, trust-neutral copy), `:175`
