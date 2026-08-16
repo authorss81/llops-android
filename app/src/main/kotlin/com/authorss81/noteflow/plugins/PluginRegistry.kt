@@ -125,6 +125,13 @@ class PluginRegistry(
     private val availabilityCache = java.util.concurrent.ConcurrentHashMap<String, PluginAvailability>()
     private val arbitrationDisabledNotified = mutableSetOf<String>()
 
+    // B1-AUTH-03 (phase-67): while the vault is locked NO lifecycle hook may
+    // fire. pauseLifecycle() tears down live hooks and sets this flag;
+    // onProcessStart / setEnabled stay quiesced until resumeLifecycle() re-arms
+    // them after a successful unlock. Default false keeps every pre-phase-67
+    // caller (and the JVM tests) on the old immediate-fire behaviour.
+    private var lifecyclePaused = false
+
     init {
         // Phase 21: re-materialize optional definitions the user already
         // installed in a previous session (install state persists in the store
@@ -170,6 +177,11 @@ class PluginRegistry(
      */
     @Synchronized
     fun onProcessStart(context: Context?) {
+        // B1-AUTH-03 (phase-67): while the vault is locked the lifecycle is
+        // paused — no onEnable (and no plugin availability gate) may fire with a
+        // live Context before the user unlocks. The ViewModel only invokes this
+        // (directly, or via resumeLifecycle) after a successful unlock.
+        if (lifecyclePaused) return
         val states = resolve(context)
         when (val resolution = resolveEnableOrder()) {
             is PluginOrderResolution.Success -> resolution.order.forEach { id ->
@@ -188,6 +200,44 @@ class PluginRegistry(
                 "dependency cycle prevents enabling: ${resolution.pluginIds}"
             )
         }
+    }
+
+    /**
+     * B1-AUTH-03 (phase-67): quiesce the plugin lifecycle — called when the
+     * vault locks.
+     *
+     * Fires [NoteflowPlugin.onDisable] for every plugin whose
+     * [NoteflowPlugin.onEnable] already ran this process (a live plugin must not
+     * keep running with a real application Context while the vault is locked),
+     * clears the per-process enabled-notified set so the next unlock re-fires
+     * onEnable, and pauses the lifecycle: while paused, [onProcessStart] and the
+     * enable path of [setEnabled] never fire an onEnable hook. The persisted
+     * opt-in state is untouched — the plugin stays *enabled*, only its runtime
+     * hook is stopped. Idempotent.
+     */
+    @Synchronized
+    fun pauseLifecycle(context: Context? = null) {
+        lifecyclePaused = true
+        enabledNotified.toList().forEach { id ->
+            val plugin = pluginById(id) ?: return@forEach
+            enabledNotified.remove(id)
+            if (enableStore.isEnabled(id)) {
+                guardedOnDisable(plugin, context)
+            }
+        }
+    }
+
+    /**
+     * B1-AUTH-03 (phase-67): re-arm the lifecycle after a successful unlock and
+     * re-fire [NoteflowPlugin.onEnable] for every plugin still enabled in the
+     * store (delegates to [onProcessStart], so idempotency, dependency order and
+     * conflict-awareness are identical). A plugin torn down by [pauseLifecycle]
+     * is re-initialized here.
+     */
+    @Synchronized
+    fun resumeLifecycle(context: Context? = null) {
+        lifecyclePaused = false
+        onProcessStart(context)
     }
 
     /**
@@ -222,7 +272,11 @@ class PluginRegistry(
                 return PluginEnableResult.Refused(pluginId, refusal)
             }
             enableStore.setEnabled(pluginId, true)
-            if (enabledNotified.add(pluginId) && plugin != null) {
+            // B1-AUTH-03 (phase-67): while the lifecycle is paused (vault
+            // locked) the hook must not fire with a live context; the plugin
+            // stays persisted-enabled and resumeLifecycle() fires it after the
+            // next unlock.
+            if (!lifecyclePaused && enabledNotified.add(pluginId) && plugin != null) {
                 guardedOnEnable(plugin, context)
             }
             logger.lifecycle("enabled", pluginId, plugin?.name ?: pluginId)

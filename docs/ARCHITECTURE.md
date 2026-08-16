@@ -259,6 +259,18 @@
 - **Plugins**: `plugin-sdk` → `plugins/FrameworkPlugin.kt:58` (`interface NoteflowPlugin`),
   `plugins/PluginCapability.kt:28` (sealed capability set); `plugins/PluginRegistry.kt:75`,
   `plugins/PluginManager.kt:83`; store: `plugins/store/PluginStoreCatalog.kt:57`, `PluginStoreController.kt:45`.
+  - **Implemented in phase-67** (B1-AUTH-03, see `workspace/phase-67/REPORT.md`): the plugin
+    lifecycle is vault-lock-gated. `PluginRegistry` gained a pure-JVM pause/resume gate —
+    `pauseLifecycle` (`PluginRegistry.kt:219`) tears down every live onEnable hook with
+    `onDisable` + clears `enabledNotified`; `resumeLifecycle` (`:238`) re-fires hooks via
+    `onProcessStart`; `onProcessStart` early-returns while paused (`:184`) and the `setEnabled`
+    enable path is guarded by `!lifecyclePaused` (`:279`). `NoteflowViewModel`'s init block now
+    boots the plugin layer ONLY for a passwordless already-authenticated start
+    (`if (!settings.hasMasterPassword) startPluginLifecycle()`, `:258-272`); the new idempotent
+    `startPluginLifecycle()` (`:285-312`) owns store re-materialization + hook firing, called
+    from both unlock paths (`verifyMasterPassword` `:2489`, `verifyBiometricsAndUnlock` `:2643`);
+    `lock()` pauses the lifecycle + resets the flag (`:3204-3205`). No plugin code runs before
+    unlock.
 - **Downloadable runtime**: `plugins/runtime/RuntimePluginLoader.kt:68`; `services/AppClassLoaderFactory.kt:23`
   (`DexClassLoader`); `services/AppFacadeHost.kt:27` (deny-by-default facade, NO direct DB/keystore handles);
   `plugins/runtime/PinnedCertHash.kt:25`; `plugins/runtime/ArtifactSignatureVerifier.kt:52`.

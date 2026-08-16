@@ -249,9 +249,44 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     private val _storeRows = MutableStateFlow<List<PluginStoreController.StoreRow>>(emptyList())
     val storeRows: StateFlow<List<PluginStoreController.StoreRow>> = _storeRows.asStateFlow()
 
+    // B1-AUTH-03 (phase-67): true once the plugin layer has been booted for the
+    // current session. Reset by lock() so the next successful unlock re-boots it
+    // (bounded exactly once per authenticated session). Declared above the init
+    // block for the same reason as the flow backings above.
+    private var pluginLifecycleStarted = false
+
     init {
+        // B1-AUTH-03 (phase-67): NO plugin runtime loading or lifecycle hook may
+        // run before the vault is unlocked. A passwordless vault is authenticated
+        // from boot (its device-wrapped DEK is the boot credential), so the plugin
+        // layer boots immediately here; a password-protected vault sits on the
+        // LockScreen and defers ALL of it — the store re-materialization loop,
+        // onProcessStart → onEnable, and the plugin state flows — to the first
+        // successful unlock (verifyMasterPassword / verifyBiometricsAndUnlock call
+        // startPluginLifecycle()). lock() tears the hooks down via
+        // PluginRegistry.pauseLifecycle so no plugin ever runs with a live
+        // application context while locked.
+        if (!settings.hasMasterPassword) {
+            startPluginLifecycle()
+        }
+    }
+
+    /**
+     * B1-AUTH-03 (phase-67): the ONLY sanctioned way to boot the plugin layer.
+     *
+     * Re-materializes downloadable plugins installed in a previous session (the
+     * persisted entry + on-disk artifact are re-verified and re-loaded into the
+     * registry), fires the process-start onEnable hooks for plugins already
+     * enabled in the persisted store, and refreshes the plugin state flows.
+     * Re-arm/teardown symmetry: [PluginRegistry.pauseLifecycle] on lock, this on
+     * unlock — so a plugin's `onEnable(context)` can never run before the user
+     * authenticates. Idempotent per authenticated session.
+     */
+    private fun startPluginLifecycle() {
+        if (pluginLifecycleStarted) return
+        pluginLifecycleStarted = true
         // Phase 23: register the real downloadable-plugin runtime (the lazy
-        // `pluginRuntime` above swaps the Phase-22 stub via the registry seam).
+        // `pluginRuntime` swaps the Phase-22 stub via the registry seam).
         PluginRuntimeRegistry.register(pluginRuntime)
         // Re-materialize downloadable plugins installed in a previous session:
         // the persisted entry + on-disk artifact are re-verified and re-loaded
@@ -271,8 +306,8 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
             }
         }
         // Fire onEnable once per process for plugins already enabled in a
-        // previous session (see PluginRegistry.onProcessStart).
-        pluginRegistry.onProcessStart(appContext)
+        // previous session (see PluginRegistry.onProcessStart / resumeLifecycle).
+        pluginRegistry.resumeLifecycle(appContext)
         refreshPluginStates()
     }
 
@@ -2448,6 +2483,10 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
             settings.lockoutUntilEpochMs = 0L
             _lockoutRemainingMs.value = 0L
             initializeData()
+            // B1-AUTH-03 (phase-67): a successful password unlock is the moment the
+            // vault is no longer locked — boot the plugin layer here (store
+            // re-materialization + onEnable hooks, quiesced by lock()).
+            startPluginLifecycle()
             // B2-UI-1 (phase-49): flush page saves that a lock deferred, now that
             // the DEK is live again — rows are written encrypted, never plaintext.
             flushPendingEditorSaves()
@@ -2599,6 +2638,9 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         settings.lockoutUntilEpochMs = 0L
         _lockoutRemainingMs.value = 0L
         initializeData()
+        // B1-AUTH-03 (phase-67): biometric unlock is equally a successful unlock —
+        // boot the plugin layer here just like the password unlock path.
+        startPluginLifecycle()
         // B2-UI-1 (phase-49): flush page saves deferred during the lock.
         flushPendingEditorSaves()
         // B1-CRYPTO-02 (phase-45): re-assert the policy after a biometric unlock so
@@ -3154,6 +3196,13 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
             NoteflowDatabase.dispose()
             databaseDisposedByLock = true
             dataInitialized = false
+            // B1-AUTH-03 (phase-67): tear down + quiesce the plugin lifecycle —
+            // every enabled plugin whose onEnable ran gets onDisable and the
+            // registry refuses further hooks while the vault is locked, so no
+            // plugin keeps a live application Context on the LockScreen. The
+            // next successful unlock re-boots the layer via startPluginLifecycle().
+            pluginRegistry.pauseLifecycle(appContext)
+            pluginLifecycleStarted = false
         }
         invalidatePaletteIndex()
         // B2-DOS-01 (phase-50): a new unlock session may re-notify a capped page.
