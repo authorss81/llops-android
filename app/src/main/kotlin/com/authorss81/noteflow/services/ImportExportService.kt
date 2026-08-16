@@ -1114,8 +1114,17 @@ object ImportExportService {
     }
 
     private const val BACKUP_MAGIC = "NFLB2"
+    // B2-CRYPTO-04 (phase-84): v3 splits the DEK-wrapping key — the header still
+    // carries salt + payload IV + wrapped DEK, but the DEK is now wrapped by a
+    // random key whose SECOND half only exists inside the encrypted payload, so
+    // the public header alone no longer contains a cheap offline-crack target.
+    private const val BACKUP_MAGIC_V3 = "NFLB3"
     private const val BACKUP_SALT_SIZE = 16
     private const val BACKUP_IV_SIZE = 12
+    // B2-CRYPTO-04: half of the 32-byte DEK-wrapping key that rides in the v3
+    // header; the other half is stored only inside the (password-encrypted) payload
+    // and recovered at restore time. 16 bytes in the header + 16 in the payload.
+    private const val BACKUP_WRAP_KEY_HALF_SIZE = 16
     // EncryptionService.encrypt/encryptAad output: 1 version byte + 12-byte IV + 32-byte
     // ciphertext + 16-byte tag.
     private const val BACKUP_WRAPPED_DEK_SIZE = 61
@@ -1146,6 +1155,29 @@ object ImportExportService {
             System.arraycopy(magic, 0, out, off, magic.size); off += magic.size
             System.arraycopy(salt, 0, out, off, salt.size); off += salt.size
             System.arraycopy(payloadIv, 0, out, off, payloadIv.size); off += payloadIv.size
+            System.arraycopy(wrappedDek, 0, out, off, wrappedDek.size)
+        }
+    }
+
+    /**
+     * B2-CRYPTO-04 (phase-84): Serialized v3 header:
+     * [magic "NFLB3"][salt][payloadIv][wrapKeyPart1][wrappedDek].
+     *
+     * [wrapKeyPart1] is the FIRST half of the random DEK-wrapping key; its
+     * sibling [wrapKeyPart2] is embedded at the start of the encrypted payload
+     * (see [exportBackup]), so the public header alone can never form the
+     * wrapping key and an offline brute-force attempt cannot test password
+     * guesses against a small wrapped-DEK blob — every candidate pays a full
+     * payload decrypt on top of PBKDF2 and requires the payload itself.
+     */
+    internal fun buildBackupHeaderV3(salt: ByteArray, payloadIv: ByteArray, wrapKeyPart1: ByteArray, wrappedDek: ByteArray): ByteArray {
+        val magic = BACKUP_MAGIC_V3.toByteArray(Charsets.US_ASCII)
+        return ByteArray(magic.size + salt.size + payloadIv.size + wrapKeyPart1.size + wrappedDek.size).also { out ->
+            var off = 0
+            System.arraycopy(magic, 0, out, off, magic.size); off += magic.size
+            System.arraycopy(salt, 0, out, off, salt.size); off += salt.size
+            System.arraycopy(payloadIv, 0, out, off, payloadIv.size); off += payloadIv.size
+            System.arraycopy(wrapKeyPart1, 0, out, off, wrapKeyPart1.size); off += wrapKeyPart1.size
             System.arraycopy(wrappedDek, 0, out, off, wrappedDek.size)
         }
     }
@@ -1312,44 +1344,62 @@ object ImportExportService {
             }
 
             if (backupPassword != null && key != null) {
-                // v2: password-derived portable backup carrying the wrapped DEK.
-                // B2-CRYPTO-07 (phase-113): min/max are measured in graphemes of the
-                // NFKC-normalized form (what deriveKey will actually hash) — a
-                // compatibility/normalization shift can never make a valid password
-                // silently exceed the bound or be rejected at restore time.
-                val graphemes = EncryptionService.normalizedGraphemeCount(backupPassword)
-                require(graphemes >= EncryptionService.MIN_PASSWORD_GRAPHEMES) {
-                    "Backup password must be at least ${EncryptionService.MIN_PASSWORD_GRAPHEMES} characters"
-                }
-                require(graphemes <= EncryptionService.MAX_PASSWORD_GRAPHEMES) {
-                    "Backup password must be at most ${EncryptionService.MAX_PASSWORD_GRAPHEMES} characters"
-                }
+                // v3 (NFLB3, B2-CRYPTO-04): password-derived portable backup.
+                // B1-CRYPTO-04/phase-63 + B2-CRYPTO-04 (phase-84): the backup password
+                // rides the vault to PUBLIC Downloads/WebDAV, so it must clear the SAME
+                // strength bar as the vault master password (was: bare `length >= 6`,
+                // no complexity — crackable offline in hours-days on a GPU PBKDF2 rig).
+                // The verdict message + the offline-backup warning are surfaced loudly;
+                // a weak-credential backup is rejected, never written silently.
+                BackupPasswordPolicy.requireStrongBackupPassword(backupPassword)
                 val salt = EncryptionService.generateSalt()
                 val kek = EncryptionService.deriveKey(backupPassword, salt)
                 try {
-                    val wrappedDek = EncryptionService.encryptAad(key, kek, BACKUP_DEK_WRAP_AAD)
-                    val payloadIv = ByteArray(BACKUP_IV_SIZE)
-                    java.security.SecureRandom().nextBytes(payloadIv)
-                    val header = buildBackupHeader(salt, payloadIv, wrappedDek)
-                    // B2-DOS-07 (phase-83): streamed file-to-file encryption — the
-                    // header, then each chunk's ciphertext, then the tag. Byte layout
-                    // identical to the pre-fix single-shot doFinal, never a full copy
-                    // in heap. On-disk format is unchanged; legacy restores read it.
-                    BackupExportPolicy.encryptStreamGcm(
-                        FileInputStream(stagingZip),
-                        FileOutputStream(tempBackupFile),
-                        kek,
-                        payloadIv,
-                        header,
-                        BACKUP_PAYLOAD_AAD
-                    )
+                    // B2-CRYPTO-04 (phase-84): split the DEK-wrapping key. A fresh
+                    // random 32-byte wrap key is halved: part1 rides in the (public)
+                    // header, part2 is embedded at the start of the password-encrypted
+                    // payload. An offline attacker holding the header alone has HALF a
+                    // key — they can neither form the wrap key nor test a password
+                    // guess against the wrapped DEK; every crack attempt must fully
+                    // decrypt the payload (a full-vault GCM on top of PBKDF2) before
+                    // the DEK can even be attempted. v2 backups (NFLB2) remain fully
+                    // restoreable — the parse/verify paths below read both magics.
+                    val wrapKey = EncryptionService.generateDek()
+                    val wrapKeyPart1 = ByteArray(BACKUP_WRAP_KEY_HALF_SIZE)
+                    val wrapKeyPart2 = ByteArray(BACKUP_WRAP_KEY_HALF_SIZE)
+                    System.arraycopy(wrapKey, 0, wrapKeyPart1, 0, BACKUP_WRAP_KEY_HALF_SIZE)
+                    System.arraycopy(wrapKey, BACKUP_WRAP_KEY_HALF_SIZE, wrapKeyPart2, 0, BACKUP_WRAP_KEY_HALF_SIZE)
+                    try {
+                        val wrappedDek = EncryptionService.encryptAad(key, wrapKey, BACKUP_DEK_WRAP_AAD)
+                        val payloadIv = ByteArray(BACKUP_IV_SIZE)
+                        java.security.SecureRandom().nextBytes(payloadIv)
+                        val header = buildBackupHeaderV3(salt, payloadIv, wrapKeyPart1, wrappedDek)
+                        // B2-DOS-07 (phase-83) + phase-84: streamed file-to-file
+                        // encryption. The plaintext stream is [16B part2] || zip, so
+                        // the payload-derived key half rides INSIDE the ciphertext.
+                        BackupExportPolicy.encryptStreamGcm(
+                            java.io.SequenceInputStream(
+                                java.io.ByteArrayInputStream(wrapKeyPart2),
+                                FileInputStream(stagingZip)
+                            ),
+                            FileOutputStream(tempBackupFile),
+                            kek,
+                            payloadIv,
+                            header,
+                            BACKUP_PAYLOAD_AAD
+                        )
+                    } finally {
+                        wrapKey.fill(0.toByte())
+                        wrapKeyPart1.fill(0.toByte())
+                        wrapKeyPart2.fill(0.toByte())
+                    }
                 } finally {
                     kek.fill(0.toByte())
                 }
             } else {
                 // H4: a backup must never silently be a plain zip containing
-                // journal/voice/image files. It is either password-encrypted (v2
-                // NFLB2 above) or device-keyed (legacy) — no unencrypted fallback.
+                // journal/voice/image files. It is either password-encrypted (v3
+                // NFLB3 above) or device-keyed (legacy) — no unencrypted fallback.
                 require(key != null) {
                     "Backup rejected: no encryption key is available and no backup password was provided. Unlock the vault before exporting."
                 }
@@ -1407,14 +1457,14 @@ object ImportExportService {
         return entryBytes
     }
 
-    private data class BackupV2Payload(val zipBytes: ByteArray, val dekHex: String?, val kek: ByteArray?)
+    internal data class BackupV2Payload(val zipBytes: ByteArray, val dekHex: String?, val kek: ByteArray?)
 
     /**
      * Payload decrypt with the B2-CRYPTO-03 diagnostics: a tag failure is
      * reported as CORRUPTION when a probe unwrap of the wrapped DEK proves the
      * password was correct (header/payload tampering or a splice), and as a
      * wrong password only when the DEK does not open either. A one-size-fits-all
-     * 'Incorrect backup password' would mislead on a spliced/corrupt file.
+     * 'Incorrect backup password' would mislead on a spliced/corrupt file. v2 only.
      */
     private fun decryptBackupPayloadOrThrow(
         cipherText: ByteArray,
@@ -1441,19 +1491,79 @@ object ImportExportService {
         }
     }
 
-    private fun tryParseBackupV2(rawBytes: ByteArray, backupPassword: String?): BackupV2Payload? {
-        val magic = BACKUP_MAGIC.toByteArray(Charsets.US_ASCII)
-        val headerSize = magic.size + BACKUP_SALT_SIZE + BACKUP_IV_SIZE + BACKUP_WRAPPED_DEK_SIZE
-        if (rawBytes.size <= headerSize) return null
+    /**
+     * B2-CRYPTO-04 (phase-84): v3 (NFLB3) payload decrypt — the AAD-bound
+     * format is the ONLY format v3 has ever been written in, so unlike the v2
+     * reader there is deliberately NO legacy zero-AAD retry (a genuine v3
+     * payload's tag covers BACKUP_PAYLOAD_AAD + the exact header, so an
+     * un-AADed retry can never rescue it and would only mask a splice).
+     */
+    internal fun decryptBackupPayloadV3(cipherText: ByteArray, kek: ByteArray, payloadIv: ByteArray, header: ByteArray): ByteArray {
+        val cipher = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(
+            javax.crypto.Cipher.DECRYPT_MODE,
+            javax.crypto.spec.SecretKeySpec(kek, "AES"),
+            javax.crypto.spec.GCMParameterSpec(128, payloadIv)
+        )
+        cipher.updateAAD(BACKUP_PAYLOAD_AAD)
+        cipher.updateAAD(header)
+        return cipher.doFinal(cipherText)
+    }
+
+    /** Parsed backup header, format-agnostic (v2 NFLB2 / v3 NFLB3). */
+    private data class BackupHeaderParts(
+        val version: Int, // 2 (NFLB2) or 3 (NFLB3)
+        val magic: ByteArray,
+        val salt: ByteArray,
+        val iv: ByteArray,
+        val wrapKeyPart1: ByteArray?, // NFLB3 only: first half of the DEK-wrap key
+        val wrappedDek: ByteArray,
+        val header: ByteArray,
+        val headerSize: Int
+    ) {
+        /** Bytes of payload-derived key material a v3 payload prefixes (v2: none). */
+        val payloadKeyPrefix: Int get() = if (version == 3) BACKUP_WRAP_KEY_HALF_SIZE else 0
+    }
+
+    /** Assembles a 32-byte wrap key from its two 16-byte halves (zeroize after use). */
+    private fun combineWrapKey(firstHalf: ByteArray, secondHalf: ByteArray): ByteArray {
+        val out = ByteArray(firstHalf.size + secondHalf.size)
+        System.arraycopy(firstHalf, 0, out, 0, firstHalf.size)
+        System.arraycopy(secondHalf, 0, out, firstHalf.size, secondHalf.size)
+        return out
+    }
+
+    /**
+     * Parses a v2 ([NFLB2]) or v3 ([NFLB3]) header, or returns null when
+     * [rawBytes] does not start with either magic (a legacy/device-keyed file).
+     */
+    private fun parseBackupHeader(rawBytes: ByteArray): BackupHeaderParts? {
+        val magicV3 = BACKUP_MAGIC_V3.toByteArray(Charsets.US_ASCII)
+        val magicV2 = BACKUP_MAGIC.toByteArray(Charsets.US_ASCII)
+        val isV3 = rawBytes.size > magicV3.size && rawBytes.copyOfRange(0, magicV3.size).contentEquals(magicV3)
+        val magic = if (isV3) magicV3 else magicV2
+        if (rawBytes.size <= magic.size) return null
         if (!rawBytes.copyOfRange(0, magic.size).contentEquals(magic)) return null
 
-        val salt = rawBytes.copyOfRange(magic.size, magic.size + BACKUP_SALT_SIZE)
-        val iv = rawBytes.copyOfRange(magic.size + BACKUP_SALT_SIZE, magic.size + BACKUP_SALT_SIZE + BACKUP_IV_SIZE)
-        val wrappedDek = rawBytes.copyOfRange(
-            magic.size + BACKUP_SALT_SIZE + BACKUP_IV_SIZE,
-            headerSize
+        val part1Size = if (isV3) BACKUP_WRAP_KEY_HALF_SIZE else 0
+        val headerSize = magic.size + BACKUP_SALT_SIZE + BACKUP_IV_SIZE + part1Size + BACKUP_WRAPPED_DEK_SIZE
+        if (rawBytes.size <= headerSize) return null
+
+        var off = magic.size
+        val salt = rawBytes.copyOfRange(off, off + BACKUP_SALT_SIZE); off += BACKUP_SALT_SIZE
+        val iv = rawBytes.copyOfRange(off, off + BACKUP_IV_SIZE); off += BACKUP_IV_SIZE
+        val part1 = if (isV3) rawBytes.copyOfRange(off, off + BACKUP_WRAP_KEY_HALF_SIZE) else null
+        if (isV3) off += BACKUP_WRAP_KEY_HALF_SIZE
+        val wrappedDek = rawBytes.copyOfRange(off, headerSize)
+        return BackupHeaderParts(
+            if (isV3) 3 else 2, magic, salt, iv, part1, wrappedDek,
+            rawBytes.copyOfRange(0, headerSize), headerSize
         )
-        val cipherText = rawBytes.copyOfRange(headerSize, rawBytes.size)
+    }
+
+    internal fun tryParseBackupV2(rawBytes: ByteArray, backupPassword: String?): BackupV2Payload? {
+        val h = parseBackupHeader(rawBytes) ?: return null
+        val cipherText = rawBytes.copyOfRange(h.headerSize, rawBytes.size)
 
         if (backupPassword == null) {
             throw IllegalStateException("This backup is protected by a password. Enter the backup password to restore.")
@@ -1465,32 +1575,66 @@ object ImportExportService {
             // plain wrong-password outcome and the raw input is not already
             // normalized, retry the legacy raw bytes so a pre-fix backup whose
             // password was set with a non-NFKC byte sequence still restores.
-            for (derivedKek in EncryptionService.deriveKeyCandidates(backupPassword, salt)) {
+            for (derivedKek in EncryptionService.deriveKeyCandidates(backupPassword, h.salt)) {
                 kek = derivedKek
-                val header = rawBytes.copyOfRange(0, headerSize)
                 val payload = try {
-                    decryptBackupPayloadOrThrow(cipherText, derivedKek, iv, header, wrappedDek)
+                    if (h.version == 3) {
+                        decryptBackupPayloadV3(cipherText, derivedKek, h.iv, h.header)
+                    } else {
+                        decryptBackupPayloadOrThrow(cipherText, derivedKek, h.iv, h.header, h.wrappedDek)
+                    }
                 } catch (e: Exception) {
                     // A corruption diagnosis means THIS candidate's password was
                     // proven correct and the header/payload no longer match — it
-                    // is final, never retried against the other byte form.
+                    // is final, never retried against the other byte form. v3 has
+                    // no cheap DEK probe, so a v3 payload tag failure surfaces as
+                    // 'Incorrect backup password' (see B2Crypto04 REPORT).
                     if (e.message?.contains("corrupted", ignoreCase = true) == true) throw e
                     null
                 }
                 if (payload != null) {
-                    // The SAME derived KEK also unwraps the backup DEK — the
-                    // restore path runs a single PBKDF2 per candidate instead of
-                    // one pass per step.
+                    // B2-CRYPTO-04: v3 payload = [16B wrapKeyPart2][zip...]; the
+                    // header alone never forms the wrap key, the payload-derived
+                    // half must be recovered from the decrypted bytes first.
+                    var wrapKey: ByteArray? = null
+                    var part2: ByteArray? = null
+                    val zipBytes: ByteArray
+                    if (h.version == 3) {
+                        if (payload.size <= h.payloadKeyPrefix) {
+                            throw IllegalArgumentException(
+                                "Backup appears corrupted: the encrypted payload is too short."
+                            )
+                        }
+                        part2 = payload.copyOfRange(0, h.payloadKeyPrefix)
+                        wrapKey = combineWrapKey(h.wrapKeyPart1!!, part2!!)
+                        zipBytes = payload.copyOfRange(h.payloadKeyPrefix, payload.size)
+                    } else {
+                        zipBytes = payload
+                    }
                     val dekHex = try {
-                        EncryptionService.decryptAad(wrappedDek, derivedKek, BACKUP_DEK_WRAP_AAD)
-                            .also { it.fill(0.toByte()) }
-                            .toHexString()
+                        val unwrapKey = wrapKey ?: derivedKek
+                        val unwrappedDek = EncryptionService.decryptAad(h.wrappedDek, unwrapKey, BACKUP_DEK_WRAP_AAD)
+                        try {
+                            unwrappedDek.toHexString()
+                        } finally {
+                            unwrappedDek.fill(0.toByte())
+                        }
                     } catch (e: Exception) {
-                        null
+                        // v3: correct password + untangled payload, but the DEK did
+                        // not open with the reassembled wrap key — a header/payload
+                        // splice. v2 never reaches here (its probe ran inside the
+                        // payload decrypt). Treat as corruption so the user is not
+                        // told their (correct) password is wrong.
+                        throw IllegalArgumentException(
+                            "Backup appears corrupted: the header and the encrypted payload do not match.", e
+                        )
+                    } finally {
+                        wrapKey?.fill(0.toByte())
+                        part2?.fill(0.toByte())
                     }
                     // KEK ownership hands off to importBackup, which zeroizes it
                     // on every outcome; the failure paths below zeroize it too.
-                    return BackupV2Payload(payload, dekHex, derivedKek)
+                    return BackupV2Payload(zipBytes, dekHex, derivedKek)
                 }
                 // Wrong-password candidate — zeroize it before trying the next.
                 kek?.fill(0.toByte())
@@ -1505,37 +1649,58 @@ object ImportExportService {
 
     /**
      * H1: rejects a wrong backup password BEFORE the live vault is closed or
-     * touched. The wrapped DEK in the v2 header can only be opened with the
-     * correct password (GCM tag), so this is a cheap, side-effect-free check.
-     * Legacy backups carry no password and are skipped (they are validated by
-     * the device DEK inside importBackup).
+     * touched. v2's wrapped DEK opens only with the correct password (a cheap
+     * GCM-tag probe). v3 has no such cheap authenticator by design (the header
+     * carries only half of the wrap key), so a v3 check performs ONE full
+     * payload decrypt + DEK unwrap — same memory budget (MAX_BACKUP_INPUT_BYTES)
+     * and cost class as the import itself, and the only way the password can be
+     * tested at all. Legacy backups carry no password and are skipped.
      */
     fun validateBackupPassword(rawBytes: ByteArray, backupPassword: String?) {
-        val magic = BACKUP_MAGIC.toByteArray(Charsets.US_ASCII)
-        if (rawBytes.size <= magic.size) return
-        if (!rawBytes.copyOfRange(0, magic.size).contentEquals(magic)) return
+        val h = parseBackupHeader(rawBytes) ?: return
 
         if (backupPassword == null) {
             throw IllegalStateException("This backup is protected by a password. Enter the backup password to restore.")
         }
-        val headerSize = magic.size + BACKUP_SALT_SIZE + BACKUP_IV_SIZE + BACKUP_WRAPPED_DEK_SIZE
-        if (rawBytes.size <= headerSize) {
-            throw IllegalArgumentException("Backup appears corrupted: header is truncated.")
-        }
-        val salt = rawBytes.copyOfRange(magic.size, magic.size + BACKUP_SALT_SIZE)
-        val wrappedDek = rawBytes.copyOfRange(magic.size + BACKUP_SALT_SIZE + BACKUP_IV_SIZE, headerSize)
         var kek: ByteArray? = null
         try {
             // B2-CRYPTO-07 (phase-113): normalized password first, then the raw
             // legacy bytes when it differs — see tryParseBackupV2.
-            for (derivedKek in EncryptionService.deriveKeyCandidates(backupPassword, salt)) {
+            for (derivedKek in EncryptionService.deriveKeyCandidates(backupPassword, h.salt)) {
                 kek = derivedKek
-                try {
-                    EncryptionService.decryptAad(wrappedDek, derivedKek, BACKUP_DEK_WRAP_AAD)
-                    return
+                val payload = try {
+                    if (h.version == 3) {
+                        decryptBackupPayloadV3(rawBytes.copyOfRange(h.headerSize, rawBytes.size), derivedKek, h.iv, h.header)
+                    } else {
+                        // v2 cheap probe: a 61-byte wrapped-DEK GCM-tag check.
+                        EncryptionService.decryptAad(h.wrappedDek, derivedKek, BACKUP_DEK_WRAP_AAD)
+                        return
+                    }
                 } catch (e: Exception) {
                     kek?.fill(0.toByte())
                     kek = null
+                    continue
+                }
+                try {
+                    if (payload.size <= h.payloadKeyPrefix) {
+                        throw IllegalArgumentException("Backup appears corrupted: the encrypted payload is too short.")
+                    }
+                    val part2 = payload.copyOfRange(0, h.payloadKeyPrefix)
+                    val wrapKey = combineWrapKey(h.wrapKeyPart1!!, part2)
+                    try {
+                        EncryptionService.decryptAad(h.wrappedDek, wrapKey, BACKUP_DEK_WRAP_AAD)
+                            .also { it.fill(0.toByte()) }
+                        return
+                    } finally {
+                        wrapKey.fill(0.toByte())
+                        part2.fill(0.toByte())
+                    }
+                } catch (e: IllegalArgumentException) {
+                    throw e
+                } catch (e: Exception) {
+                    throw IllegalArgumentException(
+                        "Backup appears corrupted: the header and the encrypted payload do not match.", e
+                    )
                 }
             }
             throw IllegalArgumentException("Incorrect backup password.")

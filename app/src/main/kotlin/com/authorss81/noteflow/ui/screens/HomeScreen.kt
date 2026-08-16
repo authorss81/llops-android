@@ -29,8 +29,8 @@ import androidx.compose.ui.unit.dp
 import com.authorss81.noteflow.data.model.NotePageEntity
 import com.authorss81.noteflow.data.model.NotebookEntity
 import com.authorss81.noteflow.data.model.SectionEntity
+import com.authorss81.noteflow.services.BackupPasswordPolicy
 import com.authorss81.noteflow.services.DocumentTextExtractor
-import com.authorss81.noteflow.services.EncryptionService
 import com.authorss81.noteflow.services.ExportDestinationPolicy
 import com.authorss81.noteflow.services.ImportArchivePolicy
 import com.authorss81.noteflow.services.ImportExportService
@@ -1259,6 +1259,18 @@ fun HomeScreen(
                             }
                         )
                         Spacer(modifier = Modifier.height(8.dp))
+                        // B2-CRYPTO-04 (phase-84): the offline-cost warning is never
+                        // silent — a backup seeded to Downloads/WebDAV is only as
+                        // strong as this password (no lockout protects an offline
+                        // PBKDF2 crack of a leaked file).
+                        if (pendingRestoreBytes == null) {
+                            Text(
+                                BackupPasswordPolicy.OFFLINE_BACKUP_NOTICE,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.outline
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
                         OutlinedTextField(
                             value = backupPasswordInput,
                             onValueChange = {
@@ -1290,8 +1302,13 @@ fun HomeScreen(
                                     performRestore(context, pending, backupPasswordInput)
                                 }
                             } else {
-                                if (EncryptionService.normalizedGraphemeCount(backupPasswordInput) < EncryptionService.MIN_PASSWORD_GRAPHEMES) {
-                                    backupPasswordError = "Backup password must be at least ${EncryptionService.MIN_PASSWORD_GRAPHEMES} characters"
+                                // B2-CRYPTO-04 (phase-84): the backup password must
+                                // clear the SAME strength bar as the master password
+                                // (was a bare `>= 6` length check); its verdict
+                                // message is surfaced as the dialog error.
+                                val strength = BackupPasswordPolicy.evaluate(backupPasswordInput)
+                                if (!strength.accepted) {
+                                    backupPasswordError = strength.message
                                 } else if (!isValidating) {
                                     isValidating = true
                                     scope.launch {

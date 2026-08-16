@@ -209,6 +209,10 @@ class B1Crypto04PasswordStrengthTest {
             }
         val expected = setOf(
             "app/src/main/kotlin/com/authorss81/noteflow/services/PasswordStrengthPolicy.kt",
+            // B2-CRYPTO-04 (phase-84): the backup-password policy reuses the SAME
+            // strength decision table (backups ride to public Downloads/WebDAV and
+            // must clear the identical bar as the vault master password).
+            "app/src/main/kotlin/com/authorss81/noteflow/services/BackupPasswordPolicy.kt",
             "app/src/main/kotlin/com/authorss81/noteflow/ui/viewmodel/NoteflowViewModel.kt",
             "app/src/main/kotlin/com/authorss81/noteflow/ui/components/Dialogs.kt",
         )
