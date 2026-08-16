@@ -362,6 +362,27 @@
 - **Downloadable runtime**: `plugins/runtime/RuntimePluginLoader.kt:68`; `services/AppClassLoaderFactory.kt:23`
   (`DexClassLoader`); `services/AppFacadeHost.kt:27` (deny-by-default facade, NO direct DB/keystore handles);
   `plugins/runtime/PinnedCertHash.kt:25`; `plugins/runtime/ArtifactSignatureVerifier.kt:52`.
+  - **Implemented in phase-76** (B2-DEPS-04, see `workspace/phase-76/REPORT.md`): the downloadable-plugin
+    SIGNING identity is no longer a public default or an ephemeral build-bred keystore.
+    `plugins/llm/build.gradle.kts` deleted the hardcoded default signing password and the `keytool
+    -genkeypair` fallback that minted a fresh self-signed JKS into `build/plugin-signing/` on every local
+    build; the signing tasks now FAIL LOUDLY — a `gradle.taskGraph.whenReady` gate
+    (`PLUGIN_SIGNING_TASK_NAMES = signPlugin|verifyPluginSignature|pluginMetadata`, mirroring the `:app`
+    phase-57 release gate) plus `requirePluginSigningKeystoreB64()`/`requirePluginSigningStorePass()`
+    throw a `GradleException` when `PLUGIN_SIGNING_KEYSTORE_B64`/`PLUGIN_SIGNING_STORE_PASS` are unset
+    (`PLUGIN_SIGNING_KEY_PASS` optional — the key password defaults to the store password, never a
+    committed constant). The dangling `:app:generateLlmPluginSeed` claim became a REAL task in
+    `app/build.gradle.kts`: `dependsOn(":plugins:llm:pluginMetadata")` (fails without the signing env),
+    validates the signed artifact's `sha256` (64-hex) + `pinnedCertHash` (`sha256/<base64>`), and
+    rewrites the committed `app/.../plugins/runtime/GeneratedLlmPluginPin.kt` seed (`null` = fail-closed,
+    no release pinned yet). `CompileTimePluginPins.RELEASES` folds that seed in via
+    `buildReleaseTable(*listOfNotNull(llmPluginSeedRelease).toTypedArray())`, so the app's compiled-in
+    pin can only ever match the ONE real CI key identity. A latent pre-existing bug — `signPlugin`'s
+    `dependsOn(pluginSigningKeystore)` passed a `Provider<RegularFile>` as the task dependency (a
+    Gradle hard error), so signing could never run even with a keystore — was fixed by materializing the
+    keystore inside the task action instead. Positive path proven with a throwaway `/tmp` keystore (seed
+    emitted the exact pin of the key that signed the artifact; pin reverted, never committed). Tests:
+    `B2Deps04PluginSigningTest` (9).
   - **Implemented in phase-80** (B2-DOS-04, see `workspace/phase-80/REPORT.md`): `AppFacadeHost.httpGet`
     enforces its response-size cap DURING the read, never after `readBytes()` already slurped the whole
     body. New pure-JVM `services/FacadeHttpGetPolicy.kt` is the single decision table

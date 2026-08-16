@@ -1,4 +1,3 @@
-import java.io.ByteArrayInputStream
 import java.security.KeyStore
 import java.security.MessageDigest
 import java.security.cert.X509Certificate
@@ -138,44 +137,95 @@ tasks.register<Jar>("packagePlugin") {
 //
 // The downloadable artifact MUST be signed before the Phase-23 runtime accepts
 // it: the app pins `sha256/<base64>` of the signing certificate (PinnedCertHash)
-// and verifies it on TLS AND on the JAR signature block. The signing keystore
-// is NEVER committed. CI provides a stable keystore via
-// `PLUGIN_SIGNING_KEYSTORE_B64` (base64 JKS); a local developer build generates
-// an ephemeral self-signed keystore into `build/plugin-signing/` so the whole
-// pipeline stays runnable offline (the pinned hashes then rotate per build and
-// are injected into the app at build time — see `:app:generateLlmPluginSeed`).
+// and verifies it on TLS AND on the JAR signature block.
+//
+// B2-DEPS-04 (phase-76): the signing identity is the ONE real, operator-held
+// plugin-signing keystore, provisioned ONLY from the secret store:
+//   - `PLUGIN_SIGNING_KEYSTORE_B64` — base64 JKS of that key (never committed,
+//     never derived from public inputs);
+//   - `PLUGIN_SIGNING_STORE_PASS` — its store password from the secret store
+//     (`PLUGIN_SIGNING_KEY_PASS` optional; when unset the key password defaults
+//     to the store password, never to a committed constant).
+// When either variable is unset the SIGNING tasks FAIL LOUDLY. The old
+// JDK keystore-generation CLI fallback that minted a fresh self-signed JKS into
+// `build/plugin-signing/` on every local build (a per-build signing identity no
+// app could ever pin) and the hardcoded default signing password (a public
+// secret protecting any keystore created with it) are gone. The app's compiled-in
+// pin (`:app:generateLlmPluginSeed`) can therefore only ever match this one real
+// CI key identity — never a build-bred keystore.
 private val KEYSTORE_ALIAS = "plugin-signing"
-private val DEFAULT_KEY_PASSWORD = "inkflow.2026.plugins"
+
+/** Fails loudly unless the real plugin-signing keystore is supplied. */
+private fun requirePluginSigningKeystoreB64(): String {
+    val b64 = providers.environmentVariable("PLUGIN_SIGNING_KEYSTORE_B64").orNull
+        ?.takeIf { it.isNotBlank() }
+    return b64 ?: throw GradleException(
+        "LLM plugin signing refused (B2-DEPS-04): PLUGIN_SIGNING_KEYSTORE_B64 is unset. " +
+            "The downloadable artifact must be signed by the ONE real plugin-signing " +
+            "keystore provisioned from the secret store - there is no ephemeral " +
+            "self-signed fallback and no default credential in this build. " +
+            "Set PLUGIN_SIGNING_KEYSTORE_B64 (base64 JKS) and PLUGIN_SIGNING_STORE_PASS " +
+            "and retry, or do not invoke the plugin-signing tasks."
+    )
+}
+
+/** Fails loudly unless the real plugin-signing store password is supplied. */
+private fun requirePluginSigningStorePass(): String {
+    val pass = providers.environmentVariable("PLUGIN_SIGNING_STORE_PASS").orNull
+        ?.takeIf { it.isNotBlank() }
+    return pass ?: throw GradleException(
+        "LLM plugin signing refused (B2-DEPS-04): PLUGIN_SIGNING_STORE_PASS is unset. " +
+            "The plugin-signing keystore's store password must come from the secret " +
+            "store - there is no default credential in this build."
+    )
+}
+
+/** Key password: the optional `PLUGIN_SIGNING_KEY_PASS`, else the (already
+ *  required) store password. Never a committed constant. */
+private fun pluginSigningKeyPass(): String =
+    providers.environmentVariable("PLUGIN_SIGNING_KEY_PASS").orNull
+        ?.takeIf { it.isNotBlank() }
+        ?: requirePluginSigningStorePass()
+
+// B2-DEPS-04 fail-fast gate: whenever a task that produces the SIGNED plugin
+// artifact or its metadata is requested while the real signing keystore is not
+// configured, abort before any build work — mirror the `:app` phase-57
+// release-signing gate. The unsigned-jar task `packagePlugin` never carries
+// these names and is unaffected.
+private val PLUGIN_SIGNING_TASK_NAMES = setOf(
+    "signPlugin", "verifyPluginSignature", "pluginMetadata"
+)
+
+gradle.taskGraph.whenReady {
+    if (allTasks.any { task -> task.project == project && task.name in PLUGIN_SIGNING_TASK_NAMES }) {
+        val keystoreSet =
+            providers.environmentVariable("PLUGIN_SIGNING_KEYSTORE_B64").orNull?.isNotBlank() == true
+        val storePassSet =
+            providers.environmentVariable("PLUGIN_SIGNING_STORE_PASS").orNull?.isNotBlank() == true
+        if (!keystoreSet || !storePassSet) {
+            throw GradleException(
+                "LLM plugin signing refused (B2-DEPS-04): PLUGIN_SIGNING_KEYSTORE_B64 and " +
+                    "PLUGIN_SIGNING_STORE_PASS must both be set from the secret store. " +
+                    "There is no ephemeral self-signed keystore fallback and no default " +
+                    "password in this build. (keystore set=$keystoreSet, store pass set=$storePassSet)"
+            )
+        }
+    }
+}
 
 val pluginSigningKeystore: Provider<RegularFile> = providers.provider {
+    val fromEnv = requirePluginSigningKeystoreB64()
     val target = layout.buildDirectory.file("plugin-signing/plugin-signing.jks").get()
     val file = target.asFile
-    val fromEnv = providers.environmentVariable("PLUGIN_SIGNING_KEYSTORE_B64").orNull
-    if (file.exists()) return@provider target
-    if (fromEnv != null) {
+    if (!file.exists() || file.length() == 0L) {
         file.parentFile.mkdirs()
         file.writeBytes(Base64.getDecoder().decode(fromEnv))
-    } else {
-        file.parentFile.mkdirs()
-        project.exec {
-            commandLine(
-                "keytool", "-genkeypair",
-                "-alias", KEYSTORE_ALIAS,
-                "-keyalg", "RSA", "-keysize", "2048",
-                "-validity", "10950",
-                "-dname", "CN=InkFlow Plugin Signing, OU=Developer, O=InkFlow",
-                "-keystore", file.absolutePath,
-                "-storetype", "JKS",
-                "-storepass", DEFAULT_KEY_PASSWORD,
-                "-keypass", DEFAULT_KEY_PASSWORD
-            )
-        }.rethrowFailure()
     }
     target
 }
 
 private fun loadSigningCert(): X509Certificate {
-    val storePass = providers.environmentVariable("PLUGIN_SIGNING_STORE_PASS").orNull ?: DEFAULT_KEY_PASSWORD
+    val storePass = requirePluginSigningStorePass()
     val keyStore = KeyStore.getInstance("JKS")
     pluginSigningKeystore.get().asFile.inputStream().use {
         keyStore.load(it, storePass.toCharArray())
@@ -186,12 +236,15 @@ private fun loadSigningCert(): X509Certificate {
 tasks.register("signPlugin") {
     group = "plugin-artifact"
     description = "Signs llm-plugin.jar with the plugin-signing keystore (jarsigner, SHA256withRSA)."
-    dependsOn("packagePlugin", pluginSigningKeystore)
+    // The keystore provider is NOT a task dependency: `pluginSigningKeystore.get()`
+    // inside the task action materializes (requiring the env vars and throwing
+    // loudly when they are unset) + decodes the JKS right before jarsigner runs.
+    dependsOn("packagePlugin")
     inputs.file(layout.buildDirectory.file("plugin-artifact/llm-plugin.jar"))
     outputs.file(layout.buildDirectory.file("plugin-artifact/llm-plugin-signed.jar"))
     doLast {
-        val storePass = providers.environmentVariable("PLUGIN_SIGNING_STORE_PASS").orNull ?: DEFAULT_KEY_PASSWORD
-        val keyPass = providers.environmentVariable("PLUGIN_SIGNING_KEY_PASS").orNull ?: DEFAULT_KEY_PASSWORD
+        val storePass = requirePluginSigningStorePass()
+        val keyPass = pluginSigningKeyPass()
         val jar = layout.buildDirectory.file("plugin-artifact/llm-plugin.jar").get().asFile
         val signed = layout.buildDirectory.file("plugin-artifact/llm-plugin-signed.jar").get().asFile
         project.exec {
@@ -228,8 +281,12 @@ tasks.register("verifyPluginSignature") {
 //
 // Emits the exact `sha256` (hex) and `pinnedCertHash` (`sha256/<base64>`) the
 // app must pin in its catalog seed so a signed artifact from THIS build passes
-// both the TLS pin and the JAR-signature pin. `:app:generateLlmPluginSeed`
-// consumes this file.
+// both the TLS pin and the JAR-signature pin. The real task
+// `:app:generateLlmPluginSeed` (app/build.gradle.kts) consumes this file: it
+// depends on `pluginMetadata` (which fails loudly unless the real signing
+// keystore env vars are present), validates the emitted values, and rewrites
+// `app/.../GeneratedLlmPluginPin.kt` so `CompileTimePluginPins.RELEASES` ships
+// the pin of the ONE real CI key identity — never a build-bred one.
 val pluginMetadataFile = layout.buildDirectory.file("plugin-artifact/plugin-metadata.properties")
 
 tasks.register("pluginMetadata") {

@@ -163,12 +163,17 @@ val DEFAULT_DOWNLOAD_HOSTS: Set<String> = setOf(DEFAULT_MANIFEST_HOST)
 /**
  * The PRODUCTION compile-time pin table.
  *
- * [RELEASES] is deliberately EMPTY in this build: no downloadable (remote)
- * plugin has been released yet, so nothing is updatable — the update path
- * fails closed (B1-NET-03) exactly like the placeholder
- * [PLUGIN_MANIFEST_CERT_PIN] does for the manifest transport. Publishing a
- * genuine plugin release REQUIRES adding its `PinnedPluginRelease` row(s) here
- * (and bumping the app); the manifest can never introduce an unpinned release.
+ * The table folds in the committed `llmPluginSeedRelease`
+ * (`GeneratedLlmPluginPin.kt`, regenerated ONLY by the operator task
+ * `:app:generateLlmPluginSeed` from the SIGNED `:plugins:llm` artifact — which
+ * requires the real plugin-signing keystore env vars, B2-DEPS-04) plus any pins
+ * future releases add here directly. Today the seed is `null` — no downloadable
+ * (remote) plugin has been released yet — so [RELEASES] is EMPTY and nothing is
+ * updatable: the update path fails closed (B1-NET-03) exactly like the
+ * placeholder [PLUGIN_MANIFEST_CERT_PIN] does for the manifest transport.
+ * Publishing a genuine plugin release REQUIRES running the seed task (or adding
+ * its `PinnedPluginRelease` row here) and bumping the app; the manifest can
+ * never introduce an unpinned release.
  *
  * **Current limitation:** until a release is pinned, the hosted-update feature
  * is INERT — every offer, even a genuine one, is refused with "no compile-time
@@ -186,7 +191,8 @@ val DEFAULT_DOWNLOAD_HOSTS: Set<String> = setOf(DEFAULT_MANIFEST_HOST)
  */
 object CompileTimePluginPins {
 
-    val RELEASES: Map<String, Map<PluginVersion, PinnedReleaseVersion>> = emptyMap()
+    val RELEASES: Map<String, Map<PluginVersion, PinnedReleaseVersion>> =
+        CompileTimePluginPinStore.buildReleaseTable(*listOfNotNull(llmPluginSeedRelease).toTypedArray())
 
     /** The store/engine/downloader default — secure unless injected otherwise. */
     val defaultStore: CompileTimePluginPinStore =

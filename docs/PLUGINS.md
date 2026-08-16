@@ -614,16 +614,44 @@ verified.** A downloaded remote plugin can be updated from the store:
 
 ### Publishing a downloadable plugin release
 
-1. Compute the artifact's `sha256` (lowercase 64-char hex SHA-256) and its
+> **Signing (B2-DEPS-04, phase 76):** the artifact must be signed by the ONE real
+> plugin-signing keystore provisioned from the secret store — NOT a default
+> credential and NOT an ephemeral build-bred keystore. `plugins/llm/build.gradle.kts`
+> no longer contains a default signing password and never runs `keytool -genkeypair`
+> to mint a throwaway JKS. The signing tasks (`:plugins:llm:signPlugin`,
+> `verifyPluginSignature`, `pluginMetadata`) **fail loudly** — a
+> `gradle.taskGraph.whenReady` gate plus `requirePluginSigningKeystoreB64()` /
+> `requirePluginSigningStorePass()` throw a `GradleException` — whenever
+> `PLUGIN_SIGNING_KEYSTORE_B64` (base64 JKS) and `PLUGIN_SIGNING_STORE_PASS` are
+> unset. `PLUGIN_SIGNING_KEY_PASS` is optional and defaults to the store password;
+> it is never a committed constant. The keystore alias is `plugin-signing`.
+
+0. From the machine holding the secret store, export the base64 JKS and run the
+   signing tasks with `PLUGIN_SIGNING_KEYSTORE_B64=<base64>` and
+   `PLUGIN_SIGNING_STORE_PASS=...` set. `:plugins:llm:signPlugin` produces the
+   signed artifact in `plugins/llm/build/plugin-artifact/`, and
+   `pluginMetadata` writes `plugin-metadata.properties` (artifact name,
+   `sha256`, `pinnedCertHash`, `version`).
+1. Regenerate the app's compiled-in trust anchor: run the REAL task
+   `gradle :app:generateLlmPluginSeed`. It depends on `:plugins:llm:pluginMetadata`
+   (so it inherits the fail-loud signing gate), validates the metadata
+   (`sha256` = 64-char lowercase hex, `pinnedCertHash` = `sha256/<base64>`,
+   `version` = `major.minor.patch`), and rewrites the committed
+   `app/.../plugins/runtime/GeneratedLlmPluginPin.kt` seed. Do NOT commit a
+   keystore; the committed unit of trust is the seed file + the app bump that
+   ships it.
+2. Compute the artifact's `sha256` (lowercase 64-char hex SHA-256) and its
    `pinnedCertHash` (`sha256/<base64>`, RFC 7469-style, standard base64 alphabet +
    `=` padding, byte-exact — base64 is **case-sensitive**, so the value in the build
    must byte-for-byte equal what the hosted manifest emits, or the release fails
-   closed).
-2. Add one `PinnedPluginRelease(id, version, sha256, pinnedCertHash)` row per
-   released version to `CompileTimePluginPins.RELEASES` and bump the app so that
-   build ships the pins. The manifest can never introduce a release that is not
-   pinned here.
-3. If the artifact `downloadUrl` host is NOT the manifest host, add that host to
+   closed). These are surfaced by `plugin-metadata.properties`; cross-check them
+   against the seed the task wrote.
+3. With the seed non-null, `CompileTimePluginPins.RELEASES` (which already folds
+   `llmPluginSeedRelease` via `buildReleaseTable(*listOfNotNull(...)))`) now
+   resolves that release, and the store will accept offers matching that pin. The
+   manifest can never introduce a release that is not pinned here. (A committed
+   `null` seed = fail closed, no downloadable release accepted.)
+4. If the artifact `downloadUrl` host is NOT the manifest host, add that host to
    BOTH the pin store's `allowedDownloadHosts` AND
    `PluginDownloader.allowedDownloadHosts` — the two allow-lists are threaded
    independently and a mismatch surfaces as a downloader refusal ("not on the
