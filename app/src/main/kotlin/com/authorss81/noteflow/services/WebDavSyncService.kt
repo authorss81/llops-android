@@ -357,6 +357,10 @@ class WebDavSyncService(private val context: Context) {
                 SyncResult(false, "Download failed with HTTP response $downCode")
             }
         } catch (e: WebDavRemoteListingPolicy.DownloadTooLargeException) {
+            // Review-fix (phase-86): never leave a multi-hundred-MB partial
+            // archive behind; the caller only proceeds when `success`, so
+            // dropping the truncated file is always safe here.
+            runCatching { targetLocalFile.delete() }
             SyncResult(false, e.message ?: "Remote backup archive is too large to download.")
         } catch (e: IllegalArgumentException) {
             SyncResult(false, e.message ?: "Invalid WebDAV server URL.")

@@ -552,6 +552,21 @@
     (`:164`), with `instanceFollowRedirects=false` (`:158`). Off-origin/private-IP hrefs
     and 3xx redirects are refused with a clear `SyncResult(false, "Sync refused: ...")` —
     closes B1-NET-01 + the WebDAV slice of B1-NET-05 (see `workspace/phase-40/REPORT.md`).
+  - **Implemented in phase-86** (B1-NET-07): the remote-listing → download slice is a
+    pure-JVM decision table `services/WebDavRemoteListingPolicy.kt` — the "latest"
+    backup is chosen by the MAXIMUM FILENAME TIMESTAMP across both name generations
+    (`noteflow_vault_backup_<epochMillis>.nfb` legacy + `noteflow_vault_backup_<yyyy-MM-dd>_<token>.nfb`
+    B2-CRYPTO-06), never the last href in XML document order (`newestBackupHref`,
+    timestamps compared ASCENDING so `maxWithOrNull` yields the newest — unparseable
+    names score lowest, same-timestamp ties break deterministically by href); the `.nfb`
+    GET is streamed under the `MAX_DOWNLOAD_BYTES` (400 MB) cap by `copyBounded`
+    (mid-stream abort, typed `DownloadTooLargeException`, no target-file over-budget,
+    IDLE_READ_LIMIT stall guard); `remoteFolderName` is validated as ONE path segment
+    and RFC 3986 percent-encoded by `encodedRemoteFolderSegment` (blank/`.`/`..`/
+    separators/control chars rejected) at every URL interpolation. Review-fix (same
+    lineage): the too-large catch deletes the partial cache file, and the download
+    source pins are scoped to the download path only (the upload PUT legitimately keeps
+    `input.copyTo(output)`). See `workspace/phase-86/REPORT.md`.
 - **LocalSend**: `services/localsend/LocalSendProtocol.kt:29`, `LocalSendSender.kt:48`.
   - **Implemented in phase-41**: confirmed-pairing gate for sends. Pure-JVM
     `services/localsend/LocalSendPairing.kt` (`gate` = HTTPS-only +

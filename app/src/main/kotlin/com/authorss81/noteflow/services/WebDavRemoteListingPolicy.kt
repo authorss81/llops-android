@@ -90,7 +90,10 @@ object WebDavRemoteListingPolicy {
      */
     fun newestBackupHref(hrefs: List<String>): String? {
         if (hrefs.isEmpty()) return null
-        val comparator = compareByDescending<Pair<String, Long?>> { it.second ?: Long.MIN_VALUE }
+        // Timestamps compared ASCENDING (newest = comparator-maximum) — combining
+        // compareByDescending with maxWithOrNull would hand back the OLDEST file
+        // (review-fix: phase-86 shipped that inversion, picking the minimum).
+        val comparator = compareBy<Pair<String, Long?>> { it.second ?: Long.MIN_VALUE }
             .thenByDescending { it.first }
         return hrefs.map { href -> href to filenameTimestampMillis(href) }
             .maxWithOrNull(comparator)
@@ -185,9 +188,8 @@ object WebDavRemoteListingPolicy {
             total += n
             if (total > maxBytes) {
                 throw DownloadTooLargeException(
-                    "Refusing to download a backup archive larger than " +
-                        "${maxBytes / (1024L * 1024L)} MB — the file on the server " +
-                        "exceeds the restore budget."
+                    "Remote backup archive is too large — refusing to download more than " +
+                        "${maxBytes / (1024L * 1024L)} MB (the restore budget)."
                 )
             }
             output.write(buf, 0, n)

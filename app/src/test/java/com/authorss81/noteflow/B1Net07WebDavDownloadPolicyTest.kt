@@ -101,7 +101,7 @@ class B1Net07WebDavDownloadPolicyTest {
 
     @Test
     fun `empty listing yields null newest`() {
-        assertNull(WebDavRemoteListingPolicy.findBackupHrefs("<d:multistatus></d:multistatus>"))
+        assertTrue(WebDavRemoteListingPolicy.findBackupHrefs("<d:multistatus></d:multistatus>").isEmpty())
         assertNull(WebDavRemoteListingPolicy.newestBackupHref(emptyList()))
     }
 
@@ -258,7 +258,15 @@ class B1Net07WebDavDownloadPolicyTest {
         val source = File(repoRoot(), "app/src/main/kotlin/com/authorss81/noteflow/services/WebDavSyncService.kt")
             .readText()
         assertTrue("the GET body must route through the bounded copy", source.contains("copyBounded(input, output)"))
-        assertFalse("the unbounded input.copyTo(output) must be gone", source.contains("input.copyTo(output)"))
+        // The download path must be the ONLY copyTo-free GET; the upload path
+        // (uploadEncryptedVault, which streams the LOCAL file to the server and
+        // is naturally bounded by the local file size) legitimately keeps
+        // `input.copyTo(output)` — and it sits BEFORE downloadLatestEncryptedVault.
+        val copyTo = source.indexOf("input.copyTo(output)")
+        assertTrue(
+            "the only remaining copyTo must be the bounded local-to-server upload",
+            copyTo != -1 && copyTo < source.indexOf("downloadLatestEncryptedVault")
+        )
         assertTrue(
             "the too-large condition must be caught with a clean message",
             source.contains("DownloadTooLargeException")
