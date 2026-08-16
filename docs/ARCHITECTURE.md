@@ -269,8 +269,17 @@
     (`if (!settings.hasMasterPassword) startPluginLifecycle()`, `:258-272`); the new idempotent
     `startPluginLifecycle()` (`:285-312`) owns store re-materialization + hook firing, called
     from both unlock paths (`verifyMasterPassword` `:2489`, `verifyBiometricsAndUnlock` `:2643`);
-    `lock()` pauses the lifecycle + resets the flag (`:3204-3205`). No plugin code runs before
-    unlock.
+`lock()` pauses the lifecycle + resets the flag (`:3204-3205`). No plugin code runs
+    before unlock. Phase-67 review-fix (same commit): the gate now covers the whole
+    live-Context surface, not just hook firing — `containedAvailability` reports
+    `Unavailable` without invoking `plugin.availability(context)` while paused
+    (every derived-state query + capability route fails closed on the LockScreen,
+    incl. the previously out-of-scope post-lock dispatch), `setEnabled` disable +
+    `uninstallPlugin` only fire `onDisable` for a plugin whose `onEnable` ran this
+    process, `notifyConfigChanged` returns early while paused, the ViewModel's
+    `refreshPluginStates()`/`testPlugin()` no-op while `pluginRegistry.isLifecyclePaused`
+    (`:361`,`:381`), and `pluginLifecycleStarted` is `@Volatile` + double-checked
+    (`synchronized`) so racing unlock paths can never boot the layer twice.
 - **Downloadable runtime**: `plugins/runtime/RuntimePluginLoader.kt:68`; `services/AppClassLoaderFactory.kt:23`
   (`DexClassLoader`); `services/AppFacadeHost.kt:27` (deny-by-default facade, NO direct DB/keystore handles);
   `plugins/runtime/PinnedCertHash.kt:25`; `plugins/runtime/ArtifactSignatureVerifier.kt:52`.

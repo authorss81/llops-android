@@ -132,6 +132,12 @@ class PluginRegistry(
     // caller (and the JVM tests) on the old immediate-fire behaviour.
     private var lifecyclePaused = false
 
+    /** B1-AUTH-03 (phase-67 review-fix): true while the vault is locked (the
+     *  lifecycle is paused). The ViewModel gates its plugin state refresh and
+     *  self-check on this so no plugin bytecode (availability, snapshots,
+     *  diagnostics) runs on the LockScreen. */
+    val isLifecyclePaused: Boolean get() = lifecyclePaused
+
     init {
         // Phase 21: re-materialize optional definitions the user already
         // installed in a previous session (install state persists in the store
@@ -285,13 +291,21 @@ class PluginRegistry(
             return PluginEnableResult.Changed(pluginId, nowEnabled = true)
         }
         enableStore.setEnabled(pluginId, false)
-        plugin?.let {
-            guardedOnDisable(it, context)
-            logger.lifecycle("disabled", pluginId, it.name)
+        // B1-AUTH-03 (phase-67 review-fix): only tear down a plugin whose
+        // onEnable actually ran this process — it is a live hook. A plugin whose
+        // enable was deferred (setEnabled while the vault was locked) or never
+        // booted has nothing to tear down; firing onDisable then would hand
+        // plugin bytecode a live Context (on the LockScreen) with no matching
+        // onEnable. enabledNotified.remove always runs so a later re-enable in
+        // the same process fires onEnable again.
+        if (enabledNotified.remove(pluginId)) {
+            plugin?.let {
+                guardedOnDisable(it, context)
+                logger.lifecycle("disabled", pluginId, it.name)
+            }
+        } else {
+            logger.lifecycle("disabled", pluginId, plugin?.name ?: pluginId)
         }
-        // A later re-enable in the same process must fire onEnable again (the
-        // plugin was torn down by the onDisable above).
-        enabledNotified.remove(pluginId)
         refreshAvailability(context)
         // Arbitration may now pick a different winner — release previously
         // disabled losers so their derived state can recover to AVAILABLE.
@@ -301,6 +315,11 @@ class PluginRegistry(
 
     /** Notify a plugin that one of its `plugins.<id>.<key>` settings changed. */
     fun notifyConfigChanged(pluginId: String, context: Context? = null) {
+        // B1-AUTH-03 (phase-67 review-fix): onConfigChanged is a lifecycle-class
+        // hook handed a live Context — it must not fire while the vault is
+        // locked. A config write that races a lock is picked up on the next
+        // unlock (resumeLifecycle re-enables with the current settings).
+        if (lifecyclePaused) return
         val plugin = pluginById(pluginId) ?: return
         try {
             plugin.onConfigChanged(context, pluginSettingsFor(plugin))
@@ -425,7 +444,14 @@ class PluginRegistry(
         val plugin = pluginById(pluginId)
             ?: return PluginUninstallResult.Refused(pluginId, "This plugin is not installed.")
         if (enableStore.isEnabled(pluginId)) {
-            guardedOnDisable(plugin, context)
+            // B1-AUTH-03 (phase-67 review-fix): only tear down plugins whose
+            // onEnable actually ran this process (a live hook). A plugin that was
+            // enabled while the vault was locked (deferred hook) or never booted
+            // must not be handed a live Context with no matching onEnable. The
+            // unconditional enabledNotified.remove below still clears the set.
+            if (enabledNotified.remove(pluginId)) {
+                guardedOnDisable(plugin, context)
+            }
         }
         // Wipe opt-in history + every namespaced setting (delete, not disable).
         enableStore.wipe(pluginId)
@@ -548,6 +574,19 @@ class PluginRegistry(
      * callers of [refreshAvailability]/[resolve]/[setEnabled].
      */
     private fun containedAvailability(plugin: NoteflowPlugin, context: Context?): PluginAvailability {
+        // B1-AUTH-03 (phase-67 review-fix): while the lifecycle is paused (vault
+        // locked) the plugin's availability GATE must not run either — it is
+        // downloadable bytecode with a live Context. Report Unavailable without
+        // invoking the plugin, which (a) runs no plugin code on the LockScreen
+        // and (b) makes every availability-derived surface (resolve, derived
+        // states, enabledPlugins, availablePlugins, stateOf, capability routing,
+        // dependency checks, conflict arbitration) fail closed: nothing is
+        // routable until resumeLifecycle() re-arms.
+        if (lifecyclePaused) {
+            return PluginAvailability.Unavailable(
+                "App is locked — plugin availability is not evaluated until unlock."
+            )
+        }
         return try {
             plugin.availability(context)
         } catch (e: Throwable) {

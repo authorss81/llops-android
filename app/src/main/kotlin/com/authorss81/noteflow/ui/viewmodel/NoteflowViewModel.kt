@@ -253,6 +253,9 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     // current session. Reset by lock() so the next successful unlock re-boots it
     // (bounded exactly once per authenticated session). Declared above the init
     // block for the same reason as the flow backings above.
+    // phase-67 review-fix: @Volatile so lock()'s reset (any thread) is visible to
+    // a subsequent unlock running on another thread.
+    @Volatile
     private var pluginLifecycleStarted = false
 
     init {
@@ -283,8 +286,16 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
      * authenticates. Idempotent per authenticated session.
      */
     private fun startPluginLifecycle() {
+        // phase-67 review-fix: double-checked under a short critical section —
+        // the @Volatile flag + this lock make the "exactly once per authenticated
+        // session" claim a guarantee even if two unlock paths race the boot (each
+        // step below is registry-idempotent: registerRemotePlugin refuses
+        // duplicates, resumeLifecycle is guarded by enabledNotified).
         if (pluginLifecycleStarted) return
-        pluginLifecycleStarted = true
+        synchronized(this) {
+            if (pluginLifecycleStarted) return
+            pluginLifecycleStarted = true
+        }
         // Phase 23: register the real downloadable-plugin runtime (the lazy
         // `pluginRuntime` swaps the Phase-22 stub via the registry seam).
         PluginRuntimeRegistry.register(pluginRuntime)
@@ -358,6 +369,11 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     }
 
     private fun refreshPluginStates() {
+        // B1-AUTH-03 (phase-67 review-fix): while the vault is locked the plugin
+        // layer is quiesced (pluginRegistry.isLifecyclePaused) — do not re-run
+        // plugin availability/snapshot bytecode on the LockScreen; keep the last
+        // pre-lock flows, which the next unlock's startPluginLifecycle refreshes.
+        if (pluginRegistry.isLifecyclePaused) return
         _pluginEnabledIds.value = pluginRegistry.allPlugins.associate { it.id to pluginRegistry.isEnabled(it.id) }
         _pluginStates.value = pluginRegistry.resolve(appContext)
         _pluginDiagnostics.value = pluginDiagnostics.snapshot(appContext)
@@ -377,6 +393,10 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
 
     /** Run a plugin's self-check for the diagnostics "Test now" action. */
     fun testPlugin(pluginId: String) {
+        // B1-AUTH-03 (phase-67 review-fix): a self-check runs plugin bytecode —
+        // never execute it while the vault is locked. The diagnostics UI is behind
+        // the LockScreen anyway; the check runs on the next unlock.
+        if (pluginRegistry.isLifecyclePaused) return
         viewModelScope.launch(Dispatchers.Default) {
             pluginDiagnostics.testNow(pluginId, appContext)
             withContext(Dispatchers.Main) { refreshPluginStates() }

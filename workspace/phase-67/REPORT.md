@@ -107,6 +107,56 @@ guarded by `:184`.
   green with `packageDebug`/`assembleDebug` `UP-TO-DATE`). Debug APK on disk:
   173.7 MB, SHA-256 `2a4bccfe3a7971d20351fca25371a6ee876229578fe320c3bef54cbce9415959`.
 
+## Post-review fix (phase-67 FINDINGS, same commit scope)
+
+The review flagged that the vault-lock gate covered lifecycle-hook FIRING but not
+every live-Context surface the phase claimed was gated, plus a couple of
+robustness nits. Closed in the same commit (no API/DB/dep/workflow change):
+
+- **Availability gate quiesced** (`plugins/PluginRegistry.kt`, `containedAvailability`):
+  while `lifecyclePaused` the plugin's `availability(context)` — downloadable
+  bytecode with a live Context — is never invoked; it reports `Unavailable`
+  instead. That single choke point makes every availability-derived surface
+  (`resolve`/derived states, `enabledPlugins`, `availablePlugins`, `stateOf`,
+  capability routing via `PluginManager.resolvePlugin`, dependency checks,
+  conflict arbitration) fail closed while locked — closing BOTH the flagged
+  availability-gate gap AND the previously-out-of-scope post-lock capability
+  dispatch (nothing routes on the LockScreen; it resumes exactly once after
+  unlock).
+- **`onDisable` only for live hooks** (`setEnabled` disable path + `uninstallPlugin`):
+  a plugin is torn down with `onDisable` only if its `onEnable` actually ran
+  this process (`enabledNotified`), so a deferred enable (enabled while locked)
+  torn down while locked can never hand plugin bytecode a live Context with no
+  matching `onEnable`. Persisted opt-in/wipes unchanged.
+- **`notifyConfigChanged` gated** (`:303`): `onConfigChanged` — a lifecycle-class
+  hook with a live Context — returns early while paused; a config write racing a
+  lock is picked up on the next unlock (resumeLifecycle re-enables with current
+  settings). Both call sites (`EditorScreen` shape toggle, phase-26 plugin
+  dialogs) sit behind the LockScreen so no live behavior is lost.
+- **VM state refresh + diagnostics quiesced** (`NoteflowViewModel.refreshPluginStates`
+  + `testPlugin`): both no-op while `pluginRegistry.isLifecyclePaused` so no
+  availability/snapshot/self-check bytecode runs on the LockScreen; flows keep
+  the last pre-lock values and refresh on the next unlock.
+- **Race hardening**: `pluginLifecycleStarted` is now `@Volatile` and
+  `startPluginLifecycle()` uses a double-checked `synchronized(this)` gate so two
+  racing unlock paths can never boot the layer twice; `PluginRegistry` exposes
+  `isLifecyclePaused` for the ViewModel.
+
+Tests: `B1Auth03PluginLifecycleGateTest` grew to **14** (8 pure-JVM behavioral —
+incl. new "availability gates never run while locked", "disable while locked never
+fires onDisable without a matching onEnable", "onConfigChanged never fires while
+locked", and the opt-in test now also proves nothing is routed on the LockScreen
+— plus 6 source-level wiring pins; the pins were hardened to extract each target's
+brace-balanced body instead of brittle `substringBefore/After` anchors, so cosmetic
+reformatting inside a body can no longer break or vacuously widen a pin while a
+renamed/moved declaration still fails loudly).
+`gradle :app:testDebugUnitTest` — **1308 tests, 2 failed**, the SAME two
+pre-existing `B1Plat01ReleaseSigningTest` asserts on untouched
+`app/build.gradle.kts`/`docs/RELEASE.md` (a `WikiLinkParserCacheUnitTest`
+cancellation-timing failure appeared once mid-review and passed in isolation and on
+re-run — pre-existing flake, unrelated to this diff). `gradle :app:assembleDebug`
+**BUILD SUCCESSFUL**.
+
 ## OS/API floor
 
 Pure-JVM policy change + Android application wiring. No API-gated behaviour,
