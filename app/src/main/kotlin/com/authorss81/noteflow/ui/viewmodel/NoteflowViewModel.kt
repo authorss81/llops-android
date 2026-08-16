@@ -64,6 +64,7 @@ import com.authorss81.noteflow.plugins.TranslationPlugin
 import com.authorss81.noteflow.plugins.TtsChunk
 import com.authorss81.noteflow.services.BiometricKeyBindingPolicy
 import com.authorss81.noteflow.services.ClipboardGuard
+import com.authorss81.noteflow.services.DatabaseHmacPolicy
 import com.authorss81.noteflow.services.DatabaseIntegrityPolicy
 import com.authorss81.noteflow.services.DatabaseIntegrityVerdict
 import com.authorss81.noteflow.services.DatabaseSecurityHelper
@@ -114,6 +115,7 @@ import com.authorss81.noteflow.theme.AppThemeMode
 import com.authorss81.noteflow.ui.components.WorkspaceTemplate
 import com.authorss81.noteflow.plugins.AndroidPluginLogger
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
@@ -134,8 +136,27 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     // auto-arm this fix permits). An EXISTING vault whose checksum baseline
     // turns out to be missing/unreadable is treated as possibly-tampered and
     // gets the fail-closed "cannot verify" tripwire — never a silent re-arm.
+    // B1-CRYPTO-06 review (phase-91): "present" means the MAIN file has bytes
+    // OR its `-wal` companion has committed frames — a WAL-resident vault whose
+    // main file is 0-length/missing is an EXISTING vault, never "fresh", so it
+    // can never be silently re-baselined as if it were a first run.
     private val vaultFilePresentAtStart: Boolean =
-        appContext.getDatabasePath("noteflow.sqlite").let { it.exists() && it.length() > 0L }
+        appContext.getDatabasePath("noteflow.sqlite").let { db ->
+            db.exists() && db.length() > 0L ||
+                DatabaseHmacPolicy.walFile(db).let { it.exists() && it.length() > 0L }
+        }
+
+    // B1-CRYPTO-06 review (phase-91): completion gate that buffers the FIRST
+    // tamper verification of a PASSWORDLESS vault until the initial data open
+    // has settled. The DB is opened concurrently with this constructor's init
+    // blocks; a WAL recovery/checkpoint mid-hash produces a non-deterministic
+    // HMAC (a false Mismatch/CannotVerify). Locked vaults skip the wait — their
+    // file stays untouched until unlock, so verifying the at-rest bytes
+    // immediately is safe. Released after every first data-init attempt
+    // (success in `initializeData`.finally, and in the key-lost/anomalous
+    // passwordless branches that never open the DB) so the fail-closed notice
+    // can never be starved.
+    private val firstDataInitDone = CompletableDeferred<Unit>()
 
     val settings = SettingsManager(appContext)
     val security = SecurityService.forDevice(appContext)
@@ -1107,13 +1128,25 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     }
 
     init {
-        viewModelScope.launch {
-            if (settings.databaseIntegrityCheckEnabled) {
-                verifyDatabaseIntegrityNow()
+        // B1-CRYPTO-06 review (phase-91): a PASSWORDLESS vault opens its DB
+        // concurrently with this constructor (init block below runs
+        // `initializeData()`), so a first verification racing the open can hash
+        // mid-WAL-recovery and report a false Mismatch/CannotVerify. Defer it
+        // until the first data init has settled. A LOCKED (master-password)
+        // vault's file is byte-identical until unlock, so verifying the at-rest
+        // file immediately is safe and keeps the pre-unlock tripwire armed.
+        if (settings.databaseIntegrityCheckEnabled) {
+            if (settings.hasMasterPassword) {
+                viewModelScope.launch { verifyDatabaseIntegrityNow() }
             } else {
-                _databaseTampered.value = false
-                _databaseIntegrityUnverified.value = false
+                viewModelScope.launch {
+                    firstDataInitDone.await()
+                    verifyDatabaseIntegrityNow()
+                }
             }
+        } else {
+            _databaseTampered.value = false
+            _databaseIntegrityUnverified.value = false
         }
     }
 
@@ -1180,7 +1213,11 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
                 val freshUnarmedVault =
                     !vaultFilePresentAtStart && !DatabaseSecurityHelper.hasStoredChecksum(appContext)
                 _databaseTampered.value = false
-                _databaseIntegrityUnverified.value = !freshUnarmedVault
+                // B1-CRYPTO-06 review (phase-91): honor the SAME per-session
+                // dismissal gate as the Mismatch branch — an "I already saw it this
+                // session" decision applies to either banner, and never permanently
+                // (per-session only; re-enabling the check clears the gate).
+                _databaseIntegrityUnverified.value = !freshUnarmedVault && integrityWarningDismissal.mayShow()
             }
         }
     }
@@ -1385,6 +1422,11 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
                     // be silently swallowed).
                     throw e
                 }
+            } finally {
+                // B1-CRYPTO-06 review (phase-91): release the deferred first
+                // verification on EVERY first-init attempt (success or failure) so
+                // the fail-closed notice can never be starved by an early exit.
+                firstDataInitDone.complete(Unit)
             }
         }
     }
@@ -1553,10 +1595,17 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
                     // It cannot be read without the biometric flow; surface the
                     // recovery screen instead of minting over it.
                     _keystoreKeyLost.value = true
+                    // B1-CRYPTO-06 review (phase-91): no DB open happens here, so
+                    // nothing raced the file — release the deferred first
+                    // verification so the fail-closed notice can still surface.
+                    firstDataInitDone.complete(Unit)
                 }
                 is DekReadResult.KeyLost -> {
                     // Keystore key lost / stored blob unreadable: explicit recovery.
                     _keystoreKeyLost.value = true
+                    // B1-CRYPTO-06 review (phase-91): same as AuthRequired — no DB
+                    // open, the at-rest file is untouched; release the gate.
+                    firstDataInitDone.complete(Unit)
                 }
             }
         }

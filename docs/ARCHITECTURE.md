@@ -401,6 +401,23 @@
     auto-arm is a brand-new vault: `initializeDataCore` (`:1509-1520`) arms iff
     `!vaultFilePresentAtStart && !hasStoredChecksum(appContext)` — an existing vault is never
     re-baselined from a live-file verify. Tests: `B1Crypto06DatabaseIntegrityPolicyTest` (11).
+  - **Phase-91 review fixes** (commit `llops: phase-91 review fixes`, B1-CRYPTO-06 review findings):
+    (a) the "fresh vault" probe is WAL-aware — `vaultFilePresentAtStart` (`NoteflowViewModel.kt:139-145`)
+    now also treats a populated `noteflow.sqlite-wal` as an EXISTING vault, so a WAL-resident vault
+    whose main file is 0-length/missing can never be silently re-baselined as a first run, and
+    `computeDatabaseHmac` (`DatabaseSecurityHelper.kt:49-60`) returns null (CannotVerify) only when
+    the main file is empty AND `-wal` has no frames (an empty main + populated WAL stays computable);
+    (b) the FIRST verification of a PASSWORDLESS vault is deferred until the initial data open settles
+    (`firstDataInitDone` gate — `NoteflowViewModel.kt:158-168`, released in `initializeData`.finally and
+    the key-lost/anomalous DEK branches), removing the false-Mismatch race against concurrent WAL
+    recovery; locked vaults still verify immediately at init (at-rest file untouched until unlock);
+    (c) `CannotVerify` now honors the SAME per-session dismissal gate as `Mismatch`
+    (`_databaseIntegrityUnverified.value = !freshUnarmedVault && integrityWarningDismissal.mayShow()`,
+    `NoteflowViewModel.kt:1216-1221`); (d) the two banner blocks in `MainActivity.kt` are deduplicated
+    into ONE `IntegrityBannerCard` composable (`:1089-1150`). No schema change, no migration, no new
+    deps. Tests: `B1Crypto06DatabaseIntegrityPolicyTest` 14 green (added: WAL-aware probe, empty-main
+    + populated-WAL computability, passwordless-deferral pins) + `B1Db06WalCoverageAndDismissalTest`
+    (16) green — `gradle testDebugUnitTest` 1580 total green (0 failures).
   - **Implemented in phase-88** (B1-DB-8, see `workspace/phase-88/REPORT.md`): decrypt-failure
     fallbacks never render RAW CIPHERTEXT as note content. Single pure-JVM decision table
     `services/DecryptFailurePolicy.kt` owns `render(storedValue, decrypted, isCiphertext)` — the

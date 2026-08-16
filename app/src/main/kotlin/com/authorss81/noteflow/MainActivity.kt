@@ -67,6 +67,9 @@ import androidx.compose.material.icons.outlined.EditNote
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 
 enum class WindowSizeCategory {
@@ -316,71 +319,16 @@ class MainActivity : FragmentActivity() {
                     ) {
                         Column(Modifier.fillMaxSize()) {
                         if (databaseTampered) {
-                            Surface(
-                                color = MaterialTheme.colorScheme.errorContainer,
-                                modifier = Modifier.fillMaxWidth().padding(12.dp),
-                                shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
-                                tonalElevation = 6.dp
-                            ) {
-                                Column(
-                                    modifier = Modifier.padding(16.dp),
-                                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        Icon(
-                                            androidx.compose.material.icons.Icons.Outlined.Security,
-                                            contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.error
-                                        )
-                                        Text(
-                                            text = "Database Integrity Warning",
-                                            style = MaterialTheme.typography.titleSmall,
-                                            color = MaterialTheme.colorScheme.onErrorContainer,
-                                            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
-                                        )
-                                    }
-                                    Text(
-                                        text = "The vault file may have been modified outside the app or integrity check failed. Your data might be compromised. Consider restoring from a backup.",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onErrorContainer
-                                    )
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        var dontShowAgain by remember { mutableStateOf(false) }
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            modifier = Modifier.clickable { dontShowAgain = !dontShowAgain }
-                                        ) {
-                                            androidx.compose.material3.Checkbox(
-                                                checked = dontShowAgain,
-                                                onCheckedChange = { dontShowAgain = it }
-                                            )
-                                            Text(
-                                                text = "Don't show again this session",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = MaterialTheme.colorScheme.onErrorContainer
-                                            )
-                                        }
-                                        androidx.compose.material3.TextButton(
-                                            onClick = {
-                                                viewModel.dismissDatabaseIntegrityWarning(dontShowAgain)
-                                            }
-                                        ) {
-                                            Text(
-                                                text = "OK",
-                                                color = MaterialTheme.colorScheme.error,
-                                                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
-                                            )
-                                        }
-                                    }
-                                }
-                            }
+                            IntegrityBannerCard(
+                                containerColor = MaterialTheme.colorScheme.errorContainer,
+                                icon = Icons.Outlined.Security,
+                                iconTint = MaterialTheme.colorScheme.error,
+                                textColor = MaterialTheme.colorScheme.onErrorContainer,
+                                okTextColor = MaterialTheme.colorScheme.error,
+                                title = "Database Integrity Warning",
+                                message = "The vault file may have been modified outside the app or integrity check failed. Your data might be compromised. Consider restoring from a backup.",
+                                onDismiss = { dontShowAgain -> viewModel.dismissDatabaseIntegrityWarning(dontShowAgain) }
+                            )
                         }
                         // B1-CRYPTO-06 (phase-91): DISTINCT, NON-ALARMING fail-closed
                         // notice for "cannot verify" (a missing/unreadable checksum
@@ -390,71 +338,16 @@ class MainActivity : FragmentActivity() {
                         // backup re-arms the baseline; per-session dismissal reuses
                         // the same gate as the tamper banner.
                         if (databaseIntegrityUnverified) {
-                            Surface(
-                                color = MaterialTheme.colorScheme.tertiaryContainer,
-                                modifier = Modifier.fillMaxWidth().padding(12.dp),
-                                shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
-                                tonalElevation = 6.dp
-                            ) {
-                                Column(
-                                    modifier = Modifier.padding(16.dp),
-                                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        Icon(
-                                            Icons.Outlined.Info,
-                                            contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.onTertiaryContainer
-                                        )
-                                        Text(
-                                            text = "Vault Integrity Could Not Be Verified",
-                                            style = MaterialTheme.typography.titleSmall,
-                                            color = MaterialTheme.colorScheme.onTertiaryContainer,
-                                            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
-                                        )
-                                    }
-                                    Text(
-                                        text = DatabaseIntegrityPolicy.CANNOT_VERIFY_NOTICE,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onTertiaryContainer
-                                    )
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        var dontShowAgain by remember { mutableStateOf(false) }
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            modifier = Modifier.clickable { dontShowAgain = !dontShowAgain }
-                                        ) {
-                                            androidx.compose.material3.Checkbox(
-                                                checked = dontShowAgain,
-                                                onCheckedChange = { dontShowAgain = it }
-                                            )
-                                            Text(
-                                                text = "Don't show again this session",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = MaterialTheme.colorScheme.onTertiaryContainer
-                                            )
-                                        }
-                                        androidx.compose.material3.TextButton(
-                                            onClick = {
-                                                viewModel.dismissDatabaseIntegrityWarning(dontShowAgain)
-                                            }
-                                        ) {
-                                            Text(
-                                                text = "OK",
-                                                color = MaterialTheme.colorScheme.onTertiaryContainer,
-                                                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
-                                            )
-                                        }
-                                    }
-                                }
-                            }
+                            IntegrityBannerCard(
+                                containerColor = MaterialTheme.colorScheme.tertiaryContainer,
+                                icon = Icons.Outlined.Info,
+                                iconTint = MaterialTheme.colorScheme.onTertiaryContainer,
+                                textColor = MaterialTheme.colorScheme.onTertiaryContainer,
+                                okTextColor = MaterialTheme.colorScheme.onTertiaryContainer,
+                                title = "Vault Integrity Could Not Be Verified",
+                                message = DatabaseIntegrityPolicy.CANNOT_VERIFY_NOTICE,
+                                onDismiss = { dontShowAgain -> viewModel.dismissDatabaseIntegrityWarning(dontShowAgain) }
+                            )
                         }
                         if (hasMasterPassword && !authenticated) {
                             LockScreen(viewModel = viewModel)
@@ -1180,6 +1073,82 @@ private fun KeystoreKeyLostScreen(viewModel: NoteflowViewModel) {
         errorMessage?.let {
             Spacer(Modifier.height(12.dp))
             Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+        }
+    }
+}
+
+/**
+ * B1-CRYPTO-06 review (phase-91): the SINGLE shared banner card for the two
+ * vault-integrity surfaces — the ALARMING tamper banner (`databaseTampered`,
+ * errorContainer) and the DISTINCT, non-alarming "cannot verify" notice
+ * (`databaseIntegrityUnverified`, tertiaryContainer). Identical layout and
+ * chrome, identical per-session "Don't show again this session" checkbox +
+ * OK, both wired to the same `dismissDatabaseIntegrityWarning`. The
+ * dismissal is per-session only (see `IntegrityWarningDismissalGate`) — a
+ * single tap can never permanently kill either tripwire.
+ */
+@Composable
+    private fun IntegrityBannerCard(
+        containerColor: Color,
+        icon: ImageVector,
+        iconTint: Color,
+        textColor: Color,
+        okTextColor: Color,
+        title: String,
+        message: String,
+        onDismiss: (Boolean) -> Unit
+    ) {
+    Surface(
+        color = containerColor,
+        modifier = Modifier.fillMaxWidth().padding(12.dp),
+        shape = RoundedCornerShape(12.dp),
+        tonalElevation = 6.dp
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(icon, contentDescription = null, tint = iconTint)
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = textColor,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            Text(
+                text = message,
+                style = MaterialTheme.typography.bodySmall,
+                color = textColor
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                var dontShowAgain by remember { mutableStateOf(false) }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.clickable { dontShowAgain = !dontShowAgain }
+                ) {
+                    androidx.compose.material3.Checkbox(
+                        checked = dontShowAgain,
+                        onCheckedChange = { dontShowAgain = it }
+                    )
+                    Text(
+                        text = "Don't show again this session",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = textColor
+                    )
+                }
+TextButton(onClick = { onDismiss(dontShowAgain) }) {
+                        Text("OK", color = okTextColor, fontWeight = FontWeight.Bold)
+                    }
+            }
         }
     }
 }

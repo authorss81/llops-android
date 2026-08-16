@@ -129,3 +129,39 @@ B1-DB-6 test's scanned region).
   `NoteflowViewModel.kt`, `MainActivity.kt`. Tests: `B1Crypto06DatabaseIntegrityPolicyTest.kt`.
 - `namespace`/applicationId alignment remains B1-PLAT-6 / ROADMAP 21.10 (out of scope, needs
   user approval).
+
+## Review fixes (commit `llops: phase-91 review fixes`, 2026-08-16)
+
+Applied the phase-91 code review FINDINGS:
+
+1. **WAL-aware "fresh vault" classification** (finding 2 — an existing WAL-resident vault must
+   never be re-baselined as a first run): `NoteflowViewModel.vaultFilePresentAtStart`
+   (`NoteflowViewModel.kt:139-145`) now also treats a populated `noteflow.sqlite-wal` as an
+   EXISTING vault (a main file that is 0-length/missing is no longer enough to look "fresh"), and
+   `DatabaseSecurityHelper.computeDatabaseHmac` (`DatabaseSecurityHelper.kt:49-60`) returns null
+   (CannotVerify) only when the main file is empty AND `-wal` carries no frames — an empty main +
+   populated WAL is still computable, so a truncated-main + live-WAL vault either verifies or trips
+   `Mismatch`, never a silent fresh-arm.
+2. **Deferred first passwordless verification** (finding 3 — the init verify raced Room's open and
+   could hash mid-WAL-recovery into a false `Mismatch`/`CannotVerify`): the FIRST verification of a
+   PASSWORDLESS vault now waits on a `firstDataInitDone` gate (`NoteflowViewModel.kt:158-168`),
+   released after every first data-init attempt (`initializeData`.finally `:1425-1431` and the
+   key-lost/anomalous DEK branches `:1598-1608`). LOCKED (master-password) vaults still verify
+   immediately at init — their file is byte-identical until unlock.
+3. **`CannotVerify` honors the per-session dismissal gate** (finding 4): `_databaseIntegrityUnverified`
+   is now `!freshUnarmedVault && integrityWarningDismissal.mayShow()`
+   (`NoteflowViewModel.kt:1216-1221`), identical session semantics to the `Mismatch` banner.
+4. **Banner dedup** (finding 5): the two ~70-line copy-pasted banner blocks in `MainActivity.kt` are
+   one `IntegrityBannerCard` composable (`MainActivity.kt:1089-1150`) — same layout, same per-session
+   checkbox + OK, both wired to `dismissDatabaseIntegrityWarning`; the icon/colors/title/message stay
+   per-surface (alarming errorContainer tamper vs tertiaryContainer non-alarming notice).
+5. **Robust test pins** (finding 7): the write-free-helper scan is now bounded to the
+   `verifyDatabaseIntegrity` function body (survives a later `fun` being appended).
+6. **Style** (finding 1): `.editorconfig` `insert_final_newline` — trailing newlines restored on the
+   two new phase-91 files.
+
+No finding-6 change (the "cannot verify" notice intentionally renders pre-lock: fail-closed
+surface for a locked vault, as designed). Re-verified: `B1Crypto06DatabaseIntegrityPolicyTest` 14
+green (+3 new: WAL-aware probe, empty-main+populated-WAL computability, passwordless-deferral
+pins; CannotVerify session-gate pin added), `B1Db06WalCoverageAndDismissalTest` 16 green, and
+`gradle testDebugUnitTest` **1580 total green (0 failures, 0 skipped)**.

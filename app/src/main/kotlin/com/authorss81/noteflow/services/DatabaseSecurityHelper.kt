@@ -47,7 +47,15 @@ object DatabaseSecurityHelper {
     }
 
     private fun computeDatabaseHmac(context: Context, key: SecretKey?, dbFile: File = context.getDatabasePath(DB_NAME)): String? {
-        if (key == null || !dbFile.exists() || dbFile.length() == 0L) return null
+        if (key == null || !dbFile.exists()) return null
+        // B1-CRYPTO-06 review (phase-91): a 0-length MAIN file is NOT unverifiable when
+        // its `-wal` companion still holds committed frames (a WAL-resident vault, e.g.
+        // one whose main file was truncated/replaced). The policy hashes main + `-wal`,
+        // so hash what is real. Return null only when there is genuinely nothing to
+        // authenticate (empty main AND no/empty wal) — that is `CannotVerify`, never a
+        // silent re-baseline.
+        val walFile = DatabaseHmacPolicy.walFile(dbFile)
+        if (dbFile.length() == 0L && !(walFile.isFile && walFile.length() > 0L)) return null
         return try {
             val mac = Mac.getInstance("HmacSHA256")
             mac.init(key)

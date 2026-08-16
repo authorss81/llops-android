@@ -111,9 +111,11 @@ class B1Crypto06DatabaseIntegrityPolicyTest {
     @Test
     fun `DatabaseSecurityHelper verifyDatabaseIntegrity is fail-closed and write-free`() {
         val helper = readSource("services/DatabaseSecurityHelper.kt")
-        // verifyDatabaseIntegrity is the LAST function in the object, so the tail
-        // after its signature is exactly its body + closing braces.
+        // B1-CRYPTO-06 review (phase-91): bound the scan to the function BODY so the
+        // pin survives a later helper being appended after it (a later function using
+        // a legitimate `fun ` line must never widen the scanned region).
         val verifyBlock = helper.substringAfter("fun verifyDatabaseIntegrity(context: Context)")
+            .let { it.substringBefore("\n    fun ", it) }
         assertTrue(
             "the helper must route through the pure-JVM decision table",
             verifyBlock.contains("DatabaseIntegrityPolicy.verdictFor(stored, current)")
@@ -176,6 +178,10 @@ class B1Crypto06DatabaseIntegrityPolicyTest {
             mapBlock.contains("DatabaseIntegrityVerdict.CannotVerify -> {") &&
                 mapBlock.contains("_databaseIntegrityUnverified.value = !freshUnarmedVault")
         )
+        assertTrue(
+            "the cannot-verify notice must honor the SAME per-session dismissal gate as the tamper banner",
+            mapBlock.contains("_databaseIntegrityUnverified.value = !freshUnarmedVault && integrityWarningDismissal.mayShow()")
+        )
         assertFalse(
             "the verification path must never re-baseline",
             mapBlock.contains("stampDatabaseChecksum")
@@ -198,6 +204,53 @@ class B1Crypto06DatabaseIntegrityPolicyTest {
         assertTrue(
             "the process-start vault-presence probe must exist",
             vm.contains("private val vaultFilePresentAtStart: Boolean")
+        )
+    }
+
+    @Test
+    fun `the vault-presence probe treats a populated wal companion as an existing vault`() {
+        val vm = readSource("ui/viewmodel/NoteflowViewModel.kt")
+        val probe = vm.substringAfter("private val vaultFilePresentAtStart: Boolean")
+            .substringBefore("val settings = SettingsManager", "END")
+        assertTrue(
+            "an existing WAL-resident vault must NEVER be classified 'fresh'",
+            probe.contains("DatabaseHmacPolicy.walFile(db).let { it.exists() && it.length() > 0L }")
+        )
+    }
+
+    @Test
+    fun `a zero-length main with a populated wal is still hashable - never a silent fresh re-baseline`() {
+        val helper = readSource("services/DatabaseSecurityHelper.kt")
+        val hmacBlock = helper.substringAfter("private fun computeDatabaseHmac")
+            .substringBefore("fun updateStoredChecksum", "END")
+        assertTrue(
+            "the helper must use the WAL-aware companion to decide verifiability",
+            hmacBlock.contains("val walFile = DatabaseHmacPolicy.walFile(dbFile)")
+        )
+        assertTrue(
+            "a WAL-resident vault must remain computable (not collapse to null -> CannotVerify)",
+            hmacBlock.contains("dbFile.length() == 0L && !(walFile.isFile && walFile.length() > 0L)")
+        )
+    }
+
+    @Test
+    fun `passwordless verification is deferred until the first data init settles`() {
+        val vm = readSource("ui/viewmodel/NoteflowViewModel.kt")
+        assertTrue(
+            "a gate must buffer the first verification",
+            vm.contains("private val firstDataInitDone = CompletableDeferred<Unit>()")
+        )
+        assertTrue(
+            "the passwordless verify must wait on the gate",
+            vm.contains("firstDataInitDone.await()")
+        )
+        assertTrue(
+            "the gate is released after every first data-init attempt (success/failure/key-lost)",
+            vm.contains("firstDataInitDone.complete(Unit)")
+        )
+        assertTrue(
+            "locked vaults still verify immediately (at-rest file untouched until unlock)",
+            vm.contains("if (settings.hasMasterPassword) {")
         )
     }
 
