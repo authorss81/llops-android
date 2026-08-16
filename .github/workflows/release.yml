@@ -25,13 +25,24 @@ jobs:
 
       - name: Clean Native C++ Cache
         run: rm -rf .cxx app/.cxx
-      - name: Restore Debug Keystore
+
+      - name: Restore Release Keystore (B1-PLAT-1)
+        env:
+          RELEASE_KEYSTORE_B64: ${{ secrets.RELEASE_KEYSTORE_B64 }}
         run: |
-          if [ -f "debug.keystore.base64" ]; then
-            base64 -d debug.keystore.base64 > debug.keystore
+          if [ -n "$RELEASE_KEYSTORE_B64" ]; then
+            echo "$RELEASE_KEYSTORE_B64" | base64 -d > release.keystore
+            echo "release.keystore restored ($(wc -c < release.keystore) bytes)"
+          else
+            echo "::warning::RELEASE_KEYSTORE_B64 secret is unset - release build will fail closed (B1-PLAT-1)."
           fi
 
       - name: Build Release APK
+        env:
+          KEYSTORE_FILE: release.keystore
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: gradle assembleRelease
 
       - name: Upload Release APK

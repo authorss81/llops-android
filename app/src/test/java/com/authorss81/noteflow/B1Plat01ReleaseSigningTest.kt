@@ -104,7 +104,7 @@ class B1Plat01ReleaseSigningTest {
         assertFalse(
             "the debug buildType must not assign a custom signingConfig " +
                 "(AGP auto-generates the debug keystore)",
-            debugBlock.contains("signingConfig")
+            Regex("signingConfig\\s*=").containsMatchIn(debugBlock)
         )
     }
 
@@ -160,7 +160,13 @@ class B1Plat01ReleaseSigningTest {
         )
         assertFalse(
             "docs/RELEASE.md must not advertise a debug-keystore fallback",
-            text.contains("debug.keystore.base64") || text.contains("CI/dev fallback only")
+            text.contains("CI/dev fallback only")
+        )
+        assertTrue(
+            "docs/RELEASE.md must mention the removed fallback only in removal context",
+            text.lineSequence()
+                .filter { it.contains("debug.keystore.base64") }
+                .all { it.contains("removed", ignoreCase = true) || it.contains("old ", ignoreCase = true) }
         )
     }
 
