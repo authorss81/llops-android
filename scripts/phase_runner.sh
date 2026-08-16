@@ -204,6 +204,16 @@ run_phase() {
     > "${LOG_DIR}/${PHASE}.log" 2>&1
   local code=$?
   set -e
+  # Stale-session recovery: opencode stores sessions on the CI VM's local disk,
+  # which is wiped between runs. A `.session` marker committed by an earlier tick
+  # points at an ID that no longer exists -> "Session not found". Clear the stale
+  # marker and return a retryable-env code (5, not counted as a phase failure) so
+  # the next tick runs the phase fresh instead of burning attempts on a dead ID.
+  if [ "${code}" -ne 0 ] && grep -qi "Session not found" "${LOG_DIR}/${PHASE}.log"; then
+    echo "== [phase] STALE SESSION (${SESSION_FILE}): 'Session not found' - clearing marker, will retry fresh =="
+    rm -f "${SESSION_FILE}"
+    return 5
+  fi
   return "${code}"
 }
 
@@ -224,11 +234,36 @@ run_review() {
     set +e
     opencode run --model "${MODEL}" --agent build \
       --continue \
-      "Apply fixes for the review FINDINGS above. Do not break other code." \
+      "Apply fixes for the review FINDINGS above. Do not break other code. After applying every fix, commit and push them yourself: git add -A; git commit -m 'llops: ${PHASE} review fixes'; git push (pull --rebase on rejection). If the working tree is clean, push nothing." \
       > "${LOG_DIR}/${PHASE}.fix.log" 2>&1
     code=$?
     set -e
     echo "== [fix] exit: ${code} =="
+  fi
+
+  # Safety net: if the fix agent committed but could not push (or left
+  # uncommitted fixes behind), commit and push them here so a job timeout
+  # after this point can never lose the review work.
+  if [ "$(git status --porcelain 2>/dev/null | grep -vE '^\?\? (logs/|workspace/\.)' | wc -l)" -gt 0 ]; then
+    echo "== [review] committing + pushing review fixes (safety net) =="
+    git config user.name "llops-bot"
+    git config user.email "llops-bot@users.noreply.github.com"
+    git add -A
+    git commit -m "llops: ${PHASE} review fixes" 2>/dev/null || true
+    PUSHED=0
+    for i in 1 2 3 4 5; do
+      if git push origin main 2>/dev/null; then
+        echo "== [review] review fixes pushed (attempt $i) =="
+        PUSHED=1
+        break
+      fi
+      git pull --rebase origin main 2>/dev/null || true
+      sleep 3
+    done
+    if [ "${PUSHED}" = "0" ]; then
+      echo "== [review] WARNING: review fixes could not be pushed after 5 attempts =="
+      git branch -f "llops-recovery/${PHASE}-review" HEAD 2>/dev/null || true
+    fi
   fi
 }
 
@@ -301,6 +336,14 @@ if run_phase; then
        "outside logs/ + phase markers =="
   echo "== [phase] NOT marking done; counting as a failed attempt (cap ${MAX_ATTEMPTS}) =="
   touch "${NOWORK_FILE}"
+else
+  # run_phase failed. Retryable infra errors (exit 5) must NOT count against the
+  # attempt cap and must not touch failure markers — the next tick just retries.
+  RUN_CODE=$?
+  if [ "${RUN_CODE}" = "5" ]; then
+    echo "== [phase] RETRYABLE INFRA ERROR (exit 5): ${PHASE} — not counted, will retry =="
+    exit 5
+  fi
 fi
 
 # --- Phase failed: classify -------------------------------------------------------
