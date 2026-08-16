@@ -362,10 +362,14 @@
     non-directory whose canonical path is a STRICT descendent of the canonical
     `baseDir` (symlink escape refused) — the old `file.isAbsolute && file.exists()`
     / `File(baseDir, dest).exists()` accept branches are deleted, so a crafted
-    note can no longer read-and-display arbitrary process-readable files nor use
-    the "File not found" fallback as an existence oracle. Covers preview, split,
+    note can no longer read-and-display arbitrary process-readable files; a
+    blocked reference (absolute / `..`) is classified by
+    `InlineImagePathPolicy.isBlockedDestination` and shown a distinct non-alarming
+    "Image location blocked" note rather than echoed as "File not found", so
+    out-of-subtree existence is not disclosed, and the decode path re-canonicalizes
+    before reading (symlink-swap refused). Covers preview, split,
     and hybrid-editor panes via the single composable. Tests:
-    `B1Auth04InlineImagePathTest` (13).
+    `B1Auth04InlineImagePathTest` (14).
 - **Knowledge graph**: `ui/screens/KnowledgeGraphScreen.kt`
   (Phase 38 rewrite — deterministic force-directed layout, cluster colouring, tag
   filter chips, link pulses, collision bounding, low-RAM cull + notice) built on

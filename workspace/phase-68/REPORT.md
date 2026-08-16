@@ -70,14 +70,15 @@ the already-gated `resolvedPath`, so it never shows a forbidden file either.
 
 ## Verification output
 
-`gradle testDebugUnitTest` — **1321 tests, 2 failed** (the 2 failures are the
+`gradle testDebugUnitTest` — **1321 tests, 2 failed** (pre-addendum run; the
+post-addendum run is 1322 total — see Addendum below. The 2 failures are the
 pre-existing, untouched `B1Plat01ReleaseSigningTest` asserts documented in
 phases 55/59/60/61/62/63/64/66/67 — `docs/RELEASE.md` + `app/build.gradle.kts`
 signing-config asserts; they fail identically on a clean tree and are unrelated
 to this diff).
 
 New test class `app/src/test/java/com/authorss81/noteflow/B1Auth04InlineImagePathTest.kt`
-(13 tests, all green in isolation and in the full run):
+(14 tests, all green in isolation and in the full run):
 
 - absolute destinations rejected even when the file exists and is readable
   (incl. the crafted `/data/user/0/<appId>/files/…` voice-notes path);
@@ -93,11 +94,14 @@ New test class `app/src/test/java/com/authorss81/noteflow/B1Auth04InlineImagePat
 - a destination that lands on the root directory itself (`.`, `child`) never
   resolves;
 - null / non-directory `baseDir` yields no resolution;
+- `isBlockedDestination` classifies absolute / `..` references as blocked
+  (regardless of existence) and plain relative references as not;
 - source-level wiring pins: `MarkdownInlineImage` routes through
   `InlineImagePathPolicy.resolve(destination, baseDir)`; the
   `file.isAbsolute && file.exists()`, `File(baseDir, dest).exists()`, and
   `else -> dest` branches are gone; no `isAbsolute` / `File(baseDir, dest)`
-  resolution remains anywhere in `ImageViewer.kt`.
+  resolution remains anywhere in `ImageViewer.kt`; the blocked-vs-missing
+  message and the pre-decode re-canonicalization guard are present.
 
 `gradle assembleDebug` — **green** (173.7 MB `app-debug.apk`,
 SHA-256 `4735b13c25a3b1f41c12cac04fa2b3585349e6e83d19daca7d883babf0d20f01`).
@@ -129,3 +133,44 @@ SHA-256 `4735b13c25a3b1f41c12cac04fa2b3585349e6e83d19daca7d883babf0d20f01`).
   was already inherent in `decodeBoundedImage`'s bounds/`decodeFile` behavior — no
   new whitelist added (not required by the finding).
 - No DB schema change, no new dependency, `.github/workflows/` untouched.
+
+## Addendum — review fixes (same commit, after review)
+
+The phase review surfaced five items; all are applied here:
+
+1. **Blocked-vs-missing UI distinction (AGENTS.md "never silent degradation").**
+   New pure-JVM `InlineImagePathPolicy.isBlockedDestination`
+   (`InlineImagePathPolicy.kt:84-92`) is the shared ineligibility classifier
+   (absolute, or a `..` segment in either separator). A policy-blocked reference
+   is shown a distinct, non-alarming note — "Image location blocked (must be
+   inside the note's folder)" (`ImageViewer.kt:184-188`) — instead of being
+   echoed as "File not found: <path>". A settings "re-enable" toggle is
+   deliberately NOT offered: re-allowing absolute / `..` references would
+   re-open the vulnerability itself. Genuinely missing in-subtree files keep the
+   original "File not found: <path>" text. This ALSO closes the residual
+   existence echo: a blocked destination is never probed nor echoed, so
+   out-of-subtree existence stays undisclosed.
+2. **Existence-oracle claim scoped.** The oracle is closed for every path
+   OUTSIDE the allowlisted subtree. Existence of files INSIDE `baseDir` remains
+   observable through the "File not found" fallback — that is the feature's
+   intended allowlist, is low-value (the subtree already holds the note's own
+   attachments), and is acknowledged as an accepted residual here.
+3. **TOCTOU hardening before decode.** `MarkdownInlineImage` re-canonicalizes the
+   validated path immediately before `decodeBoundedImage` and refuses when it no
+   longer equals the policy-time canonical path (`ImageViewer.kt:139-153`) — a
+   file swapped for a symlink after resolution is never followed.
+4. **remember key uses the path string, not the `File` instance** (java.io.File
+   has identity equality) so a newly-constructed `baseDir` for the same folder
+   cannot force an avoidable re-resolution (`ImageViewer.kt:132-137`).
+5. **editorconfig compliance:** `insert_final_newline = true` now holds for the
+   new source/test files and this report.
+
+Tests: `B1Auth04InlineImagePathTest` is now 14 — the added classifier test
+(`blocked destination classifier flags absolute and traversal references`)
+proves `isBlockedDestination` flags absolute / `..` (incl. backslash-smuggled)
+regardless of existence and leaves plain in-subtree references unblocked; the
+wiring pins additionally assert the blocked-vs-missing message and the
+re-canonicalization guard exist in `ImageViewer.kt`. `gradle testDebugUnitTest`
+**:app** full rerun: 1322 total (+1 from the new classifier test), the same 2
+pre-existing `B1Plat01ReleaseSigningTest` failures only.
+`gradle :app:assembleDebug` green.

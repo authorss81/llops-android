@@ -116,7 +116,10 @@ fun FullscreenImageDialog(path: String?, onDismiss: () -> Unit) {
  * B1-AUTH-04 (phase-68): resolution is confined to the app-private subtree by
  * [InlineImagePathPolicy] — absolute and `..`-traversing destinations never
  * resolve, so a crafted note cannot read-and-display arbitrary files the
- * process can access.
+ * process can access. Below, a policy-blocked reference is shown a distinct
+ * non-alarming "blocked" note (never echoed as "File not found", so out-of-
+ * subtree existence is not disclosed), and the decoded file is re-canonicalized
+ * before reading to refuse a symlink swapped in after resolution.
  */
 @Composable
 fun MarkdownInlineImage(
@@ -126,13 +129,26 @@ fun MarkdownInlineImage(
     modifier: Modifier = Modifier
 ) {
     var showFullscreen by remember { mutableStateOf(false) }
-    val resolvedPath = remember(destination, baseDir) {
+    // Key on the baseDir PATH string, not the File instance (java.io.File has
+    // identity equality) — a newly-constructed File for the same folder must
+    // not force an avoidable re-resolution.
+    val resolvedPath = remember(destination, baseDir?.path) {
         InlineImagePathPolicy.resolve(destination, baseDir)?.absolutePath
     }
     var bitmap by remember(resolvedPath) { mutableStateOf<Bitmap?>(null) }
     LaunchedEffect(resolvedPath) {
         bitmap = resolvedPath?.let { path ->
-            withContext(Dispatchers.IO) { decodeBoundedImage(path, maxDim = 1600) }
+            withContext(Dispatchers.IO) {
+                // TOCTOU guard: the policy validated a canonical path above; if
+                // the file at that path was since swapped for a symlink, its
+                // canonical form changes and the swap is refused before decode.
+                val canonicalNow = runCatching { File(path).canonicalPath }.getOrNull()
+                if (canonicalNow == null || canonicalNow != path) {
+                    null
+                } else {
+                    decodeBoundedImage(path, maxDim = 1600)
+                }
+            }
         }
     }
 
@@ -162,7 +178,14 @@ fun MarkdownInlineImage(
                 if (resolvedPath == null && !destination.isNullOrBlank()) {
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        "File not found: $destination",
+                        // A policy-blocked reference (absolute or `..` traversal)
+                        // is never probed for existence, so it must not be echoed
+                        // as "File not found" — say clearly it was refused.
+                        if (InlineImagePathPolicy.isBlockedDestination(destination)) {
+                            "Image location blocked (must be inside the note's folder)"
+                        } else {
+                            "File not found: $destination"
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error
                     )

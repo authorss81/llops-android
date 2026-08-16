@@ -236,6 +236,31 @@ class B1Auth04InlineImagePathTest {
         }
     }
 
+    // ---------- behavioral: ineligibility classifier -----------------------
+
+    @Test
+    fun `blocked destination classifier flags absolute and traversal references`() {
+        assertTrue(
+            "an absolute destination is inherently blocked regardless of existence",
+            InlineImagePathPolicy.isBlockedDestination("/data/user/0/com.aistudio.inkflow.app/files/voice_notes/v.enc")
+        )
+        for (trav in listOf(
+            "../img.png",
+            "../../secret.png",
+            "a/../img.png",
+            "./../img.png",
+            "..\\img.png",
+            "a\\..\\..\\img.png",
+            "../img.png/../img.png"
+        )) {
+            assertTrue("$trav must be flagged as blocked traversal", InlineImagePathPolicy.isBlockedDestination(trav))
+        }
+        assertFalse(InlineImagePathPolicy.isBlockedDestination("img.png"))
+        assertFalse(InlineImagePathPolicy.isBlockedDestination("images/photo.png"))
+        assertFalse("blank/null are not policy-violations, just unresolvable", InlineImagePathPolicy.isBlockedDestination(null))
+        assertFalse(InlineImagePathPolicy.isBlockedDestination("   "))
+    }
+
     // ---------- wiring pins ------------------------------------------------
 
     @Test
@@ -244,6 +269,14 @@ class B1Auth04InlineImagePathTest {
         assertTrue(
             "the composable must route destination resolution through InlineImagePathPolicy",
             viewerSource.contains("InlineImagePathPolicy.resolve(destination, baseDir)")
+        )
+        assertTrue(
+            "the fallback must distinguish a policy-blocked location from a missing file",
+            viewerSource.contains("InlineImagePathPolicy.isBlockedDestination(destination)")
+        )
+        assertTrue(
+            "the decode path must re-canonicalize to refuse a symlink swapped in after resolution",
+            viewerSource.contains("canonicalPath")
         )
         // The old `/../`-accepting resolver branches are deleted from the file.
         assertFalse(

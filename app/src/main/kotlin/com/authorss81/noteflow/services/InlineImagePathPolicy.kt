@@ -27,6 +27,10 @@ import java.io.File
  *    must live strictly INSIDE the canonical base directory — a symlink planted
  *    under baseDir cannot reach outside the subtree;
  *  - with a null or non-directory baseDir nothing relative can resolve.
+ *
+ * [isBlockedDestination] is the shared ineligibility classifier used by both
+ * [resolve] and the UI, so a policy-blocked reference (absolute or `..`
+ * traversal) is never probed for existence nor echoed as "not found".
  */
 object InlineImagePathPolicy {
 
@@ -38,19 +42,11 @@ object InlineImagePathPolicy {
      */
     fun resolve(destination: String?, baseDir: File?): File? {
         val dest = destination
-        if (dest.isNullOrBlank()) return null
-
-        // Absolute paths are refused outright, before any existence probe, so a
-        // note can never read files by their absolute location.
-        if (File(dest).isAbsolute) return null
-
-        // Any `..` segment is refused before reading — even a "Windows-style"
-        // `..\..` sequence (backslash is a legal filename character on the OS
-        // floor, so it is treated as a segment separator here lest an imported
-        // Obsidian note smuggle traversal inside a single name).
-        for (segment in dest.split('/').flatMap { it.split('\\') }) {
-            if (segment == "..") return null
-        }
+        // Blank destinations are refused outright; absolute and `..`-traversing
+        // destinations are refused by the policy classifier — all before any
+        // existence probe, so a note can never read files by their absolute
+        // location or escape the base directory.
+        if (dest.isNullOrBlank() || isBlockedDestination(dest)) return null
 
         val root = baseDir ?: return null
         if (!root.isDirectory) return null
@@ -74,5 +70,24 @@ object InlineImagePathPolicy {
         if (candidatePath.length <= rootPath.length) return false
         if (!candidatePath.startsWith(rootPath)) return false
         return candidatePath.startsWith(rootPath + File.separator)
+    }
+
+    /**
+     * True when [destination] is inherently ineligible REGARDLESS of what
+     * exists on disk: an ABSOLUTE path or a destination containing a `..` path
+     * segment (in either separator). The UI uses this to distinguish a
+     * policy-blocked reference — which is never readable and must not be
+     * echoed as "file not found" — from a genuinely missing in-subtree file.
+     * Blank/null destinations return false (they cannot resolve either, but
+     * they are not a policy violation).
+     */
+    fun isBlockedDestination(destination: String?): Boolean {
+        val dest = destination
+        if (dest.isNullOrBlank()) return false
+        if (File(dest).isAbsolute) return true
+        for (segment in dest.split('/').flatMap { it.split('\\') }) {
+            if (segment == "..") return true
+        }
+        return false
     }
 }
