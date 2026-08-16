@@ -13,7 +13,7 @@
 | `data/model/` | `Entities.kt`, `StrokeModels.kt` | Room entities (8) + stroke/ink types |
 | `data/db/` | `NoteflowDatabase.kt`, `Daos.kt` | Room DB (schema v9, 8 DAOs), corrupt-DB quarantine |
 | `data/repository/` | `NoteRepository.kt`, `LruBoundedMap.kt` | Encrypted read/write, search corpus, WAL checkpoint, re-key |
-| `services/` | `EncryptionService.kt`, `SecurityService.kt`, `DatabaseSecurityHelper.kt`, `VaultKeyHolder.kt`, `WetBrushEngine.kt`, `WebDavSyncService.kt`, `ImportExportService.kt`, `ImportArchivePolicy.kt`, `PaletteCatalog.kt`, `ShapeRecognitionHelper.kt`, `SsrfHostPolicy.kt`, `VoiceNoteCrypto.kt` | Non-UI: crypto/vault, brush math, sync, import/export, zip-import zip-bomb policy (B1-DB-5), palette, SSRF blocklist (B1-NET-04), voice-note audio cryptor (B1-DB-3) |
+| `services/` | `EncryptionService.kt`, `SecurityService.kt`, `DatabaseSecurityHelper.kt`, `VaultKeyHolder.kt`, `WetBrushEngine.kt`, `WebDavSyncService.kt`, `ImportExportService.kt`, `ImportArchivePolicy.kt`, `PaletteCatalog.kt`, `ShapeRecognitionHelper.kt`, `SsrfHostPolicy.kt`, `VoiceNoteCrypto.kt`, `DecryptFailurePolicy.kt` | Non-UI: crypto/vault, brush math, sync, import/export, zip-import zip-bomb policy (B1-DB-5), palette, SSRF blocklist (B1-NET-04), voice-note audio cryptor (B1-DB-3), decrypt-failure render decision (B1-DB-8) |
 | `services/localsend/` | `LocalSendProtocol.kt`, `LocalSendSender.kt`, `LocalSendPairing.kt`, `SettingsLocalSendPairedDeviceStore.kt`, `LocalSendDiscoveryPolicy.kt` | Pure-JVM LocalSend v2.2 + real network sender + TOFU pairing gate (B1-NET-02) + discovery/sweep gate (B1-NET-06) |
 | `plugins/` | `NoteflowPlugin.kt`, `PluginRegistry.kt`, `PluginManager.kt`, `PluginDiagnostics.kt`, `PluginLifecycle.kt` | Compile-time plugin framework + typed serving interfaces |
 | `plugins/runtime/` | `RuntimePluginLoader.kt`, `SignatureVerifiedPluginRuntime.kt`, `ArtifactSignatureVerifier.kt`, `PinnedCertHash.kt`, `PinnedTlsConnector.kt`, `PluginManifestFetcher.kt`, `HttpsPluginDownloadTransport.kt`, `PluginDownloader.kt`, `PluginUpdateEngine.kt`, `CompileTimePluginPinStore.kt`, `PluginFrameworkClassLoader.kt`, `ArtifactStaticScan.kt` | Downloadable-plugin runtime: pinned-cert verify (manifest + artifact transports, no redirects), DexClassLoader (scoped `plugins.*`-only parent), verify-time static content scan (B1-AUTH-01), updates |
@@ -356,6 +356,26 @@
     B1-CRYPTO-06's fail-open re-baseline at `verifyDatabaseIntegrity`
     `:147-152` untouched (own phase-91 finding; must account for the re-arm now hashing `main + wal`).
     Tests: `B1Db06WalCoverageAndDismissalTest` (16).
+  - **Implemented in phase-88** (B1-DB-8, see `workspace/phase-88/REPORT.md`): decrypt-failure
+    fallbacks never render RAW CIPHERTEXT as note content. Single pure-JVM decision table
+    `services/DecryptFailurePolicy.kt` owns `render(storedValue, decrypted, isCiphertext)` — the
+    ONLY render outcome (legacy plaintext verbatim, authenticated ciphertext's plaintext, or
+    `UNREADABLE_MARKER` = "Unreadable (decryption failed)"), the structural classifier
+    `isStructuralCiphertext` (keeps legacy plaintext rows out of the decrypt branch), the
+    persistent-failure threshold (`PERSISTENT_FAILURE_THRESHOLD` = 10 DISTINCT records) and the
+    non-alarming notices. Every `NoteRepository` display-field decrypt site routes through it:
+    `getStrokesForPage` (`:946-960`, text via `decryptFieldForDisplay`, geometry via
+    `decryptStoredGeometryOrBlank` — an unreadable row yields an EMPTY payload, never phantom ink or
+    raw ciphertext into `deserializeStrokes`), `getMediaEmbedsForPage`, `getNoteVersions` and
+    `decryptPageIfNeeded` (the pre-fix catch-all `catch { page }` that returned the page — encrypted
+    title/body — unchanged is gone). Each failed auth while a DEK is present (a locked vault never
+    records) is counted once per session in a deduped ledger (`NoteRepository.kt:79-99`); when the
+    threshold is crossed `decryptFailureListener` fires once and `NoteflowViewModel.initializeDataCore`
+    (`:1330-1343`) escalates to the existing corruption/restore event — `setCorruptionDetected` +
+    `_corruptionBlocked` (recovery screen: restore-from-backup / re-key / start-fresh) plus a
+    non-alarming `PERSISTENT_DECRYPT_FAILURE_NOTICE` snackbar, never silent degradation. The ledger
+    + in-memory escalation are reset at every legitimate session boundary (`lock()`, re-key
+    `changeMasterPassword`, WebDAV restore, and every `initializeData`), so a fresh unlock recounts.
 - **Canvas**: `ui/components/AnnotationCanvas.kt:83` (ink canvas, gestures, layers, `pointerInteropFilter`);
   `services/WetBrushEngine.kt:13` (AGSL wet-mixing gating); `ui/components/ShaderCapabilityHelper.kt:5`
   (`isAgslSupported` = SDK ≥ 33); `services/ShapeRecognitionHelper.kt:13` (`trySnapShape()` :27).

@@ -65,6 +65,7 @@ import com.authorss81.noteflow.plugins.TtsChunk
 import com.authorss81.noteflow.services.BiometricKeyBindingPolicy
 import com.authorss81.noteflow.services.ClipboardGuard
 import com.authorss81.noteflow.services.DatabaseSecurityHelper
+import com.authorss81.noteflow.services.DecryptFailurePolicy
 import com.authorss81.noteflow.services.DekAtRestMode
 import com.authorss81.noteflow.services.DekAtRestPolicy
 import com.authorss81.noteflow.services.DekReadResult
@@ -1276,6 +1277,16 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     private var lockoutTickerJob: Job? = null
     private var dataInitialized = false
 
+    /**
+     * B1-DB-8 (phase-88): true once THIS session's persistent-decrypt-failure
+     * escalation fired (see [initializeDataCore]). Reset at every session
+     * boundary (initialize, re-key, restore) so a fresh unlock recounts instead
+     * of being blocked by a stale flag; the corruption flag itself persists in
+     * SharedPreferences until the user restores/starts-fresh.
+     */
+    @Volatile
+    private var decryptPersistenceEscalated = false
+
     // B1-AUTH-02 (phase-47): true after lock() disposes the SQLCipher connection.
     // A successful explicit unlock (password or biometrics) must reinstate a live
     // connection BEFORE any data-layer flow re-subscribes, so the lock boundary is
@@ -1312,6 +1323,26 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     }
 
     private suspend fun initializeDataCore() {
+            // B1-DB-8 (phase-88): fresh per-session decrypt-failure ledger. Any
+            // genuine ciphertext that fails AES-GCM auth while a DEK is present is
+            // recorded by [NoteRepository]; once [DecryptFailurePolicy]'s threshold
+            // of DISTINCT records is crossed the failure is judged PERSISTENT (a
+            // re-key/restore mismatch or a manipulated DB — not an isolated note)
+            // and this listener escalates to the existing corruption/restore event:
+            // the flag raises the recovery screen (restore-from-backup / re-key /
+            // start-fresh) instead of silently degrading the vault to "Unreadable"
+            // markers. The listener runs on a repository reader thread and only
+            // performs thread-safe work (StateFlow writes + snackbar + prefs).
+            repository.resetDecryptFailures()
+            decryptPersistenceEscalated = false
+            repository.decryptFailureListener = {
+                if (!decryptPersistenceEscalated && repository.decryptFailuresPersistent) {
+                    decryptPersistenceEscalated = true
+                    DatabaseSecurityHelper.setCorruptionDetected(appContext)
+                    _corruptionBlocked.value = true
+                    showSnackbar(DecryptFailurePolicy.PERSISTENT_DECRYPT_FAILURE_NOTICE, isLong = true)
+                }
+            }
             if (!settings.fieldAadMigrated) {
                 // B2-CRYPTO-09 (phase-107): bind pre-phase-107 field ciphertexts to
                 // their record context before any page/stroke/version is served.
@@ -2540,6 +2571,10 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
             // (never re-wrapped under the non-auth keystore key); biometrics ON ⇒
             // re-wrapped auth-gated only.
             enforceDekAtRestPolicy()
+            // B1-DB-8 (phase-88): a re-key is a session boundary — recount from a
+            // clean ledger so a stale roll of a single old-broken row can't linger.
+            repository.resetDecryptFailures()
+            decryptPersistenceEscalated = false
             true
         } catch (e: Exception) {
             false
@@ -3164,6 +3199,11 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
                 // B2-CRYPTO-09 (phase-107): re-migrate restored rows to per-record
                 // AAD on next launch (see attemptRecoveryFromBackup comment).
                 settings.fieldAadMigrated = false
+                // B1-DB-8 (phase-88): a successful restore replaces the whole DB —
+                // the decrypt-failure ledger (and any in-memory escalation) must
+                // not survive into the restored vault.
+                repository.resetDecryptFailures()
+                decryptPersistenceEscalated = false
                 onComplete(true, null)
             } catch (e: com.authorss81.noteflow.services.ImportArchivePolicy.ImportSizeLimitException) {
                 // B2-DOS-05 (phase-81 review fix): an over-budget WebDAV archive
@@ -3424,6 +3464,10 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         ClipboardGuard.scrubIfOwnCopy(appContext)
 
         repository.zeroizeKey()
+        // B1-DB-8 (phase-88): the session ledger must not survive a lock — the
+        // next unlock recomputes it from fresh reads (and a locked vault never
+        // inflates it: reads record only when a DEK is actually present).
+        repository.resetDecryptFailures()
         // B1-AUTH-02 (phase-47): the lock boundary must reach the DATA LAYER, not
         // just the Compose LockScreen boolean. dispose() closes and forgets the
         // Room/SQLCipher instance so NO keyed SQLCipher handle survives — a stale

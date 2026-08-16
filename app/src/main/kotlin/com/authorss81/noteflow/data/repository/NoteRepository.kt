@@ -5,6 +5,7 @@ import com.authorss81.noteflow.data.db.NoteflowDatabase
 import com.authorss81.noteflow.data.model.*
 import com.authorss81.noteflow.services.AttachmentIngestPolicy
 import com.authorss81.noteflow.services.DatabaseSecurityHelper
+import com.authorss81.noteflow.services.DecryptFailurePolicy
 import com.authorss81.noteflow.services.EncryptionService
 import com.authorss81.noteflow.services.NoteBodyVaultPolicy
 import com.authorss81.noteflow.services.SourceFilePathPolicy
@@ -53,6 +54,108 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
      * [EditorFlushPolicy] stash for after the next unlock.
      */
     private fun requireEncryptionKey(): ByteArray = VaultWriteGate.requireKey(encryptionKey)
+
+    // -----------------------------------------------------------------------
+    // B1-DB-8 (phase-88): decrypt-failure safety.
+    // -----------------------------------------------------------------------
+
+    /**
+     * Distinct records whose field ciphertext failed to decrypt THIS SESSION
+     * ("record" = `table:recordId:field`, deduped so one broken row read by
+     * several flows — Home list, search window, editor — is counted ONCE).
+     * When [DecryptFailurePolicy.PERSISTENT_FAILURE_THRESHOLD] distinct records
+     * fail, the failure is judged PERSISTENT (the DEK is present and correct by
+     * construction on the read path, so this is a re-key/restore mismatch or a
+     * manipulated DB, not an isolated note) and [decryptFailureListener] fires
+     * so the ViewModel can escalate to the corruption/restore event (the
+     * existing recovery screen offers restore/re-key instead of silently
+     * degrading the whole vault to markers).
+     *
+     * `synchronizedSet(LinkedHashSet)` keeps add/clear atomic across the
+     * IO/Default readers; the bought listener may then run on one of those
+     * threads and must only perform thread-safe work (StateFlow writes /
+     * snackbar emit / SharedPreferences commit).
+     */
+    private val decryptFailureRecordIds: MutableSet<String> =
+        Collections.synchronizedSet(java.util.LinkedHashSet<String>())
+
+    /**
+     * Called exactly once per session, on the repository reader thread, when
+     * the persistent-failure threshold is first crossed. The ViewModel wires
+     * this to raise the corruption flag (recovery screen) + surface the
+     * restoration promotion.
+     */
+    var decryptFailureListener: (() -> Unit)? = null
+
+    val decryptFailuresPersistent: Boolean
+        get() = DecryptFailurePolicy.isPersistent(decryptFailureRecordIds.size)
+
+    val decryptFailureRecordCount: Int
+        get() = decryptFailureRecordIds.size
+
+    /** B1-DB-8: start a fresh per-session ledger (lock, unlock, re-key, restore). */
+    fun resetDecryptFailures() {
+        decryptFailureRecordIds.clear()
+    }
+
+    private fun recordDecryptFailure(table: String, recordId: String, fieldName: String) {
+        val key = "$table:$recordId:$fieldName"
+        if (decryptFailureRecordIds.add(key) && decryptFailuresPersistent) {
+            decryptFailureListener?.invoke()
+        }
+    }
+
+    /**
+     * B1-DB-8: the ONLY field-decrypt path for display. Follows the single
+     * [DecryptFailurePolicy.render] decision table:
+     *  - a stored value that is NOT structurally ciphertext is legacy plaintext
+     *    and renders verbatim (never the marker — a pre-field-encryption row
+     *    must not become "Unreadable");
+     *  - a genuine ciphertext that authenticates yields its plaintext;
+     *  - a genuine ciphertext whose auth fails (or a locked-vault read with no
+     *    DEK) renders [DecryptFailurePolicy.UNREADABLE_MARKER], NEVER the raw
+     *    blob — the pre-fix `catch { rawText }`/`catch { text }`/`?: v.title`
+     *    fallbacks are gone. A locked read is reported (recorded) only when a
+     *    DEK is actually present, so a locked vault can never inflate the
+     *    persistent ledger.
+     */
+    private fun decryptFieldForDisplay(storedValue: String, table: String, recordId: String, fieldName: String): String {
+        if (storedValue.isBlank()) return storedValue
+        val structural = DecryptFailurePolicy.isStructuralCiphertext(storedValue)
+        val key = encryptionKey
+        val decrypted = if (structural && key != null) {
+            try {
+                String(EncryptionService.decryptField(storedValue, key, table, recordId, fieldName))
+            } catch (e: Exception) {
+                null
+            }
+        } else {
+            null
+        }
+        if (structural && decrypted == null && key != null) {
+            recordDecryptFailure(table, recordId, fieldName)
+        }
+        return DecryptFailurePolicy.render(storedValue, decrypted, structural)
+    }
+
+    /**
+     * B1-DB-8: the stroke-geometry decrypt path. Geometry can never render as
+     * the marker (there is no text surface), so a failed row yields an EMPTY
+     * payload — nothing is parsed (never raw ciphertext into
+     * [EncryptionService.deserializeStrokes]), so an unreadable row produces no
+     * phantom ink, while still recording the failure for the persistent ledger.
+     */
+    private fun decryptStoredGeometryOrBlank(storedValue: String, recordId: String): String {
+        if (storedValue.isBlank()) return storedValue
+        if (!DecryptFailurePolicy.isStructuralCiphertext(storedValue)) return storedValue
+        val key = encryptionKey ?: return ""
+        return try {
+            String(EncryptionService.decryptField(storedValue, key, "strokes", recordId, "pointsJson"))
+        } catch (e: Exception) {
+            recordDecryptFailure("strokes", recordId, "pointsJson")
+            ""
+        }
+    }
 
     /**
      * In-memory cache of decrypted active pages (title + extractedText) used by
@@ -837,23 +940,21 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
                 }
 
                 val rawText = entity.textContent
-                val decryptedText = if (encryptionKey != null && rawText.isNotBlank()) {
-                    try {
-                        String(EncryptionService.decryptField(rawText, encryptionKey!!, "strokes", entity.id, "textContent"))
-                    } catch (e: Exception) {
-                        rawText
-                    }
+                // B1-DB-8 (phase-88): a stroke text that fails to decrypt renders
+                // the explicit UNREADABLE_MARKER (via the single policy decision),
+                // never the raw base64 ciphertext blob the old catch returned.
+                val decryptedText = if (rawText.isNotBlank()) {
+                    decryptFieldForDisplay(rawText, "strokes", entity.id, "textContent")
                 } else {
                     rawText
                 }
 
                 val rawPointsJson = entity.pointsJson
-                val decryptedPointsJson = if (encryptionKey != null && rawPointsJson.isNotBlank()) {
-                    try {
-                        String(EncryptionService.decryptField(rawPointsJson, encryptionKey!!, "strokes", entity.id, "pointsJson"))
-                    } catch (e: Exception) {
-                        rawPointsJson
-                    }
+                // B1-DB-8 (phase-88): unreadable geometry yields an EMPTY payload
+                // (no phantom ink from ciphertext, nothing fed to deserializeStrokes),
+                // and every failure is recorded for the persistent ledger.
+                val decryptedPointsJson = if (rawPointsJson.isNotBlank()) {
+                    decryptStoredGeometryOrBlank(rawPointsJson, entity.id)
                 } else {
                     rawPointsJson
                 }
@@ -1095,11 +1196,14 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
             val waveformList = parseWaveformJson(entity.waveformJson)
 
             val text = entity.textContent ?: ""
-            val decryptedText = if (encryptionKey != null && text.isNotBlank()) {
-                try {
-                    String(EncryptionService.decryptField(text, encryptionKey!!, "media_embeds", entity.id, "textContent"))
-                } catch (e: Exception) { text }
-            } else text
+            // B1-DB-8 (phase-88): an embed text that fails to decrypt renders the
+            // explicit UNREADABLE_MARKER (never the raw ciphertext `catch { text }`
+            // returned) and is recorded for the persistent ledger.
+            val decryptedText = if (text.isNotBlank()) {
+                decryptFieldForDisplay(text, "media_embeds", entity.id, "textContent")
+            } else {
+                text
+            }
 
             CanvasMediaEmbed(
                 id = entity.id,
@@ -1305,10 +1409,17 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
 
     suspend fun getNoteVersions(pageId: String): List<NoteVersionEntity> = withContext(Dispatchers.IO) {
         val versions = db.noteVersionDao().getVersionsForPage(pageId)
+        // B1-DB-8 (phase-88): version title/body decrypt failures render the
+        // explicit UNREADABLE_MARKER via the single policy decision — the old
+        // `decryptFieldOrNull(...) ?: v.title` fallback returned the raw blob.
         versions.map { v ->
-            val decTitle = encryptionKey?.let { key -> EncryptionService.decryptFieldOrNull(v.title, key, "note_versions", v.id, "title") } ?: v.title
-            val decText = if (encryptionKey != null && !v.extractedText.isNullOrBlank()) {
-                EncryptionService.decryptFieldOrNull(v.extractedText, encryptionKey!!, "note_versions", v.id, "extractedText") ?: v.extractedText
+            val decTitle = if (v.title.isNotBlank()) {
+                decryptFieldForDisplay(v.title, "note_versions", v.id, "title")
+            } else {
+                v.title
+            }
+            val decText = if (!v.extractedText.isNullOrBlank()) {
+                decryptFieldForDisplay(v.extractedText, "note_versions", v.id, "extractedText")
             } else {
                 v.extractedText
             }
@@ -1316,24 +1427,24 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
         }
     }
 
+    /**
+     * B1-DB-8 (phase-88): rewired page decrypt. The pre-fix body threw the whole
+     * read and returned the page UNCHANGED — i.e. `title`/`extractedText`
+     * rendered as raw base64 AES-GCM blobs. Now the title and extractedText
+     * follow the single policy decision table: genuine ciphertext that fails to
+     * authenticate renders [DecryptFailurePolicy.UNREADABLE_MARKER] (never the
+     * blob), and the failure is recorded for the persistent ledger.
+     */
     private fun decryptPageIfNeeded(page: NotePageEntity): NotePageEntity {
-
-        if (encryptionKey == null) return page
-        return try {
-            val decryptedTitle = String(EncryptionService.decryptField(page.title, encryptionKey!!, "pages", page.id, "title"))
-            val decryptedExtracted = if (!page.extractedText.isNullOrBlank()) {
-                try {
-                    String(EncryptionService.decryptField(page.extractedText, encryptionKey!!, "pages", page.id, "extractedText"))
-                } catch (e: Exception) {
-                    page.extractedText
-                }
-            } else {
-                page.extractedText
-            }
-            page.copy(title = decryptedTitle, extractedText = decryptedExtracted)
-        } catch (e: Exception) {
-            page
+        val key = encryptionKey
+        if (key == null) return page
+        val decryptedTitle = decryptFieldForDisplay(page.title, "pages", page.id, "title")
+        val decryptedExtracted = if (!page.extractedText.isNullOrBlank()) {
+            decryptFieldForDisplay(page.extractedText, "pages", page.id, "extractedText")
+        } else {
+            page.extractedText
         }
+        return page.copy(title = decryptedTitle, extractedText = decryptedExtracted)
     }
 }
 
