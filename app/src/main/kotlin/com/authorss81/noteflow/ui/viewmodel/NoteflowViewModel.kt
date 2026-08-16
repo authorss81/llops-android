@@ -63,6 +63,7 @@ import com.authorss81.noteflow.plugins.TranslationOutcome
 import com.authorss81.noteflow.plugins.TranslationPlugin
 import com.authorss81.noteflow.plugins.TtsChunk
 import com.authorss81.noteflow.services.BiometricKeyBindingPolicy
+import com.authorss81.noteflow.services.ClipboardGuard
 import com.authorss81.noteflow.services.DatabaseSecurityHelper
 import com.authorss81.noteflow.services.DekAtRestMode
 import com.authorss81.noteflow.services.DekAtRestPolicy
@@ -3215,6 +3216,17 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     )
 
     fun lock() {
+        // B2-UI-2 (phase-72): decrypted note content this app copied to the
+        // system clipboard (code blocks, OCR results) must not survive an in-app
+        // lock. The in-app lock paths (manual "Lock Vault Now", idle auto-lock,
+        // ACTION_SCREEN_OFF) keep the app foregrounded, so ON_PAUSE — the only
+        // existing scrub trigger — may never fire. Centralizing the scrub here
+        // (instead of in every viewModel.lock() call site) makes EVERY lock path
+        // clear an app-owned copy inside its window and forget the timestamp,
+        // while a foreign (other-app) copy on the clipboard is never wiped.
+        // Best-effort by design — the guard swallows platform failures so the
+        // lock itself can never break.
+        ClipboardGuard.scrubIfOwnCopy(appContext)
 
         repository.zeroizeKey()
         // B1-AUTH-02 (phase-47): the lock boundary must reach the DATA LAYER, not

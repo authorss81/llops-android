@@ -516,6 +516,18 @@
     applies FLAG_SECURE unconditionally (debug clearFlags carve-out deleted). `ON_STOP` → lock
     retained. `ON_PAUSE` → lock explicitly NOT chosen (system-overlay pauses like phase-59's SAF
     pickers, biometric prompts and the share sheet must not force a lock).
+  - **Implemented in phase-72** (B2-UI-2, see `workspace/phase-72/REPORT.md`): `NoteflowViewModel.lock()`
+    (`NoteflowViewModel.kt:3219-3234`) scrubs the system clipboard as its FIRST statement —
+    `ClipboardGuard.scrubIfOwnCopy(appContext)`, before `repository.zeroizeKey()` and before the
+    passwordless-vault gate — so EVERY lock path (manual "Lock Vault Now", idle auto-lock, ON_STOP,
+    ACTION_SCREEN_OFF) clears an app-owned clipboard copy inside its window even though the app stays
+    foregrounded (ON_PAUSE may never fire). The decide → clear → forget decision is the new pure-JVM
+    `services/ClipboardScrubPolicy.kt` (single decision table, `SCRUB_WINDOW_MS = 60_000`); the
+    Android clipboard write stays in `services/ClipboardGuard.kt` (clearPrimaryClip API 28+ / empty
+    setPrimaryClip API 26-27, best-effort, `clearPrimaryClipOverride` = pure-JVM test seam) and after a
+    scrub the guard forgets its timestamp so a foreign (other-app) copy is never wiped. ON_PAUSE scrub
+    retained as defense-in-depth; both note-content copy sources stamp the guard before writing
+    (`OcrResultDialog.kt:149-150`, `MediaEmbedComponents.kt:352-354`). Tests: `B2Ui2ClipboardScrubTest` (13).
 - **Import/export**: `services/ImportExportService.kt:30` (encrypted backup/restore, `validateBackupPassword`,
   PDF/HTML/image export).
   - **Implemented in phase-55** (B1-DB-5, see `workspace/phase-55/REPORT.md`): the HTML/Obsidian
