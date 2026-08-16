@@ -91,11 +91,12 @@ object LocalSendMessages {
     )
 
     /**
-     * The SENDER's identity announcement (B1-NET-09, phase-110): a fixed,
-     * user-set `alias` with NO device-model disclosure. We deliberately do NOT
-     * put `Build.MODEL` (or any OS/app/version fingerprint) into
-     * `deviceModel`/`alias` — every LAN host that sees the announce, register
+     * The SENDER's identity announcement (B1-NET-09, phase-110 + B1-NET-06,
+     * phase-85): a fixed, user-set `alias` with NO device-model disclosure. We
+     * deliberately do NOT put `Build.MODEL` (or any OS/app/version fingerprint)
+     * into `deviceModel`/`alias` — every LAN host that sees the announce, register
      * or prepare-upload bodies must not be able to fingerprint the exact handset.
+     * The values come from the single [LocalSendDiscoveryPolicy] decision table.
      *
      * B1-NET-02 (phase-41): the announced `protocol` is NEVER `"http"` — this
      * app only ever speaks TLS for LocalSend (it is sender-only, but the field
@@ -103,9 +104,9 @@ object LocalSendMessages {
      * always announced.
      */
     fun senderIdentity(fingerprint: String): Info = Info(
-        alias = "InkFlow",
+        alias = LocalSendDiscoveryPolicy.SENDER_ALIAS,
         version = LocalSendProtocol.PROTOCOL_VERSION,
-        deviceModel = null,
+        deviceModel = LocalSendDiscoveryPolicy.senderDeviceModel,
         deviceType = "mobile",
         fingerprint = fingerprint,
         port = LocalSendProtocol.DEFAULT_PORT,

@@ -93,21 +93,24 @@ class LocalSendSender(
      * Discovers LocalSend devices on the same LAN. Runs fully off the main
      * thread. Returns de-duplicated devices.
      *
-     * [includeLegacyHttpScan] additionally probes every IPv4 in the /24 of the
-     * active interface with a tiny `POST /register` (LocalSend "HTTP legacy
-     * mode"): this keeps discovery working on networks where wireless AP
-     * isolation drops UDP broadcasts but still allows directed TCP.
+     * B1-NET-06 (phase-85): a search only ever happens after the user explicitly
+     * asked for it (the dialog's "Find nearby devices" action) — opening the
+     * dialog transmits nothing. Discovery defaults to UDP announce/listen ONLY;
+     * the `/24` HTTP register sweep (LocalSend "HTTP legacy mode") is gated by
+     * [LocalSendDiscoveryPolicy.LEGACY_HTTP_SCAN_ENABLED_BY_DEFAULT] and runs
+     * here only when the caller explicitly opted in for it (per-search checkbox),
+     * so a plain search never blasts 254 HTTP POSTs across the subnet.
      */
     suspend fun discoverDevices(
         discoveryTimeoutMs: Long = 3_000L,
-        includeLegacyHttpScan: Boolean = true
+        includeLegacyHttpScan: Boolean = LocalSendDiscoveryPolicy.LEGACY_HTTP_SCAN_ENABLED_BY_DEFAULT
     ): List<LocalSendDevice> = withContext(Dispatchers.IO) {
         val found = LinkedHashMap<String, LocalSendDevice>()
 
         val udpResults = udpAnnounceAndListen(discoveryTimeoutMs)
         udpResults.forEach { putDevice(found, it) }
 
-        if (includeLegacyHttpScan && udpResults.isEmpty()) {
+        if (LocalSendDiscoveryPolicy.mayRunLegacyHttpScan(includeLegacyHttpScan) && udpResults.isEmpty()) {
             legacyHttpScan().forEach { putDevice(found, it) }
         }
 

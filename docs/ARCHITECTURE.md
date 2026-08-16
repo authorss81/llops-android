@@ -14,7 +14,7 @@
 | `data/db/` | `NoteflowDatabase.kt`, `Daos.kt` | Room DB (schema v9, 8 DAOs), corrupt-DB quarantine |
 | `data/repository/` | `NoteRepository.kt`, `LruBoundedMap.kt` | Encrypted read/write, search corpus, WAL checkpoint, re-key |
 | `services/` | `EncryptionService.kt`, `SecurityService.kt`, `DatabaseSecurityHelper.kt`, `VaultKeyHolder.kt`, `WetBrushEngine.kt`, `WebDavSyncService.kt`, `ImportExportService.kt`, `ImportArchivePolicy.kt`, `PaletteCatalog.kt`, `ShapeRecognitionHelper.kt`, `SsrfHostPolicy.kt`, `VoiceNoteCrypto.kt` | Non-UI: crypto/vault, brush math, sync, import/export, zip-import zip-bomb policy (B1-DB-5), palette, SSRF blocklist (B1-NET-04), voice-note audio cryptor (B1-DB-3) |
-| `services/localsend/` | `LocalSendProtocol.kt`, `LocalSendSender.kt`, `LocalSendPairing.kt`, `SettingsLocalSendPairedDeviceStore.kt` | Pure-JVM LocalSend v2.2 + real network sender + TOFU pairing gate (B1-NET-02) |
+| `services/localsend/` | `LocalSendProtocol.kt`, `LocalSendSender.kt`, `LocalSendPairing.kt`, `SettingsLocalSendPairedDeviceStore.kt`, `LocalSendDiscoveryPolicy.kt` | Pure-JVM LocalSend v2.2 + real network sender + TOFU pairing gate (B1-NET-02) + discovery/sweep gate (B1-NET-06) |
 | `plugins/` | `NoteflowPlugin.kt`, `PluginRegistry.kt`, `PluginManager.kt`, `PluginDiagnostics.kt`, `PluginLifecycle.kt` | Compile-time plugin framework + typed serving interfaces |
 | `plugins/runtime/` | `RuntimePluginLoader.kt`, `SignatureVerifiedPluginRuntime.kt`, `ArtifactSignatureVerifier.kt`, `PinnedCertHash.kt`, `PinnedTlsConnector.kt`, `PluginManifestFetcher.kt`, `HttpsPluginDownloadTransport.kt`, `PluginDownloader.kt`, `PluginUpdateEngine.kt`, `CompileTimePluginPinStore.kt`, `PluginFrameworkClassLoader.kt`, `ArtifactStaticScan.kt` | Downloadable-plugin runtime: pinned-cert verify (manifest + artifact transports, no redirects), DexClassLoader (scoped `plugins.*`-only parent), verify-time static content scan (B1-AUTH-01), updates |
 | `plugins/store/` | `PluginStoreCatalog.kt`, `PluginStoreController.kt`, `RemotePluginInstaller.kt`, `PluginInstallStore.kt` | Plugin Store lifecycle (bundled catalog + remote install) |
@@ -568,6 +568,23 @@
     (constant-time checked, mismatch refuses) or an explicit "fingerprints match"
     acknowledgement, plus a per-send confirmation; `200` to `/prepare-upload` is
     zero evidence of consent.
+  - **Implemented in phase-85 (B1-NET-06, LOW)**: the /24 `legacyHttpScan`
+    register sweep is now an EXPLICIT per-search opt-in, never a default.
+    Single pure-JVM decision table `services/localsend/LocalSendDiscoveryPolicy.kt`
+    (`DISCOVERY_REQUIRES_EXPLICIT_USER_ACTION = true`,
+    `LEGACY_HTTP_SCAN_ENABLED_BY_DEFAULT = false`, `SENDER_ALIAS = "InkFlow"`,
+    `senderDeviceModel = null`; `mayRunDiscovery(userInitiated)` /
+    `mayRunLegacyHttpScan(userOptedIn)` fail closed). `LocalSendSender.discoverDevices`
+    (`LocalSendSender.kt:104-118`) defaults `includeLegacyHttpScan` to
+    `LEGACY_HTTP_SCAN_ENABLED_BY_DEFAULT` and only consults the sweep when UDP
+    discovery found nothing (`udpResults.isEmpty()`); `LocalSendSendDialog` seeds
+    a "Also check every address on this Wi-Fi…" Checkbox from the same constant
+    and feeds `legacyHttpScanOptIn` into the single discovery call (the old
+    hard-coded `= true` is gone). `discover()` still fires ONLY from the explicit
+    "Find nearby devices"/"Refresh" `onClick` handlers, so opening the dialog
+    transmits nothing. The announce/identity (`LocalSendProtocol.senderIdentity`
+    `:105-114`) is now wired to the same policy constants (alias `InkFlow`,
+    no device model — `Build.MODEL` long gone since phase-110/B1-NET-09).
 - **Web Capture / Citation fetch (SSRF)**: `services/SsrfHostPolicy.kt:30` (shared pure-JVM host
   blocklist — loopback/RFC-1918/link-local-metadata/CGNAT/ULA/`.local`/embedded-IPv4, structural, no DNS),
   `plugins/webcapture/WebPageFetchPolicy.kt:31` (`validateUrl`) + `:80` (`rejectHop`),

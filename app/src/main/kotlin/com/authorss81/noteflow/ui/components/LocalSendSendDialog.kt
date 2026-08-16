@@ -23,6 +23,7 @@ import com.authorss81.noteflow.data.model.NotePageEntity
 import com.authorss81.noteflow.services.ImportExportService
 import com.authorss81.noteflow.services.SettingsManager
 import com.authorss81.noteflow.services.localsend.LocalSendDevice
+import com.authorss81.noteflow.services.localsend.LocalSendDiscoveryPolicy
 import com.authorss81.noteflow.services.localsend.LocalSendGate
 import com.authorss81.noteflow.services.localsend.LocalSendPairing
 import com.authorss81.noteflow.services.localsend.LocalSendPairingCodes
@@ -81,6 +82,13 @@ fun LocalSendSendDialog(
     var isDiscovering by remember { mutableStateOf(false) }
     var discoveryNote by remember { mutableStateOf<String?>(null) }
 
+    // B1-NET-06 (phase-85): the /24 HTTP register sweep is OFF unless the user
+    // explicitly opts in for it (per-search checkbox, never persisted). Discovery
+    // only ever runs on the explicit "Find nearby devices" action below.
+    var legacyHttpScanOptIn by remember {
+        mutableStateOf(LocalSendDiscoveryPolicy.LEGACY_HTTP_SCAN_ENABLED_BY_DEFAULT)
+    }
+
     var phase by remember { mutableStateOf("Idle") } // Idle | Preparing | Requesting | Sending | Done/Failed
     var statusText by remember { mutableStateOf<String?>(null) }
     var progressSent by remember { mutableStateOf(0L) }
@@ -110,7 +118,10 @@ fun LocalSendSendDialog(
             isDiscovering = true
             discoveryNote = "Listening on the local network…"
             discoveredDevices = emptyList()
-            val devices = sender.discoverDevices(discoveryTimeoutMs = 3_000L, includeLegacyHttpScan = true)
+            val devices = sender.discoverDevices(
+                discoveryTimeoutMs = 3_000L,
+                includeLegacyHttpScan = legacyHttpScanOptIn
+            )
             discoveredDevices = devices
             discoveryNote = when {
                 devices.isEmpty() ->
@@ -342,6 +353,21 @@ fun LocalSendSendDialog(
             discoveryNote?.let {
                 Text(
                     it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            // B1-NET-06 (phase-85): the directed /24 HTTP sweep is an EXPLICIT
+            // per-search opt-in, off by default — a plain search only ever issues
+            // the UDP announce/listen, never 254 HTTP POSTs to the subnet.
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(
+                    checked = legacyHttpScanOptIn,
+                    onCheckedChange = { legacyHttpScanOptIn = it },
+                    enabled = !isDiscovering && phase == "Idle"
+                )
+                Text("Also check every address on this Wi-Fi (slower; helps on networks that block discovery broadcasts)",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
