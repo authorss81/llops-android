@@ -80,15 +80,16 @@ class AppFacadeHost(
                         return FacadeResult.Failed("HTTP GET failed (HTTP $code).")
                     }
                     val contentLength = connection.contentLengthLong
-                    if (contentLength > MAX_FACADE_GET_BYTES) {
+                    if (contentLength > FacadeHttpGetPolicy.MAX_FACADE_GET_BYTES) {
                         return FacadeResult.Failed("HTTP GET response too large.")
                     }
+                    // B2-DOS-04: the cap is enforced DURING the read by
+                    // FacadeHttpGetPolicy.readCapped (mirror of WebPageFetcher),
+                    // so a chunked/unknown-length (Content-Length: -1) or
+                    // slow-chunked response aborts mid-stream instead of being
+                    // fully slurped into heap by readBytes() first.
                     val body = connection.inputStream.use { stream ->
-                        val bytes = stream.readBytes()
-                        if (bytes.size > MAX_FACADE_GET_BYTES) {
-                            return FacadeResult.Failed("HTTP GET response too large.")
-                        }
-                        bytes.toString(Charsets.UTF_8)
+                        FacadeHttpGetPolicy.readCapped(stream)
                     }
                     return FacadeResult.Granted(body)
                 } finally {
@@ -96,6 +97,8 @@ class AppFacadeHost(
                 }
             }
             return FacadeResult.Failed("HTTP GET refused: the service redirected too many times.")
+        } catch (e: FacadeHttpGetPolicy.ResponseTooLargeException) {
+            return FacadeResult.Failed("HTTP GET response too large.")
         } catch (e: StrictRedirectPolicy.RedirectRefusedException) {
             return FacadeResult.Failed("HTTP GET refused: ${e.message}")
         } catch (e: Throwable) {
@@ -110,8 +113,4 @@ class AppFacadeHost(
     override fun requestModelDownload(sizeBytes: Long): FacadeResult<Unit> = FacadeResult.Failed(
         "Model downloads go through the host consent flow, which lands in a later phase."
     )
-
-    private companion object {
-        const val MAX_FACADE_GET_BYTES: Long = 10L * 1024 * 1024
-    }
 }

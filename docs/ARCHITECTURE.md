@@ -345,6 +345,19 @@
 - **Downloadable runtime**: `plugins/runtime/RuntimePluginLoader.kt:68`; `services/AppClassLoaderFactory.kt:23`
   (`DexClassLoader`); `services/AppFacadeHost.kt:27` (deny-by-default facade, NO direct DB/keystore handles);
   `plugins/runtime/PinnedCertHash.kt:25`; `plugins/runtime/ArtifactSignatureVerifier.kt:52`.
+  - **Implemented in phase-80** (B2-DOS-04, see `workspace/phase-80/REPORT.md`): `AppFacadeHost.httpGet`
+    enforces its response-size cap DURING the read, never after `readBytes()` already slurped the whole
+    body. New pure-JVM `services/FacadeHttpGetPolicy.kt` is the single decision table
+    (`MAX_FACADE_GET_BYTES` = 10 MB, `READ_BUFFER_BYTES` = 64 KiB, `readCapped` — the bounded streaming
+    loop mirroring `WebPageFetcher` — throws `ResponseTooLargeException` mid-stream on the first chunk
+    that crosses the cap, so a chunked/unknown-length (Content-Length: -1) or slow-chunked response can
+    never pin more than the budget + one buffer in heap). `AppFacadeHost.kt:91-94` routes every body
+    read through `FacadeHttpGetPolicy.readCapped` (the dead post-check on `readBytes().size` and the
+    private `MAX_FACADE_GET_BYTES` companion are gone); the early `contentLengthLong` header pre-check
+    (`AppFacadeHost.kt:82-85`) stays, and the B1-NET-05 manual-redirect posture (`instanceFollowRedirects
+    = false`, per-hop `StrictRedirectPolicy` re-validation) is retained so every redirect hop carries its
+    own 10 MB budget. API-26+ floor, pure java.io, no new deps, no fallback needed.
+    Tests: `B2Dos04FacadeGetStreamingCapTest` (7).
   - **Implemented in phase-46** (B1-AUTH-01, see `workspace/phase-46/REPORT.md`): plugin bytecode no
     longer resolves app-private classes AND artifacts that merely mention them are rejected before any
     bytecode materializes. `plugins/runtime/PluginFrameworkClassLoader.kt:45` — a scoped parent between
