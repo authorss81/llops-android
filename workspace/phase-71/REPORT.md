@@ -32,17 +32,17 @@ sanitizer because these calls bypass it entirely.
 
 | # | Before (pre-fix) | After (fixed) |
 |---|---|---|
-| 1 | `:289` `Log.e("ImportExportService", "Failed to export annotated page", e)` | `:291` `Log.e("ImportExportService", FailureLogPolicy.safeLogMessage(e, "Failed to export annotated page"))` |
-| 2 | `:370` `… "Failed to export document as PDF", e)` | `:373` `… safeLogMessage(e, "Failed to export document as PDF"))` |
-| 3 | `:1096` `… "Failed to parse docx", e)` | `:1100` `… safeLogMessage(e, "Failed to parse docx"))` |
-| 4 | `:2063` `… "Failed to export vault to ZIP", e)` | `:2068` `… safeLogMessage(e, "Failed to export vault to ZIP"))` |
-| 5 | `:2098` `… "Failed to import HTML file", e)` | `:2104` `… safeLogMessage(e, "Failed to import HTML file"))` |
-| 6 | `:2154` `… "Failed to import HTML ZIP folder", e)` | `:2161` `… safeLogMessage(e, "Failed to import HTML ZIP folder"))` |
-| 7 | `:2223` `… "Failed to export note to HTML", e)` | `:2231` `… safeLogMessage(e, "Failed to export note to HTML"))` |
-| 8 | `:2271` `… "Failed to export vault HTML site", e)` | `:2280` `… safeLogMessage(e, "Failed to export vault HTML site"))` |
-| 9 | `:2343` `… "Failed to import Obsidian Vault ZIP", e)` | `:2353` `… safeLogMessage(e, "Failed to import Obsidian Vault ZIP"))` |
-| 10 | `:2405` `… "Failed to export Obsidian Vault ZIP", e)` | `:2416` `… safeLogMessage(e, "Failed to export Obsidian Vault ZIP"))` |
-| 11 | `:2462` `… "Failed to export page to PSD", e)` | `:2474` `… safeLogMessage(e, "Failed to export page to PSD"))` |
+| 1 | `:289` `Log.e("ImportExportService", "Failed to export annotated page", e)` | `:290` `Log.e("ImportExportService", FailureLogPolicy.safeLogMessage(e, "Failed to export annotated page"))` |
+| 2 | `:370` `… "Failed to export document as PDF", e)` | `:372` `… safeLogMessage(e, "Failed to export document as PDF"))` |
+| 3 | `:1096` `… "Failed to parse docx", e)` | `:1099` `… safeLogMessage(e, "Failed to parse docx"))` |
+| 4 | `:2063` `… "Failed to export vault to ZIP", e)` | `:2067` `… safeLogMessage(e, "Failed to export vault to ZIP"))` |
+| 5 | `:2098` `… "Failed to import HTML file", e)` | `:2103` `… safeLogMessage(e, "Failed to import HTML file"))` |
+| 6 | `:2154` `… "Failed to import HTML ZIP folder", e)` | `:2160` `… safeLogMessage(e, "Failed to import HTML ZIP folder"))` |
+| 7 | `:2223` `… "Failed to export note to HTML", e)` | `:2230` `… safeLogMessage(e, "Failed to export note to HTML"))` |
+| 8 | `:2271` `… "Failed to export vault HTML site", e)` | `:2279` `… safeLogMessage(e, "Failed to export vault HTML site"))` |
+| 9 | `:2343` `… "Failed to import Obsidian Vault ZIP", e)` | `:2352` `… safeLogMessage(e, "Failed to import Obsidian Vault ZIP"))` |
+| 10 | `:2405` `… "Failed to export Obsidian Vault ZIP", e)` | `:2415` `… safeLogMessage(e, "Failed to export Obsidian Vault ZIP"))` |
+| 11 | `:2462` `… "Failed to export page to PSD", e)` | `:2473` `… safeLogMessage(e, "Failed to export page to PSD"))` |
 
 **Before / after (the vulnerability path):**
 
@@ -112,12 +112,13 @@ Source pins (the "no message text containing a path" grep-verification the PROMP
 
 ## Out of scope (documented, not fixed here)
 
-- `ImportExportService.kt:1414` `throw IllegalArgumentException("Incorrect backup password.", e)`
-  passes `e` as a CAUSE of a thrown exception whose own message is a fixed string. This is
-  not a `Log.*` call — no logcat path in this file — but the nested cause message could in
-  principle embed a path if a future caller ever logs that thrown exception's cause. Left
-  as-is per the phase constraint ("do not fix OTHER security findings"); noted here for a
-  future logging-audit phase.
+- `ImportExportService.kt:1413-1417` two `throw IllegalArgumentException(..., e)` call sites
+  pass `e` as a CAUSE of a thrown exception whose own message is a fixed string: `…("Backup
+  appears corrupted: the header and the encrypted payload do not match.", e)` at `:1413-1415`
+  and `"Incorrect backup password.", e)` at `:1417`. These are not `Log.*` calls — no logcat
+  path in this file — but a nested cause message could in principle embed a path if a future
+  caller ever logs that thrown exception's cause. Left as-is per the phase constraint ("do not
+  fix OTHER security findings"); noted here for a future logging-audit phase.
 - B2-LOG-04 (Plugin download/install URL echoes) and B2-LOG-05 (WebDAV raw exception text
   in the sync-status UI) are separate findings with their own phases.
 - `PrivacyCrashReporter`/`AppStartupLogger` behaviour (B2-LOG-01/02) already fixed.
