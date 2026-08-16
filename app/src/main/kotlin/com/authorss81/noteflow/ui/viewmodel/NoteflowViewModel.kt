@@ -2783,10 +2783,9 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
                 return false
             }
             _authenticated.value = true
-            _failedUnlockAttempts.value = 0
-            settings.failedUnlockAttempts = 0
-            settings.lockoutUntilEpochMs = 0L
-            _lockoutRemainingMs.value = 0L
+            // B1-AUTH-07 (phase-92): success bookkeeping is shared with every other
+            // master-password verification surface (incl. isMasterPasswordValid).
+            resetMasterPasswordVerificationCounters()
             initializeData()
             // B1-AUTH-03 (phase-67): a successful password unlock is the moment the
             // vault is no longer locked — boot the plugin layer here (store
@@ -2801,17 +2800,10 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
             enforceDekAtRestPolicy()
             true
         } catch (e: Exception) {
-            val newCount = _failedUnlockAttempts.value + 1
-            _failedUnlockAttempts.value = newCount
-            settings.failedUnlockAttempts = newCount
-            if (newCount >= MAX_FAILED_ATTEMPTS) {
-                // Persisted lockout + exponential backoff; survives app restarts.
-                settings.lockoutUntilEpochMs = System.currentTimeMillis() + computeLockoutDelayMs(newCount)
-                _lockoutRemainingMs.value = computeLockoutDelayMs(newCount)
-                repository.zeroizeKey()
-                _authenticated.value = false
-                startLockoutTicker()
-            }
+            // B1-AUTH-07 (phase-92): the failure bookkeeping is shared with every
+            // other master-password verification surface (incl. isMasterPasswordValid),
+            // so no in-app verifier can act as an unrestrained PBKDF2 oracle.
+            recordFailedMasterPasswordVerification()
             false
         }
     }
@@ -2858,17 +2850,75 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     }
 
     /**
-     * Side-effect-free master password check for password-derived backups.
-     * Must not bump failed-attempt counters or trigger lockout — a typo in the
-     * backup dialog is not an attack.
+     * B1-AUTH-07 (phase-92): shared failure bookkeeping for EVERY master-password
+     * verification surface — [verifyMasterPassword] (LockScreen unlock + the
+     * re-verify inside changeMasterPassword / setBiometricEnabled / the biometric
+     * unlock re-route) AND [isMasterPasswordValid] (the create-backup dialog's
+     * pre-export check). The pre-fix `isMasterPasswordValid` was a side-effect-free
+     * oracle: unlimited full-PBKDF2 guesses with zero throttling, never touching
+     * the persisted 5-attempt exponential lockout the LockScreen relies on. Both
+     * surfaces now share ONE counter set + lockout, persisted via
+     * [SettingsManager] so it survives app restarts. Crossing the threshold ALSO
+     * performs a real lock ([lock], password-vault only) so an in-app surface
+     * that trips the lockout (e.g. the create-backup dialog) can never leave a
+     * live keyed SQLCipher connection sitting behind the LockScreen
+     * (B1-AUTH-02 data-layer posture).
+     */
+    private fun recordFailedMasterPasswordVerification() {
+        val newCount = _failedUnlockAttempts.value + 1
+        _failedUnlockAttempts.value = newCount
+        settings.failedUnlockAttempts = newCount
+        if (newCount >= MAX_FAILED_ATTEMPTS) {
+            // Persisted lockout + exponential backoff; survives app restarts.
+            val delayMs = computeLockoutDelayMs(newCount)
+            settings.lockoutUntilEpochMs = System.currentTimeMillis() + delayMs
+            _lockoutRemainingMs.value = delayMs
+            lock()
+            startLockoutTicker()
+        }
+    }
+
+    /**
+     * B1-AUTH-07 (phase-92): shared success bookkeeping — a verified master
+     * password clears the persisted failed-attempt counters + lockout on every
+     * verification surface ([verifyMasterPassword], [isMasterPasswordValid]).
+     */
+    private fun resetMasterPasswordVerificationCounters() {
+        _failedUnlockAttempts.value = 0
+        settings.failedUnlockAttempts = 0
+        settings.lockoutUntilEpochMs = 0L
+        _lockoutRemainingMs.value = 0L
+    }
+
+    /**
+     * Master-password check for password-derived backups (create-backup dialog).
+     *
+     * B1-AUTH-07 (phase-92): this verifies knowledge of the vault master password
+     * IMMEDIATELY BEFORE a password-protected export, so it is a real
+     * authentication surface and must use the SAME persisted lockout counters as
+     * [verifyMasterPassword]. Pre-fix it was side-effect-free — unlimited full
+     * PBKDF2 attempts with zero throttling, an in-app offline-equivalent oracle
+     * that never tripped the 5-attempt exponential lockout. Now: an active
+     * lockout refuses before any PBKDF2 work runs, a failed attempt bumps the
+     * SAME counters, the 5th failure performs the same persisted lockout +
+     * data-layer lock [lock], and a verified password clears the counters. Still
+     * NOT a password-strength gate — a pre-existing weak master password keeps
+     * unlocking (that policy only gates set/rotate).
      */
     suspend fun isMasterPasswordValid(password: String): Boolean {
+        if (lockoutActive()) return false
+        if (settings.masterPasswordCredentialOrLegacy == null) return false
         val dek = try {
             unwrapMasterDek(password)
         } catch (e: Exception) {
             null
-        } ?: return false
+        }
+        if (dek == null) {
+            recordFailedMasterPasswordVerification()
+            return false
+        }
         dek.fill(0.toByte())
+        resetMasterPasswordVerificationCounters()
         return true
     }
 

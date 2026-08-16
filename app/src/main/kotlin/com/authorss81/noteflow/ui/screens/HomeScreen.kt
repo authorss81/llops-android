@@ -1314,7 +1314,16 @@ fun HomeScreen(
                                     scope.launch {
                                         try {
                                             if (!viewModel.isMasterPasswordValid(backupPasswordInput)) {
-                                                backupPasswordError = "Incorrect master password"
+                                                // B1-AUTH-07 (phase-92): the check shares the LockScreen's
+                                                // lockout counters — an active lockout (or one just tripped
+                                                // by this attempt) is surfaced honestly, never as a generic
+                                                // "incorrect password", and a tripped 5th attempt locks the
+                                                // vault before any export byte moves.
+                                                backupPasswordError = if (viewModel.lockoutActive()) {
+                                                    "Too many failed attempts. Try again after the lockout countdown."
+                                                } else {
+                                                    "Incorrect master password"
+                                                }
                                                 return@launch
                                             }
                                             viewModel.repository.checkpointWal()

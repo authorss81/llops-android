@@ -36,8 +36,10 @@ import org.junit.Test
  * Crucially the policy is measured on the NFKC-NORMALIZED password (the exact
  * byte string `EncryptionService.deriveKey` hashes, B2-CRYPTO-07), and it is
  * enforced ONLY at set/change — `verifyMasterPassword`/`unwrapMasterDek`/
- * `isMasterPasswordValid` never touch it, so a pre-existing weaker vault keeps
- * unlocking and rotating. The UI lockout is documented UI-only (B1-PLAT-8):
+ * `isMasterPasswordValid` never touch it (B1-AUTH-07 phase-92 made
+ * `isMasterPasswordValid` share the lockout counters, but never a strength
+ * gate), so a pre-existing weaker vault keeps unlocking and rotating. The UI
+ * lockout is documented UI-only (B1-PLAT-8):
  * offline brute force on a copied vault is only mitigated by password entropy,
  * never by the on-device lockout.
  */
@@ -274,7 +276,7 @@ class B1Crypto04PasswordStrengthTest {
         )
         val isValidBlock = vm.substringAfter("suspend fun isMasterPasswordValid", "END").substringBefore("suspend fun setBiometricEnabled", "END")
         assertFalse(
-            "isMasterPasswordValid (side-effect-free oracle) must stay strength-gated-free",
+            "isMasterPasswordValid (throttled by the B1-AUTH-07 lockout, never a strength gate) must stay strength-gated-free",
             isValidBlock.contains("PasswordStrengthPolicy")
         )
     }

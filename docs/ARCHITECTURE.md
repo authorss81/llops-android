@@ -309,6 +309,25 @@
     `iloveyou` bare, `password123`/`monkey1234`/`123password` sequential-pad) and `B2Crypto04BackupPasswordTest`
     (`password123` → COMMON_PASSWORD; `PASSWORD12X` → LOW_DIVERSITY re-annotated as the documented
     letter-embedded-decoration residual).
+  - **Implemented in phase-92** (B1-AUTH-07, see `workspace/phase-92/REPORT.md`): BOTH in-app
+    master-password verification surfaces now share ONE persisted lockout. `isMasterPasswordValid`
+    (`NoteflowViewModel.kt:2908-2923`) — the create-backup dialog's pre-export check at
+    `HomeScreen.kt:1316` — was a side-effect-free oracle (ignored `lockoutActive()`, never bumped
+    the counters) allowing unlimited full-PBKDF2 guesses that never tripped the LockScreen's
+    lockout. New shared helpers in `NoteflowViewModel`: `recordFailedMasterPasswordVerification()`
+    (`:2867-2879`, bumps `_failedUnlockAttempts` + persisted `settings.failedUnlockAttempts`; at
+    `MAX_FAILED_ATTEMPTS`=5 persists `settings.lockoutUntilEpochMs` via `computeLockoutDelayMs`
+    exponential backoff, starts the countdown ticker, AND calls `lock()` so an in-app tripped
+    lockout performs the same data-layer teardown as a real lock — B1-AUTH-02 posture) and
+    `resetMasterPasswordVerificationCounters()` (`:2886-2891`). `verifyMasterPassword` (`:2806`)
+    and `isMasterPasswordValid` (`:2917`/`:2921`) delegate to them — the old inline
+    `settings.failedUnlockAttempts = newCount` catch block is gone. `isMasterPasswordValid` now
+    checks `lockoutActive()` FIRST (refuses before any PBKDF2 work), guards
+    `masterPasswordCredentialOrLegacy == null`, records failures via the shared helper, and still
+    zeroizes the DEK + resets on success; it stays deliberately strength-gate-free (set/rotate
+    only). The backup dialog still re-authenticates immediately before `exportBackup` and now
+    distinguishes a tripped/active lockout message from a plain wrong password. Tests:
+    `B1Auth07IsMasterPasswordOracleTest` (11).
   - **Implemented in phase-64** (B1-CRYPTO-05, see `workspace/phase-64/REPORT.md`): a stored DEK
     device wrapper that becomes undecryptable (AndroidKeyStore key lost/unreadable) is NEVER
     silently re-keyed. Pure-JVM `services/DekReadResult.kt` defines sealed `DekReadResult`
