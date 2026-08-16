@@ -187,6 +187,12 @@ fun HomeScreen(
     // Global Vault Search state
     var globalSearchResults by remember { mutableStateOf<List<NotePageEntity>?>(null) }
 
+    // B2-DOS-02 (phase-78): the capped-window "search all pages" refine notice is
+    // ONE-TIME per query session — shown when the cached search window was capped
+    // (vault > VaultSearchPolicy.SEARCH_CORPUS_CAP pages), hidden once the user
+    // explicitly opts into the deep full-vault scan.
+    var refinedSearchDone by remember { mutableStateOf(false) }
+
     // Tag Manager and Tag Editor dialog state
     var showTagManagerDialog by remember { mutableStateOf(false) }
     var tagEditorTargetNotebook by remember { mutableStateOf<NotebookEntity?>(null) }
@@ -194,6 +200,7 @@ fun HomeScreen(
 
     LaunchedEffect(searchQuery) {
         if (searchQuery.isNotBlank()) {
+            refinedSearchDone = false
             kotlinx.coroutines.delay(300)
             viewModel.searchVault(searchQuery) { results ->
                 globalSearchResults = results
@@ -1009,6 +1016,40 @@ fun HomeScreen(
                                         modifier = Modifier.size(24.dp)
                                     ) {
                                         Icon(Icons.Outlined.Close, contentDescription = "Clear Tag Filter")
+                                    }
+                                }
+                            }
+                        }
+
+                        if (searchQuery.isNotBlank() &&
+                            viewModel.repository.searchCorpusCapped &&
+                            !refinedSearchDone
+                        ) {
+                            Surface(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 8.dp),
+                                shape = RoundedCornerShape(8.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        "Search covers the most recent pages. Search all pages in the vault for older notes.",
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                    TextButton(
+                                        onClick = {
+                                            refinedSearchDone = true
+                                            viewModel.deepSearchVault(searchQuery) { results ->
+                                                globalSearchResults = results
+                                            }
+                                        }
+                                    ) {
+                                        Text("Search all pages")
                                     }
                                 }
                             }

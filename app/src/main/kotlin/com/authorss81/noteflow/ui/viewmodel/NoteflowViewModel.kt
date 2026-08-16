@@ -112,6 +112,7 @@ import com.authorss81.noteflow.plugins.AndroidPluginLogger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -1916,9 +1917,35 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    /**
+     * B2-DOS-02 (phase-78): vault search shares ONE cancellable Job. Every new
+     * keystroke (after HomeScreen's 300 ms debounce) cancels the previous
+     * in-flight search before launching, so concurrent full-corpus decrypts can
+     * never pile up on a 2-core device. The results callback is dropped if the
+     * job was superseded before the search completed.
+     */
+    private var searchVaultJob: Job? = null
+
     fun searchVault(query: String, onResult: (List<NotePageEntity>) -> Unit) {
-        viewModelScope.launch {
+        searchVaultJob?.cancel()
+        searchVaultJob = viewModelScope.launch {
             val results = repository.searchPages(query)
+            coroutineContext.ensureActive()
+            onResult(results)
+        }
+    }
+
+    /**
+     * B2-DOS-02 (phase-78): the explicit "search all pages" refine path for a
+     * vault whose cached search window was capped. Shares the same Job as
+     * [searchVault], so a subsequent keystroke cancels the deep scan mid-batch
+     * instead of letting it keep grinding through the vault.
+     */
+    fun deepSearchVault(query: String, onResult: (List<NotePageEntity>) -> Unit) {
+        searchVaultJob?.cancel()
+        searchVaultJob = viewModelScope.launch(Dispatchers.IO) {
+            val results = repository.deepSearchPages(query)
+            coroutineContext.ensureActive()
             onResult(results)
         }
     }

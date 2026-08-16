@@ -454,6 +454,30 @@
   plugin-action execution in `NoteflowViewModel.commandPaletteSearch` /
   `runPaletteAction` over the cached decrypted corpus
   (`NoteRepository.cachedCorpus`, generation `currentSearchCorpusGeneration`).
+  - **Implemented in phase-78** (B2-DOS-02, see `workspace/phase-78/REPORT.md`):
+    vault search is bounded at every layer. New pure-JVM
+    `services/VaultSearchPolicy.kt` is the single decision table
+    (`SEARCH_CORPUS_CAP = 1500`, `DEEP_SCAN_BATCH_SIZE = 1500`,
+    `exceedsCorpusCap`, `cachedWindowSize`, `isBlankQuery`, `pageMatches`,
+    `refineNoticeMessage`). `NoteRepository.loadSearchCorpus`
+    (`NoteRepository.kt:107-126`) now ALWAYS caches the decrypted window —
+    loaded through the bounded DAO read `NotePageDao.getAllActivePagesBounded`
+    (`Daos.kt`, `LIMIT :limit`) — so a keystroke never re-decrypts the vault;
+    a vault over the cap is flagged via `NoteRepository.searchCorpusCapped`
+    (recomputed per load) instead of silently dropping the cache. `searchPages`
+    filters the cached window only; the explicit user-approved refine path is
+    `NoteRepository.deepSearchPages` (`:412-434`), paged in bounded batches via
+    `getAllActivePagesPaged` (`LIMIT :limit OFFSET :offset`) with only matches
+    retained (never the whole vault pinned). `NoteflowViewModel.searchVault`
+    shares ONE cancellable `Job` (`searchVaultJob?.cancel()` before every new
+    launch, `if (isActive)` callback guard) and `deepSearchVault`
+    (`NoteflowViewModel.kt:1926-1948`) shares it, so a keystroke pre-empts an
+    in-flight deep scan. `HomeScreen` shows a one-time non-alarming
+    "Search covers the most recent pages" banner + "Search all pages" action
+    (`HomeScreen.kt`, gated on `viewModel.repository.searchCorpusCapped` +
+    `refinedSearchDone`). The command palette / quick-switcher now indexes the
+    same bounded cached window (consistent, bounded). Tests:
+    `B2Dos02VaultSearchBoundedTest` (10).
 - **WebDAV sync**: `services/WebDavSyncService.kt:28` (encrypted vault archives, HTTPS enforced).
   - **Implemented in phase-40**: server-supplied PROPFIND hrefs are re-resolved against the
     configured server origin by the new pure-JVM `services/WebDavHrefResolver.kt`

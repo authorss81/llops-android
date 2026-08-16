@@ -100,6 +100,20 @@ interface NotePageDao {
     @Query("SELECT * FROM pages WHERE deleted = 0 ORDER BY updatedAt DESC")
     suspend fun getAllActivePages(): List<NotePageEntity>
 
+    // B2-DOS-02 (phase-78): BOUNDED reads for vault search. The search corpus is
+    // loaded through the capped/paged queries below so a keystroke search never
+    // decrypts more than VaultSearchPolicy.SEARCH_CORPUS_CAP rows, and the
+    // explicit refine (deep) scan pages the vault in bounded batches.
+
+    @Query("SELECT * FROM pages WHERE deleted = 0 ORDER BY pinned DESC, updatedAt DESC LIMIT :limit")
+    suspend fun getAllActivePagesBounded(limit: Int): List<NotePageEntity>
+
+    @Query("SELECT * FROM pages WHERE deleted = 0 ORDER BY pinned DESC, updatedAt DESC LIMIT :limit OFFSET :offset")
+    suspend fun getAllActivePagesPaged(limit: Int, offset: Int): List<NotePageEntity>
+
+    @Query("SELECT COUNT(*) FROM pages WHERE deleted = 0")
+    suspend fun getActivePageCountOnce(): Int
+
     @Query("SELECT * FROM pages WHERE sectionId = :sectionId AND deleted = 0 ORDER BY pageIndex ASC, createdAt ASC")
     suspend fun getPagesForSectionOnce(sectionId: String): List<NotePageEntity>
 

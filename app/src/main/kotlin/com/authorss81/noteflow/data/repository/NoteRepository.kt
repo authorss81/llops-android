@@ -9,6 +9,7 @@ import com.authorss81.noteflow.services.NoteBodyVaultPolicy
 import com.authorss81.noteflow.services.SourceFilePathPolicy
 import com.authorss81.noteflow.services.StrokeGeometryGateResult
 import com.authorss81.noteflow.services.StrokeGeometryPolicy
+import com.authorss81.noteflow.services.VaultSearchPolicy
 import com.authorss81.noteflow.services.VaultKeyHolder
 import com.authorss81.noteflow.services.VaultWriteGate
 import com.authorss81.noteflow.services.VoiceNoteCrypto
@@ -62,11 +63,17 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
     private var searchCorpusGeneration = 0L
 
     /**
-     * Loading the full decrypted corpus is only cached below this size. Above it,
-     * search decrypts per query so a huge vault can't pin an unbounded plaintext
-     * snapshot in memory for the whole unlocked session.
+     * B2-DOS-02 (phase-78): whether the cached search window was CAPPED because
+     * the vault exceeds [VaultSearchPolicy.SEARCH_CORPUS_CAP] active pages. The
+     * UI reads this after a search to surface the one-time, non-alarming
+     * "refine" affordance (search all pages) instead of silently narrowing
+     * results. Recomputed on every corpus load; false until the first load.
      */
-    private val searchCorpusMaxPages = 1500
+    val searchCorpusCapped: Boolean
+        get() = searchCorpusIsCapped
+
+    @Volatile
+    private var searchCorpusIsCapped = false
 
     /**
      * Monotonic generation bumped by every page mutation / lock / re-key.
@@ -80,6 +87,7 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
         synchronized(searchCorpusLock) {
             searchCorpusGeneration++
             cachedSearchCorpus = null
+            searchCorpusIsCapped = false
         }
         // B2-DOS-11: the WikiLink/tag builders must not serve a scan from a previous
         // unlock epoch — this hook fires on lock, key replacement and every page
@@ -87,19 +95,29 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
         WikiLinkParser.invalidateCaches()
     }
 
+    /**
+     * B2-DOS-02 (phase-78): load (once per epoch) the CAPPED decrypted search
+     * window. The window is ALWAYS cached — bounded at
+     * [VaultSearchPolicy.SEARCH_CORPUS_CAP] rows — so a keystroke search never
+     * re-decrypts the vault. Pre-fix, a vault larger than the cap deliberately
+     * skipped the cache and every keystroke re-ran a full-vault AES-GCM.
+     * Vaults over the cap report via [searchCorpusCapped] so the UI can offer
+     * the explicit, user-approved deep-scan (refine) path instead.
+     */
     private suspend fun loadSearchCorpus(): List<NotePageEntity> {
         while (true) {
             synchronized(searchCorpusLock) {
                 cachedSearchCorpus?.let { return it }
             }
             val generationAtStart = synchronized(searchCorpusLock) { searchCorpusGeneration }
-            val corpus = db.pageDao().getAllActivePages().map { decryptPageIfNeeded(it) }
+            val window = db.pageDao().getAllActivePagesBounded(VaultSearchPolicy.SEARCH_CORPUS_CAP)
+                .map { decryptPageIfNeeded(it) }
+            val totalActive = db.pageDao().getActivePageCountOnce()
             synchronized(searchCorpusLock) {
                 if (generationAtStart == searchCorpusGeneration) {
-                    if (corpus.size <= searchCorpusMaxPages) {
-                        cachedSearchCorpus = corpus
-                    }
-                    return corpus
+                    searchCorpusIsCapped = VaultSearchPolicy.exceedsCorpusCap(totalActive)
+                    cachedSearchCorpus = window
+                    return window
                 }
                 // else: invalidated (e.g. re-key) while decrypting — loop retries
                 // with the current key instead of serving a stale snapshot.
@@ -376,14 +394,42 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
         db.sectionDao().getSectionById(id)
     }
 
+    /**
+     * B2-DOS-02 (phase-78): per-keystroke search over the CACHED, CAPPED window
+     * ([loadSearchCorpus]) — never a full-vault decrypt. Vaults over the cap are
+     * narrowed to the [VaultSearchPolicy.SEARCH_CORPUS_CAP] most recent pages;
+     * [deepSearchPages] is the explicit, user-approved full-vault refinement.
+     */
     suspend fun searchPages(query: String): List<NotePageEntity> = withContext(Dispatchers.IO) {
-        if (query.isBlank()) return@withContext emptyList()
+        if (VaultSearchPolicy.isBlankQuery(query)) return@withContext emptyList()
         val allPages = loadSearchCorpus()
         val q = query.trim()
-        allPages.filter { page ->
-            page.title.contains(q, ignoreCase = true) ||
-            (page.extractedText?.contains(q, ignoreCase = true) == true)
+        allPages.filter { page -> VaultSearchPolicy.pageMatches(page, q) }
+    }
+
+    /**
+     * B2-DOS-02 (phase-78): the EXPLICIT refine path — the user asked to search
+     * the WHOLE vault after being shown the capped-window notice. Decrypts in
+     * bounded [VaultSearchPolicy.DEEP_SCAN_BATCH_SIZE] batches (memory + per-step
+     * work stay bounded; only matches are retained, the full corpus is never
+     * pinned) and is cancellable by the ViewModel's shared search Job, so a new
+     * keystroke can always pre-empt it. A one-time cost per explicit request,
+     * NEVER per keystroke.
+     */
+    suspend fun deepSearchPages(query: String): List<NotePageEntity> = withContext(Dispatchers.IO) {
+        if (VaultSearchPolicy.isBlankQuery(query)) return@withContext emptyList()
+        val q = query.trim()
+        val matches = ArrayList<NotePageEntity>()
+        var offset = 0
+        while (true) {
+            val batch = db.pageDao().getAllActivePagesPaged(VaultSearchPolicy.DEEP_SCAN_BATCH_SIZE, offset)
+                .map { decryptPageIfNeeded(it) }
+            if (batch.isEmpty()) break
+            matches += batch.filter { page -> VaultSearchPolicy.pageMatches(page, q) }
+            if (batch.size < VaultSearchPolicy.DEEP_SCAN_BATCH_SIZE) break
+            offset += VaultSearchPolicy.DEEP_SCAN_BATCH_SIZE
         }
+        matches
     }
 
     suspend fun updatePageTemplate(id: String, template: String) = withContext(Dispatchers.Default) {
