@@ -145,6 +145,11 @@ A ".aab" (Android App Bundle) is not produced yet — generating one needs
   copy of the prefs + SQLCipher vault (or a restore onto a rooted emulator)
   cracks the wrapped DEK with a GPU rig at the speed of the password itself.
   Recommend long passphrases (≥ 16 chars) in all user-facing guidance.
+  Evaluation order (phase-90 review fix): a common word is detected BEFORE the
+  length floor and the pattern checks, so a bare `password`/`sunshine` and the
+  `password123`/`123password` keyspace report "too common" — never a misleading
+  "too short"/"predictable pattern"; non-common inputs still report the length/
+  pattern reason. The order only changes the reason string, never accept/reject.
 - **App icon / label**: `applicationId = com.aistudio.inkflow.app.bkxjrz`,
   namespace `com.authorss81.noteflow` (known mismatch — ROADMAP 21.10). Keep
   `applicationId` stable; renaming it orphans existing installs.

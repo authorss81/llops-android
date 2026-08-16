@@ -43,6 +43,14 @@ import java.text.BreakIterator
  *     accepted on length alone so `correct horse battery staple`-style inputs
  *     pass without the 3-class burden.
  *
+ * EVALUATION ORDER (phase-90 review fix): the common-word check (3) runs
+ * immediately after the 128-grapheme cap and BEFORE the length floor (1) and the
+ * sequential/repeated checks (2). A bare short word (`password`) and the classic
+ * `password123`/`123password` keyspace therefore report `COMMON_PASSWORD` — the
+ * reviewer-flagged phase-90 gap where those inputs got a misleading
+ * `TOO_SHORT`/`SEQUENTIAL` instead. The order never flips accept/reject (the
+ * check only adds rejection); it only makes the reason string accurate.
+ *
  * VERIFY-TIME LOCKOUT IS DOCUMENTED UI-ONLY, BY DESIGN: this policy and the
  * lockout counters in `NoteflowViewModel.verifyMasterPassword` only throttle
  * human attempts through the UI. offline brute force on a copied vault is only
@@ -120,11 +128,14 @@ internal object PasswordStrengthPolicy {
 
     /**
      * B1-PLAT-8 (phase-90): widely-leaked password words an offline GPU cracker
-     * feeds to a wordlist first. Each entry is rejected whole (`password`) or in
-     * its classic prefix/suffix keyspace (`password123`, `123password`,
-     * `password!`). Only HIGH-PRECISION bases are listed (top breach rolls), so
-     * genuine passphrases that merely contain an ordinary word are never
-     * blocked.
+     * feeds to a wordlist first. Each entry is rejected whole (`password`,
+     * `sunshine`) or in the classic prefix/suffix keyspace (`password123`,
+     * `123password`, `password!`). Only HIGH-PRECISION bases are listed (top
+     * breach rolls), so genuine passphrases that merely contain an ordinary word
+     * are never blocked. Phase-90 review fix: this check runs BEFORE the length
+     * floor and the sequential check (see [evaluate]), so whole words — even
+     * sub-10-grapheme ones — report `COMMON_PASSWORD`, and so do decorated
+     * variants whose pad happens to be a predictable run (`password123`).
      */
     private val commonPasswordBases = listOf(
         "password", "passw0rd",
@@ -137,11 +148,18 @@ internal object PasswordStrengthPolicy {
     fun evaluate(raw: String): PasswordStrengthVerdict {
         val normalized = EncryptionService.normalizePassword(raw)
         val graphemes = EncryptionService.normalizedGraphemeCount(normalized)
-        if (graphemes < MIN_STRENGTH_GRAPHEMES) return PasswordStrengthVerdict.TOO_SHORT
         if (graphemes > EncryptionService.MAX_PASSWORD_GRAPHEMES) return PasswordStrengthVerdict.TOO_LONG
+        // B1-PLAT-8 review fix (phase-90): common-word detection runs BEFORE the
+        // length floor and the pattern checks. A bare word (`password`) or its
+        // classic digit/symbol-decorated keyspace (`password123`, `123password`)
+        // is the exact wordlist-first input an offline GPU rig feeds, so it must
+        // report "too common" — never a misleading "too short"/"predictable
+        // pattern". This ordering only ever changes the reason string, never the
+        // accept/reject outcome (the check only adds rejection).
+        if (isCommonPasswordVariant(normalized)) return PasswordStrengthVerdict.COMMON_PASSWORD
+        if (graphemes < MIN_STRENGTH_GRAPHEMES) return PasswordStrengthVerdict.TOO_SHORT
         if (containsSequentialPattern(normalized)) return PasswordStrengthVerdict.SEQUENTIAL
         if (distinctGraphemeCount(normalized) < MIN_DISTINCT_GRAPHEMES) return PasswordStrengthVerdict.WEAK
-        if (isCommonPasswordVariant(normalized)) return PasswordStrengthVerdict.COMMON_PASSWORD
         if (graphemes < PASSPHRASE_GRAPHEMES && classCount(normalized) < REQUIRED_CLASSES_SHORT) {
             return PasswordStrengthVerdict.LOW_DIVERSITY
         }
@@ -156,6 +174,8 @@ internal object PasswordStrengthPolicy {
      * `2024word`, `word!` keyspace). A base merely embedded among real letters
      * (a genuine passphrase like `my monkey friend` or `sunshine on parade`)
      * is NOT rejected, so the length-alone passphrase exception keeps working.
+     * Called first in [evaluate] (phase-90 review fix) so bare words do not fall
+     * through to the misleading `TOO_SHORT`/`SEQUENTIAL` verdicts.
      */
     private fun isCommonPasswordVariant(normalized: String): Boolean {
         val lower = normalized.lowercase(java.util.Locale.ROOT)

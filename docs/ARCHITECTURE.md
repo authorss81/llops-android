@@ -298,8 +298,17 @@
     mitigated by password ENTROPY, never by the on-device lockout (the 5-attempt UI lockout only
     throttles typing on-device). Enforced only at set/rotate; unlock never strength-gates, so
     pre-existing weaker vaults keep unlocking and rotating. Tests: `B1Crypto04PasswordStrengthTest`
-    (now 17: 3 new B1-PLAT-8 cases incl. common-word rejection + documentation pin) +
-    `B2Crypto04BackupPasswordTest` updated to the 10 floor (backups reuse the same bar).
+    (17) + `B2Crypto04BackupPasswordTest` updated to the 10 floor (backups reuse the same bar).
+    **Phase-90 review fix (commit `llops: phase-90 review fixes`)**: `isCommonPasswordVariant` is now
+    evaluated FIRST in `PasswordStrengthPolicy.evaluate` (after the 128-grapheme cap, before the 10-floor
+    and before sequential detection), so a bare `password`/`sunshine` and the `password123`/`123password`
+    keyspace report `COMMON_PASSWORD` — the review found the phase-90 build gave those a misleading
+    `TOO_SHORT`/`SEQUENTIAL` verdict because the length/sequential checks ran first. Accept/reject is
+    unchanged (the common check only ever adds rejection); only the user-facing reason string moved.
+    Pinned by additional assertions in `B1Crypto04PasswordStrengthTest` (`password`/`sunshine`/
+    `iloveyou` bare, `password123`/`monkey1234`/`123password` sequential-pad) and `B2Crypto04BackupPasswordTest`
+    (`password123` → COMMON_PASSWORD; `PASSWORD12X` → LOW_DIVERSITY re-annotated as the documented
+    letter-embedded-decoration residual).
   - **Implemented in phase-64** (B1-CRYPTO-05, see `workspace/phase-64/REPORT.md`): a stored DEK
     device wrapper that becomes undecryptable (AndroidKeyStore key lost/unreadable) is NEVER
     silently re-keyed. Pure-JVM `services/DekReadResult.kt` defines sealed `DekReadResult`

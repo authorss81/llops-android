@@ -26,6 +26,9 @@ import org.junit.Test
  *     `qwertyuiop`, `aaaaaaaaaa`);
  *   - B1-PLAT-8: no widely-leaked password word — bare or thinly decorated with
  *     a digit/symbol prefix/suffix (`password`, `monkey1234`, `2026sunshine`);
+ *     the common check runs BEFORE the length floor and the sequential/pattern
+ *     checks (phase-90 review fix), so bare words and `password123`-class pads
+ *     report "too common", never a misleading "too short"/"predictable pattern";
  *   - ≥ 3 distinct graphemes (kills the `ababab…` tiny-keyspace class);
  *   - character-class diversity for short passwords (< 12 graphemes need ≥ 3 of
  *     upper/lower/digit/symbol); passphrases ≥ 12 pass on length alone.
@@ -53,8 +56,11 @@ class B1Crypto04PasswordStrengthTest {
             PasswordStrengthPolicy.evaluate("123456")
         )
         assertEquals(PasswordStrengthVerdict.TOO_SHORT, PasswordStrengthPolicy.evaluate("abcdef"))
-        assertEquals(PasswordStrengthVerdict.TOO_SHORT, PasswordStrengthPolicy.evaluate("hunter2"))
-        assertEquals(PasswordStrengthVerdict.TOO_SHORT, PasswordStrengthPolicy.evaluate("secret1"))
+        // "hunter2"/"secret1"/"password1" are NOT merely short — they are thinly
+        // decorated common words, and the common check (review fix) runs before
+        // the length floor, so they report "too common", never "too short".
+        assertEquals(PasswordStrengthVerdict.COMMON_PASSWORD, PasswordStrengthPolicy.evaluate("hunter2"))
+        assertEquals(PasswordStrengthVerdict.COMMON_PASSWORD, PasswordStrengthPolicy.evaluate("secret1"))
         assertEquals(
             "B1-PLAT-8: the phase-63 floor of 8 is also superseded — 8..9 graphemes must now be rejected",
             PasswordStrengthVerdict.TOO_SHORT,
@@ -62,7 +68,8 @@ class B1Crypto04PasswordStrengthTest {
         )
         assertEquals(PasswordStrengthVerdict.TOO_SHORT, PasswordStrengthPolicy.evaluate("123456789"))
         assertEquals(PasswordStrengthVerdict.TOO_SHORT, PasswordStrengthPolicy.evaluate("abcdefghi"))
-        assertEquals(PasswordStrengthVerdict.TOO_SHORT, PasswordStrengthPolicy.evaluate("password1"))
+        // "password1" = base "password" + non-letter padding -> COMMON_PASSWORD.
+        assertEquals(PasswordStrengthVerdict.COMMON_PASSWORD, PasswordStrengthPolicy.evaluate("password1"))
     }
 
     @Test
@@ -104,6 +111,14 @@ class B1Crypto04PasswordStrengthTest {
 
     @Test
     fun `bare and prefix-suffix decorated common passwords are rejected`() {
+        // BARE words — review fix: the common check runs BEFORE the length floor,
+        // so a bare word reports "too common" even though it is also < 10
+        // graphemes (never the misleading "too short" verdict).
+        assertEquals(PasswordStrengthVerdict.COMMON_PASSWORD, PasswordStrengthPolicy.evaluate("password"))
+        assertEquals(PasswordStrengthVerdict.COMMON_PASSWORD, PasswordStrengthPolicy.evaluate("sunshine"))
+        assertEquals(PasswordStrengthVerdict.COMMON_PASSWORD, PasswordStrengthPolicy.evaluate("iloveyou"))
+        // DECORATED with a digit/symbol pad around a contiguous base (>= the
+        // classic `wordNNN` / `YYYYword` keyspace an offline cracker feeds first).
         assertEquals(PasswordStrengthVerdict.COMMON_PASSWORD, PasswordStrengthPolicy.evaluate("password12"))
         assertEquals(PasswordStrengthVerdict.COMMON_PASSWORD, PasswordStrengthPolicy.evaluate("passw0rd2025"))
         assertEquals(PasswordStrengthVerdict.COMMON_PASSWORD, PasswordStrengthPolicy.evaluate("monkey5281"))
@@ -112,6 +127,14 @@ class B1Crypto04PasswordStrengthTest {
         assertEquals(PasswordStrengthVerdict.COMMON_PASSWORD, PasswordStrengthPolicy.evaluate("Princess2025"))
         assertEquals(PasswordStrengthVerdict.COMMON_PASSWORD, PasswordStrengthPolicy.evaluate("iloveyou2025"))
         assertEquals(PasswordStrengthVerdict.COMMON_PASSWORD, PasswordStrengthPolicy.evaluate("superman4002"))
+        // DECORATED with a sequential pad — review fix: the common check now runs
+        // BEFORE the sequential check, so `password123`/`monkey1234`/`123password`
+        // report "too common" (never the misleading "predictable pattern"), while
+        // a NON-common sequential password still reports SEQUENTIAL.
+        assertEquals(PasswordStrengthVerdict.COMMON_PASSWORD, PasswordStrengthPolicy.evaluate("password123"))
+        assertEquals(PasswordStrengthVerdict.COMMON_PASSWORD, PasswordStrengthPolicy.evaluate("monkey1234"))
+        assertEquals(PasswordStrengthVerdict.COMMON_PASSWORD, PasswordStrengthPolicy.evaluate("123password"))
+        assertEquals(PasswordStrengthVerdict.SEQUENTIAL, PasswordStrengthPolicy.evaluate("1234567890"))
         assertEquals(
             "common detection fires BEFORE the low-class-diversity check: a decorated 'sunshine911' is 'too common', not merely short-of-classes",
             PasswordStrengthVerdict.COMMON_PASSWORD,

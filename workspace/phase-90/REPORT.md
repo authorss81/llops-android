@@ -139,3 +139,39 @@ in `NoteflowViewModel.kt` is long gone). This phase closes the residual gap:
 - `.github/workflows/` not edited. No new dependencies.
 - Never logs keys/passwords/decrypted content; `allowBackup=false`, `ClipboardGuard`,
   FLAG_SECURE intact. No other security findings fixed or modified in this phase.
+
+## Post-review fixes (commit `llops: phase-90 review fixes`)
+
+A code review found three documentation/behavior mismatches in the shipped phase-90 build.
+All were fixed in a follow-up commit (still phase-90 scope, no new findings touched):
+
+1. **FINDING 1 — bare common words never reached `COMMON_PASSWORD`.** `evaluate`
+   checked the `≥ 10` length floor *before* `isCommonPasswordVariant`, and every
+   `commonPasswordBases` entry is ≤ 8 graphemes, so `evaluate("password")` returned
+   `TOO_SHORT` while the KDoc/RELEASE/sec-report/ARCHITECTURE claimed "rejected whole
+   as too common". **Fix:** `isCommonPasswordVariant` now runs immediately after the
+   128-grapheme cap and before the length floor / sequential / repeated checks
+   (`PasswordStrengthPolicy.kt` `evaluate`), so bare `password`/`sunshine`/`iloveyou`
+   report `COMMON_PASSWORD`. Accept/reject is provably unchanged — the common check
+   only ever adds rejection — only the reason string moved.
+2. **FINDING 2 — `password123`/`monkey1234` reported `SEQUENTIAL`.** The monotonic-run
+   check ran before the common check, so the classic digit-decorated keyspace got the
+   "predictable pattern" verdict while docs described it as common-word rejection.
+   **Fix:** the reorder above also moves common detection ahead of sequential
+   detection; `password123`/`monkey1234`/`123password` now return `COMMON_PASSWORD`,
+   while non-common sequential inputs (`1234567890`) still return `SEQUENTIAL`
+   (pinned in tests).
+3. **FINDING 3 — `PASSWORD12X → LOW_DIVERSITY` was an unannotated bypass.** The
+   trailing `X` is a letter, so `password12x` cannot match the structural
+   "base with non-letter padding" rule; it is a documented residual, but the test
+   enshrined it without an explanation. **Fix:** the case is now explicitly annotated
+   as the letter-embedded-decoration residual in `B2Crypto04BackupPasswordTest`, and a
+   `password123 → COMMON_PASSWORD` case proves the backup gate inherits the reorder.
+
+Updated files: `services/PasswordStrengthPolicy.kt` (evaluate order + KDoc),
+`B1Crypto04PasswordStrengthTest.kt` (bare + sequential-pad pins; `hunter2`/`secret1`/
+`password1` re-annotated to `COMMON_PASSWORD`), `B2Crypto04BackupPasswordTest.kt`,
+`docs/RELEASE.md`, `docs/ARCHITECTURE.md`, `docs/security-report.md`,
+`docs/phase-status.md`. Verification: `gradle :app:testDebugUnitTest` re-run green
+(28 policy + backup-password tests, 0 failures) and full `gradle testDebugUnitTest` +
+`gradle assembleDebug` green (see output below).

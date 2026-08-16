@@ -79,8 +79,17 @@ class B2Crypto04BackupPasswordTest {
             "qwertyuiop" to PasswordStrengthVerdict.SEQUENTIAL,
             "abcdefghij" to PasswordStrengthVerdict.SEQUENTIAL,
             "aaaaabaaaa" to PasswordStrengthVerdict.WEAK, // < 3 distinct graphemes
-            // B1-PLAT-8: widely-leaked words (bare or decorated) are rejected:
+            // B1-PLAT-8: widely-leaked words (bare or decorated) are rejected.
+            // The backup gate inherits the review-fix ordering: `password123` has a
+            // sequential pad but is DETECTED common FIRST (never SEQUENTIAL).
             "sunshine123" to PasswordStrengthVerdict.COMMON_PASSWORD,
+            "password123" to PasswordStrengthVerdict.COMMON_PASSWORD,
+            // REVIEW-FIX PIN of the DOCUMENTED residual (leaves the common check ON
+            // purpose): the trailing "X" is a letter, so `password12x` does NOT match
+            // the structural "base with non-letter padding" rule and falls through to
+            // low class-diversity (uppercase+digit only, 11 chars). It is still
+            // rejected — this is exactly the "letter-embedded decoration escapes"
+            // trade-off documented in PasswordStrengthPolicy KDoc.
             "PASSWORD12X" to PasswordStrengthVerdict.LOW_DIVERSITY, // 11 chars, upper+digit only
         )
         cases.forEach { (pw, expected) ->
