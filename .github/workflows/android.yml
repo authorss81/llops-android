@@ -49,9 +49,11 @@ jobs:
         env:
           RELEASE_KEYSTORE_B64: ${{ secrets.RELEASE_KEYSTORE_B64 }}
         run: |
+          # Keystore goes OUTSIDE the checkout tree: B1Plat01ReleaseSigningTest
+          # walks the whole repo tree and fails if any *.keystore file exists in it.
           if [ -n "$RELEASE_KEYSTORE_B64" ]; then
-            echo "$RELEASE_KEYSTORE_B64" | base64 -d > release.keystore
-            echo "release.keystore restored ($(wc -c < release.keystore) bytes)"
+            echo "$RELEASE_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+            echo "release.keystore restored to $RUNNER_TEMP ($(wc -c < "$RUNNER_TEMP/release.keystore") bytes)"
           else
             echo "::warning::RELEASE_KEYSTORE_B64 secret is unset - release build will fail closed (B1-PLAT-1)."
           fi
@@ -64,7 +66,7 @@ jobs:
 
       - name: Build Signed Release APK
         env:
-          KEYSTORE_FILE: release.keystore
+          KEYSTORE_FILE: ${{ runner.temp }}/release.keystore
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
