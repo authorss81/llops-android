@@ -2859,19 +2859,59 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     }
 
     /**
+     * B2-UI-3 (phase-73): the editor's dispose/flush entry point that CANCELS a
+     * pending debounced autosave and AWAITS its settlement before persisting the
+     * final (newest) page snapshot.
+     *
+     * On composition disposal `DisposableEffect.onDispose` is synchronous and the
+     * composition scope is already being torn down, so this must run in
+     * [viewModelScope] (which survives the editor leaving composition). The
+     * await matters: [EditorScreen] now debounces the WHOLE write (delay + the
+     * suspended [autosaveStrokes]) in one cancellable job, so cancelling it stops
+     * a stale snapshot from ever firing, and joining it settles any write the
+     * debounce already dispatched BEFORE the flush is issued — the flush (rooted
+     * in the newest state) then commits last.
+     */
+    fun disposeEditorPageFlush(
+        pageId: String,
+        strokes: List<Stroke>,
+        stickyNotes: List<CanvasStickyNote>,
+        embeds: List<CanvasMediaEmbed>,
+        layers: List<LayerEntity>,
+        pendingDebounce: Job?
+    ) {
+        viewModelScope.launch {
+            pendingDebounce?.cancel()
+            // B2-UI-3 (phase-73): await settlement. The cancelled debounce either
+            // never started its write (delay pending) or had already launched it —
+            // joining guarantees the stale write is done/cancelled before the
+            // final flush below is issued, so the newest snapshot lands last.
+            pendingDebounce?.join()
+            flushEditorPageSave(pageId, strokes, stickyNotes, embeds, layers)
+        }
+    }
+
+    /**
      * Strokes-only debounced autosave. When the vault is unlocked only the
      * changed stroke rows are written (the historical 1s-debounce behaviour);
      * when a lock beats the debounce the FULL page snapshot is stashed so the
      * deferred flush reconstitutes the whole page after unlock.
+     *
+     * B2-UI-3 (phase-73): SUSPENDED now, and the write runs INLINE in the
+     * caller's coroutine (the editor's debounce job), so [EditorScreen]'s
+     * `saveJob` covers the actual persistence — it can be cancelled to stop the
+     * stale snapshot and awaited to settle it before the dispose flush. The old
+     * fire-and-forget `persistOrDefer` launch left the write detached from the
+     * debounce job, so cancel-then-flush could not guarantee ordering.
      */
-    fun autosaveStrokes(
+    suspend fun autosaveStrokes(
         pageId: String,
         strokes: List<Stroke>,
         stickyNotes: List<CanvasStickyNote>,
         embeds: List<CanvasMediaEmbed>,
         layers: List<LayerEntity>
     ) {
-        persistOrDefer(
+        persistEditorSaveSuspend(
             EditorFlushPolicy.DeferredSave(pageId, strokes, stickyNotes, embeds, layers),
             unlockedPersist = { repo ->
                 maybeNotifyGeometryCapped(pageId, repo.saveStrokesForPage(pageId, strokes))
@@ -2933,14 +2973,15 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     }
 
     /**
-     * The single persist-vs-defer decision (see [VaultWriteGate]).
-     * Unlocked ⇒ persist [unlockedPersist] on the IO dispatcher; locked ⇒ stash.
-     * If a lock races the gate check the repository throws
-     * [VaultLockedWriteException] (or the DB pool is closed) — catch and stash,
-     * never crash, never lose the user's edits. `sampled` is re-stashed only for
-     * deferrals; an in-flight save that succeeded needs no resurrection.
+     * B2-UI-3 (phase-73): the SUSPENDED (awaitable) form of the persist-vs-defer
+     * decision (see [VaultWriteGate]). Runs [unlockedPersist] INLINE in the
+     * caller's coroutine so the caller can cancel/await the actual write (the
+     * editor's debounce + dispose-flush ordering depends on this). Unlocked ⇒
+     * persist; locked ⇒ stash. If a lock races the gate check the repository
+     * throws [VaultLockedWriteException] (or the DB pool is closed) — catch and
+     * stash, never crash, never lose the user's edits.
      */
-    private fun persistOrDefer(
+    private suspend fun persistEditorSaveSuspend(
         save: EditorFlushPolicy.DeferredSave,
         unlockedPersist: suspend (NoteRepository) -> Unit
     ) {
@@ -2948,22 +2989,42 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
             editorFlushPolicy.defer(save)
             return
         }
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                unlockedPersist(repository)
-            } catch (e: VaultLockedWriteException) {
+        try {
+            unlockedPersist(repository)
+        } catch (e: VaultLockedWriteException) {
+            editorFlushPolicy.defer(save)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // A lock can zeroize the DEK / dispose the pool after the gate
+            // check; any save-path failure is re-queued for the next unlock.
+            if (repository.encryptionKey == null) {
                 editorFlushPolicy.defer(save)
-            } catch (e: kotlinx.coroutines.CancellationException) {
+            } else {
                 throw e
-            } catch (e: Exception) {
-                // A lock can zeroize the DEK / dispose the pool after the gate
-                // check; any save-path failure is re-queued for the next unlock.
-                if (repository.encryptionKey == null) {
-                    editorFlushPolicy.defer(save)
-                } else {
-                    throw e
-                }
             }
+        }
+    }
+
+    /**
+     * The single persist-vs-defer decision (see [VaultWriteGate]).
+     * Unlocked ⇒ persist [unlockedPersist] on the IO dispatcher; locked ⇒ stash.
+     * If a lock races the gate check the repository throws
+     * [VaultLockedWriteException] (or the DB pool is closed) — catch and stash,
+     * never crash, never lose the user's edits. `sampled` is re-stashed only for
+     * deferrals; an in-flight save that succeeded needs no resurrection.
+     *
+     * B2-UI-3 (phase-73): the fire-and-forget wrapper over
+     * [persistEditorSaveSuspend] — kept for the non-dispose flush entry points
+     * ([flushEditorPageSave] / [saveLayersGated]); the debounced autosave uses
+     * the suspended form directly so its write is cancellable/awaitable.
+     */
+    private fun persistOrDefer(
+        save: EditorFlushPolicy.DeferredSave,
+        unlockedPersist: suspend (NoteRepository) -> Unit
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            persistEditorSaveSuspend(save, unlockedPersist)
         }
     }
 

@@ -201,6 +201,23 @@
     ONE non-alarming snackbar per page per session via `maybeNotifyGeometryCapped` (latch cleared on
     lock); `AnnotationCanvas.kt:1415-1434` culls pages whose slab misses the visible world rect
     `(screen − pan)/zoom` in paginated mode. Tests: `B2Dos01StrokeGeometryTest` (18) — 1053 green.
+  - **Implemented in phase-73** (B2-UI-3, see `workspace/phase-73/REPORT.md`): the shared
+    `NoteRepository.lastSavedStrokeHash` diff cache and per-page saves are serialized, closing the
+    concurrent-save interleave (older hash commit landing last drops the newest stroke / interleaved
+    delete+upsert rounds drop rows / `ConcurrentModificationException` on the access-order
+    `LinkedHashMap`). `lastSavedStrokeHash` (`:911-912`) is now
+    `Collections.synchronizedMap(LruBoundedMap<…>)` (per-op atomic, B2-DOS-10 LRU bound preserved);
+    new `pageSaveLocks = ConcurrentHashMap<String, Mutex>()` (`:944`) gives each page ONE fair/FIFO
+    kotlinx `Mutex` that `saveStrokesForPage` (`:986-988`), `saveMediaEmbedsForPage` (`:1165-1167`)
+    and `saveLayersForPage` (`:1244-1246`) all acquire via `lock.withLock { … }` before their Room
+    `withTransaction` — so the full strokes→embeds→layers snapshot is atomic per page and different
+    pages stay concurrent. `NoteflowViewModel.disposeEditorPageFlush` (`:2875-2892`)
+    CANcels→joins the editor's debounce job then flushes the newest snapshot; `autosaveStrokes`
+    (`:2907-2920`) is `suspend fun` so the write runs inline in the debounce job (cancellable +
+    awaitable). `EditorScreen`'s dispose (`:443-451`) captures/clears the pending `saveJob` and
+    routes through the VM helper. Tests: new `B2Ui3StrokeSaveConcurrencyTest` (11, behavioral model
+    driven by the same `synchronizedMap`+per-page-`Mutex` primitives + source pins) — 1447 green, 0
+    failures, `gradle assembleDebug` green. No schema change, no new deps.
   - **Implemented in phase-53** (B1-DB-2, see `workspace/phase-53/REPORT.md`): the plaintext→SQLCipher
     migration can no longer destroy the original plaintext database on failure.
     `NoteflowDatabase.migratePlaintextIfNeeded` (`:201-258`) swaps atomically — the encrypted scratch

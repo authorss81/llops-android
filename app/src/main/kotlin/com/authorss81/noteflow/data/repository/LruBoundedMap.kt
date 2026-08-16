@@ -17,7 +17,11 @@ import java.util.LinkedHashMap
  * stroke "changed" and re-write it — a redundant write, never missing data.
  *
  * NOT thread-safe — matches the previous plain-map behaviour. B2-UI-3 (phase-73)
- * is responsible for the concurrent replacement/synchronization on top of this.
+ * applied the required concurrent synchronization ON TOP of this: the single
+ * call-site that holds it ([com.authorss81.noteflow.data.repository.NoteRepository.lastSavedStrokeHash])
+ * wraps it in `Collections.synchronizedMap` and additionally serializes the
+ * compound read-modify-write per page ([com.authorss81.noteflow.data.repository.NoteRepository.pageSaveLocks]).
+ * The class itself stays a plain access-order LinkedHashMap.
  */
 class LruBoundedMap<K, V>(
     private val maxEntries: Int,

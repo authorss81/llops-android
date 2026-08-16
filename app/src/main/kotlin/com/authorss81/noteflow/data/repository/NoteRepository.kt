@@ -19,9 +19,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.Collections
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 
 class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: File) {
     var encryptionKey: ByteArray?
@@ -891,8 +895,21 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
      * B2-DOS-10 (phase 100): the map is LRU-bounded so a long editing session
      * touching many pages never grows it without limit. Evicted entries are
      * simply re-saved on the next write — a redundant write, never lost data.
+     *
+     * B2-UI-3 (phase-73): the map is now THREAD-SAFE. The plain [LruBoundedMap]
+     * is an access-order `LinkedHashMap`, whose bookkeeping is not safe to
+     * mutate from two coroutines at once — and it IS mutated from both the
+     * stroke-load path ([getStrokesForPage], no transaction) and the
+     * stroke-save path ([saveStrokesForPage], inside `withTransaction`), so a
+     * concurrent load + save (or two saves) could corrupt the internal link
+     * list or lose an entry. `Collections.synchronizedMap` makes every
+     * individual get/put/remove atomic while preserving the LRU bound; the
+     * compound read-modify-write inside [saveStrokesForPage] is additionally
+     * serialized by the per-page [pageSaveLocks] mutex + Room's `withTransaction`
+     * writer lock, so no interleaved hash read/commit can ever land stale.
      */
-    private val lastSavedStrokeHash = LruBoundedMap<String, Int>(MAX_LAST_SAVED_STROKE_HASH_ENTRIES)
+    private val lastSavedStrokeHash: MutableMap<String, Int> =
+        Collections.synchronizedMap(LruBoundedMap<String, Int>(MAX_LAST_SAVED_STROKE_HASH_ENTRIES))
 
     /**
      * Upper bound for [lastSavedStrokeHash]. A stroke UUID key + int hash is a
@@ -903,6 +920,28 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
     private companion object {
         const val MAX_LAST_SAVED_STROKE_HASH_ENTRIES = 10_000
     }
+
+    /**
+     * B2-UI-3 (phase-73): per-page write serialization. Every full-page write
+     * for a page — strokes ([saveStrokesForPage]), stickies/embeds
+     * ([saveMediaEmbedsForPage]) and layers ([saveLayersForPage]) — acquires
+     * the SAME per-page [Mutex], so two concurrent saves for ONE page can never
+     * interleave their Room transactions nor the [lastSavedStrokeHash]
+     * read-modify-write (a stale snapshot's hash commit can never land last —
+     * the exploit's data-loss + `ConcurrentModificationException` paths).
+     * Different pages stay fully concurrent.
+     *
+     * kotlinx [Mutex] is fair (FIFO), and every write carries the caller's full
+     * latest page snapshot, so a later-issued (newer) save is enqueued after an
+     * earlier one and commits last — the newest state always wins.
+     *
+     * The map grows only with the distinct pages edited in a session (each
+     * entry is a ~100-byte [Mutex], naturally bounded by the vault's B2-DOS
+     * budgets); it is deliberately never evicted, because removing a lock that
+     * an in-flight save still holds would let two saves share the same page
+     * under different mutexes and reopen the race.
+     */
+    private val pageSaveLocks = ConcurrentHashMap<String, Mutex>()
 
     private fun strokeContentHash(s: Stroke): Int {
         var h = s.tool.name.hashCode()
@@ -929,6 +968,12 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
      * metering whether the write was bounded by B2-DOS-01 (phase-50) caps —
      * callers surface a non-alarming notice when geometry was truncated/dropped
      * instead of letting a page grow without bound.
+     *
+     * B2-UI-3 (phase-73): the whole save runs under the page's per-page
+     * [pageSaveLocks] mutex, so two concurrent same-page saves are serialized —
+     * their [lastSavedStrokeHash] read-modify-write and their delete+upsert
+     * transaction can never interleave (older snapshot landing last / dropping
+     * rows / a corrupted diff cache).
      */
     suspend fun saveStrokesForPage(pageId: String, strokes: List<Stroke>): StrokeGeometryGateResult = withContext(Dispatchers.Default) {
         // B2-DOS-01 (phase-50): the ONLY place stroke geometry may be written.
@@ -939,58 +984,61 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
         // dropped. The metering result lets the UI tell the user AT MOST once,
         // non-alarmingly, that the page was bounded.
         val gate = StrokeGeometryPolicy.applySaveGate(strokes)
-        val gatedStrokes = gate.kept
-        db.withTransaction {
-            val storedIds = db.strokeDao().getStrokeIdsForPage(pageId).toHashSet()
-            val incomingIds = HashSet<String>(gatedStrokes.size).apply { addAll(gatedStrokes.map { it.id }) }
+        val lock = pageSaveLocks.computeIfAbsent(pageId) { Mutex() }
+        lock.withLock {
+            val gatedStrokes = gate.kept
+            db.withTransaction {
+                val storedIds = db.strokeDao().getStrokeIdsForPage(pageId).toHashSet()
+                val incomingIds = HashSet<String>(gatedStrokes.size).apply { addAll(gatedStrokes.map { it.id }) }
 
-            val removedIds = storedIds - incomingIds
-            if (removedIds.isNotEmpty()) {
-                db.strokeDao().deleteStrokesByIds(removedIds.toList())
-                removedIds.forEach(lastSavedStrokeHash::remove)
+                val removedIds = storedIds - incomingIds
+                if (removedIds.isNotEmpty()) {
+                    db.strokeDao().deleteStrokesByIds(removedIds.toList())
+                    removedIds.forEach(lastSavedStrokeHash::remove)
+                }
+
+                val changed = gatedStrokes.filter { stroke ->
+                    strokeContentHash(stroke) != lastSavedStrokeHash[stroke.id]
+                }
+                if (changed.isEmpty()) return@withTransaction
+
+                val entities = changed.map { stroke ->
+                    val rawText = stroke.text
+                    // B2-CRYPTO-10 (phase-108): blank text is stored as a real AEAD
+                    // payload, never raw "" — the row's blank-ness is always tagged.
+                    // B2-UI-1 (phase-49): the DEK is grabbed once PER STROKE here
+                    // (inside the change loop); a lock that fires mid-write throws
+                    // fail-closed instead of storing plaintext, and the surrounding
+                    // Room transaction rolls the whole page's write back.
+                    val dek = requireEncryptionKey()
+                    val storedText = EncryptionService.encryptField(rawText.toByteArray(), dek, "strokes", stroke.id, "textContent")
+
+                    val dummyStroke = stroke.copy(text = "")
+                    val pointsJson = EncryptionService.serializeStrokes(listOf(dummyStroke))
+                    val storedPointsJson = EncryptionService.encryptField(pointsJson.toByteArray(), dek, "strokes", stroke.id, "pointsJson")
+
+                    StrokeEntity(
+                        id = stroke.id,
+                        pageId = pageId,
+                        toolName = stroke.tool.name,
+                        colorInt = stroke.colorInt,
+                        strokeWidth = stroke.width,
+                        filled = stroke.filled,
+                        textContent = storedText,
+                        pointsJson = storedPointsJson,
+                        startX = stroke.start?.x,
+                        startY = stroke.start?.y,
+                        endX = stroke.end?.x,
+                        endY = stroke.end?.y,
+                        pdfPage = stroke.pdfPage,
+                        timestampMs = stroke.timestampMs,
+                        layerId = stroke.layerId
+                    )
+                }
+                db.strokeDao().insertStrokes(entities)
+                val hashes = gatedStrokes.associateBy({ it.id }, ::strokeContentHash)
+                entities.forEach { lastSavedStrokeHash[it.id] = hashes[it.id]!! }
             }
-
-            val changed = gatedStrokes.filter { stroke ->
-                strokeContentHash(stroke) != lastSavedStrokeHash[stroke.id]
-            }
-            if (changed.isEmpty()) return@withTransaction
-
-            val entities = changed.map { stroke ->
-                val rawText = stroke.text
-                // B2-CRYPTO-10 (phase-108): blank text is stored as a real AEAD
-                // payload, never raw "" — the row's blank-ness is always tagged.
-                // B2-UI-1 (phase-49): the DEK is grabbed once PER STROKE here
-                // (inside the change loop); a lock that fires mid-write throws
-                // fail-closed instead of storing plaintext, and the surrounding
-                // Room transaction rolls the whole page's write back.
-                val dek = requireEncryptionKey()
-                val storedText = EncryptionService.encryptField(rawText.toByteArray(), dek, "strokes", stroke.id, "textContent")
-
-                val dummyStroke = stroke.copy(text = "")
-                val pointsJson = EncryptionService.serializeStrokes(listOf(dummyStroke))
-                val storedPointsJson = EncryptionService.encryptField(pointsJson.toByteArray(), dek, "strokes", stroke.id, "pointsJson")
-
-                StrokeEntity(
-                    id = stroke.id,
-                    pageId = pageId,
-                    toolName = stroke.tool.name,
-                    colorInt = stroke.colorInt,
-                    strokeWidth = stroke.width,
-                    filled = stroke.filled,
-                    textContent = storedText,
-                    pointsJson = storedPointsJson,
-                    startX = stroke.start?.x,
-                    startY = stroke.start?.y,
-                    endX = stroke.end?.x,
-                    endY = stroke.end?.y,
-                    pdfPage = stroke.pdfPage,
-                    timestampMs = stroke.timestampMs,
-                    layerId = stroke.layerId
-                )
-            }
-            db.strokeDao().insertStrokes(entities)
-            val hashes = gatedStrokes.associateBy({ it.id }, ::strokeContentHash)
-            entities.forEach { lastSavedStrokeHash[it.id] = hashes[it.id]!! }
         }
         gate
     }
@@ -1106,38 +1154,49 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
         saveMediaEmbedsForPage(pageId, stickyAsEmbeds + embeds)
     }
 
+    /**
+     * Persists a page's stickies + media embeds (delete + reinsert inside one
+     * transaction). B2-UI-3 (phase-73): runs under the page's per-page
+     * [pageSaveLocks] mutex so two concurrent same-page saves can never
+     * interleave their delete+reinsert rounds (one dropping the other's rows);
+     * the full-page flush writes strokes → embeds → layers through the SAME lock,
+     * keeping a page's whole snapshot atomic.
+     */
     suspend fun saveMediaEmbedsForPage(pageId: String, embeds: List<CanvasMediaEmbed>) = withContext(Dispatchers.Default) {
-        db.withTransaction {
-            db.mediaEmbedDao().deleteMediaEmbedsForPage(pageId)
-            if (embeds.isEmpty()) return@withTransaction
+        val lock = pageSaveLocks.computeIfAbsent(pageId) { Mutex() }
+        lock.withLock {
+            db.withTransaction {
+                db.mediaEmbedDao().deleteMediaEmbedsForPage(pageId)
+                if (embeds.isEmpty()) return@withTransaction
 
-            val entities = embeds.map { embed ->
-                val rawText = embed.textContent ?: ""
-                // B2-CRYPTO-10 (phase-108): blank embed text is tagged too.
-                // B2-UI-1 (phase-49): fail closed — never a plaintext embed body.
-                val dek = requireEncryptionKey()
-                val storedText = EncryptionService.encryptField(rawText.toByteArray(), dek, "media_embeds", embed.id, "textContent")
+                val entities = embeds.map { embed ->
+                    val rawText = embed.textContent ?: ""
+                    // B2-CRYPTO-10 (phase-108): blank embed text is tagged too.
+                    // B2-UI-1 (phase-49): fail closed — never a plaintext embed body.
+                    val dek = requireEncryptionKey()
+                    val storedText = EncryptionService.encryptField(rawText.toByteArray(), dek, "media_embeds", embed.id, "textContent")
 
-                val waveformJson = embed.waveformAmplitudes.joinToString(prefix = "[", postfix = "]")
+                    val waveformJson = embed.waveformAmplitudes.joinToString(prefix = "[", postfix = "]")
 
-                MediaEmbedEntity(
-                    id = embed.id,
-                    pageId = pageId,
-                    typeName = embed.type.name,
-                    x = embed.x,
-                    y = embed.y,
-                    width = embed.width,
-                    height = embed.height,
-                    contentUrlOrPath = embed.contentUrlOrPath,
-                    textContent = storedText,
-                    codeLanguage = embed.codeLanguage,
-                    durationMs = embed.durationMs,
-                    waveformJson = waveformJson,
-                    pdfPage = embed.pdfPage,
-                    rotationDegrees = embed.rotationDegrees
-                )
+                    MediaEmbedEntity(
+                        id = embed.id,
+                        pageId = pageId,
+                        typeName = embed.type.name,
+                        x = embed.x,
+                        y = embed.y,
+                        width = embed.width,
+                        height = embed.height,
+                        contentUrlOrPath = embed.contentUrlOrPath,
+                        textContent = storedText,
+                        codeLanguage = embed.codeLanguage,
+                        durationMs = embed.durationMs,
+                        waveformJson = waveformJson,
+                        pdfPage = embed.pdfPage,
+                        rotationDegrees = embed.rotationDegrees
+                    )
+                }
+                db.mediaEmbedDao().insertMediaEmbeds(entities)
             }
-            db.mediaEmbedDao().insertMediaEmbeds(entities)
         }
     }
 
@@ -1176,10 +1235,19 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
         }
     }
 
+    /**
+     * Persists a page's layers (delete + reinsert inside one transaction).
+     * B2-UI-3 (phase-73): like the stroke + embed saves, this runs under the
+     * page's per-page [pageSaveLocks] mutex so a concurrent same-page save can
+     * never interleave its delete+reinsert round with another one.
+     */
     suspend fun saveLayersForPage(pageId: String, layers: List<LayerEntity>) = withContext(Dispatchers.IO) {
-        db.withTransaction {
-            db.layerDao().deleteLayersForPage(pageId)
-            db.layerDao().insertLayers(layers)
+        val lock = pageSaveLocks.computeIfAbsent(pageId) { Mutex() }
+        lock.withLock {
+            db.withTransaction {
+                db.layerDao().deleteLayersForPage(pageId)
+                db.layerDao().insertLayers(layers)
+            }
         }
     }
 

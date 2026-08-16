@@ -433,10 +433,19 @@ fun EditorScreen(
     // ENCRYPTED after the next unlock. The old code launched these saves with
     // `NonCancellable` and no authenticated/key check, which ran post-lock with
     // `encryptionKey == null` and wrote PLAINTEXT stroke/embed rows (B2-UI-1).
+    //
+    // B2-UI-3 (phase-73): the flush first CANCELS the pending debounced autosave
+    // and AWAITS its settlement (viewModel.disposeEditorPageFlush) so a STALE
+    // snapshot can never fire after this flush and land last — cancelling stops
+    // the debounce, joining settles any write it already dispatched, then the
+    // final (newest) snapshot is persisted. `saveJob` is nulled so a later
+    // dispose can't double-cancel a job that already completed normally.
     DisposableEffect(page.id) {
         onDispose {
             if (isInitialLoadComplete) {
-                viewModel.flushEditorPageSave(page.id, strokes, stickyNotes, mediaEmbeds, layers)
+                val pending = saveJob
+                saveJob = null
+                viewModel.disposeEditorPageFlush(page.id, strokes, stickyNotes, mediaEmbeds, layers, pending)
             }
         }
     }
@@ -504,6 +513,12 @@ fun EditorScreen(
     fun triggerAutoSave(newStrokes: List<Stroke>) {
         if (!isInitialLoadComplete) return
         saveJob?.cancel()
+        // B2-UI-3 (phase-73): the debounce coroutine now INCLUDES the write — the
+        // VM autosave is suspended and runs the persistence inline — so `saveJob`
+        // covers the whole debounced flush. That lets the dispose flush (via
+        // viewModel.disposeEditorPageFlush) CANCEL a stale pending snapshot and
+        // AWAIT a write that already started, guaranteeing the newest snapshot
+        // lands last. The historical 1s debounce behaviour is unchanged.
         saveJob = viewModel.viewModelScope.launch(Dispatchers.IO) {
             delay(1000) // 1s Debounce
             // B2-UI-1 (phase-49): route through the VM lock-safe gate. The old
