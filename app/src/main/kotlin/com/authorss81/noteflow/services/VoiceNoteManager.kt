@@ -53,6 +53,27 @@ class VoiceNoteManager(private val context: Context) {
     private val _recordingError = MutableStateFlow<String?>(null)
     val recordingError: StateFlow<String?> = _recordingError.asStateFlow()
 
+    // B2-DOS-03 (phase-79): when the recorder aborts at the duration/size ceiling
+    // the audio up to the limit IS a completed recording — the finished result is
+    // published here so the editor attaches the audio embed instead of leaving an
+    // orphaned encrypted blob with no DB row. The manual stop path (`stopRecording`)
+    // returns its result directly and does NOT publish here, so a capped auto-stop
+    // can never double-attach.
+    private val _completedRecordingResult = MutableStateFlow<VoiceRecordingResult?>(null)
+    val completedRecordingResult: StateFlow<VoiceRecordingResult?> = _completedRecordingResult.asStateFlow()
+
+    // B2-DOS-03 (phase-79): fixed-budget live waveform accumulator. Appends are
+    // O(1) amortized into a preallocated FloatArray and the emitted StateFlow view
+    // never exceeds `WaveformPeakMath.recordingLiveBuckets` (160) entries — the
+    // pre-fix `_waveformAmplitudes.value + amp` full-list copy per tick is gone.
+    private var waveformBuckets = LiveWaveformBuckets(WaveformPeakMath.recordingLiveBuckets)
+
+    // Serializes recorder start/stop/finalize. The B2-DOS-03 sampler now runs on
+    // Dispatchers.Default while `stop()`/finalize can be triggered on the main
+    // thread (chip tap) or the sampler thread (ceiling abort) — a racing
+    // double-finalize must be impossible.
+    private val recorderLock = Any()
+
     private val _playbackError = MutableStateFlow<String?>(null)
     val playbackError: StateFlow<String?> = _playbackError.asStateFlow()
 
@@ -61,7 +82,7 @@ class VoiceNoteManager(private val context: Context) {
         _playbackError.value = null
     }
 
-    fun startRecording(pageId: String): File? {
+    fun startRecording(pageId: String): File? = synchronized(recorderLock) {
         stopPlayback()
 
         // B1-DB-3 (phase-54): MediaRecorder must stream to a real file, but that
@@ -81,6 +102,8 @@ class VoiceNoteManager(private val context: Context) {
         currentBlobFile = blobFile
 
         _recordingError.value = null
+        _completedRecordingResult.value = null
+        waveformBuckets = LiveWaveformBuckets(WaveformPeakMath.recordingLiveBuckets)
         _waveformAmplitudes.value = emptyList()
         _recordingElapsedMs.value = 0L
 
@@ -105,9 +128,21 @@ class VoiceNoteManager(private val context: Context) {
             mediaRecorder = recorder
             _isRecording.value = true
 
-            // Real amplitude & timer sampler (no simulated fallback)
+            // Real amplitude & timer sampler (no simulated fallback).
+            // B2-DOS-03 (phase-79): the sampler:
+            //  1. runs OFF the main dispatcher (launched on Dispatchers.Default) so
+            //     the per-tick amplitude work never janks/ANRs a 2-core device;
+            //  2. accumulates amplitudes via the fixed-budget LiveWaveformBuckets
+            //     (O(1)-amortized appends into a preallocated FloatArray) and emits
+            //     a BOUNDED downsampled view (<=160 entries) — the pre-fix
+            //     `_waveformAmplitudes.value + amp` full-list copy-on-write per tick
+            //     (~648M element copies after an hour) is gone;
+            //  3. aborts at the duration (30 min) and file-size (32 MB) ceilings —
+            //     the pre-fix recorder had NO cap and could fill internal storage
+            //     (~57 MB/hour at 128 kbps) — then surfaces a non-alarming error and
+            //     publishes the completed recording so it is saved, not discarded.
             timerJob?.cancel()
-            timerJob = scope.launch {
+            timerJob = scope.launch(Dispatchers.Default) {
                 val startTime = System.currentTimeMillis()
                 while (isActive && _isRecording.value) {
                     val elapsed = System.currentTimeMillis() - startTime
@@ -119,12 +154,30 @@ class VoiceNoteManager(private val context: Context) {
                         0f
                     }
                     val normalizedAmp = (maxAmp / 32767f).coerceIn(0.05f, 1.0f)
-                    _waveformAmplitudes.value = _waveformAmplitudes.value + normalizedAmp
+                    waveformBuckets.append(normalizedAmp)
+                    _waveformAmplitudes.value = waveformBuckets.snapshot()
 
-                    delay(100)
+                    // B2-DOS-03: abort at the recording-length ceiling.
+                    if (VoiceRecordingPolicy.isOverDuration(elapsed)) {
+                        finalizeRecording(VoiceRecordingPolicy.DURATION_LIMIT_MESSAGE)
+                        return@launch
+                    }
+                    // B2-DOS-03: abort at the file-size ceiling (defense-in-depth
+                    // for encoder bitrate variance beyond the 128 kbps nominal).
+                    val rawBytes = try {
+                        currentOutputFile?.length() ?: 0L
+                    } catch (e: Exception) {
+                        0L
+                    }
+                    if (VoiceRecordingPolicy.isOverSize(rawBytes)) {
+                        finalizeRecording(VoiceRecordingPolicy.SIZE_LIMIT_MESSAGE)
+                        return@launch
+                    }
+
+                    delay(VoiceRecordingPolicy.SAMPLER_TICK_MS)
                 }
             }
-            return blobFile
+            blobFile
         } catch (e: Exception) {
             Log.e("VoiceNoteManager", "Error starting audio recording: ${e.message}")
             _isRecording.value = false
@@ -137,13 +190,28 @@ class VoiceNoteManager(private val context: Context) {
             currentOutputFile = null
             currentBlobFile = null
             if (tempFile.exists()) tempFile.delete()
-            return null
+            null
         }
     }
 
     fun stopRecording(): VoiceRecordingResult? {
         if (!_isRecording.value) return null
+        return finalizeRecording(null)
+    }
 
+    /**
+     * Stops the recorder, encrypts the finished audio into the vault-DEK `.enc`
+     * blob and destroys the plaintext temp. Shared by the manual stop path
+     * (`[stopRecording]`, [limitMessage] == null) and the B2-DOS-03 ceiling
+     * abort (`[VoiceRecordingPolicy]` duration/size caps, [limitMessage] != null).
+     *
+     * Serialized under [recorderLock] so a manual stop racing a sampler abort can
+     * never double-finalize. On the ceiling path the completed recording is
+     * published via [completedRecordingResult] so the editor attaches the audio
+     * embed (never silently orphaned) alongside the non-alarming error banner.
+     */
+    private fun finalizeRecording(limitMessage: String?): VoiceRecordingResult? = synchronized(recorderLock) {
+        if (!_isRecording.value) return@synchronized null
         _isRecording.value = false
         timerJob?.cancel()
 
@@ -158,7 +226,7 @@ class VoiceNoteManager(private val context: Context) {
         }
         mediaRecorder = null
 
-        val tempFile = currentOutputFile ?: return null
+        val tempFile = currentOutputFile ?: return@synchronized null
         val blobFile = currentBlobFile
         if (!tempFile.exists() || tempFile.length() < 44L) {
             // Log WITHOUT the absolute path: the path reveals the private vault
@@ -168,7 +236,7 @@ class VoiceNoteManager(private val context: Context) {
             currentOutputFile = null
             currentBlobFile = null
             _recordingError.value = "No audio was captured — the microphone may be busy or permission was revoked."
-            return null
+            return@synchronized null
         }
         val duration = _recordingElapsedMs.value
         val amplitudes = _waveformAmplitudes.value
@@ -185,14 +253,23 @@ class VoiceNoteManager(private val context: Context) {
         if (!encrypted) {
             Log.w("VoiceNoteManager", "Recording could not be encrypted — plaintext temp destroyed")
             _recordingError.value = "The recording could not be saved securely. Please try again."
-            return null
+            return@synchronized null
         }
 
-        return VoiceRecordingResult(
+        val result = VoiceRecordingResult(
             filePath = blobFile!!.absolutePath,
             durationMs = duration,
             waveformAmplitudes = amplitudes
         )
+        if (limitMessage != null) {
+            // B2-DOS-03: a ceiling abort STOPS the recorder and saves what was
+            // recorded (the audio is the user's — never discard it silently). A
+            // non-alarming banner + a published result the editor observes and
+            // attaches as an audio embed.
+            _recordingError.value = limitMessage
+            _completedRecordingResult.value = result
+        }
+        result
     }
 
     fun startPlayback(filePath: String, speed: Float = 1.0f) {

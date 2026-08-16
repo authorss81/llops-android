@@ -13,6 +13,7 @@ import com.authorss81.noteflow.services.VaultSearchPolicy
 import com.authorss81.noteflow.services.VaultKeyHolder
 import com.authorss81.noteflow.services.VaultWriteGate
 import com.authorss81.noteflow.services.VoiceNoteCrypto
+import com.authorss81.noteflow.services.VoiceRecordingPolicy
 import com.authorss81.noteflow.services.WikiLinkParser
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -996,11 +997,19 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
 
     private fun parseWaveformJson(json: String): List<Float> {
         if (json.isBlank() || json == "[]") return emptyList()
+        // B2-DOS-03 (phase-79): the re-parse side of the finding must be BOUNDED
+        // too — the recorder now only ever emits ≤ `recordingLiveBuckets` entries,
+        // but a legacy vault or a crafted backup (B1-DB-7 restore path) can carry
+        // an arbitrarily long `waveformJson`; never materialize more than the
+        // stored-waveform ceiling into a List. Downstream (CanvasMediaEmbed,
+        // render) therefore stays bounded regardless of the column length.
         return try {
             val arr = org.json.JSONArray(json)
-            List(arr.length()) { index -> arr.getDouble(index).toFloat() }
+            val n = minOf(arr.length(), VoiceRecordingPolicy.MAX_STORED_WAVEFORM_ENTRIES)
+            List(n) { index -> arr.getDouble(index).toFloat() }
         } catch (e: Exception) {
             json.removePrefix("[").removeSuffix("]").split(",")
+                .take(VoiceRecordingPolicy.MAX_STORED_WAVEFORM_ENTRIES)
                 .mapNotNull { it.trim().toFloatOrNull() }
         }
     }

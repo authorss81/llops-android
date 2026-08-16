@@ -224,6 +224,21 @@
     `SettingsManager.voiceNotesEncryptedMigrated`, WAL-checkpoints + re-stamps the DB HMAC first.
     `exportBackup` packs only `.enc`; restore re-keys blobs to the restoring device's DEK
     (`ImportExportService.kt:1708`). Tests: `B1Db03VoiceNoteEncryptionTest` (18) — 1129 green.
+  - **Implemented in phase-79** (B2-DOS-03, see `workspace/phase-79/REPORT.md`): the voice RECORDER is
+    bounded and the amplitude sampler is off-main. New pure-JVM `services/LiveWaveformBuckets.kt`
+    (preallocated `FloatArray` accumulator, O(1)-amortized `append`, fold-on-full, `snapshot()` ≤
+    `WaveformPeakMath.recordingLiveBuckets`=160) + `services/VoiceRecordingPolicy.kt` (decision table:
+    30 min `MAX_RECORDING_DURATION_MS`, 32 MB `MAX_RECORDING_BYTES`, 100 ms tick,
+    `MAX_STORED_WAVEFORM_ENTRIES`=600, non-alarming limit messages). `VoiceNoteManager` sampler runs on
+    `Dispatchers.Default` (`VoiceNoteManager.kt:150`), appends `waveformBuckets.append(...)` + emits
+    `waveformBuckets.snapshot()` (pre-fix `= _waveformAmplitudes.value + amp` full-list copy gone), and
+    aborts past the duration/file-size ceilings via `finalizeRecording(limitMessage)` — stops+encrypts
+    (B1-DB-3 path), surfaces `recordingError`, publishes `completedRecordingResult` so `EditorScreen`'s
+    `LaunchedEffect` auto-attaches the audio embed through the shared `attachVoiceRecording` helper.
+    `startRecording`/`stopRecording`/`finalizeRecording` are serialized under `recorderLock`.
+    `NoteRepository.parseWaveformJson` (`:997-1009`) is bounded to 600 entries. Tests:
+    `LiveWaveformBucketsTest` (9) + `VoiceRecordingPolicyTest` (6) + `B2Dos03VoiceRecordingTest` (12) —
+    1429 app tests, only the 2 pre-existing `B1Plat01ReleaseSigningTest` failures.
   - **Implemented in phase-62** (B1-CRYPTO-03, see `workspace/phase-62/REPORT.md`): the master-password
     salt + wrapped-DEK pair is persisted atomically as ONE versioned blob
     (`services/MasterPasswordCredential.kt`, format `MPB1|<saltB64>|<wrappedDek>`, pure JVM). The old two

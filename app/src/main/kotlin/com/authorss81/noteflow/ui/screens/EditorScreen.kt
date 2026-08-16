@@ -279,6 +279,10 @@ fun EditorScreen(
     val activeVoicePlaybackFilePath by voiceNoteManager.activePlayingFilePath.collectAsState()
     val voiceRecordingError by voiceNoteManager.recordingError.collectAsState()
     val voicePlaybackError by voiceNoteManager.playbackError.collectAsState()
+    // B2-DOS-03 (phase-79): a recording that hit the 30 min / 32 MB ceiling is
+    // auto-finalized by the sampler — observe its published result so the audio
+    // embed is attached instead of leaving an orphaned encrypted blob.
+    val completedVoiceRecording by voiceNoteManager.completedRecordingResult.collectAsState()
 
     val paletteItems by viewModel.paletteItems.collectAsState()
 
@@ -658,6 +662,41 @@ fun EditorScreen(
         viewModel.flushEditorPageSave(page.id, strokes, stickyNotes, newEmbeds, layers)
     }
 
+    // B2-DOS-03 (phase-79): shared attach path for a finished voice recording.
+    // Used by the manual chip-tap stop AND the ceiling-abort auto-stop (observer
+    // on `completedVoiceRecording`), so a capped recording is attached exactly
+    // like a manual one — never silently dropped, never double-attached.
+    fun attachVoiceRecording(result: com.authorss81.noteflow.services.VoiceRecordingResult) {
+        val pageStride = 1528f + 64f
+        val centerViewportY = (-panOffset.y + 600f) / zoomScale
+        val activePageIdx = if (!isContinuousMode) currentPdfPage else (centerViewportY / pageStride).toInt().coerceIn(0, if (isPdf) (pdfTotalPages - 1).coerceAtLeast(0) else Int.MAX_VALUE)
+        val activePageYOffset = if (isContinuousMode) activePageIdx * pageStride else 0f
+
+        val newAudioEmbed = CanvasMediaEmbed(
+            pageId = page.id,
+            type = MediaEmbedType.AUDIO_NOTE,
+            width = 320f,
+            height = 135f,
+            x = 100f,
+            y = activePageYOffset + 150f,
+            contentUrlOrPath = result.filePath,
+            durationMs = result.durationMs,
+            waveformAmplitudes = result.waveformAmplitudes,
+            pdfPage = activePageIdx
+        )
+        handleMediaEmbedsChange(mediaEmbeds + newAudioEmbed)
+    }
+
+    // B2-DOS-03 (phase-79): observe a ceiling-aborted recording (30 min / 32 MB)
+    // and attach the completed audio embed exactly like a manual chip-tap stop.
+    // The result is published once per recording session and reset on the next
+    // startRecording, so this effect can never double-attach. Declared after the
+    // shared attach helper (Kotlin local functions are not forward-referenceable).
+    LaunchedEffect(completedVoiceRecording) {
+        val result = completedVoiceRecording ?: return@LaunchedEffect
+        attachVoiceRecording(result)
+    }
+
     // Phase 13: STICKER tool tap → persist an emoji sticker as a media_embeds row
     // (type=STICKER, stickerId in contentUrlOrPath, emoji in textContent which is
     // already covered by the export field-encryption map).
@@ -932,24 +971,7 @@ fun EditorScreen(
                             if (isRecordingVoice) {
                                 val result = voiceNoteManager.stopRecording()
                                 if (result != null) {
-                                    val pageStride = 1528f + 64f
-                                    val centerViewportY = (-panOffset.y + 600f) / zoomScale
-                                    val activePageIdx = if (!isContinuousMode) currentPdfPage else (centerViewportY / pageStride).toInt().coerceIn(0, if (isPdf) (pdfTotalPages - 1).coerceAtLeast(0) else Int.MAX_VALUE)
-                                    val activePageYOffset = if (isContinuousMode) activePageIdx * pageStride else 0f
-
-                                    val newAudioEmbed = CanvasMediaEmbed(
-                                        pageId = page.id,
-                                        type = MediaEmbedType.AUDIO_NOTE,
-                                        width = 320f,
-                                        height = 135f,
-                                        x = 100f,
-                                        y = activePageYOffset + 150f,
-                                        contentUrlOrPath = result.filePath,
-                                        durationMs = result.durationMs,
-                                        waveformAmplitudes = result.waveformAmplitudes,
-                                        pdfPage = activePageIdx
-                                    )
-                                    handleMediaEmbedsChange(mediaEmbeds + newAudioEmbed)
+                                    attachVoiceRecording(result)
                                 }
                             } else {
                                 val hasPermission = androidx.core.content.ContextCompat.checkSelfPermission(
