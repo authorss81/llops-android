@@ -122,6 +122,20 @@
     retention bounded at 2 × 500KB. Tests: `B2Log02StartupLogRotationTest` (14) — 1350
     green (only the 2 pre-existing B1Plat01ReleaseSigningTest asserts + 1 documented
     WikiLinkParserCacheUnitTest flake that passes in isolation).
+  - **Implemented in phase-71** (B2-LOG-03, see `workspace/phase-71/REPORT.md`):
+    import/export failures never reach logcat as full throwables. The eleven
+    `Log.e("ImportExportService", "...", e)` call sites in `ImportExportService.kt`
+    (which passed the exception OBJECT, so logcat got path-carrying messages
+    embedding note-title filenames under `filesDir/noteflow/imports/` — a
+    bypass of PrivacyCrashReporter) are now 2-argument `Log.e` calls whose
+    message is built by the new pure-JVM `services/FailureLogPolicy.kt`
+    (`safeLogMessage(e, operation)` = FIXED operation label + `classNameToken(e)`
+    = the exception's simple class name only; `e.message`/stack are never read).
+    Tests: `FailureLogPolicyTest` (8, incl. a mechanical source pin: every
+    `Log.(e|w)` call in the file has exactly TWO arguments and routes through the
+    policy) — 1359 green in the final run (only the 2 pre-existing
+    B1Plat01ReleaseSigningTest asserts + 1 documented WikiLinkParserCacheUnitTest
+    flake that passes in isolation); `gradle :app:assembleDebug` green.
   - **Implemented in phase-49** (B2-UI-1, see `workspace/phase-49/REPORT.md`): the WRITE side of the
     lock boundary fails closed. Every editor page-write now routes through the ViewModel lock-safe
     gate: `NoteflowViewModel.flushEditorPageSave`/`autosaveStrokes`/`saveLayersGated` + private

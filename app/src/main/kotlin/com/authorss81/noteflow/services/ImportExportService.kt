@@ -286,7 +286,8 @@ object ImportExportService {
             // destination (see SaFExporter + ExportDestinationPolicy).
             outFile
         } catch (e: Exception) {
-            Log.e("ImportExportService", "Failed to export annotated page", e)
+            // B2-LOG-03 (phase-71): class name only, never the throwable.
+            Log.e("ImportExportService", FailureLogPolicy.safeLogMessage(e, "Failed to export annotated page"))
             null
         }
     }
@@ -367,7 +368,8 @@ object ImportExportService {
             // PDF stays app-private in cacheDir until the user picks a destination.
             outFile
         } catch (e: Exception) {
-            Log.e("ImportExportService", "Failed to export document as PDF", e)
+            // B2-LOG-03 (phase-71): class name only, never the throwable.
+            Log.e("ImportExportService", FailureLogPolicy.safeLogMessage(e, "Failed to export document as PDF"))
             null
         }
     }
@@ -1093,7 +1095,8 @@ object ImportExportService {
             }
             if (sb.isBlank()) "# Imported Document\n\n(No text content found in document)" else sb.toString()
         } catch (e: Exception) {
-            Log.e("ImportExportService", "Failed to parse docx", e)
+            // B2-LOG-03 (phase-71): class name only, never the throwable.
+            Log.e("ImportExportService", FailureLogPolicy.safeLogMessage(e, "Failed to parse docx"))
             "# Document Import Error\n\nFailed to convert DOCX file."
         }
     }
@@ -2060,7 +2063,8 @@ object ImportExportService {
             // stays app-private in cacheDir until the user picks a destination.
             zipFile
         } catch (e: Exception) {
-            Log.e("ImportExportService", "Failed to export vault to ZIP", e)
+            // B2-LOG-03 (phase-71): class name only, never the throwable.
+            Log.e("ImportExportService", FailureLogPolicy.safeLogMessage(e, "Failed to export vault to ZIP"))
             null
         }
     }
@@ -2095,7 +2099,8 @@ object ImportExportService {
             // B1-DB-5: an oversized share must surface, never be silently skipped.
             throw e
         } catch (e: Exception) {
-            Log.e("ImportExportService", "Failed to import HTML file", e)
+            // B2-LOG-03 (phase-71): class name only, never the throwable.
+            Log.e("ImportExportService", FailureLogPolicy.safeLogMessage(e, "Failed to import HTML file"))
             null
         }
     }
@@ -2151,7 +2156,8 @@ object ImportExportService {
             // error — never a half-imported silent skip, never an OOM.
             throw e
         } catch (e: Exception) {
-            Log.e("ImportExportService", "Failed to import HTML ZIP folder", e)
+            // B2-LOG-03 (phase-71): class name only, never the throwable.
+            Log.e("ImportExportService", FailureLogPolicy.safeLogMessage(e, "Failed to import HTML ZIP folder"))
         }
         count
     }
@@ -2220,7 +2226,8 @@ object ImportExportService {
             // stays app-private in cacheDir until the user picks a destination.
             htmlFile
         } catch (e: Exception) {
-            Log.e("ImportExportService", "Failed to export note to HTML", e)
+            // B2-LOG-03 (phase-71): class name only, never the throwable.
+            Log.e("ImportExportService", FailureLogPolicy.safeLogMessage(e, "Failed to export note to HTML"))
             null
         }
     }
@@ -2268,7 +2275,8 @@ object ImportExportService {
             // zip stays app-private in cacheDir until the user picks a destination.
             zipFile
         } catch (e: Exception) {
-            Log.e("ImportExportService", "Failed to export vault HTML site", e)
+            // B2-LOG-03 (phase-71): class name only, never the throwable.
+            Log.e("ImportExportService", FailureLogPolicy.safeLogMessage(e, "Failed to export vault HTML site"))
             null
         }
     }
@@ -2340,7 +2348,8 @@ object ImportExportService {
             // error — never a half-imported silent skip, never an OOM.
             throw e
         } catch (e: Exception) {
-            Log.e("ImportExportService", "Failed to import Obsidian Vault ZIP", e)
+            // B2-LOG-03 (phase-71): class name only, never the throwable.
+            Log.e("ImportExportService", FailureLogPolicy.safeLogMessage(e, "Failed to import Obsidian Vault ZIP"))
         }
         count
     }
@@ -2402,7 +2411,8 @@ object ImportExportService {
             // vault zip stays app-private in cacheDir until the user picks a destination.
             zipFile
         } catch (e: Exception) {
-            Log.e("ImportExportService", "Failed to export Obsidian Vault ZIP", e)
+            // B2-LOG-03 (phase-71): class name only, never the throwable.
+            Log.e("ImportExportService", FailureLogPolicy.safeLogMessage(e, "Failed to export Obsidian Vault ZIP"))
             null
         }
     }
@@ -2459,7 +2469,8 @@ object ImportExportService {
                 layers = psdLayers
             )
         } catch (e: Exception) {
-            Log.e("ImportExportService", "Failed to export page to PSD", e)
+            // B2-LOG-03 (phase-71): class name only, never the throwable.
+            Log.e("ImportExportService", FailureLogPolicy.safeLogMessage(e, "Failed to export page to PSD"))
             null
         }
     }
