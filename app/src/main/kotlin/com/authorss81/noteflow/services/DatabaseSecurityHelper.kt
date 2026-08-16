@@ -52,13 +52,12 @@ object DatabaseSecurityHelper {
         return try {
             val mac = Mac.getInstance("HmacSHA256")
             mac.init(key)
-            dbFile.inputStream().use { input ->
-                val buffer = ByteArray(8192)
-                var bytesRead: Int
-                while (input.read(buffer).also { bytesRead = it } != -1) {
-                    mac.update(buffer, 0, bytesRead)
-                }
-            }
+            // B1-DB-6 (phase-87): the vault runs WRITE_AHEAD_LOGGING, so committed
+            // bytes may live in `noteflow.sqlite-wal` rather than the main file; the
+            // pre-fix loop streamed only the main file, so a WAL-only mutation
+            // between checkpoints evaded the baseline. Route through the policy
+            // which streams main + `-wal` so the WAL frames are authenticated too.
+            if (DatabaseHmacPolicy.streamDbAndWal(mac, dbFile) == 0L) return null
             mac.doFinal().joinToString("") { "%02x".format(it) }
         } catch (e: Exception) {
             null

@@ -71,6 +71,7 @@ import com.authorss81.noteflow.services.DekReadResult
 import com.authorss81.noteflow.services.EditorFlushPolicy
 import com.authorss81.noteflow.services.EncryptionService
 import com.authorss81.noteflow.services.ImportExportService
+import com.authorss81.noteflow.services.IntegrityWarningDismissalGate
 import com.authorss81.noteflow.services.KeystoreKeyLostException
 import com.authorss81.noteflow.services.MarkdownBodySaveCoordinator
 import com.authorss81.noteflow.services.NoteBodyVaultPolicy
@@ -1029,6 +1030,12 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     private val _databaseIntegrityCheckEnabled = MutableStateFlow(settings.databaseIntegrityCheckEnabled)
     val databaseIntegrityCheckEnabled: StateFlow<Boolean> = _databaseIntegrityCheckEnabled.asStateFlow()
 
+    /** B1-DB-6 (phase-87): per-session dismissal gate for the tamper banner — a
+     *  single "Don't show again" tap can never permanently disable the vault's
+     *  only tamper tripwire. The gate lives for the process/session; a fresh
+     *  launch re-arms it (a new undismissed session). */
+    private val integrityWarningDismissal = IntegrityWarningDismissalGate()
+
     /** 34.8: a restored DB failed its own HMAC — hard-block the vault. */
     private val _restoreBlocked = MutableStateFlow(DatabaseSecurityHelper.hasRestoreBlock(appContext))
     val restoreBlocked: StateFlow<Boolean> = _restoreBlocked.asStateFlow()
@@ -1081,19 +1088,23 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
                 val tampered = withContext(Dispatchers.IO) {
                     !DatabaseSecurityHelper.verifyDatabaseIntegrity(appContext)
                 }
-                _databaseTampered.value = tampered && !settings.databaseIntegrityWarningDismissed
+                _databaseTampered.value = tampered && integrityWarningDismissal.mayShow()
             } else {
                 _databaseTampered.value = false
             }
         }
     }
 
+    /**
+     * B1-DB-6 (phase-87): dismissing the banner is scoped to the CURRENT session
+     * ONLY. "Don't show again" hides it for the rest of this session, but it can
+     * never permanently kill the integrity check — the pre-fix persistent write
+     * `databaseIntegrityCheckEnabled = false` (and the persisted
+     * `databaseIntegrityWarningDismissed` latch) are gone, so the vault's tamper
+     * tripwire is re-armed and can flag again on the next launch.
+     */
     fun dismissDatabaseIntegrityWarning(dontShowAgain: Boolean) {
-        if (dontShowAgain) {
-            settings.databaseIntegrityCheckEnabled = false
-            _databaseIntegrityCheckEnabled.value = false
-        }
-        settings.databaseIntegrityWarningDismissed = true
+        integrityWarningDismissal.onDismiss(dontShowAgain)
         _databaseTampered.value = false
     }
 
@@ -1101,7 +1112,7 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         settings.databaseIntegrityCheckEnabled = enabled
         _databaseIntegrityCheckEnabled.value = enabled
         if (enabled) {
-            settings.databaseIntegrityWarningDismissed = false
+            integrityWarningDismissal.onReenable()
             viewModelScope.launch {
                 val tampered = withContext(Dispatchers.IO) {
                     !DatabaseSecurityHelper.verifyDatabaseIntegrity(appContext)

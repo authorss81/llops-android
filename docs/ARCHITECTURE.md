@@ -331,6 +331,23 @@
     (3rd arg, default keeps 2-arg call sites compatible). Out of scope (documented, untouched):
     `WebDavCredentialStore`'s positive-duration pre-30 binding is the B1-NET-08 design, and the minSdk
     bump to 30 is a product decision. Tests: `B1Crypto07BiometricKeyBindingTest` (20).
+  - **Implemented in phase-87** (B1-DB-6, see `workspace/phase-87/REPORT.md`): the tamper HMAC now
+    authenticates `main + -wal` AND the banner dismissal is per-session. The pre-fix main-file-only
+    inline loop in `DatabaseSecurityHelper.computeDatabaseHmac` (`DatabaseSecurityHelper.kt:50-67`)
+    is replaced by the new pure-JVM `services/DatabaseHmacPolicy.kt`
+    (`streamDbAndWal` `:45` streams `noteflow.sqlite` then its `-wal` companion through the same
+    initialised `Mac`, returning total bytes consumed) — a WAL-only mutation committed between two
+    checkpoints (the vault runs `JournalMode.WRITE_AHEAD_LOGGING`) is now detected at the next
+    verification, and every baseline-arming site already checkpoints first or reads a closed raw
+    file, so a freshly armed baseline covers `(main + empty/absent wal)` with a cleanly-emptied WAL
+    contributing byte-identical state to an absent one. `NoteflowViewModel.dismissDatabaseIntegrityWarning`
+    (`NoteflowViewModel.kt:1106-1109`) no longer flips `databaseIntegrityCheckEnabled` and neither
+    dismissal path touches the persisted `databaseIntegrityWarningDismissed` latch; the banner routes
+    through the new pure-JVM per-session `services/IntegrityWarningDismissalGate.kt`
+    (`integrityWarningDismissal.mayShow()` `:1091`, `.onDismiss` `:1107`, `.onReenable()` `:1115`),
+    re-armed on every launch, and the checkbox is relabelled "Don't show again this session"
+    (`MainActivity.kt:362`). B1-CRYPTO-06's fail-open re-baseline at `verifyDatabaseIntegrity`
+    `:147-152` untouched (own phase-91 finding). Tests: `B1Db06WalCoverageAndDismissalTest` (16).
 - **Canvas**: `ui/components/AnnotationCanvas.kt:83` (ink canvas, gestures, layers, `pointerInteropFilter`);
   `services/WetBrushEngine.kt:13` (AGSL wet-mixing gating); `ui/components/ShaderCapabilityHelper.kt:5`
   (`isAgslSupported` = SDK ≥ 33); `services/ShapeRecognitionHelper.kt:13` (`trySnapShape()` :27).

@@ -359,7 +359,7 @@ class MainActivity : FragmentActivity() {
                                                 onCheckedChange = { dontShowAgain = it }
                                             )
                                             Text(
-                                                text = "Don't show again",
+                                                text = "Don't show again this session",
                                                 style = MaterialTheme.typography.labelSmall,
                                                 color = MaterialTheme.colorScheme.onErrorContainer
                                             )
