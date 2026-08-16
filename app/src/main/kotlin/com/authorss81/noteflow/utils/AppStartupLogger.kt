@@ -2,7 +2,7 @@ package com.authorss81.noteflow.utils
 
 import android.content.Context
 import android.util.Log
-import java.io.File
+import com.authorss81.noteflow.services.StartupLogPolicy
 import java.io.FileWriter
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -16,11 +16,21 @@ import java.util.concurrent.Executors
  * crash embeds app-private paths (vault layout, note-title filenames) and was
  * written VERBATIM to logcat, defeating the app's privacy-first crash reporter.
  * PrivacyCrashReporter is the SOLE owner of uncaught-exception logging.
+ *
+ * B2-LOG-02 (phase-70): the file is capped, rotated and pruned via the pure-JVM
+ * [StartupLogPolicy]. The append gate runs BEFORE writing so an event line is
+ * never split across a rotation and the active file can never grow past the cap;
+ * prune-on-init clears any leftover over-budget file. Event lines are timestamps
+ * + fixed strings only — the file never carries note content, and the raw
+ * crash-dump path (removed in phase-48) excluded raw stack traces by
+ * construction. The dead getLogs/clearLogs accessors are removed; if a
+ * "export/share logs" UI ever ships, log text must be sanitized before leaving
+ * the device (see StartupLogPolicy KDoc).
  */
 object AppStartupLogger {
 
     private const val TAG = "AppStartupLogger"
-    private const val LOG_FILE_NAME = "app_startup.log"
+
     private var isInitialized = false
 
     // Phase 08: startup event logging must not do file I/O on the main thread
@@ -37,6 +47,11 @@ object AppStartupLogger {
         isInitialized = true
 
         val appContext = context.applicationContext
+        // B2-LOG-02: prune on init — bounded retention even if an earlier process
+        // died mid-rotation. Runs on the background executor, never the main thread.
+        logWriterExecutor.execute {
+            StartupLogPolicy.pruneOnInit(appContext.filesDir)
+        }
         logEvent(appContext, "AppStartupLogger initialized")
     }
 
@@ -52,38 +67,20 @@ object AppStartupLogger {
 
     private fun appendToFile(context: Context, text: String) {
         try {
-            val logFile = File(context.filesDir, LOG_FILE_NAME)
+            val logFile = StartupLogPolicy.activeFile(context.filesDir)
+            val incomingBytes = text.toByteArray(Charsets.UTF_8).size.toLong()
+            // B2-LOG-02: rotate-on-size BEFORE the write — the active file never
+            // grows past StartupLogPolicy.MAX_LOG_BYTES and a single event line is
+            // never split across a rotation boundary.
+            if (logFile.exists() && StartupLogPolicy.wouldExceedCap(logFile.length(), incomingBytes)) {
+                StartupLogPolicy.rotateForAppend(context.filesDir)
+            }
             FileWriter(logFile, true).use { fileWriter ->
                 fileWriter.append(text)
             }
         } catch (e: Exception) {
             // Never pass the exception (its stack can embed app-private paths) to logcat.
             Log.e(TAG, "Failed to write log to file")
-        }
-    }
-
-    fun getLogs(context: Context): String {
-        return try {
-            val logFile = File(context.filesDir, LOG_FILE_NAME)
-            if (logFile.exists()) {
-                logFile.readText()
-            } else {
-                "No logs available."
-            }
-        } catch (e: Exception) {
-            "Error reading log file: ${e.message}"
-        }
-    }
-
-    fun clearLogs(context: Context) {
-        try {
-            val logFile = File(context.filesDir, LOG_FILE_NAME)
-            if (logFile.exists()) {
-                logFile.delete()
-            }
-        } catch (e: Exception) {
-            // Never pass the exception to logcat (see appendToFile).
-            Log.e(TAG, "Failed to clear logs")
         }
     }
 }

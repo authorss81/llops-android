@@ -108,6 +108,20 @@
     `sanitizeMessage` (`:91-93`) redacts ANY `/data/user/<uid>/...` or `/data/data/...`
     path — covers both the namespace and the real applicationId dir. Tests:
     `B2Log01CrashReportingTest` (7) — 1020 unit tests green.
+  - **Implemented in phase-70** (B2-LOG-02, see `workspace/phase-70/REPORT.md`):
+    `app_startup.log` is capped, rotated and pruned — the pre-fix append-only
+    `FileWriter(logFile, true)` (no length check / rotation / delete, unbounded growth on
+    the vault's partition) is gone. New pure-JVM `services/StartupLogPolicy.kt` is the
+    single decision table: `LOG_FILE_NAME`/`BACKUP_SUFFIX=".1"`, `MAX_LOG_BYTES = 500_000L`
+    (same ~500KB budget `PrivacyCrashReporter` uses), `MAX_LOG_FILES = 2`, plus
+    `wouldExceedCap` (the BEFORE-write rotate decision), `rotateForAppend` (keep-last-N:
+    drop the oldest `.1`, promote the active file) and `pruneOnInit` (clears any leftover
+    over-cap file). `AppStartupLogger.appendToFile` now gates the write through the policy
+    (`AppStartupLogger.kt:71-80`), `init` prunes on the background executor, and the dead
+    `getLogs`/`clearLogs` accessors are removed. Active log never exceeds the cap; total
+    retention bounded at 2 × 500KB. Tests: `B2Log02StartupLogRotationTest` (14) — 1350
+    green (only the 2 pre-existing B1Plat01ReleaseSigningTest asserts + 1 documented
+    WikiLinkParserCacheUnitTest flake that passes in isolation).
   - **Implemented in phase-49** (B2-UI-1, see `workspace/phase-49/REPORT.md`): the WRITE side of the
     lock boundary fails closed. Every editor page-write now routes through the ViewModel lock-safe
     gate: `NoteflowViewModel.flushEditorPageSave`/`autosaveStrokes`/`saveLayersGated` + private
