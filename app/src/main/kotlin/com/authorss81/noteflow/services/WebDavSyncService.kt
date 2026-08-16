@@ -24,6 +24,11 @@ import com.authorss81.noteflow.utils.HttpUserAgent
  *   in for a local-network-only server (loopback/private IP/mDNS host).
  * - Connection timeouts are enforced; no cleartext fallback is ever attempted.
  * - Only the Android INTERNET permission is required (this is its sole use).
+ * - B1-NET-07 (phase-86): the remote folder name is validated + percent-encoded
+ *   as ONE path segment; the "latest" file is chosen by MAXIMUM filename
+ *   timestamp (never XML document order); and the download stream is bounded by
+ *   `WebDavRemoteListingPolicy.MAX_DOWNLOAD_BYTES` (aligned with the 400 MB
+ *   restore budget).
  */
 class WebDavSyncService(private val context: Context) {
 
@@ -179,8 +184,9 @@ class WebDavSyncService(private val context: Context) {
             val responseCode = conn.responseCode
 
             if (responseCode in 200..299 || responseCode == 207) {
-                // Ensure target folder exists
-                val targetUrl = "$serverUrlClean${config.remoteFolderName}/"
+                // B1-NET-07 (phase-86): remoteFolderName is validated + URL-encoded
+                // as ONE path segment before it is interpolated into any URL.
+                val targetUrl = "$serverUrlClean${WebDavRemoteListingPolicy.encodedRemoteFolderSegment(config.remoteFolderName)}/"
                 val folderConn = createConnection(targetUrl, config, "PROPFIND")
                 folderConn.setRequestProperty("Depth", "0")
                 if (folderConn.responseCode == 404) {
@@ -217,7 +223,7 @@ class WebDavSyncService(private val context: Context) {
             // Day-granular + random token (prefix/suffix kept so the download
             // listing regex `noteflow_vault_backup_[^<]+\.nfb` still matches).
             val remoteFileName = BackupFileNamePolicy.remoteVaultBackupFileName()
-            val targetUrl = "$serverUrlClean${config.remoteFolderName}/$remoteFileName"
+            val targetUrl = "$serverUrlClean${WebDavRemoteListingPolicy.encodedRemoteFolderSegment(config.remoteFolderName)}/$remoteFileName"
 
             val conn = createConnection(targetUrl, config, "PUT")
             conn.doOutput = true
@@ -261,7 +267,7 @@ class WebDavSyncService(private val context: Context) {
             if (!prep.success) return@withContext prep
 
             val serverUrlClean = normalizeBaseUrl(config.serverUrl, config.allowInsecureHttp)
-            val folderUrl = "$serverUrlClean${config.remoteFolderName}/"
+            val folderUrl = "$serverUrlClean${WebDavRemoteListingPolicy.encodedRemoteFolderSegment(config.remoteFolderName)}/"
 
             // List files via PROPFIND
             val listConn = createConnection(folderUrl, config, "PROPFIND")
@@ -276,15 +282,19 @@ class WebDavSyncService(private val context: Context) {
             val xmlResponse = listConn.inputStream.bufferedReader().use { it.readText() }
             listConn.disconnect()
 
-            // Find remote backup file names from XML response
-            val zipRegex = Regex("<d:href>([^<]+noteflow_vault_backup_[^<]+\\.nfb)</d:href>", RegexOption.IGNORE_CASE)
-            val matches = zipRegex.findAll(xmlResponse).map { it.groupValues[1] }.toList()
+            // B1-NET-07 (phase-86): parse the listing via the policy. The href
+            // with the MAXIMUM filename timestamp is chosen — never the last href
+            // in XML document order — so a server returning non-chronological
+            // hrefs can no longer silently roll "Download & Restore" back to an
+            // older archive. The .nfb GET below is additionally size-capped.
+            val matches = WebDavRemoteListingPolicy.findBackupHrefs(xmlResponse)
 
             if (matches.isEmpty()) {
                 return@withContext SyncResult(false, "No remote vault backup archives found on WebDAV server.")
             }
 
-            val latestRemotePath = matches.last()
+            val latestRemotePath = WebDavRemoteListingPolicy.newestBackupHref(matches)
+                ?: return@withContext SyncResult(false, "No remote vault backup archives found on WebDAV server.")
             // B1-NET-01 (phase-40): never trust a server-supplied href. Every
             // href is re-resolved against the configured server origin
             // (scheme+host+port); anything that escapes it is rejected here
@@ -318,9 +328,13 @@ class WebDavSyncService(private val context: Context) {
             val downCode = downloadConn.responseCode
 
             if (downCode in 200..299) {
+                // B1-NET-07 (phase-86): the download is streamed under a hard
+                // size cap (MAX_DOWNLOAD_BYTES, aligned with the 400 MB restore
+                // budget) — a malicious server can no longer stream an unbounded
+                // archive into the app's cache (webdav_download_import.nfb).
                 downloadConn.inputStream.use { input ->
                     targetLocalFile.outputStream().use { output ->
-                        input.copyTo(output)
+                        WebDavRemoteListingPolicy.copyBounded(input, output)
                     }
                 }
                 downloadConn.disconnect()
@@ -342,6 +356,8 @@ class WebDavSyncService(private val context: Context) {
                 downloadConn.disconnect()
                 SyncResult(false, "Download failed with HTTP response $downCode")
             }
+        } catch (e: WebDavRemoteListingPolicy.DownloadTooLargeException) {
+            SyncResult(false, e.message ?: "Remote backup archive is too large to download.")
         } catch (e: IllegalArgumentException) {
             SyncResult(false, e.message ?: "Invalid WebDAV server URL.")
         } catch (e: Exception) {
