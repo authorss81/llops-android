@@ -39,11 +39,13 @@ object ClipboardGuard {
     /**
      * Clears the primary clip when the last app copy is within [windowMs].
      *
-     * [context] is only consulted when [clearPrimaryClipOverride] is null; unit
-     * tests exercising the decision through the seam may pass null. Returns true
-     * when the primary clip was actually cleared (and the copy timestamp
-     * forgotten), false when nothing was touched — a foreign or expired/no app
-     * copy on the clipboard is always left alone.
+     * [context] is only consulted when [clearPrimaryClipOverride] is null; if
+     * both are absent there is no way to reach the system ClipboardManager, so
+     * nothing is touched and false is returned. Unit tests exercising the
+     * decision through the seam may pass null. Returns true when the primary
+     * clip was actually cleared (and the copy timestamp forgotten), false when
+     * nothing was touched — a foreign or expired/no app copy on the clipboard
+     * is always left alone.
      */
     fun scrubIfOwnCopy(context: Context?, windowMs: Long = ClipboardScrubPolicy.SCRUB_WINDOW_MS): Boolean {
         val copiedAt = mostRecentCopyAtMs
@@ -52,15 +54,17 @@ object ClipboardGuard {
         }
         return try {
             val override = clearPrimaryClipOverride
-            if (override != null) {
-                override()
-            } else {
-                val cm = context!!.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                    cm.clearPrimaryClip()
-                } else {
-                    cm.setPrimaryClip(ClipData.newPlainText("", ""))
+            when {
+                override != null -> override()
+                context != null -> {
+                    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                        cm.clearPrimaryClip()
+                    } else {
+                        cm.setPrimaryClip(ClipData.newPlainText("", ""))
+                    }
                 }
+                else -> return false
             }
             mostRecentCopyAtMs = 0L
             true

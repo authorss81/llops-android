@@ -11,6 +11,13 @@ package com.authorss81.noteflow.services
  * them: the guard only clears the primary clip when the app's own most recent copy
  * is inside the window, and a successful scrub forgets the timestamp so whatever
  * the user copies afterwards is left alone by the next lock.
+ *
+ * Timing note: the window is measured in wall-clock [System.currentTimeMillis]
+ * terms (the caller passes [kotlin.Long] epoch values). A user setting the device
+ * clock backwards can therefore stretch the window, and a future-dated app copy
+ * (copiedAtMs greater than nowMs) is still treated as inside the window — both are
+ * acceptable for a best-effort, app-owned-copy-only guard that already forgets its
+ * timestamp on every successful scrub.
  */
 object ClipboardScrubPolicy {
     /** How long after an app copy a lock may still clear the primary clip. */
