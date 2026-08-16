@@ -24,7 +24,7 @@ HMAC never covered. Two exploitable halves:
 - **Before:** `DatabaseSecurityHelper.computeDatabaseHmac` looped its own `dbFile.inputStream()`
   over ONLY the main file.
 - **After:** new pure-JVM `app/src/main/kotlin/com/authorss81/noteflow/services/DatabaseHmacPolicy.kt`:
-  `walFile()` (`:34`) names the `-wal` companion; `streamDbAndWal(mac, dbFile)` (`:41-65`)
+  `walFile()` (`:35`) names the `-wal` companion; `streamDbAndWal(mac, dbFile)` (`:42-66`)
   streams the main file then `-wal` (when a file) through the SAME initialised `Mac` and returns
   the total bytes consumed. `DatabaseSecurityHelper.computeDatabaseHmac` (`DatabaseSecurityHelper.kt:50-65`)
   now routes every baseline computation through it (`:60`, returns `null` when 0 bytes consumed).
@@ -38,15 +38,15 @@ HMAC never covered. Two exploitable halves:
 
   | Arm site | Pre-existing hygiene |
   |---|---|
-  | `NoteflowViewModel.initializeData` body-migration (`NoteflowViewModel.kt:1337-1339`) | `repository.checkpointWal()` before `stampDatabaseChecksum` |
-  | `NoteflowViewModel.initializeData` voice-migration (`:1364-1366`) | `checkpointWal()` before stamp |
-  | `NoteflowViewModel.setMasterPassword` (`:2455-2459`) | `reencryptPlaintextFields` + `checkpointWal()` before stamp |
-  | `NoteflowViewModel.exportEncryptedBackupToZip` (`:3115-3117`) | `checkpointWal()` before stamp |
+  | `NoteflowViewModel.initializeData` body-migration (`NoteflowViewModel.kt:1348-1350`) | `repository.checkpointWal()` before `stampDatabaseChecksum` |
+  | `NoteflowViewModel.initializeData` voice-migration (`:1375-1377`) | `checkpointWal()` before stamp |
+  | `NoteflowViewModel.setMasterPassword` (`:2466-2471`) | `reencryptPlaintextFields` + `checkpointWal()` before stamp |
+  | `NoteflowViewModel.exportEncryptedBackupToZip` (`:3126-3128`) | `checkpointWal()` before stamp |
   | `HomeScreen` device-keyed backup (`HomeScreen.kt:529-531`) | `checkpointWal()` before stamp |
   | `HomeScreen` password backup (`HomeScreen.kt:1320-1322`) | `checkpointWal()` before stamp |
   | `ImportExportService.restoreFromZip` → `rearmBaselineFromFile` (`ImportExportService.kt:1805`) | temp DB closed + re-keyed via raw SQLCipher (rollback journal mode), main complete |
   | `NoteflowDatabase.migratePlaintextIfNeeded` (`NoteflowDatabase.kt:250`) | raw SQLCipher export, closed file |
-  | `NoteflowViewModel.startFreshAfterCorruption` (`:1065`) | brand-new empty vault (no WAL) |
+  | `NoteflowViewModel.startFreshAfterCorruption` (`:1070-1074`) | brand-new empty vault (no WAL) |
 
   No new checkpoint wiring was required — all arms were already quiescent; the fix closes the
   coverage gap itself.
@@ -93,6 +93,22 @@ HMAC never covered. Two exploitable halves:
   startup verify flags it" behavior is inherent to a whole-file tripwire on a live vault (pre-existing,
   acknowledged in the finding), and is exactly why the dismissal must be per-session so the user is
   not walked into permanently turning the tripwire off.
+- **Crash-recovery false-positive (review finding 1, documented now):** once a baseline is armed,
+  a process kill with uncheckpointed frames still in `-wal` also flags at the next launch. Pre-fix,
+  the "verify before SQLite replays the WAL" ordering computed `HMAC(main_old)` == baseline → no
+  flag; post-fix `HMAC(main_old + wal_frames)` ≠ baseline → one banner on legitimate crash recovery.
+  This is the intended flip-side of closing the WAL-coverage detection gap; it is not a defect, but
+  it is surfaced on every launch (per-session dismissal only, never a permanent disable), so a user
+  who crashed during a write may see the banner once per launch until the WAL is merged on the next
+  clean close.
+- **Post-upgrade baseline note (review finding 2):** an install carrying a PRE-phase-87 stored
+  checksum (HMAC of main-only) fails the first post-upgrade verify ONLY when a leftover non-empty
+  `-wal` is present at verify time (e.g. a crash before the upgrade). A clean state is byte-identical
+  (empty-WAL ≡ absent-WAL), so no banner. Affected users see one per-session-dismissible banner.
+- **B1-CRYPTO-06 interplay (review finding 3):** when phase-91 tightens the fail-open stored==null
+  re-baseline at `verifyDatabaseIntegrity`, it MUST account for the re-arm now hashing `main + wal` —
+  a fail-open re-baseline blesses whatever `-wal` state exists at that moment (including injected
+  frames) as the new baseline.
 
 ## Checksum / secrets handling
 
