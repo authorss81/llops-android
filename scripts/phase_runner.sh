@@ -195,7 +195,7 @@ run_phase() {
     --agent build \
     "${SESSION_ARGS[@]}" \
     --title "llops-${PHASE}" \
-    "$(cat "${LOG_DIR}/${PHASE}.prompt")" \
+    < "${LOG_DIR}/${PHASE}.prompt" \
     > "${LOG_DIR}/${PHASE}.log" 2>&1
   local code=$?
   set -e
