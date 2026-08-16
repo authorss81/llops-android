@@ -64,6 +64,8 @@ import com.authorss81.noteflow.plugins.TranslationPlugin
 import com.authorss81.noteflow.plugins.TtsChunk
 import com.authorss81.noteflow.services.BiometricKeyBindingPolicy
 import com.authorss81.noteflow.services.ClipboardGuard
+import com.authorss81.noteflow.services.DatabaseIntegrityPolicy
+import com.authorss81.noteflow.services.DatabaseIntegrityVerdict
 import com.authorss81.noteflow.services.DatabaseSecurityHelper
 import com.authorss81.noteflow.services.DecryptFailurePolicy
 import com.authorss81.noteflow.services.DekAtRestMode
@@ -124,6 +126,16 @@ import java.util.UUID
 class NoteflowViewModel(application: Application) : AndroidViewModel(application) {
 
     private val appContext: Application get() = getApplication()
+
+    // B1-CRYPTO-06 (phase-91): whether the vault file already existed when this
+    // process started. A BRAND-NEW vault (file absent at start) has no prior
+    // state an attacker could have tampered with, so `initializeDataCore` may
+    // legitimately arm its baseline after the app creates it (the single
+    // auto-arm this fix permits). An EXISTING vault whose checksum baseline
+    // turns out to be missing/unreadable is treated as possibly-tampered and
+    // gets the fail-closed "cannot verify" tripwire — never a silent re-arm.
+    private val vaultFilePresentAtStart: Boolean =
+        appContext.getDatabasePath("noteflow.sqlite").let { it.exists() && it.length() > 0L }
 
     val settings = SettingsManager(appContext)
     val security = SecurityService.forDevice(appContext)
@@ -1028,6 +1040,16 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     private val _databaseTampered = MutableStateFlow(false)
     val databaseTampered: StateFlow<Boolean> = _databaseTampered.asStateFlow()
 
+    // B1-CRYPTO-06 (phase-91): DISTINCT fail-closed state from _databaseTampered.
+    // True when the integrity check could NOT run at all — the stored checksum
+    // baseline is missing/unreadable or the current HMAC is un-computable. The
+    // vault is NOT locked and NOT proven compromised, but tamper detection could
+    // not verify it, so the recovery banner shows a one-time non-alarming notice
+    // (per-session dismissible) instead of silently trusting the vault and never
+    // re-baselines from a live-file verify.
+    private val _databaseIntegrityUnverified = MutableStateFlow(false)
+    val databaseIntegrityUnverified: StateFlow<Boolean> = _databaseIntegrityUnverified.asStateFlow()
+
     private val _databaseIntegrityCheckEnabled = MutableStateFlow(settings.databaseIntegrityCheckEnabled)
     val databaseIntegrityCheckEnabled: StateFlow<Boolean> = _databaseIntegrityCheckEnabled.asStateFlow()
 
@@ -1075,6 +1097,7 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         }
         _corruptionBlocked.value = false
         _databaseTampered.value = false
+        _databaseIntegrityUnverified.value = false
         // B1-DB-1 (phase-43): initializeData() bails with the corruption flag on a
         // failed open, so a fresh empty vault never got its default notebook/section.
         // Re-run it now that the flag is cleared (guard re-armed) so "start fresh"
@@ -1086,12 +1109,10 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     init {
         viewModelScope.launch {
             if (settings.databaseIntegrityCheckEnabled) {
-                val tampered = withContext(Dispatchers.IO) {
-                    !DatabaseSecurityHelper.verifyDatabaseIntegrity(appContext)
-                }
-                _databaseTampered.value = tampered && integrityWarningDismissal.mayShow()
+                verifyDatabaseIntegrityNow()
             } else {
                 _databaseTampered.value = false
+                _databaseIntegrityUnverified.value = false
             }
         }
     }
@@ -1107,6 +1128,10 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     fun dismissDatabaseIntegrityWarning(dontShowAgain: Boolean) {
         integrityWarningDismissal.onDismiss(dontShowAgain)
         _databaseTampered.value = false
+        // B1-CRYPTO-06 (phase-91): the "cannot verify" notice shares the same
+        // per-session dismissal — it is hidden for the rest of this session,
+        // never permanently.
+        _databaseIntegrityUnverified.value = false
     }
 
     fun setDatabaseIntegrityCheckEnabled(enabled: Boolean) {
@@ -1115,14 +1140,56 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         if (enabled) {
             integrityWarningDismissal.onReenable()
             viewModelScope.launch {
-                val tampered = withContext(Dispatchers.IO) {
-                    !DatabaseSecurityHelper.verifyDatabaseIntegrity(appContext)
-                }
-                _databaseTampered.value = tampered
+                verifyDatabaseIntegrityNow()
             }
         } else {
             _databaseTampered.value = false
+            _databaseIntegrityUnverified.value = false
         }
+    }
+
+    /**
+     * B1-CRYPTO-06 (phase-91): maps the fail-closed [DatabaseIntegrityVerdict]
+     * onto the two distinct UI states.
+     *
+     *  - [DatabaseIntegrityVerdict.Verified] clears both the alarming tamper
+     *    banner and the "cannot verify" notice.
+     *  - [DatabaseIntegrityVerdict.Mismatch] (stored baseline present but the
+     *    current main+`-wal` bytes differ) keeps the existing warning banner,
+     *    still scoped per-session via the B1-DB-6 gate.
+     *  - [DatabaseIntegrityVerdict.CannotVerify] — a missing/unreadable baseline
+     *    or an un-computable current HMAC — is surfaced as the distinct
+     *    non-alarming notice (["DatabaseIntegrityPolicy.CANNOT_VERIFY_NOTICE"]),
+     *    FAIL-CLOSED: the vault is never silently trusted and never re-baselined.
+     *    The ONLY suppression is a brand-new vault (no file existed at process
+     *    start and no baseline exists yet) whose baseline is legitimately armed
+     *    by [initializeDataCore] — a first-run vault false-alarming would be
+     *    wrong, and there is no prior state for an attacker to tamper.
+     */
+    private fun applyDatabaseIntegrityVerdict(verdict: DatabaseIntegrityVerdict) {
+        when (verdict) {
+            DatabaseIntegrityVerdict.Verified -> {
+                _databaseTampered.value = false
+                _databaseIntegrityUnverified.value = false
+            }
+            DatabaseIntegrityVerdict.Mismatch -> {
+                _databaseIntegrityUnverified.value = false
+                _databaseTampered.value = integrityWarningDismissal.mayShow()
+            }
+            DatabaseIntegrityVerdict.CannotVerify -> {
+                val freshUnarmedVault =
+                    !vaultFilePresentAtStart && !DatabaseSecurityHelper.hasStoredChecksum(appContext)
+                _databaseTampered.value = false
+                _databaseIntegrityUnverified.value = !freshUnarmedVault
+            }
+        }
+    }
+
+    private suspend fun verifyDatabaseIntegrityNow() {
+        val verdict = withContext(Dispatchers.IO) {
+            DatabaseSecurityHelper.verifyDatabaseIntegrity(appContext)
+        }
+        applyDatabaseIntegrityVerdict(verdict)
     }
 
     private val _failedUnlockAttempts = MutableStateFlow(settings.failedUnlockAttempts)
@@ -1437,6 +1504,19 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
                 _selectedSection.value = defaultSec
                 observeSections(defaultNb.id)
                 observePages(defaultSec.id)
+            }
+
+            // B1-CRYPTO-06 (phase-91): the ONE legitimate auto-arm of the tamper
+            // baseline. A brand-new vault (no DB file existed when this process
+            // started) has no prior state an attacker could have modified, so arming
+            // its checksum baseline right after the app itself created it is safe —
+            // and without it, a first-run vault would false-alarm the fail-closed
+            // "cannot verify" notice on every launch. This path is reachable ONLY
+            // when `verifyDatabaseIntegrityNow()` has observed `vaultFilePresentAtStart
+            // == false` and no baseline exists — i.e. a genuine first run, never a
+            // re-baseline of an existing (possibly-tampered) vault.
+            if (!vaultFilePresentAtStart && !DatabaseSecurityHelper.hasStoredChecksum(appContext)) {
+                repository.stampDatabaseChecksum(appContext)
             }
     }
 

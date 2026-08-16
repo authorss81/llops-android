@@ -3,7 +3,6 @@ package com.authorss81.noteflow.services
 import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
-import com.authorss81.noteflow.utils.ConstantTime
 import java.io.File
 import java.security.KeyStore
 import javax.crypto.KeyGenerator
@@ -112,6 +111,12 @@ object DatabaseSecurityHelper {
             .apply()
     }
 
+    /** B1-CRYPTO-06 (phase-91): read-only accessor — a usable baseline exists. */
+    fun hasStoredChecksum(context: Context): Boolean =
+        !context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+            .getString(PREF_DB_CHECKSUM, null)
+            .isNullOrEmpty()
+
     /**
      * H2 (phase-09): records that the SQLCipher vault failed to open with a
      * corrupt/wrong-key exception. The offending files are ALWAYS quarantined
@@ -143,17 +148,32 @@ object DatabaseSecurityHelper {
             .apply()
     }
 
-    fun verifyDatabaseIntegrity(context: Context): Boolean {
+    /**
+     * B1-CRYPTO-06 (phase-91): FAIL-CLOSED tamper verification.
+     *
+     * Returns a [DatabaseIntegrityVerdict] — NEVER a bare boolean. A MISSING
+     * stored checksum or an UN-COMPUTABLE current HMAC (DB file absent/empty,
+     * keystore key missing, or a stream error) yields
+     * [DatabaseIntegrityVerdict.CannotVerify] — "cannot verify / possibly
+     * tampered" — which the recovery banner surfaces instead of trusting the
+     * vault.
+     *
+     * The pre-fix path reported `true` in both cases AND silently re-baselined:
+     * `stored == null` ran `updateStoredChecksum(context); return true`
+     * (arming the baseline against whatever file was on disk, so an attacker
+     * who can delete the `db_hmac_checksum` pref gets the app to bless a
+     * possibly-tampered file as "verified") and the `computeDatabaseHmac() ?:
+     * return true` collapse trusted an unverifiable state. Both are gone: this
+     * function NEVER writes and NEVER re-baselines. The checksum pref is
+     * write-only through [updateStoredChecksum] / [rearmBaselineFromFile], and
+     * the only (re)armers are the trusted sites (fresh-vault creation,
+     * migration, re-encrypt, backup, and the validate-then-arm restore paths) —
+     * never a live-file verification.
+     */
+    fun verifyDatabaseIntegrity(context: Context): DatabaseIntegrityVerdict {
         val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
-        val stored = prefs.getString(PREF_DB_CHECKSUM, null) ?: run {
-            updateStoredChecksum(context)
-            return true
-        }
-        val current = computeDatabaseHmac(context, getOrCreateHmacKey()) ?: return true
-        // B2-CRYPTO-01 (Phase 102): `==`/String.equals is an early-exit comparison
-        // that leaks the stored checksum via timing (CWE-650). Both sides are
-        // fixed-length lowercase hex, so ConstantTime.hexEqual runs a full-length
-        // MessageDigest.isEqual loop instead.
-        return ConstantTime.hexEqual(stored, current)
+        val stored = prefs.getString(PREF_DB_CHECKSUM, null)
+        val current = computeDatabaseHmac(context, getOrCreateHmacKey())
+        return DatabaseIntegrityPolicy.verdictFor(stored, current)
     }
 }

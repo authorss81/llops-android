@@ -383,6 +383,24 @@
     B1-CRYPTO-06's fail-open re-baseline at `verifyDatabaseIntegrity`
     `:147-152` untouched (own phase-91 finding; must account for the re-arm now hashing `main + wal`).
     Tests: `B1Db06WalCoverageAndDismissalTest` (16).
+  - **Implemented in phase-91** (B1-CRYPTO-06, see `workspace/phase-91/REPORT.md`): the tamper
+    baseline verification is FAIL-CLOSED and write-free. `DatabaseSecurityHelper.verifyDatabaseIntegrity`
+    (`DatabaseSecurityHelper.kt:173-178`) returns a sealed three-outcome `DatabaseIntegrityVerdict`
+    from the single pure-JVM decision table `services/DatabaseIntegrityPolicy.kt`
+    (`verdictFor(storedChecksum, currentChecksum)` — `Verified` = baseline present + matching current
+    main+`-wal` HMAC via `ConstantTime.hexEqual`; `Mismatch` = baseline present + differing bytes;
+    `CannotVerify` = baseline MISSING or current HMAC un-computable). The pre-fix
+    `stored==null → updateStoredChecksum(context); return true` silent re-baseline and the
+    `?: return true` collapse are gone — the helper NEVER writes, `hasStoredChecksum`
+    (`DatabaseSecurityHelper.kt:115-118`) is the new read-only accessor, and the pref stays
+    write-only through `updateStoredChecksum`/`rearmBaselineFromFile` at the trusted arm sites.
+    `NoteflowViewModel.verifyDatabaseIntegrityNow` (`NoteflowViewModel.kt:1188-1193`) maps the
+    verdict: `Mismatch` → existing per-session tamper banner (B1-DB-6 gate), `CannotVerify` →
+    DISTINCT non-alarming notice (`MainActivity.kt` tertiaryContainer banner; wording from the
+    policy `CANNOT_VERIFY_NOTICE`; shared per-session dismissal), `Verified` → clears both. The only
+    auto-arm is a brand-new vault: `initializeDataCore` (`:1509-1520`) arms iff
+    `!vaultFilePresentAtStart && !hasStoredChecksum(appContext)` — an existing vault is never
+    re-baselined from a live-file verify. Tests: `B1Crypto06DatabaseIntegrityPolicyTest` (11).
   - **Implemented in phase-88** (B1-DB-8, see `workspace/phase-88/REPORT.md`): decrypt-failure
     fallbacks never render RAW CIPHERTEXT as note content. Single pure-JVM decision table
     `services/DecryptFailurePolicy.kt` owns `render(storedValue, decrypted, isCiphertext)` — the

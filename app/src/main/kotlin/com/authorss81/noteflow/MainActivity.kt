@@ -32,6 +32,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Restore
 import androidx.compose.material.icons.outlined.Security
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.*
@@ -42,6 +43,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.authorss81.noteflow.data.model.NotePageEntity
+import com.authorss81.noteflow.services.DatabaseIntegrityPolicy
 import com.authorss81.noteflow.theme.NoteflowTheme
 import com.authorss81.noteflow.ui.screens.EditorScreen
 import com.authorss81.noteflow.ui.screens.HomeScreen
@@ -174,6 +176,7 @@ class MainActivity : FragmentActivity() {
             val authenticated by viewModel.authenticated.collectAsState()
             val hasMasterPassword by viewModel.hasMasterPassword.collectAsState()
             val databaseTampered by viewModel.databaseTampered.collectAsState()
+            val databaseIntegrityUnverified by viewModel.databaseIntegrityUnverified.collectAsState()
             val restoreBlocked by viewModel.restoreBlocked.collectAsState()
             val corruptionBlocked by viewModel.corruptionBlocked.collectAsState()
             val keystoreKeyLost by viewModel.keystoreKeyLost.collectAsState()
@@ -372,6 +375,80 @@ class MainActivity : FragmentActivity() {
                                             Text(
                                                 text = "OK",
                                                 color = MaterialTheme.colorScheme.error,
+                                                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        // B1-CRYPTO-06 (phase-91): DISTINCT, NON-ALARMING fail-closed
+                        // notice for "cannot verify" (a missing/unreadable checksum
+                        // baseline or an un-computable current HMAC). The vault is NOT
+                        // locked and NOT proven compromised — but tamper detection
+                        // could not run, so we never silently trust it. Restore-from-
+                        // backup re-arms the baseline; per-session dismissal reuses
+                        // the same gate as the tamper banner.
+                        if (databaseIntegrityUnverified) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.tertiaryContainer,
+                                modifier = Modifier.fillMaxWidth().padding(12.dp),
+                                shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+                                tonalElevation = 6.dp
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(16.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Outlined.Info,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.onTertiaryContainer
+                                        )
+                                        Text(
+                                            text = "Vault Integrity Could Not Be Verified",
+                                            style = MaterialTheme.typography.titleSmall,
+                                            color = MaterialTheme.colorScheme.onTertiaryContainer,
+                                            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+                                        )
+                                    }
+                                    Text(
+                                        text = DatabaseIntegrityPolicy.CANNOT_VERIFY_NOTICE,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onTertiaryContainer
+                                    )
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        var dontShowAgain by remember { mutableStateOf(false) }
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.clickable { dontShowAgain = !dontShowAgain }
+                                        ) {
+                                            androidx.compose.material3.Checkbox(
+                                                checked = dontShowAgain,
+                                                onCheckedChange = { dontShowAgain = it }
+                                            )
+                                            Text(
+                                                text = "Don't show again this session",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onTertiaryContainer
+                                            )
+                                        }
+                                        androidx.compose.material3.TextButton(
+                                            onClick = {
+                                                viewModel.dismissDatabaseIntegrityWarning(dontShowAgain)
+                                            }
+                                        ) {
+                                            Text(
+                                                text = "OK",
+                                                color = MaterialTheme.colorScheme.onTertiaryContainer,
                                                 fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
                                             )
                                         }
