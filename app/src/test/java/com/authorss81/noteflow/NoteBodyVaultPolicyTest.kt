@@ -27,6 +27,20 @@ import java.io.File
  */
 class NoteBodyVaultPolicyTest {
 
+    // B1-AUTH-05 (phase-69): legacy source files may only be read/deleted when
+    // they are confined under the app-private imports root. The real files are
+    // placed there so the coercion tests exercise the pre-fix (confined) path.
+    private val importsRoot: File =
+        File(System.getProperty("java.io.tmpdir"), "inkflow-nbp-root-" + java.util.UUID.randomUUID()).apply { mkdirs() }
+
+    @org.junit.After
+    fun tearDown() {
+        importsRoot.deleteRecursively()
+    }
+
+    private fun legacyFile(name: String, content: String): File =
+        File(importsRoot, name).apply { writeText(content) }
+
     // --- isNoteTextBodySource ---
 
     @Test
@@ -59,12 +73,13 @@ class NoteBodyVaultPolicyTest {
 
     @Test
     fun `existing legacy text file wins over the db column for display`() {
-        val file = File.createTempFile("legacy-note", ".md").apply { writeText("# legacy body from file") }
+        val file = legacyFile("legacy-note.md", "# legacy body from file")
         try {
             val body = NoteBodyVaultPolicy.resolveBodyForDisplay(
                 extractedText = "# stale db body",
                 sourceFilePath = file.absolutePath,
-                sourceFileType = "text"
+                sourceFileType = "text",
+                importsRoot = importsRoot
             )
             assertEquals("# legacy body from file", body)
         } finally {
@@ -84,13 +99,14 @@ class NoteBodyVaultPolicyTest {
 
     @Test
     fun `after deleting the legacy file the column is the only visible body`() {
-        val file = File.createTempFile("legacy-delete", ".md").apply { writeText("# legacy text") }
+        val file = legacyFile("legacy-delete.md", "# legacy text")
         try {
-            NoteBodyVaultPolicy.deleteLegacyNoteTextBody(file.absolutePath, "text")
+            NoteBodyVaultPolicy.deleteLegacyNoteTextBody(file.absolutePath, "text", importsRoot)
             val body = NoteBodyVaultPolicy.resolveBodyForDisplay(
                 extractedText = "# encrypted body",
                 sourceFilePath = file.absolutePath,
-                sourceFileType = "text"
+                sourceFileType = "text",
+                importsRoot = importsRoot
             )
             assertEquals("# encrypted body", body)
         } finally {
@@ -122,9 +138,9 @@ class NoteBodyVaultPolicyTest {
 
     @Test
     fun `delete removes a surviving legacy note body file and reports its path`() {
-        val file = File.createTempFile("legacy-note", ".md").apply { writeText("secret body") }
+        val file = legacyFile("legacy-note.md", "secret body")
         try {
-            val deleted = NoteBodyVaultPolicy.deleteLegacyNoteTextBody(file.absolutePath, "text")
+            val deleted = NoteBodyVaultPolicy.deleteLegacyNoteTextBody(file.absolutePath, "text", importsRoot)
             assertEquals(file.absolutePath, deleted)
             assertFalse(file.exists())
         } finally {

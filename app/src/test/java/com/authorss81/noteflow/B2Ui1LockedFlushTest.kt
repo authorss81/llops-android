@@ -267,7 +267,15 @@ class B2Ui1LockedFlushTest {
         val flush = source.substringAfter("private fun flushPendingEditorSaves", "END").take(2000)
         assertTrue("the unlock flush must drain deferred markdown bodies", flush.contains("drainBodies()"))
         assertTrue("the unlock flush must write the body through the encrypted column", flush.contains("repository.updatePageBody(body.pageId, body.body)"))
-        assertTrue("the unlock flush deletes the legacy plaintext file only after the column write", flush.contains("NoteBodyVaultPolicy.deleteLegacyNoteTextBody(body.legacySourceFilePath"))
+        assertTrue(
+            "the unlock flush deletes the legacy plaintext file only after the column write",
+            Regex("""NoteBodyVaultPolicy\.deleteLegacyNoteTextBody\(\s*body\.legacySourceFilePath""")
+                .containsMatchIn(flush)
+        )
+        assertTrue(
+            "the legacy delete must be confined to the imports root",
+            flush.contains("ImportExportService.getImportsDir(appContext)")
+        )
     }
 
     @Test

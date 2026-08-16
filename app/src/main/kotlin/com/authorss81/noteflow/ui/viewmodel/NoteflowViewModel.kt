@@ -123,7 +123,7 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     val settings = SettingsManager(appContext)
     val security = SecurityService.forDevice(appContext)
     private val db by lazy { NoteflowDatabase.getDatabase(appContext) }
-    val repository by lazy { NoteRepository(db) }
+    val repository by lazy { NoteRepository(db, ImportExportService.getImportsDir(appContext)) }
 
     // B2-UI-1 (phase-49): stash of page snapshots that a vault lock raced.
     // EditorScreen flushes route through this: DEK present ⇒ persist now;
@@ -1875,9 +1875,15 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
 
     fun updatePageSource(id: String, sourceFilePath: String?, sourceFileType: String?) {
         viewModelScope.launch {
-            repository.updatePageSource(id, sourceFilePath, sourceFileType)
+            // B1-AUTH-05 (phase-69): only a value confined under the app-private
+            // imports root is stored (the repository re-confines it too); the
+            // in-memory selection mirrors the confined value.
+            val confined = com.authorss81.noteflow.services.SourceFilePathPolicy.confine(
+                sourceFilePath, com.authorss81.noteflow.services.ImportExportService.getImportsDir(appContext)
+            )
+            repository.updatePageSource(id, confined, sourceFileType)
             if (selectedPage.value?.id == id) {
-                _selectedPage.value = _selectedPage.value?.copy(sourceFilePath = sourceFilePath, sourceFileType = sourceFileType)
+                _selectedPage.value = _selectedPage.value?.copy(sourceFilePath = confined, sourceFileType = sourceFileType)
             }
         }
     }
@@ -2210,7 +2216,11 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             try {
                 repository.updatePageBody(pageId, body)
-                NoteBodyVaultPolicy.deleteLegacyNoteTextBody(legacyPath, legacyType)
+                // B1-AUTH-05 (phase-69): only a legacy file confined under the
+                // imports root may be deleted.
+                NoteBodyVaultPolicy.deleteLegacyNoteTextBody(
+                    legacyPath, legacyType, ImportExportService.getImportsDir(appContext)
+                )
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: VaultLockedWriteException) {
@@ -2900,7 +2910,11 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
             viewModelScope.launch(Dispatchers.IO) {
                 try {
                     repository.updatePageBody(body.pageId, body.body)
-                    NoteBodyVaultPolicy.deleteLegacyNoteTextBody(body.legacySourceFilePath, body.legacySourceFileType)
+                    // B1-AUTH-05 (phase-69): only a legacy file confined under
+                    // the imports root may be deleted.
+                    NoteBodyVaultPolicy.deleteLegacyNoteTextBody(
+                        body.legacySourceFilePath, body.legacySourceFileType, ImportExportService.getImportsDir(appContext)
+                    )
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     throw e
                 } catch (e: VaultLockedWriteException) {
@@ -3002,7 +3016,12 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
             if (existing.corpusGeneration == generation) return existing
         }
         val pages = repository.cachedCorpus()
-        val tagHierarchy = WikiLinkParser.buildTagHierarchy(pages)
+        val tagHierarchy = WikiLinkParser.buildTagHierarchy(
+            pages,
+            // B1-AUTH-05 (phase-69): legacy source-file reads are confined to the
+            // app-private imports root.
+            com.authorss81.noteflow.services.ImportExportService.getImportsDir(appContext)
+        )
         val pageTags = WikiLinkParser.flattenPageTags(tagHierarchy)
         val docs = pages.map { page ->
             CommandPaletteMath.PaletteDoc(

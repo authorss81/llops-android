@@ -43,7 +43,16 @@ class WikiLinkParserCacheUnitTest {
     fun tearDown() {
         WikiLinkParser.onPageScanned = null
         WikiLinkParser.invalidateCaches()
+        importsRoot.deleteRecursively()
     }
+
+    // B1-AUTH-05 (phase-69): legacy source files must live under the imports
+    // root to be readable; the scan callers pass it explicitly.
+    private val importsRoot: File =
+        File(System.getProperty("java.io.tmpdir"), "inkflow-importer-test-" + java.util.UUID.randomUUID()).apply { mkdirs() }
+
+    private fun sourceFileUnderRoot(name: String, content: String): File =
+        File(importsRoot, name).apply { writeText(content) }
 
     private fun page(id: String, title: String, text: String? = null, sourceFile: File? = null): NotePageEntity =
         NotePageEntity(
@@ -59,10 +68,8 @@ class WikiLinkParserCacheUnitTest {
 
     @Test
     fun `repeated backlinks opens reuse the cached scan without re-reading files`() = runBlocking {
-        val sourceExplicit = File.createTempFile("backlink-explicit", ".md")
-        sourceExplicit.writeText("A note that mentions [[Target]] explicitly.")
-        val sourceMention = File.createTempFile("backlink-mention", ".md")
-        sourceMention.writeText("A note that mentions Target without a wiki link.")
+        val sourceExplicit = sourceFileUnderRoot("backlink-explicit.md", "A note that mentions [[Target]] explicitly.")
+        val sourceMention = sourceFileUnderRoot("backlink-mention.md", "A note that mentions Target without a wiki link.")
 
         val target = page("target", "Target", text = "target body")
         val explicit = page("explicit", "Explicit linker", sourceFile = sourceExplicit)
@@ -70,7 +77,7 @@ class WikiLinkParserCacheUnitTest {
         val allPages = listOf(explicit, mention, target)
 
         // Panel open 1: computes backlinks AND caches the full text of both files.
-        val (explicit1, mentions1) = WikiLinkParser.findBacklinks(target, allPages)
+        val (explicit1, mentions1) = WikiLinkParser.findBacklinks(target, allPages, importsRoot = importsRoot)
         assertEquals(1, explicit1.size)
         assertEquals(1, mentions1.size)
         val afterFirst = WikiLinkParser.cacheMetrics()
@@ -81,7 +88,7 @@ class WikiLinkParserCacheUnitTest {
         // no file I/O.
         sourceExplicit.delete() // if a re-scan happened the file would be gone
         sourceMention.delete()
-        val (explicit2, mentions2) = WikiLinkParser.findBacklinks(target, allPages)
+        val (explicit2, mentions2) = WikiLinkParser.findBacklinks(target, allPages, importsRoot = importsRoot)
         assertEquals(explicit1.size, explicit2.size)
         assertEquals(mentions1.size, mentions2.size)
         val afterSecond = WikiLinkParser.cacheMetrics()
@@ -93,14 +100,13 @@ class WikiLinkParserCacheUnitTest {
 
     @Test
     fun `a new epoch invalidates the caches and forces a fresh scan`() = runBlocking {
-        val source = File.createTempFile("epoch-source", ".md")
-        source.writeText("old content mentioning [[Target]]")
+        val source = sourceFileUnderRoot("epoch-source.md", "old content mentioning [[Target]]")
 
         val target = page("target", "Target")
         val linker = page("linker", "Linker", sourceFile = source)
         val allPages = listOf(linker, target)
 
-        val (explicit1, _) = WikiLinkParser.findBacklinks(target, allPages)
+        val (explicit1, _) = WikiLinkParser.findBacklinks(target, allPages, importsRoot = importsRoot)
         assertEquals(1, explicit1.size)
 
         // The note is edited (a new "unlock epoch" arrives) and the file now no
@@ -109,7 +115,7 @@ class WikiLinkParserCacheUnitTest {
         source.writeText("totally different content")
         WikiLinkParser.invalidateCaches()
 
-        val (explicit2, _) = WikiLinkParser.findBacklinks(target, allPages)
+        val (explicit2, _) = WikiLinkParser.findBacklinks(target, allPages, importsRoot = importsRoot)
         assertEquals("a fresh epoch must recompute backlinks", 0, explicit2.size)
     }
 

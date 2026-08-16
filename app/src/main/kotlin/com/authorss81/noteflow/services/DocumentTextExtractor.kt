@@ -18,15 +18,19 @@ import java.util.regex.Pattern
  */
 object DocumentTextExtractor {
     fun extractTextFromDocument(context: Context, page: NotePageEntity): String {
+        val importsRoot = ImportExportService.getImportsDir(context)
         // B1-DB-4 (phase-44): a text page's body lives ONLY in the encrypted
         // extractedText column — never as a plaintext .md/.txt companion file.
         // A legacy plaintext source is coalesced transiently if it still exists.
         if (NoteBodyVaultPolicy.isNoteTextBodySource(page.sourceFilePath, page.sourceFileType)) {
             return NoteBodyVaultPolicy.resolveBodyForDisplay(
-                page.extractedText, page.sourceFilePath, page.sourceFileType
+                page.extractedText, page.sourceFilePath, page.sourceFileType, importsRoot
             )
         }
-        val path = page.sourceFilePath ?: return ""
+        // B1-AUTH-05 (phase-69): a non-text source (PDF/image) is only ever read
+        // when its stored path is confined under the imports root — a crafted
+        // sourceFilePath pointing at an arbitrary readable file is refused.
+        val path = SourceFilePathPolicy.confine(page.sourceFilePath, importsRoot) ?: return ""
         val file = File(path)
         return extractText(file, page.sourceFileType)
     }

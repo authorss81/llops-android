@@ -36,14 +36,24 @@ object NoteBodyVaultPolicy {
 
     /**
      * Body to display/scan for a note. Prefers the legacy plaintext source file
-     * when one still exists (it was the authoritative content pre-fix);
-     * otherwise returns the (already-decrypted) [extractedText] column. Blocking
+     * when one still exists AND is confined under [importsRoot] (it was the
+     * authoritative content pre-fix); otherwise returns the (already-decrypted)
+     * [extractedText] column. A null [importsRoot] (or a reference that escapes
+     * it) refuses the file read entirely and falls back to the column — a stored
+     * path must NEVER be read outside the imports subtree (B1-AUTH-05). Blocking
      * file I/O — call on a background dispatcher. The returned body is only ever
      * in-memory; nothing here persists plaintext anywhere.
      */
-    fun resolveBodyForDisplay(extractedText: String?, sourceFilePath: String?, sourceFileType: String?): String {
+    fun resolveBodyForDisplay(
+        extractedText: String?,
+        sourceFilePath: String?,
+        sourceFileType: String?,
+        importsRoot: File? = null
+    ): String {
         if (isNoteTextBodySource(sourceFilePath, sourceFileType)) {
-            val path = sourceFilePath ?: return extractedText ?: ""
+            // B1-AUTH-05: only a path confined under the imports root may be read.
+            val path = SourceFilePathPolicy.confine(sourceFilePath, importsRoot)
+                ?: return extractedText ?: ""
             try {
                 val file = File(path)
                 if (file.exists() && file.canRead()) {
@@ -59,13 +69,20 @@ object NoteBodyVaultPolicy {
 
     /**
      * Deletes the legacy plaintext note-body file of a text/markdown page, if it
-     * still exists. Returns the deleted path, or null when there was no
-     * note-body file (or the delete failed). Call ONLY after the body has been
-     * persisted into the encrypted column so no content is ever lost.
+     * still exists AND is confined under [importsRoot] (a stored path is NEVER
+     * deleted outside the imports subtree — B1-AUTH-05). With a null
+     * [importsRoot] nothing is ever deleted. Returns the deleted path, or null
+     * when there was no note-body file (or the delete failed). Call ONLY after
+     * the body has been persisted into the encrypted column so no content is
+     * ever lost.
      */
-    fun deleteLegacyNoteTextBody(sourceFilePath: String?, sourceFileType: String?): String? {
+    fun deleteLegacyNoteTextBody(
+        sourceFilePath: String?,
+        sourceFileType: String?,
+        importsRoot: File? = null
+    ): String? {
         if (!isNoteTextBodySource(sourceFilePath, sourceFileType)) return null
-        val path = sourceFilePath ?: return null
+        val path = SourceFilePathPolicy.confine(sourceFilePath, importsRoot) ?: return null
         return try {
             val file = File(path)
             if (file.exists() && file.delete()) path else null

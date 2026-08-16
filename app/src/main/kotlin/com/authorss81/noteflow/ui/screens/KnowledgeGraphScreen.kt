@@ -40,6 +40,7 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.authorss81.noteflow.data.model.NotePageEntity
+import com.authorss81.noteflow.services.ImportExportService
 import com.authorss81.noteflow.services.WikiLinkParser
 import com.authorss81.noteflow.services.graph.GraphEdgeRef
 import com.authorss81.noteflow.services.graph.GraphLayoutMath
@@ -155,7 +156,12 @@ fun KnowledgeGraphScreen(
         val active = viewModel.repository.getAllActivePages()
         allPages = active
 
-        val wikiEdges = WikiLinkParser.buildWikiLinkEdges(active)
+        val wikiEdges = WikiLinkParser.buildWikiLinkEdges(
+            active,
+            // B1-AUTH-05 (phase-69): legacy source-file reads are confined to the
+            // app-private imports root.
+            ImportExportService.getImportsDir(context)
+        )
         val graphEdges = wikiEdges.map { GraphEdge(it.sourcePageId, it.targetPageId) }
         edges = graphEdges
         val edgeRefs = graphEdges.map { GraphEdgeRef(it.sourceId, it.targetId) }

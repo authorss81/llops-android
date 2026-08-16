@@ -1701,6 +1701,11 @@ object ImportExportService {
                         // compress) exceeds the budget must never migrate or swap
                         // into the live vault.
                         sanitizeRestoredStrokeGeometry(db)
+                        // B1-AUTH-05 (phase-69): strip sourceFilePath rows that
+                        // escape the imports root BEFORE they can migrate or swap
+                        // into the live vault — the zip entry-names validation
+                        // never re-checked this column.
+                        sanitizeRestoredSourceFilePaths(db, getImportsDir(context))
                         // H3: read the schema version now, while the DB is open.
                         val versionCursor = db.rawQuery("PRAGMA user_version", null)
                         if (versionCursor.moveToFirst()) userVersion = versionCursor.getLong(0)
@@ -1784,6 +1789,47 @@ object ImportExportService {
     private fun shouldPropagateRestoreStripFailure(e: Exception): Boolean {
         val msg = e.message?.lowercase() ?: return true
         return !msg.contains("no such table")
+    }
+
+    /**
+     * B1-AUTH-05 (phase-69): a crafted vault backup can transplant
+     * `pages.sourceFilePath` rows that point anywhere the process can read/write
+     * (voice-note blobs, the crash log, shared/exported artifacts) — the zip
+     * entry-NAMES were validated but this column never was. Running here, under
+     * the candidate key that can open the backup, every non-blank
+     * [SourceFilePathPolicy] value that is NOT confined under the restored
+     * imports root ([getImportsDir]) has BOTH `sourceFilePath` and
+     * `sourceFileType` set to NULL, so the malicious reference never reaches the
+     * re-key / field-migration / transplant steps nor the live vault — no later
+     * reader (editor preview, WikiLinkParser, legacy body migration) can touch
+     * the referenced file. A page whose source file legitimately lived inside
+     * the imports directory is untouched.
+     */
+    private fun sanitizeRestoredSourceFilePaths(db: net.zetetic.database.sqlcipher.SQLiteDatabase, importsRoot: java.io.File) {
+        try {
+            val offenders = mutableListOf<String>()
+            val cursor = db.rawQuery("SELECT id, sourceFilePath FROM pages WHERE sourceFilePath IS NOT NULL", null)
+            try {
+                while (cursor.moveToNext()) {
+                    val id = cursor.getString(0)
+                    val stored = cursor.getString(1)
+                    if (stored.isNullOrBlank()) continue
+                    if (!SourceFilePathPolicy.isConfined(stored, importsRoot)) {
+                        offenders.add(id)
+                    }
+                }
+            } finally {
+                cursor.close()
+            }
+            for (id in offenders) {
+                db.execSQL("UPDATE pages SET sourceFilePath = NULL, sourceFileType = NULL WHERE id = ?", arrayOf<Any>(id))
+            }
+        } catch (e: Exception) {
+            // A pages table that doesn't exist (schema not yet applied) is not an
+            // error here — there is nothing to strip. Any real failure is
+            // re-thrown so the restore-abort path handles it.
+            if (shouldPropagateRestoreStripFailure(e)) throw e
+        }
     }
 
     /**

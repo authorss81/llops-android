@@ -79,7 +79,7 @@ object WikiLinkParser {
     @Volatile
     private var cacheEpoch = 0L
 
-    private val fullTextCache = LruBoundedMap<String, String>(MAX_TEXT_CACHE_ENTRIES)
+    private val fullTextCache = LruBoundedMap<FullTextKey, String>(MAX_TEXT_CACHE_ENTRIES)
     private val backlinksCache =
         LruBoundedMap<BacklinkCacheKey, EpochEntry<Pair<List<BacklinkMatch>, List<BacklinkMatch>>>>(MAX_BACKLINK_CACHE_ENTRIES)
     private var tagHierarchyEntry: EpochEntry<List<TagNode>>? = null
@@ -87,6 +87,11 @@ object WikiLinkParser {
 
     private data class EpochEntry<T>(val epoch: Long, val fingerprint: String, val value: T)
     private data class BacklinkCacheKey(val fingerprint: String, val targetPageId: String)
+
+    // B1-AUTH-05 (phase-69): the full-text cache is keyed by (page id, imports
+    // root) so a scan that may read confined legacy source files is never served
+    // a cached body built for a different root (or the no-file null root).
+    private data class FullTextKey(val pageId: String, val importsRootPath: String?)
 
     /**
      * Cheap, collision-free fingerprint of the page list a builder is asked to scan
@@ -223,24 +228,25 @@ object WikiLinkParser {
      * the file was being read, the result is discarded (never cached) so
      * decrypted note content cannot become resident after a lock.
      */
-    suspend fun getFullTextForPage(page: NotePageEntity): String {
+    suspend fun getFullTextForPage(page: NotePageEntity, importsRoot: File? = null): String {
         val epoch = synchronized(cacheLock) { cacheEpoch }
-        val cached = synchronized(cacheLock) { fullTextCache[page.id] }
+        val key = FullTextKey(page.id, importsRoot?.absolutePath)
+        val cached = synchronized(cacheLock) { fullTextCache[key] }
         if (cached != null) {
             metricsFullTextCacheHits++
             return cached
         }
-        val text = readFullText(page)
+        val text = readFullText(page, importsRoot)
         synchronized(cacheLock) {
             if (cacheEpoch == epoch) {
-                fullTextCache[page.id] = text
+                fullTextCache[key] = text
                 metricsTextRecomputes++
             }
         }
         return text
     }
 
-    private suspend fun readFullText(page: NotePageEntity): String =
+    private suspend fun readFullText(page: NotePageEntity, importsRoot: File?): String =
         withContext(Dispatchers.IO) {
             val sb = StringBuilder()
             sb.append(page.title).append("\n")
@@ -250,15 +256,22 @@ object WikiLinkParser {
             // extractedText column above. A legacy plaintext file is coalesced
             // only if it STILL exists (pre-migration vault, or a direct disk edit
             // made before the epoch bump); it is never a new storage location.
-            page.sourceFilePath?.let { path ->
-                val f = File(path)
-                val isTextFile = NoteBodyVaultPolicy.isNoteTextBodySource(path, page.sourceFileType)
-                if (isTextFile && f.exists() && f.canRead()) {
-                    try {
-                        metricsFileReads++
-                        sb.append(f.readText())
-                    } catch (e: Exception) {
-                        // Safe read fallback
+            page.sourceFilePath?.let { rawPath ->
+                val isTextFile = NoteBodyVaultPolicy.isNoteTextBodySource(rawPath, page.sourceFileType)
+                // B1-AUTH-05 (phase-69): only a legacy source path that is CONFINED
+                // under the imports root may be read — a null root, a `..`
+                // traversal, a relative path, or an absolute path outside the
+                // imports subtree is refused before any file I/O.
+                val path = SourceFilePathPolicy.confine(rawPath, importsRoot)
+                if (isTextFile && path != null) {
+                    val f = File(path)
+                    if (f.exists() && f.canRead()) {
+                        try {
+                            metricsFileReads++
+                            sb.append(f.readText())
+                        } catch (e: Exception) {
+                            // Safe read fallback
+                        }
                     }
                 }
             }
@@ -276,7 +289,8 @@ object WikiLinkParser {
     suspend fun findBacklinks(
         targetPage: NotePageEntity,
         allPages: List<NotePageEntity>,
-        forceRefresh: Boolean = false
+        forceRefresh: Boolean = false,
+        importsRoot: File? = null
     ): Pair<List<BacklinkMatch>, List<BacklinkMatch>> {
         val epoch = synchronized(cacheLock) { cacheEpoch }
         val key = BacklinkCacheKey(pagesFingerprint(allPages), targetPage.id)
@@ -286,7 +300,7 @@ object WikiLinkParser {
                 return cached.value
             }
         }
-        val result = computeBacklinks(targetPage, allPages, epoch)
+        val result = computeBacklinks(targetPage, allPages, epoch, importsRoot)
         synchronized(cacheLock) {
             if (cacheEpoch == epoch) {
                 backlinksCache[key] = EpochEntry(epoch, key.fingerprint, result)
@@ -299,7 +313,8 @@ object WikiLinkParser {
     private suspend fun computeBacklinks(
         targetPage: NotePageEntity,
         allPages: List<NotePageEntity>,
-        epoch: Long
+        epoch: Long,
+        importsRoot: File?
     ): Pair<List<BacklinkMatch>, List<BacklinkMatch>> =
         withContext(Dispatchers.Default) {
             val targetTitle = targetPage.title.replace(".md", "").replace(".txt", "").trim()
@@ -314,7 +329,7 @@ object WikiLinkParser {
                 currentCoroutineContext().ensureActive()
                 onPageScanned?.invoke(page)
                 if (page.id == targetPage.id) continue
-                val fullText = getFullTextForPage(page)
+                val fullText = getFullTextForPage(page, importsRoot)
                 val wikiLinks = extractWikiLinks(fullText)
 
                 val matchedWikiLink = wikiLinks.find {
@@ -375,14 +390,14 @@ object WikiLinkParser {
      * tree depth and the recursive [MutableTagNodeBuilder.toTagNode] walk).
      * Cached per unlock epoch, scanned set capped, cancellable.
      */
-    suspend fun buildTagHierarchy(allPages: List<NotePageEntity>): List<TagNode> {
+    suspend fun buildTagHierarchy(allPages: List<NotePageEntity>, importsRoot: File? = null): List<TagNode> {
         val epoch = synchronized(cacheLock) { cacheEpoch }
         val fingerprint = pagesFingerprint(allPages)
         val cached = synchronized(cacheLock) { tagHierarchyEntry }
         if (cached != null && cached.epoch == epoch && cached.fingerprint == fingerprint) {
             return cached.value
         }
-        val result = computeTagHierarchy(allPages, epoch)
+        val result = computeTagHierarchy(allPages, epoch, importsRoot)
         synchronized(cacheLock) {
             if (cacheEpoch == epoch) {
                 tagHierarchyEntry = EpochEntry(epoch, fingerprint, result)
@@ -394,7 +409,8 @@ object WikiLinkParser {
 
     private suspend fun computeTagHierarchy(
         allPages: List<NotePageEntity>,
-        epoch: Long
+        epoch: Long,
+        importsRoot: File?
     ): List<TagNode> =
         withContext(Dispatchers.Default) {
             val tagToPagesMap = mutableMapOf<String, MutableSet<String>>()
@@ -402,7 +418,7 @@ object WikiLinkParser {
             val scanSet = allPages.take(MAX_SCAN_PAGES)
             for (page in scanSet) {
                 currentCoroutineContext().ensureActive()
-                val fullText = getFullTextForPage(page)
+                val fullText = getFullTextForPage(page, importsRoot)
                 val tags = extractTagsBounded(fullText, MAX_TAGS)
                 for (tag in tags) {
                     if (tagToPagesMap.size >= MAX_TAGS) break
@@ -444,7 +460,7 @@ object WikiLinkParser {
      * Cached per unlock epoch; used by KnowledgeGraphScreen so the force-directed
      * edge index is never re-scanned on repeated panel opens. Cancellable + capped.
      */
-    suspend fun buildWikiLinkEdges(allPages: List<NotePageEntity>): List<WikiLinkEdge> {
+    suspend fun buildWikiLinkEdges(allPages: List<NotePageEntity>, importsRoot: File? = null): List<WikiLinkEdge> {
         val epoch = synchronized(cacheLock) { cacheEpoch }
         val fingerprint = pagesFingerprint(allPages)
         val cached = synchronized(cacheLock) { edgesEntry }
@@ -462,7 +478,7 @@ object WikiLinkParser {
             }
             for (page in allPages.take(MAX_SCAN_PAGES)) {
                 currentCoroutineContext().ensureActive()
-                val text = getFullTextForPage(page)
+                val text = getFullTextForPage(page, importsRoot)
                 val wikiLinks = extractWikiLinks(text)
                 for (link in wikiLinks) {
                     val targetPage = pagesByTitle[link.targetTitle.lowercase()]

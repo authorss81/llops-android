@@ -18,6 +18,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.authorss81.noteflow.data.model.NotePageEntity
 import com.authorss81.noteflow.services.BacklinkMatch
+import com.authorss81.noteflow.services.ImportExportService
 import com.authorss81.noteflow.services.WikiLinkParser
 import com.authorss81.noteflow.ui.viewmodel.NoteflowViewModel
 import kotlinx.coroutines.Dispatchers
@@ -33,6 +34,7 @@ fun BacklinksInspectorBottomSheet(
     onOpenPage: (NotePageEntity) -> Unit,
     onDismiss: () -> Unit
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
 
     var explicitLinks by remember { mutableStateOf<List<BacklinkMatch>>(emptyList()) }
@@ -51,7 +53,11 @@ fun BacklinksInspectorBottomSheet(
             // set; the rememberCoroutineScope teardown cancels the build when the
             // bottom sheet closes. forceRefresh=true bypasses the cache after an
             // in-place file edit (convert-to-[[WikiLink]]).
-            val (linked, unlinked) = WikiLinkParser.findBacklinks(activePage, allPages, forceRefresh)
+            // B1-AUTH-05 (phase-69): legacy source-file reads are confined to the
+            // app-private imports root.
+            val (linked, unlinked) = WikiLinkParser.findBacklinks(
+                activePage, allPages, forceRefresh, ImportExportService.getImportsDir(context)
+            )
             explicitLinks = linked
             unlinkedMentions = unlinked
             isLoading = false
@@ -227,7 +233,10 @@ fun BacklinksInspectorBottomSheet(
                                             // legacy plaintext source file if one still exists; the save
                                             // writes the encrypted column and deletes that file.
                                             val body = com.authorss81.noteflow.services.NoteBodyVaultPolicy.resolveBodyForDisplay(
-                                                match.page.extractedText, match.page.sourceFilePath, match.page.sourceFileType
+                                                match.page.extractedText, match.page.sourceFilePath, match.page.sourceFileType,
+                                                // B1-AUTH-05 (phase-69): legacy source reads are confined to
+                                                // the app-private imports root.
+                                                ImportExportService.getImportsDir(context)
                                             )
                                             val newText = body.replace(cleanTitle, "[[$cleanTitle]]")
                                             if (newText != body) {

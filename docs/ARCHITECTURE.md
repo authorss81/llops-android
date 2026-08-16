@@ -370,6 +370,29 @@
     before reading (symlink-swap refused). Covers preview, split,
     and hybrid-editor panes via the single composable. Tests:
     `B1Auth04InlineImagePathTest` (14).
+  - **Implemented in phase-69** (B1-AUTH-05, see `workspace/phase-69/REPORT.md`):
+    a note's `pages.sourceFilePath` may only ever point inside the app-private
+    imports root (`ImportExportService.getImportsDir(context)` =
+    `File(filesDir,"noteflow/imports")`). New pure-JVM
+    `services/SourceFilePathPolicy.kt` is the single confinement decision
+    (`confine`/`isConfined`/`isBlocked`: blank/null and RELATIVE values refused,
+    any `..` segment in either `/` or `\` refused before file I/O, canonical
+    value must be a STRICT canonical descendent of the canonical root — symlink
+    escapes refused; null/non-directory root fails closed). Enforcement is at
+    every boundary: `ImportExportService.sanitizeRestoredSourceFilePaths`
+    (`ImportExportService.kt:1794-1834`, run in `validateAndPrepareRestoredDb`
+    `:1704-1708` right after `sanitizeRestoredStrokeGeometry`) NULLs
+    `sourceFilePath`+`sourceFileType` for every unconfined restored row;
+    `NoteRepository` owns `importsRoot` (constructor `:22`) and confines in
+    `createPage`/`updatePageSource`/`migrateLegacyPlaintextNoteBodies`;
+    `NoteBodyVaultPolicy.resolveBodyForDisplay`/`deleteLegacyNoteTextBody` and
+    `WikiLinkParser.getFullTextForPage`/`readFullText` (full-text cache keyed by
+    `(pageId, importsRootPath)`) only read/delete a CONFINED stored path, with
+    every caller passing the root (both `MainActivity.kt:438/539` body reads,
+    `DocumentTextExtractor`, VM `updatePageSource` + both unlock-flush deletes,
+    KnowledgeGraph/Backlinks/TagExplorer builders, command-palette index). Since
+    phase-44 no plaintext `.writeText()` source-path write survives; this closes
+    every remaining read/delete surface. Tests: `B1Auth05SourceFilePathTest` (17).
 - **Knowledge graph**: `ui/screens/KnowledgeGraphScreen.kt`
   (Phase 38 rewrite — deterministic force-directed layout, cluster colouring, tag
   filter chips, link pulses, collision bounding, low-RAM cull + notice) built on

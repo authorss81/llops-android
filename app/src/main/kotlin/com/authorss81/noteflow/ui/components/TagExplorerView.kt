@@ -21,6 +21,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.authorss81.noteflow.data.model.NotePageEntity
+import com.authorss81.noteflow.services.ImportExportService
 import com.authorss81.noteflow.services.TagNode
 import com.authorss81.noteflow.services.WikiLinkParser
 import com.authorss81.noteflow.ui.viewmodel.NoteflowViewModel
@@ -36,6 +37,7 @@ fun TagExplorerView(
     var allActivePages by remember { mutableStateOf<List<NotePageEntity>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
 
+    val context = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(Unit) {
@@ -45,7 +47,9 @@ fun TagExplorerView(
             allActivePages = pages
             // B2-DOS-11: cached per unlock epoch + capped scan set; the LaunchEffect
             // teardown cancels the build when the panel closes.
-            tagHierarchy = WikiLinkParser.buildTagHierarchy(pages)
+            // B1-AUTH-05 (phase-69): legacy source-file reads are confined to the
+            // app-private imports root.
+            tagHierarchy = WikiLinkParser.buildTagHierarchy(pages, ImportExportService.getImportsDir(context))
             isLoading = false
         }
     }

@@ -6,6 +6,7 @@ import com.authorss81.noteflow.data.model.*
 import com.authorss81.noteflow.services.DatabaseSecurityHelper
 import com.authorss81.noteflow.services.EncryptionService
 import com.authorss81.noteflow.services.NoteBodyVaultPolicy
+import com.authorss81.noteflow.services.SourceFilePathPolicy
 import com.authorss81.noteflow.services.StrokeGeometryGateResult
 import com.authorss81.noteflow.services.StrokeGeometryPolicy
 import com.authorss81.noteflow.services.VaultKeyHolder
@@ -20,7 +21,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.UUID
 
-class NoteRepository(private var db: NoteflowDatabase) {
+class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: File) {
     var encryptionKey: ByteArray?
         get() = VaultKeyHolder.dek
         set(value) {
@@ -394,7 +395,11 @@ class NoteRepository(private var db: NoteflowDatabase) {
     }
 
     suspend fun updatePageSource(id: String, sourceFilePath: String?, sourceFileType: String?) = withContext(Dispatchers.Default) {
-        db.pageDao().updatePageSource(id, sourceFilePath, sourceFileType)
+        // B1-AUTH-05 (phase-69): a stored sourceFilePath may only ever point at a
+        // file confined under the app-private imports root — any other value
+        // (relative, `..`-traversing, absolute-outside-root) is dropped to null.
+        val confined = SourceFilePathPolicy.confine(sourceFilePath, importsRoot)
+        db.pageDao().updatePageSource(id, confined, sourceFileType)
     }
 
     /**
@@ -433,8 +438,12 @@ class NoteRepository(private var db: NoteflowDatabase) {
         val key = encryptionKey
         db.pageDao().getAllPagesForReencrypt().forEach { page ->
             if (!NoteBodyVaultPolicy.isNoteTextBodySource(page.sourceFilePath, page.sourceFileType)) return@forEach
-            val path = page.sourceFilePath ?: return@forEach
-            val file = File(path)
+            // B1-AUTH-05 (phase-69): only a legacy body file CONFINED under the
+            // imports root may be read (and later deleted) — a stored path that
+            // escapes the subtree (relative, `..`, absolute-outside-root) is
+            // never read into the column nor deleted.
+            val readPath = SourceFilePathPolicy.confine(page.sourceFilePath, importsRoot) ?: return@forEach
+            val file = File(readPath)
             if (!file.exists()) return@forEach
 
             val dbBody = when {
@@ -545,6 +554,9 @@ class NoteRepository(private var db: NoteflowDatabase) {
     ): NotePageEntity = withContext(Dispatchers.Default) {
         val rawTitle = title.trim()
         val pageId = UUID.randomUUID().toString()
+        // B1-AUTH-05 (phase-69): a newly-created page's source file may only
+        // point inside the app-private imports root — anything else is dropped.
+        val storedSrc = SourceFilePathPolicy.confine(sourceFilePath, importsRoot)
         // B2-UI-1 (phase-49): the DEK is required for the encrypted columns —
         // a locked (zeroized) vault can never fall back to a plaintext title/body.
         val dek = requireEncryptionKey()
@@ -558,7 +570,7 @@ class NoteRepository(private var db: NoteflowDatabase) {
             id = pageId,
             sectionId = sectionId,
             title = storedTitle,
-            sourceFilePath = sourceFilePath,
+            sourceFilePath = storedSrc,
             sourceFileType = sourceFileType,
             pageIndex = pageIndex,
             template = template,

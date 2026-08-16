@@ -42,6 +42,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.authorss81.noteflow.data.model.NotePageEntity
+import com.authorss81.noteflow.services.ImportExportService
 import com.authorss81.noteflow.services.NoteBodyVaultPolicy
 import com.authorss81.noteflow.theme.NoteflowTheme
 import com.authorss81.noteflow.ui.screens.EditorScreen
@@ -434,8 +435,11 @@ class MainActivity : FragmentActivity() {
                                                 // extractedText column; a legacy plaintext source file is only
                                                 // coalesced transiently if it still exists (and is deleted on save).
                                                 value = withContext(Dispatchers.IO) {
+                                                    // B1-AUTH-05 (phase-69): a legacy source file may only be
+                                                    // read when it is confined under the app-private imports root.
                                                     com.authorss81.noteflow.services.NoteBodyVaultPolicy.resolveBodyForDisplay(
-                                                        page.extractedText, page.sourceFilePath, page.sourceFileType
+                                                        page.extractedText, page.sourceFilePath, page.sourceFileType,
+                                                        ImportExportService.getImportsDir(this@MainActivity)
                                                     )
                                                 }
                                             }
@@ -532,8 +536,11 @@ class MainActivity : FragmentActivity() {
                                                                 // extractedText column; legacy plaintext source files are
                                                                 // only coalesced transiently (and deleted on save).
                                                                 value = withContext(Dispatchers.IO) {
+                                                                    // B1-AUTH-05 (phase-69): legacy source-file reads are
+                                                                    // only allowed under the app-private imports root.
                                                                     com.authorss81.noteflow.services.NoteBodyVaultPolicy.resolveBodyForDisplay(
-                                                                        page.extractedText, page.sourceFilePath, page.sourceFileType
+                                                                        page.extractedText, page.sourceFilePath, page.sourceFileType,
+                                                                        ImportExportService.getImportsDir(this@MainActivity)
                                                                     )
                                                                 }
                                                             }
