@@ -30,6 +30,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.authorss81.noteflow.services.InlineImagePathPolicy
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -111,6 +112,11 @@ fun FullscreenImageDialog(path: String?, onDismiss: () -> Unit) {
  * 21.6: inline image rendered from markdown `![alt](path)`. Resolves
  * relative paths against the page's source-file directory, decodes bounded
  * and opens the fullscreen viewer on tap.
+ *
+ * B1-AUTH-04 (phase-68): resolution is confined to the app-private subtree by
+ * [InlineImagePathPolicy] — absolute and `..`-traversing destinations never
+ * resolve, so a crafted note cannot read-and-display arbitrary files the
+ * process can access.
  */
 @Composable
 fun MarkdownInlineImage(
@@ -121,14 +127,7 @@ fun MarkdownInlineImage(
 ) {
     var showFullscreen by remember { mutableStateOf(false) }
     val resolvedPath = remember(destination, baseDir) {
-        val dest = destination
-        if (dest.isNullOrBlank()) return@remember null
-        val file = File(dest)
-        when {
-            file.isAbsolute && file.exists() -> dest
-            baseDir != null && File(baseDir, dest).exists() -> File(baseDir, dest).absolutePath
-            else -> null
-        }
+        InlineImagePathPolicy.resolve(destination, baseDir)?.absolutePath
     }
     var bitmap by remember(resolvedPath) { mutableStateOf<Bitmap?>(null) }
     LaunchedEffect(resolvedPath) {

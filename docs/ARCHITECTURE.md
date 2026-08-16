@@ -353,6 +353,19 @@
   `ui/components/markdown/MarkdownRenderer.kt` + `HybridMarkdownEditor.kt`
   (replaces the raw text field in EDIT/SPLIT panes; typed callouts + interactive
   checkboxes; `AnimatedCheckmark.kt` respects reduce-motion).
+  - **Implemented in phase-68** (B1-AUTH-04, see `workspace/phase-68/REPORT.md`):
+    markdown inline-image destinations resolve ONLY inside an allowlisted
+    app-private subtree. New pure-JVM `services/InlineImagePathPolicy.kt` is the
+    single resolver behind `MarkdownInlineImage` (`ui/components/ImageViewer.kt:129-131`):
+    absolute paths rejected outright, any `..` path segment (incl. backslash-aware
+    `..\..`) rejected before file I/O, and the candidate must exist + be a
+    non-directory whose canonical path is a STRICT descendent of the canonical
+    `baseDir` (symlink escape refused) — the old `file.isAbsolute && file.exists()`
+    / `File(baseDir, dest).exists()` accept branches are deleted, so a crafted
+    note can no longer read-and-display arbitrary process-readable files nor use
+    the "File not found" fallback as an existence oracle. Covers preview, split,
+    and hybrid-editor panes via the single composable. Tests:
+    `B1Auth04InlineImagePathTest` (13).
 - **Knowledge graph**: `ui/screens/KnowledgeGraphScreen.kt`
   (Phase 38 rewrite — deterministic force-directed layout, cluster colouring, tag
   filter chips, link pulses, collision bounding, low-RAM cull + notice) built on
