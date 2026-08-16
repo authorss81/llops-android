@@ -70,6 +70,7 @@ import com.authorss81.noteflow.plugins.export.mimeType
 import com.authorss81.noteflow.plugins.inktos.InkToShapePlugin
 import com.authorss81.noteflow.services.ImportExportService
 import com.authorss81.noteflow.services.ExportDestinationPolicy
+import com.authorss81.noteflow.services.PsdExportPolicy
 import com.authorss81.noteflow.services.HarmonyScheme
 import com.authorss81.noteflow.services.PaletteCatalog
 import com.authorss81.noteflow.services.PaletteMath
@@ -1403,11 +1404,23 @@ fun EditorScreen(
                             onClick = {
                                 showOverflowMenu = false
                                 scope.launch {
-                                    val file = ImportExportService.exportPageToPsd(context, page, viewModel.repository)
-                                    if (file != null) {
+                                    val outcome = ImportExportService.exportPageToPsd(context, page, viewModel.repository)
+                                    if (outcome.file != null) {
+                                        // B2-DOS-06 (phase-82): when the layer budget
+                                        // dropped layers, tell the user once — non-alarming,
+                                        // no silent degradation.
+                                        if (outcome.wasLayerCapped) {
+                                            viewModel.showSnackbar(
+                                                PsdExportPolicy.noticeMessage(
+                                                    outcome.exportedLayerCount,
+                                                    outcome.omittedLayerCount
+                                                ),
+                                                isLong = true
+                                            )
+                                        }
                                         exporter.export(
                                             ExportDestinationPolicy.ExportKind.LAYERED_PSD,
-                                            file
+                                            outcome.file
                                         ) { ok ->
                                             if (!ok) {
                                                 viewModel.showSnackbar("Export cancelled")

@@ -2423,7 +2423,7 @@ object ImportExportService {
         context: Context,
         page: com.authorss81.noteflow.data.model.NotePageEntity,
         repository: com.authorss81.noteflow.data.repository.NoteRepository
-    ): File? = withContext(Dispatchers.IO) {
+    ): PsdExportService.PsdExportOutcome = withContext(Dispatchers.IO) {
         try {
             val strokes = repository.getStrokesForPage(page.id)
             val layers = repository.getLayersForPage(page.id)
@@ -2446,13 +2446,25 @@ object ImportExportService {
                 null
             }
 
+            // B2-DOS-06 (phase-82): the exported drawing-layer count is budgeted by
+            // PsdExportPolicy BEFORE any per-layer bitmap is created — a restored
+            // vault or heavy Layers panel can no longer make the export materialize
+            // N full-page ARGB bitmaps at once. `omittedLayerCount` drives the
+            // one-time non-alarming notice shown by the caller.
+            var exportedDataLayers = 0
+            var omittedDataLayers = 0
+
             if (layers.isEmpty()) {
                 val layerBitmap = android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.ARGB_8888)
                 val canvas = android.graphics.Canvas(layerBitmap)
                 renderLayersAndStrokesToCanvas(canvas, width, height, 0, strokes, emptyList(), inkRenderer)
                 psdLayers.add(PsdExportService.PsdLayer("Drawing Layer 1", layerBitmap))
+                exportedDataLayers = 1
             } else {
-                layers.sortedBy { it.zOrder }.forEachIndexed { idx, layerEntity ->
+                val sorted = layers.sortedBy { it.zOrder }
+                exportedDataLayers = PsdExportPolicy.capLayerCount(sorted.size)
+                omittedDataLayers = PsdExportPolicy.omittedLayerCount(sorted.size)
+                sorted.take(exportedDataLayers).forEachIndexed { idx, layerEntity ->
                     val layerBitmap = android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.ARGB_8888)
                     val canvas = android.graphics.Canvas(layerBitmap)
                     val layerStrokes = strokes.filter { it.layerId == layerEntity.id }
@@ -2461,17 +2473,22 @@ object ImportExportService {
                 }
             }
 
-            PsdExportService.exportLayersToPsd(
+            val file = PsdExportService.exportLayersToPsd(
                 context = context,
                 title = page.title,
                 width = width,
                 height = height,
                 layers = psdLayers
             )
+            PsdExportService.PsdExportOutcome(
+                file = file,
+                exportedLayerCount = exportedDataLayers,
+                omittedLayerCount = omittedDataLayers
+            )
         } catch (e: Exception) {
             // B2-LOG-03 (phase-71): class name only, never the throwable.
             Log.e("ImportExportService", FailureLogPolicy.safeLogMessage(e, "Failed to export page to PSD"))
-            null
+            PsdExportService.PsdExportOutcome(file = null, exportedLayerCount = 0, omittedLayerCount = 0)
         }
     }
 
