@@ -289,6 +289,17 @@
     "lockout is UI-only / vault only as strong as the password" caveat is documented in the policy KDoc;
     TEE-bound attempt gating / Argon2id remain tracked follow-ups (not introduced, no new deps).
     Tests: `B1Crypto04PasswordStrengthTest` (10).
+  - **Implemented in phase-90** (B1-PLAT-8, see `workspace/phase-90/REPORT.md`): the strength floor is
+    raised ≥ 10 NFKC-normalized graphemes (`PasswordStrengthPolicy.MIN_STRENGTH_GRAPHEMES` = 10, was 8)
+    and common/prefix-suffix words are rejected (`isCommonPasswordVariant` — a widely-leaked base
+    (`password`/`sunshine`/`letmein`/…) is refused reach-able whole or with only digit/symbol padding
+    around it; structural, so genuine passphrases that merely contain a word keep passing). The policy
+    KDoc + `docs/RELEASE.md` document explicitly that offline brute force on a copied vault is only
+    mitigated by password ENTROPY, never by the on-device lockout (the 5-attempt UI lockout only
+    throttles typing on-device). Enforced only at set/rotate; unlock never strength-gates, so
+    pre-existing weaker vaults keep unlocking and rotating. Tests: `B1Crypto04PasswordStrengthTest`
+    (now 17: 3 new B1-PLAT-8 cases incl. common-word rejection + documentation pin) +
+    `B2Crypto04BackupPasswordTest` updated to the 10 floor (backups reuse the same bar).
   - **Implemented in phase-64** (B1-CRYPTO-05, see `workspace/phase-64/REPORT.md`): a stored DEK
     device wrapper that becomes undecryptable (AndroidKeyStore key lost/unreadable) is NEVER
     silently re-keyed. Pure-JVM `services/DekReadResult.kt` defines sealed `DekReadResult`

@@ -20,8 +20,9 @@ package com.authorss81.noteflow.services
  * (HomeScreen validates the typed password against the vault before exporting —
  * see `HomeScreen.kt` `isMasterPasswordValid`), the backup password must clear
  * the SAME strength bar as the vault master password ([PasswordStrengthPolicy],
- * B1-CRYPTO-04 / phase-63): at least 8 NFKC-normalized graphemes, no
- * sequential/keyboard-row/repeated patterns, at least 3 distinct graphemes, and
+ * B1-CRYPTO-04 / phase-63 + B1-PLAT-8 / phase-90): at least 10 NFKC-normalized
+ * graphemes, no sequential/keyboard-row/repeated/common-word/prefix-suffix
+ * patterns, at least 3 distinct graphemes, and
  * 3-of-4 character-class diversity for short passwords (passphrases of at least
  * 12 graphemes pass on length alone). The floor is measured on the NFKC-
  * normalized form — the exact bytes `EncryptionService.deriveKey` hashes

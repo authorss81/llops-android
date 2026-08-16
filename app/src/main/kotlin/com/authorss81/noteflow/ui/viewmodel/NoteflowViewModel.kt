@@ -2433,12 +2433,16 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         // NFKC-NORMALIZED password, in grapheme clusters — this is exactly the
         // byte sequence deriveKey will hash, so the check can never be undone
         // by normalization collapsing the input differently at unlock time.
-        // B1-CRYPTO-04 (phase-63): a NEW master password must additionally clear
-        // the strength policy — ≥ 8 graphemes, no sequential/keyboard/repeated
-        // patterns, class diversity for short passwords. The policy measures the
-        // same NFKC-normalized form, so the stored+derived bytes always satisfy
-        // it. Enforced here (authoritative) AND in the dialog (human-readable);
-        // never at verify/unlock, so a pre-existing weak vault keeps unlocking.
+        // B1-CRYPTO-04 (phase-63) + B1-PLAT-8 (phase-90): a NEW master password
+        // must additionally clear the strength policy — ≥ 10 graphemes, no
+        // sequential/keyboard/common-word/prefix-suffix patterns, class
+        // diversity for short passwords. The policy measures the same
+        // NFKC-normalized form, so the stored+derived bytes always satisfy it.
+        // Enforced here (authoritative) AND in the dialog (human-readable);
+        // never at verify/unlock, so a pre-existing weaker vault keeps
+        // unlocking. IMPORTANT (B1-PLAT-8): offline brute force on a copied
+        // vault is only mitigated by this entropy — never by the on-device
+        // lockout (which only throttles attempts typed on the device).
         val normalized = EncryptionService.normalizePassword(password)
         if (!PasswordStrengthPolicy.evaluate(password).accepted) return false
         var kek: ByteArray? = null
@@ -2513,9 +2517,10 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         // B2-CRYPTO-07 (phase-113): same normalized-form length gate as
         // setMasterPassword, so a new password is always stored+derived in the
         // single NFKC form and survives re-typing on any keyboard/IME.
-        // B1-CRYPTO-04 (phase-63): the NEW password must clear the strength
-        // policy (≥ 8 graphemes, no sequential/repeated patterns, class
-        // diversity for short passwords), exactly as setMasterPassword requires.
+        // B1-CRYPTO-04 (phase-63) + B1-PLAT-8 (phase-90): the NEW password must
+        // clear the strength policy (≥ 10 graphemes, no sequential/keyboard/
+        // common-word/prefix-suffix patterns, class diversity for short
+        // passwords), exactly as setMasterPassword requires.
         // The OLD password is only VERIFIED (never strength-gated) so a
         // pre-existing weaker vault can always be rotated and keep unlocking.
         val newPasswordNormalized = EncryptionService.normalizePassword(newPassword)

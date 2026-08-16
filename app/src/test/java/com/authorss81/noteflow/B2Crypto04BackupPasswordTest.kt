@@ -73,11 +73,15 @@ class B2Crypto04BackupPasswordTest {
             "123456" to PasswordStrengthVerdict.TOO_SHORT,
             "abcdef" to PasswordStrengthVerdict.TOO_SHORT,
             "A9fj2l!" to PasswordStrengthVerdict.TOO_SHORT, // 7 chars — still too short
-            "12345678" to PasswordStrengthVerdict.SEQUENTIAL,
-            "qwertyui" to PasswordStrengthVerdict.SEQUENTIAL,
-            "abcdefgh" to PasswordStrengthVerdict.SEQUENTIAL,
-            "aaaaabaa" to PasswordStrengthVerdict.WEAK, // < 3 distinct graphemes
-            "PASSWORD1" to PasswordStrengthVerdict.LOW_DIVERSITY, // 9 chars, upper+digit only
+            // B1-PLAT-8 raised the floor from 8 to 10 — 8..9 chars must also fail:
+            "123456789" to PasswordStrengthVerdict.TOO_SHORT,
+            "1234567890" to PasswordStrengthVerdict.SEQUENTIAL,
+            "qwertyuiop" to PasswordStrengthVerdict.SEQUENTIAL,
+            "abcdefghij" to PasswordStrengthVerdict.SEQUENTIAL,
+            "aaaaabaaaa" to PasswordStrengthVerdict.WEAK, // < 3 distinct graphemes
+            // B1-PLAT-8: widely-leaked words (bare or decorated) are rejected:
+            "sunshine123" to PasswordStrengthVerdict.COMMON_PASSWORD,
+            "PASSWORD12X" to PasswordStrengthVerdict.LOW_DIVERSITY, // 11 chars, upper+digit only
         )
         cases.forEach { (pw, expected) ->
             assertEquals("$pw must be rejected as $expected", expected, BackupPasswordPolicy.evaluate(pw))
@@ -94,7 +98,7 @@ class B2Crypto04BackupPasswordTest {
         val ex = assertThrows(IllegalArgumentException::class.java) {
             BackupPasswordPolicy.requireStrongBackupPassword("123456")
         }
-        assertTrue("rejection carries the strength verdict", ex.message.orEmpty().contains("8 characters"))
+        assertTrue("rejection carries the strength verdict", ex.message.orEmpty().contains("10 characters"))
         assertTrue(
             "rejection is never silent about the offline cost",
             ex.message.orEmpty().contains("offline")

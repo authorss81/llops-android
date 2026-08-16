@@ -134,6 +134,17 @@ A ".aab" (Android App Bundle) is not produced yet — generating one needs
 
 ## Gotchas
 
+- **Master password strength & offline brute force (B1-PLAT-8, B1-CRYPTO-04)**:
+  new master/backup passwords are strength-gated at set/rotate time by the
+  pure-JVM `PasswordStrengthPolicy` (`services/PasswordStrengthPolicy.kt`):
+  ≥ 10 NFKC-normalized graphemes, no sequential/keyboard-row/repeated patterns,
+  no widely-leaked password words (bare, or with only digit/symbol prefix/suffix
+  decoration), and class diversity for short passwords. **Offline brute force is
+  only mitigated by password entropy — NOT by the on-device lockout.** The
+  5-attempt UI lockout throttles only typing on the device; an attacker with a
+  copy of the prefs + SQLCipher vault (or a restore onto a rooted emulator)
+  cracks the wrapped DEK with a GPU rig at the speed of the password itself.
+  Recommend long passphrases (≥ 16 chars) in all user-facing guidance.
 - **App icon / label**: `applicationId = com.aistudio.inkflow.app.bkxjrz`,
   namespace `com.authorss81.noteflow` (known mismatch — ROADMAP 21.10). Keep
   `applicationId` stable; renaming it orphans existing installs.

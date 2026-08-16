@@ -8,9 +8,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * B1-CRYPTO-04 (phase-63): a NEW master password must be strong enough that an
- * offline GPU/FPGA PBKDF2-SHA-256 attacker cannot crack the wrapped DEK from a
- * copied vault in hours-to-days.
+ * B1-CRYPTO-04 (phase-63) + B1-PLAT-8 (phase-90): a NEW master password must be
+ * strong enough that an offline GPU/FPGA PBKDF2-SHA-256 attacker cannot crack
+ * the wrapped DEK from a copied vault in hours-to-days.
  *
  * The pre-fix state accepted any 6+ grapheme password with no complexity/entropy
  * check (`NoteflowViewModel.kt` used `MIN_PASSWORD_LENGTH = 6`; a 6-7 char
@@ -18,21 +18,25 @@ import org.junit.Test
  * pure-JVM [PasswordStrengthPolicy] as the authoritative gate on
  * `setMasterPassword`/`changeMasterPassword` (and the human-readable verdict in
  * the Dialogs.kt set/change dialogs):
- *   - length ≥ [PasswordStrengthPolicy.MIN_STRENGTH_GRAPHEMES] (8) — stronger
- *     than the old floor, still below the [com.authorss81.noteflow.services.EncryptionService.MAX_PASSWORD_GRAPHEMES] cap;
- *   - no sequential / keyboard-row / single-run-repeat patterns (`12345678`,
- *     `qwerty`, `aaaaaaaa`);
+ *   - length ≥ [PasswordStrengthPolicy.MIN_STRENGTH_GRAPHEMES] — raised 6 → 10
+ *     by B1-CRYPTO-04/B1-PLAT-8 (the phase-63 run was 8; B1-PLAT-8 raises it to
+ *     10 so `12345678…`-class short keyspaces are out), still below the
+ *     [com.authorss81.noteflow.services.EncryptionService.MAX_PASSWORD_GRAPHEMES] cap;
+ *   - no sequential / keyboard-row / single-run-repeat patterns (`1234567890`,
+ *     `qwertyuiop`, `aaaaaaaaaa`);
+ *   - B1-PLAT-8: no widely-leaked password word — bare or thinly decorated with
+ *     a digit/symbol prefix/suffix (`password`, `monkey1234`, `2026sunshine`);
  *   - ≥ 3 distinct graphemes (kills the `ababab…` tiny-keyspace class);
  *   - character-class diversity for short passwords (< 12 graphemes need ≥ 3 of
  *     upper/lower/digit/symbol); passphrases ≥ 12 pass on length alone.
  *
  * Crucially the policy is measured on the NFKC-NORMALIZED password (the exact
- * byte string `EncryptionService.deriveKey` hashes, B2-CRYPTO-07), so full-width
- * `１２３４５６７８` folds to `12345678` and is rejected as sequential, and it is
+ * byte string `EncryptionService.deriveKey` hashes, B2-CRYPTO-07), and it is
  * enforced ONLY at set/change — `verifyMasterPassword`/`unwrapMasterDek`/
  * `isMasterPasswordValid` never touch it, so a pre-existing weaker vault keeps
- * unlocking and rotating. The UI lockout is documented UI-only (the vault is
- * only as strong as its password).
+ * unlocking and rotating. The UI lockout is documented UI-only (B1-PLAT-8):
+ * offline brute force on a copied vault is only mitigated by password entropy,
+ * never by the on-device lockout.
  */
 class B1Crypto04PasswordStrengthTest {
 
@@ -51,6 +55,14 @@ class B1Crypto04PasswordStrengthTest {
         assertEquals(PasswordStrengthVerdict.TOO_SHORT, PasswordStrengthPolicy.evaluate("abcdef"))
         assertEquals(PasswordStrengthVerdict.TOO_SHORT, PasswordStrengthPolicy.evaluate("hunter2"))
         assertEquals(PasswordStrengthVerdict.TOO_SHORT, PasswordStrengthPolicy.evaluate("secret1"))
+        assertEquals(
+            "B1-PLAT-8: the phase-63 floor of 8 is also superseded — 8..9 graphemes must now be rejected",
+            PasswordStrengthVerdict.TOO_SHORT,
+            PasswordStrengthPolicy.evaluate("12345678")
+        )
+        assertEquals(PasswordStrengthVerdict.TOO_SHORT, PasswordStrengthPolicy.evaluate("123456789"))
+        assertEquals(PasswordStrengthVerdict.TOO_SHORT, PasswordStrengthPolicy.evaluate("abcdefghi"))
+        assertEquals(PasswordStrengthVerdict.TOO_SHORT, PasswordStrengthPolicy.evaluate("password1"))
     }
 
     @Test
@@ -64,10 +76,10 @@ class B1Crypto04PasswordStrengthTest {
 
     @Test
     fun `sequential ascending and descending passwords are rejected`() {
-        assertEquals(PasswordStrengthVerdict.SEQUENTIAL, PasswordStrengthPolicy.evaluate("12345678"))
-        assertEquals(PasswordStrengthVerdict.SEQUENTIAL, PasswordStrengthPolicy.evaluate("abcdefgh"))
-        assertEquals(PasswordStrengthVerdict.SEQUENTIAL, PasswordStrengthPolicy.evaluate("987654321"))
-        assertEquals(PasswordStrengthVerdict.SEQUENTIAL, PasswordStrengthPolicy.evaluate("zyxwvuts"))
+        assertEquals(PasswordStrengthVerdict.SEQUENTIAL, PasswordStrengthPolicy.evaluate("1234567890"))
+        assertEquals(PasswordStrengthVerdict.SEQUENTIAL, PasswordStrengthPolicy.evaluate("abcdefghij"))
+        assertEquals(PasswordStrengthVerdict.SEQUENTIAL, PasswordStrengthPolicy.evaluate("9876543210"))
+        assertEquals(PasswordStrengthVerdict.SEQUENTIAL, PasswordStrengthPolicy.evaluate("zyxwvutsrq"))
         assertEquals(PasswordStrengthVerdict.SEQUENTIAL, PasswordStrengthPolicy.evaluate("2468qwerty"))
     }
 
@@ -75,30 +87,62 @@ class B1Crypto04PasswordStrengthTest {
     fun `keyboard-row passwords are rejected`() {
         assertEquals(PasswordStrengthVerdict.SEQUENTIAL, PasswordStrengthPolicy.evaluate("qwertyuiop"))
         assertEquals(PasswordStrengthVerdict.SEQUENTIAL, PasswordStrengthPolicy.evaluate("asdfghjkl1"))
-        assertEquals(PasswordStrengthVerdict.SEQUENTIAL, PasswordStrengthPolicy.evaluate("1qaz2wsx"))
-        assertEquals(PasswordStrengthVerdict.SEQUENTIAL, PasswordStrengthPolicy.evaluate("qwerty123"))
+        assertEquals(PasswordStrengthVerdict.SEQUENTIAL, PasswordStrengthPolicy.evaluate("1qaz2wsx3edc"))
+        assertEquals(PasswordStrengthVerdict.SEQUENTIAL, PasswordStrengthPolicy.evaluate("qwertyuiop123"))
     }
 
     @Test
     fun `repeated or near-single-keyspace passwords are rejected`() {
-        assertEquals(PasswordStrengthVerdict.WEAK, PasswordStrengthPolicy.evaluate("aaaaaaaa"))
-        assertEquals(PasswordStrengthVerdict.WEAK, PasswordStrengthPolicy.evaluate("11111111"))
-        assertEquals(PasswordStrengthVerdict.WEAK, PasswordStrengthPolicy.evaluate("12121212"))
+        assertEquals(PasswordStrengthVerdict.WEAK, PasswordStrengthPolicy.evaluate("aaaaaaaaaa"))
+        assertEquals(PasswordStrengthVerdict.WEAK, PasswordStrengthPolicy.evaluate("1111111111"))
+        assertEquals(PasswordStrengthVerdict.WEAK, PasswordStrengthPolicy.evaluate("1212121212"))
         assertEquals(PasswordStrengthVerdict.WEAK, PasswordStrengthPolicy.evaluate("a".repeat(40)))
         assertEquals(PasswordStrengthVerdict.WEAK, PasswordStrengthPolicy.evaluate("12".repeat(20)))
+    }
+
+    // ---------- rejected: common / prefix-suffix words (B1-PLAT-8) ----------
+
+    @Test
+    fun `bare and prefix-suffix decorated common passwords are rejected`() {
+        assertEquals(PasswordStrengthVerdict.COMMON_PASSWORD, PasswordStrengthPolicy.evaluate("password12"))
+        assertEquals(PasswordStrengthVerdict.COMMON_PASSWORD, PasswordStrengthPolicy.evaluate("passw0rd2025"))
+        assertEquals(PasswordStrengthVerdict.COMMON_PASSWORD, PasswordStrengthPolicy.evaluate("monkey5281"))
+        assertEquals(PasswordStrengthVerdict.COMMON_PASSWORD, PasswordStrengthPolicy.evaluate("2026sunshine"))
+        assertEquals(PasswordStrengthVerdict.COMMON_PASSWORD, PasswordStrengthPolicy.evaluate("letmein!!!"))
+        assertEquals(PasswordStrengthVerdict.COMMON_PASSWORD, PasswordStrengthPolicy.evaluate("Princess2025"))
+        assertEquals(PasswordStrengthVerdict.COMMON_PASSWORD, PasswordStrengthPolicy.evaluate("iloveyou2025"))
+        assertEquals(PasswordStrengthVerdict.COMMON_PASSWORD, PasswordStrengthPolicy.evaluate("superman4002"))
+        assertEquals(
+            "common detection fires BEFORE the low-class-diversity check: a decorated 'sunshine911' is 'too common', not merely short-of-classes",
+            PasswordStrengthVerdict.COMMON_PASSWORD,
+            PasswordStrengthPolicy.evaluate("sunshine911")
+        )
+    }
+
+    @Test
+    fun `common detection leaves genuine passphrases and mutated words alone`() {
+        // A base merely embedded among real letters (or substituted) is a
+        // genuine passphrase input, never a wordlist-feed common variant.
+        assertEquals(PasswordStrengthVerdict.ACCEPTED, PasswordStrengthPolicy.evaluate("correct horse battery staple"))
+        assertEquals(PasswordStrengthVerdict.ACCEPTED, PasswordStrengthPolicy.evaluate("sunshine on parade 2021"))
+        assertEquals(PasswordStrengthVerdict.ACCEPTED, PasswordStrengthPolicy.evaluate("my monkey friend"))
+        assertEquals(PasswordStrengthVerdict.ACCEPTED, PasswordStrengthPolicy.evaluate("W3lcome2Vault!"))
+        assertEquals(PasswordStrengthVerdict.ACCEPTED, PasswordStrengthPolicy.evaluate("xxpasswordxx"))
     }
 
     // ---------- rejected: low class diversity on short passwords ----------
 
     @Test
     fun `short passwords with low class diversity are rejected`() {
-        assertEquals(PasswordStrengthVerdict.LOW_DIVERSITY, PasswordStrengthPolicy.evaluate("password1"))
-        assertEquals(PasswordStrengthVerdict.LOW_DIVERSITY, PasswordStrengthPolicy.evaluate("letmein1"))
-        assertEquals(PasswordStrengthVerdict.LOW_DIVERSITY, PasswordStrengthPolicy.evaluate("iloveyou9"))
+        // 10-11 graphemes, lowercase+digit only (2 classes), NOT a common word.
+        assertEquals(PasswordStrengthVerdict.LOW_DIVERSITY, PasswordStrengthPolicy.evaluate("elephant99"))
+        assertEquals(PasswordStrengthVerdict.LOW_DIVERSITY, PasswordStrengthPolicy.evaluate("collie2459"))
+        assertEquals(PasswordStrengthVerdict.LOW_DIVERSITY, PasswordStrengthPolicy.evaluate("giraffe234"))
+        assertEquals(PasswordStrengthVerdict.LOW_DIVERSITY, PasswordStrengthPolicy.evaluate("freshpink12"))
         assertEquals(
-            "lowercase-only 8..11 graphemes must be rejected",
+            "lowercase-only 10..11 graphemes must be rejected",
             PasswordStrengthVerdict.LOW_DIVERSITY,
-            PasswordStrengthPolicy.evaluate("monkey123")
+            PasswordStrengthPolicy.evaluate("pneumatic42")
         )
     }
 
@@ -106,10 +150,12 @@ class B1Crypto04PasswordStrengthTest {
 
     @Test
     fun `full-width compatibility characters fold to the normalized form and are judged on it`() {
-        // U+FF11..U+FF18 full-width digits — NFKC-normalizes to "12345678",
+        // U+FF11..U+FF2A full-width digits — NFKC-normalizes to "1234567890",
         // which is sequential. The policy must judge the stored+derived form.
-        assertEquals(PasswordStrengthVerdict.SEQUENTIAL, PasswordStrengthPolicy.evaluate("１２３４５６７８"))
-        // And a full-width-short password is judged short.
+        assertEquals(PasswordStrengthVerdict.SEQUENTIAL, PasswordStrengthPolicy.evaluate("１２３４５６７８９０"))
+        // 9 full-width digits fold to a 9-grapheme string — below the new 10 floor.
+        assertEquals(PasswordStrengthVerdict.TOO_SHORT, PasswordStrengthPolicy.evaluate("１２３４５６７８９"))
+        // And a full-width-short password is judged short too.
         assertEquals(PasswordStrengthVerdict.TOO_SHORT, PasswordStrengthPolicy.evaluate("１２３４５６"))
     }
 
@@ -120,7 +166,7 @@ class B1Crypto04PasswordStrengthTest {
         assertEquals(PasswordStrengthVerdict.ACCEPTED, PasswordStrengthPolicy.evaluate("CorrectHorseBatteryStaple9!"))
         assertEquals(PasswordStrengthVerdict.ACCEPTED, PasswordStrengthPolicy.evaluate("Tr0ub4dor&3"))
         assertEquals(PasswordStrengthVerdict.ACCEPTED, PasswordStrengthPolicy.evaluate("W3lcome2Vault!"))
-        assertEquals(PasswordStrengthVerdict.ACCEPTED, PasswordStrengthPolicy.evaluate("D4rkMn2!"))
+        assertEquals(PasswordStrengthVerdict.ACCEPTED, PasswordStrengthPolicy.evaluate("D4rkMn2!9x"))
         assertEquals(PasswordStrengthVerdict.ACCEPTED, PasswordStrengthPolicy.evaluate("Éléphant9!"))
     }
 
@@ -129,7 +175,7 @@ class B1Crypto04PasswordStrengthTest {
         // >= 12 graphemes: length-alone acceptance (passphrase exception).
         assertEquals(PasswordStrengthVerdict.ACCEPTED, PasswordStrengthPolicy.evaluate("correct horse battery staple"))
         assertEquals(PasswordStrengthVerdict.ACCEPTED, PasswordStrengthPolicy.evaluate("correcthorsebatterystaple"))
-        assertEquals(PasswordStrengthVerdict.ACCEPTED, PasswordStrengthPolicy.evaluate("Sunshine#2026"))
+        assertEquals(PasswordStrengthVerdict.ACCEPTED, PasswordStrengthPolicy.evaluate("AuroraSky#2026"))
     }
 
     @Test
@@ -138,12 +184,41 @@ class B1Crypto04PasswordStrengthTest {
             "CorrectHorseBatteryStaple9!",
             "Tr0ub4dor&3",
             "W3lcome2Vault!",
-            "D4rkMn2!",
+            "D4rkMn2!9x",
             "correct horse battery staple",
         )) {
             val graphemes = com.authorss81.noteflow.services.EncryptionService.normalizedGraphemeCount(pwd)
-            assertTrue("accepted password must be >= 8 graphemes (was $graphemes)", graphemes >= 8)
+            assertTrue("accepted password must be >= 10 graphemes (was $graphemes)", graphemes >= 10)
         }
+    }
+
+    // ---------- B1-PLAT-8 (phase-90): documentation + wiring pins ----------
+
+    @Test
+    fun `the stronger minimum of 10 and the offline-entropy caveat are documented`() {
+        val policy = java.io.File(
+            repoRoot(),
+            "app/src/main/kotlin/com/authorss81/noteflow/services/PasswordStrengthPolicy.kt"
+        ).readText()
+        assertTrue(
+            "B1-PLAT-8: the minimum must be 10 graphemes",
+            policy.contains("const val MIN_STRENGTH_GRAPHEMES = 10")
+        )
+        assertTrue(
+            "the finding's 'only password entropy, not the on-device lockout' caveat must be documented in code",
+            policy.contains("offline brute force") &&
+                policy.contains("entropy") &&
+                policy.contains("lockout") &&
+                policy.contains("UI-only")
+        )
+
+        val release = java.io.File(repoRoot(), "docs/RELEASE.md").readText()
+        assertTrue(
+            "docs/RELEASE.md must carry the B1-PLAT-8 boundary so operators/users know the lockout is NOT the offline defense",
+            release.contains("B1-PLAT-8") &&
+                release.contains("entropy") &&
+                release.contains("lockout")
+        )
     }
 
     // ---------- source pins: enforcement + scope ----------
