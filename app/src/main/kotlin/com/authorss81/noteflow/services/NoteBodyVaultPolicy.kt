@@ -57,7 +57,11 @@ object NoteBodyVaultPolicy {
             try {
                 val file = File(path)
                 if (file.exists() && file.canRead()) {
-                    val fileBody = file.readText()
+                    // B2-DOS-05 (phase-81): the legacy body is read head-bounded so
+                    // a huge/attacker-supplied text file can never be fully
+                    // `readText()`-ed into heap — a capped prefix still resolves
+                    // (the column fallback keeps the full encrypted body).
+                    val fileBody = AttachmentIngestPolicy.readTextHead(file)
                     if (fileBody.isNotBlank()) return fileBody
                 }
             } catch (e: Exception) {

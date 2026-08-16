@@ -671,6 +671,21 @@
     copies in `ImportExportService.kt` + the PSD copy are removed; HomeScreen (5 flows) +
     EditorScreen (7 flows) route through the exporter; LocalSend's cacheDir payload path unchanged.
     Tests: `ExportDestinationPolicyTest` (11) + `B1Plat03ExportConsentTest` (5) — 1196 total.
+  - **Implemented in phase-81** (B2-DOS-05, see `workspace/phase-81/REPORT.md`): attachment/import
+    ingestion is bounded DURING the read. New pure-JVM `services/AttachmentIngestPolicy.kt` is the
+    single decision table (`MAX_ATTACHMENT_BYTES` = 25 MB, `READ_BUFFER_BYTES` = 64 KiB):
+    `boundedReadBytes(input, maxBytes)` streams over a fixed buffer and throws
+    `ImportArchivePolicy.ImportSizeLimitException` mid-stream on the first chunk crossing the cap
+    (heap never exceeds budget + one buffer); `readTextHead(file, maxBytes)` is a head-bounded,
+    prefix-preserving, UTF-8-continuation-safe text read (empty for missing/unreadable/empty).
+    `EditorScreen`'s 3 pickers (`:236` custom-bg, `:263` paper-texture, `:829` photo embed) route
+    through `boundedReadBytes` with a dedicated per-site size-limit snackbar;
+    `NoteflowViewModel.restoreEncryptedBackupFromZip` (`:3145-3147`) replaced `sourceZip.readBytes()`
+    with `boundedReadBytes(it, ImportExportService.MAX_BACKUP_INPUT_BYTES)` (400 MB restore budget
+    preserved, enforced in-flight); `DocumentTextExtractor` reads only a 25 MB PDF-head
+    (`MAX_EXTRACT_BYTES`) / 1 MB text-head (`MAX_TEXT_HEAD_BYTES`); legacy plaintext-file-body reads
+    in `NoteBodyVaultPolicy.kt:64` and `WikiLinkParser.kt:274` use `readTextHead`. Tests:
+    `B2Dos05AttachmentIngestTest` (14) — 1470 total green.
 - **Update / self-install**: `services/UpdateService.kt:128` (`checkForDownloadedUpdates` — scans ONLY app-private
   `filesDir`/`cacheDir` through `UpdateTrustPolicy.isScanSafeDirectory`; public Downloads/external dirs are NEVER
   scanned, B1-PLAT-7), `:60` (`inspectApkFile` — classifies via the policy, trust-neutral copy), `:175`

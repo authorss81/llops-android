@@ -3136,7 +3136,18 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     fun restoreEncryptedBackupFromZip(sourceZip: java.io.File, onComplete: (Boolean) -> Unit) {
         viewModelScope.launch {
             try {
-                val bytes = withContext(Dispatchers.IO) { sourceZip.readBytes() }
+                // B2-DOS-05 (phase-81): never slurp the whole downloaded archive
+                // into heap unbounded. Bound the read during the read with the
+                // same 400 MB backup budget the local restore path enforces, so a
+                // huge/malicious WebDAV download cannot OOM the restore.
+                val bytes = withContext(Dispatchers.IO) {
+                    java.io.FileInputStream(sourceZip).use { input ->
+                        com.authorss81.noteflow.services.AttachmentIngestPolicy.boundedReadBytes(
+                            input,
+                            ImportExportService.MAX_BACKUP_INPUT_BYTES
+                        )
+                    }
+                }
                 repository.closeDatabase()
                 ImportExportService.importBackup(getApplication(), bytes, repository.encryptionKey)
                 // B2-CRYPTO-09 (phase-107): re-migrate restored rows to per-record

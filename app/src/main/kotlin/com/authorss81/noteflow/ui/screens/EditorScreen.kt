@@ -228,8 +228,13 @@ fun EditorScreen(
     ) { uri: android.net.Uri? ->
         uri?.let {
             try {
-                val inputStream = context.contentResolver.openInputStream(it)
-                val bytes = inputStream?.readBytes()
+                // B2-DOS-05 (phase-81): bound the read to the ingest cap so a
+                // huge picker source can never be fully slurped into heap and OOM
+                // the embed at pick time.
+                val bytes = context.contentResolver.openInputStream(it)
+                    ?.use { stream ->
+                        com.authorss81.noteflow.services.AttachmentIngestPolicy.boundedReadBytes(stream)
+                    }
                 if (bytes != null) {
                     val fileName = "custom_bg_${System.currentTimeMillis()}.png"
                     scope.launch {
@@ -238,6 +243,8 @@ fun EditorScreen(
                         viewModel.showSnackbar("Custom paper background loaded!")
                     }
                 }
+            } catch (e: com.authorss81.noteflow.services.ImportArchivePolicy.ImportSizeLimitException) {
+                viewModel.showSnackbar("Background image is too large (max 25 MB)")
             } catch (e: Exception) {
                 viewModel.showSnackbar("Failed to load custom background image")
             }
@@ -250,9 +257,11 @@ fun EditorScreen(
     ) { uri: android.net.Uri? ->
         uri?.let {
             try {
-                val inputStream = context.contentResolver.openInputStream(it)
-                val bytes = inputStream?.readBytes()
-                inputStream?.close()
+                // B2-DOS-05 (phase-81): bound the read to the ingest cap.
+                val bytes = context.contentResolver.openInputStream(it)
+                    ?.use { stream ->
+                        com.authorss81.noteflow.services.AttachmentIngestPolicy.boundedReadBytes(stream)
+                    }
                 if (bytes != null) {
                     val ext = paperTextureExtensionFromUri(context, uri)
                     val fileName = "paper_texture_${System.currentTimeMillis()}.$ext"
@@ -264,6 +273,8 @@ fun EditorScreen(
                         viewModel.showSnackbar("Paper texture applied (tiled)")
                     }
                 }
+            } catch (e: com.authorss81.noteflow.services.ImportArchivePolicy.ImportSizeLimitException) {
+                viewModel.showSnackbar("Paper texture is too large (max 25 MB)")
             } catch (e: Exception) {
                 viewModel.showSnackbar("Failed to load paper texture")
             }
@@ -811,7 +822,12 @@ fun EditorScreen(
         if (uri != null) {
             scope.launch {
                 try {
-                    val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                    // B2-DOS-05 (phase-81): bound the read to the ingest cap so a
+                    // huge picker source can never be fully slurped into heap and
+                    // OOM the embed at attach time.
+                    val bytes = context.contentResolver.openInputStream(uri)?.use { stream ->
+                        com.authorss81.noteflow.services.AttachmentIngestPolicy.boundedReadBytes(stream)
+                    }
                     if (bytes != null) {
                         val fileName = "photo_${System.currentTimeMillis()}.jpg"
                         val savedFile = ImportExportService.persistFile(context, fileName, bytes)
@@ -834,6 +850,8 @@ fun EditorScreen(
                         handleMediaEmbedsChange(mediaEmbeds + newPhotoEmbed)
                         viewModel.showSnackbar("Photo attached to canvas")
                     }
+                } catch (e: com.authorss81.noteflow.services.ImportArchivePolicy.ImportSizeLimitException) {
+                    viewModel.showSnackbar("Photo is too large to attach (max 25 MB)")
                 } catch (e: Exception) {
                     viewModel.showSnackbar("Failed to attach photo: ${e.message}")
                 }
