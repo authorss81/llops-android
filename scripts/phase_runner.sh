@@ -138,7 +138,9 @@ build_context_header() {
     echo "## Phase status truth table (docs/phase-status.md — read + update your row)"
     if [ -f docs/phase-status.md ]; then cat docs/phase-status.md; fi
     echo ""
-    echo "## Current phase PROMPT"
+    echo "## Your task"
+    echo "Execute the phase described in ${PROMPT_FILE}. Read that file now and"
+    echo "complete it fully. The context above is orientation only."
     echo ""
   } > "${LOG_DIR}/${PHASE}.ctx" 2>/dev/null
   echo "== [phase] context header built: ${LOG_DIR}/${PHASE}.ctx =="
@@ -185,7 +187,10 @@ run_phase() {
   echo "== [phase] Running: ${PHASE} =="
   build_context_header
   set +e
-  # opencode CLI >=1.15: the prompt is a POSITIONAL argument, not --prompt.
+  # Keep the full ctx+PROMPT as a committed audit record (logs/<phase>.prompt),
+  # but send ONLY the compact context header over stdin. The header's "Your task"
+  # line points the agent at workspace/<phase>/PROMPT.md, which the agent reads
+  # itself. This keeps the arg/context footprint small as docs grow.
   {
     cat "${LOG_DIR}/${PHASE}.ctx"
     cat "${PROMPT_FILE}"
@@ -195,7 +200,7 @@ run_phase() {
     --agent build \
     "${SESSION_ARGS[@]}" \
     --title "llops-${PHASE}" \
-    < "${LOG_DIR}/${PHASE}.prompt" \
+    < "${LOG_DIR}/${PHASE}.ctx" \
     > "${LOG_DIR}/${PHASE}.log" 2>&1
   local code=$?
   set -e
