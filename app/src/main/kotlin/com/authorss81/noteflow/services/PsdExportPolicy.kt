@@ -48,13 +48,17 @@ object PsdExportPolicy {
      * omitted the message states how many were exported / dropped so the user
      * can re-layer the note if the cap bit them; when nothing was omitted it
      * says so plainly (never an error tone).
+     *
+     * The export keeps the TOP [MAX_EXPORT_LAYER_COUNT] drawing layers (the
+     * highest zOrder — the visually front-most, most recently worked-on layers)
+     * and omits the bottom of the stack, so the notice says so explicitly.
      */
     fun noticeMessage(exportedLayerCount: Int, omittedLayerCount: Int): String {
         val exported = exportedLayerCount.coerceAtLeast(0)
         val omitted = omittedLayerCount.coerceAtLeast(0)
         return if (omitted > 0) {
             val total = exported + omitted
-            "PSD export included the bottom $exported of $total layers — " +
+            "PSD export included the top $exported of $total layers — " +
                 "$omitted layer${if (omitted == 1) "" else "s"} omitted (max $MAX_EXPORT_LAYER_COUNT)."
         } else {
             "PSD export included all $exported layers."

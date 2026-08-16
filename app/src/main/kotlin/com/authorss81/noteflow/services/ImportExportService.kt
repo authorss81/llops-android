@@ -2453,6 +2453,7 @@ object ImportExportService {
             // one-time non-alarming notice shown by the caller.
             var exportedDataLayers = 0
             var omittedDataLayers = 0
+            var compositeExtras: List<PsdExportService.PsdLayer> = emptyList()
 
             if (layers.isEmpty()) {
                 val layerBitmap = android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.ARGB_8888)
@@ -2461,15 +2462,32 @@ object ImportExportService {
                 psdLayers.add(PsdExportService.PsdLayer("Drawing Layer 1", layerBitmap))
                 exportedDataLayers = 1
             } else {
-                val sorted = layers.sortedBy { it.zOrder }
-                exportedDataLayers = PsdExportPolicy.capLayerCount(sorted.size)
-                omittedDataLayers = PsdExportPolicy.omittedLayerCount(sorted.size)
-                sorted.take(exportedDataLayers).forEachIndexed { idx, layerEntity ->
+                // Keep the TOP `exportedDataLayers` layers (highest zOrder = the
+                // visually front-most, most recently worked-on layers) but write
+                // them in bottom->top PSD record order. The omitted BOTTOM layers
+                // are folded into a single bounded merged-preview bitmap that feeds
+                // the PSD's flattened composite, so the exported preview still
+                // matches the on-canvas page (one extra 6.6 MB bitmap, never one
+                // per omitted layer).
+                val sortedAsc = layers.sortedBy { it.zOrder }
+                exportedDataLayers = PsdExportPolicy.capLayerCount(sortedAsc.size)
+                omittedDataLayers = PsdExportPolicy.omittedLayerCount(sortedAsc.size)
+                val exportedEntities = sortedAsc.takeLast(exportedDataLayers)
+                exportedEntities.forEachIndexed { idx, layerEntity ->
                     val layerBitmap = android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.ARGB_8888)
                     val canvas = android.graphics.Canvas(layerBitmap)
                     val layerStrokes = strokes.filter { it.layerId == layerEntity.id }
                     renderLayersAndStrokesToCanvas(canvas, width, height, 0, layerStrokes, listOf(layerEntity), inkRenderer)
                     psdLayers.add(PsdExportService.PsdLayer(layerEntity.name.ifBlank { "Layer ${idx + 1}" }, layerBitmap, layerEntity.visible))
+                }
+                if (omittedDataLayers > 0 && exportedDataLayers < sortedAsc.size) {
+                    val omittedEntities = sortedAsc.dropLast(exportedDataLayers)
+                    val previewBitmap = android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.ARGB_8888)
+                    val previewCanvas = android.graphics.Canvas(previewBitmap)
+                    renderLayersAndStrokesToCanvas(previewCanvas, width, height, 0, strokes, omittedEntities, inkRenderer)
+                    compositeExtras = listOf(
+                        PsdExportService.PsdLayer("Merged preview (omitted layers)", previewBitmap)
+                    )
                 }
             }
 
@@ -2478,7 +2496,8 @@ object ImportExportService {
                 title = page.title,
                 width = width,
                 height = height,
-                layers = psdLayers
+                layers = psdLayers,
+                compositeExtras = compositeExtras
             )
             PsdExportService.PsdExportOutcome(
                 file = file,

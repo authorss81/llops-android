@@ -41,7 +41,8 @@ object PsdExportService {
         title: String,
         width: Int = 1080,
         height: Int = 1528,
-        layers: List<PsdLayer>
+        layers: List<PsdLayer>,
+        compositeExtras: List<PsdLayer> = emptyList()
     ): File? = withContext(Dispatchers.IO) {
         try {
             val sanitizeTitle = title.replace(Regex("[^a-zA-Z0-9_-]"), "_").ifBlank { "Canvas_Layers" }
@@ -53,6 +54,12 @@ object PsdExportService {
                     Canvas(this).drawColor(Color.WHITE)
                 }))
             }
+            // B2-DOS-06 (phase-82): belt-and-suspenders — the caller caps the DATA
+            // layer count to PsdExportPolicy.MAX_EXPORT_LAYER_COUNT before creating
+            // bitmaps; this bound keeps the record/channel/composite passes bounded
+            // even if a future caller passes an oversized list. (Background + 16 data
+            // = 17, so the current call path is never clipped.)
+            .take(PsdExportPolicy.MAX_EXPORT_LAYER_COUNT + 1)
 
             FileOutputStream(psdFile).use { fos ->
                 DataOutputStream(BufferedOutputStream(fos)).use { dos ->
@@ -96,7 +103,21 @@ object PsdExportService {
                     val compositeBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
                     val compCanvas = Canvas(compositeBitmap)
                     compCanvas.drawColor(Color.WHITE)
-                    for (layer in activeLayers) {
+                    // Stack order from the only caller: the paper/Background bitmap is the
+                    // bottom-most element; when layers were omitted (B2-DOS-06 phase-82
+                    // review) the merged-preview of the omitted BOTTOM layers sits ABOVE the
+                    // paper but BELOW the exported data layers, so the flattened composite
+                    // still shows the full page. All three passes are bounded defensively.
+                    val background = activeLayers.firstOrNull()
+                    if (background != null && background.isVisible) {
+                        compCanvas.drawBitmap(background.bitmap, 0f, 0f, null)
+                    }
+                    for (extra in compositeExtras.take(PsdExportPolicy.MAX_EXPORT_LAYER_COUNT)) {
+                        if (extra.isVisible) {
+                            compCanvas.drawBitmap(extra.bitmap, 0f, 0f, null)
+                        }
+                    }
+                    for (layer in activeLayers.drop(1)) {
                         if (layer.isVisible) {
                             compCanvas.drawBitmap(layer.bitmap, 0f, 0f, null)
                         }

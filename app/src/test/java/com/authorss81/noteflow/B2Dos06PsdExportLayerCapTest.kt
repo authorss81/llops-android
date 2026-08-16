@@ -84,6 +84,9 @@ class B2Dos06PsdExportLayerCapTest {
         assertTrue("the notice must state how many we omitted", "9" in capped)
         assertTrue("the notice must name the max", PsdExportPolicy.MAX_EXPORT_LAYER_COUNT.toString() in capped)
         assertTrue("the notice must be informational, never alarming", "omitted" in capped)
+        // the export keeps the TOP (highest-zOrder) layers and drops the bottom of
+        // the stack; the notice must state that so users know which layers survived.
+        assertTrue("the notice must say which end of the stack was kept", "top" in capped)
 
         val full = PsdExportPolicy.noticeMessage(exportedLayerCount = 16, omittedLayerCount = 0)
         assertTrue("an uncapped export says so plainly", "included all" in full)
@@ -189,8 +192,9 @@ class B2Dos06PsdExportLayerCapTest {
     fun `ImportExportService no longer iterates every layer into a bitmap`() {
         val source = File(mainSourceRoot, "services/ImportExportService.kt").readText()
         // The pre-fix `layers.sortedBy { it.zOrder }.forEachIndexed { ... }` created a
-        // fresh full-page Bitmap per layer with NO cap. Now the sorted list is capped
-        // BEFORE any bitmap is created.
+        // fresh full-page Bitmap per layer with NO cap. Now the zOrder-sorted list is
+        // capped BEFORE any bitmap is created: takeLast(exportedDataLayers) keeps the
+        // TOP (highest-zOrder, front-most) layers in bottom->top record order.
         assertTrue(
             "the export must clamp via the policy before rendering",
             source.contains("PsdExportPolicy.capLayerCount(")
@@ -200,8 +204,12 @@ class B2Dos06PsdExportLayerCapTest {
             source.contains("omittedDataLayers = PsdExportPolicy.omittedLayerCount(")
         )
         assertTrue(
-            "only the capped prefix of the sorted layers may be rendered",
-            source.contains("sorted.take(exportedDataLayers)")
+            "only the capped top layers may be rendered (bounded selection)",
+            source.contains("takeLast(exportedDataLayers)")
+        )
+        assertTrue(
+            "the bottom omitted layers must be identified for the merged preview",
+            source.contains("dropLast(exportedDataLayers)")
         )
         assertTrue(
             "the function must now return the outcome carrying the cap metadata",
@@ -212,6 +220,36 @@ class B2Dos06PsdExportLayerCapTest {
         assertFalse(
             "no unbounded per-layer bitmap loop may survive in ImportExportService",
             source.contains("sortedBy { it.zOrder }.forEachIndexed")
+        )
+    }
+
+    @Test
+    fun `omitted bottom layers are folded into one bounded merged preview`() {
+        val source = File(mainSourceRoot, "services/ImportExportService.kt").readText()
+        assertTrue(
+            "the cap path must pass a compositeExtras preview of the omitted layers",
+            source.contains("compositeExtras = compositeExtras")
+        )
+        assertTrue(
+            "the omitted layers render into a single shared preview bitmap",
+            source.contains("renderLayersAndStrokesToCanvas(previewCanvas")
+        )
+        assertTrue(
+            "the preview must only exist when layers were actually omitted",
+            source.contains("if (omittedDataLayers > 0")
+        )
+    }
+
+    @Test
+    fun `PsdExportService defensively bounds unexpected oversized input`() {
+        val source = File(mainSourceRoot, "services/PsdExportService.kt").readText()
+        assertTrue(
+            "records/channels/composite passes must be bounded even for a future oversized caller",
+            source.contains("PsdExportPolicy.MAX_EXPORT_LAYER_COUNT + 1)")
+        )
+        assertTrue(
+            "the composite pass must bound the merged-preview extras too",
+            source.contains("compositeExtras.take(PsdExportPolicy.MAX_EXPORT_LAYER_COUNT")
         )
     }
 

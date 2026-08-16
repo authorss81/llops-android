@@ -705,21 +705,27 @@
     Tests: `B2Dos05AttachmentIngestTest` (15) — 1471 total green.
   - **Implemented in phase-82** (B2-DOS-06, see `workspace/phase-82/REPORT.md`): layered PSD
     export no longer materializes N full-page ARGB bitmaps + N per-layer channel buffers at
-    once (a 25-layer export dropped from ~350 MB peak to ~112 MB bounded). New pure-JVM
+    once (a 25-layer export dropped from ~350 MB peak to a bounded ~125-132 MB). New pure-JVM
     `services/PsdExportPolicy.kt` (`MAX_EXPORT_LAYER_COUNT` = 16, `capLayerCount`/
     `omittedLayerCount`/`noticeMessage`) is the single layer-budget decision table;
-    `ImportExportService.exportPageToPsd` (`:2422`) clamps `layers.sortedBy { it.zOrder }`
-    via `sorted.take(exportedDataLayers)` BEFORE any per-layer bitmap is created and returns
-    the new `PsdExportService.PsdExportOutcome(file, exportedLayerCount, omittedLayerCount)`
-    so `EditorScreen.kt:1407-1420` shows a one-time non-alarming "layers omitted (max 16)"
-    snackbar when the cap bites. `PsdExportService.exportLayersToPsd` writes the layer-and-
-    mask section STREAMING: info records in a tiny bounded buffer (`layerRecordBytes`),
-    per-layer channel pixels straight to the destination `DataOutputStream` one channel at a
-    time (`writeLayerChannelPixels`) — the pre-fix `layerPixelBlocks` full-size channel-block
-    accumulation and per-layer `IntArray` are gone, and ONE `IntArray(width*height)` is
-    reused for every layer + the composite; pure-JVM helpers `channelSizeFor`/
-    `channelDataLength`/`layerSectionLength` keep the section length byte-identical.
-    Tests: `B2Dos06PsdExportLayerCapTest` (14) — 1485 total green.
+    `ImportExportService.exportPageToPsd` (`:2422`) keeps the TOP 16 layers of
+    `layers.sortedBy { it.zOrder }` (highest zOrder = front-most) via
+    `takeLast(exportedDataLayers)`/`dropLast(exportedDataLayers)` BEFORE any per-layer bitmap
+    is created, and returns the new `PsdExportService.PsdExportOutcome(file,
+    exportedLayerCount, omittedLayerCount)` so `EditorScreen.kt:1407-1420` shows a one-time
+    non-alarming "layers omitted (max 16)" snackbar when the cap bites (shown only after a
+    successful export so a cancelled picker cannot hide it). The omitted BOTTOM layers are
+    folded into ONE bounded merged-preview bitmap (`compositeExtras`) so the PSD's flattened
+    composite still shows the full page. `PsdExportService.exportLayersToPsd` writes the
+    layer-and-mask section STREAMING: info records in a tiny bounded buffer
+    (`layerRecordBytes`), per-layer channel pixels straight to the destination
+    `DataOutputStream` one channel at a time (`writeChannelPixels`) — the pre-fix
+    `layerPixelBlocks` full-size channel-block accumulation and per-layer `IntArray` are
+    gone, and ONE `IntArray(width*height)` is reused for every layer + the composite
+    (additionally clamped to `MAX_EXPORT_LAYER_COUNT + 1`; composite extras bounded too);
+    pure-JVM helpers `channelSizeFor`/`channelDataLength`/`layerSectionLength` keep the
+    section length byte-identical.
+    Tests: `B2Dos06PsdExportLayerCapTest` (16) — 1487 total green.
 - **Update / self-install**: `services/UpdateService.kt:128` (`checkForDownloadedUpdates` — scans ONLY app-private
   `filesDir`/`cacheDir` through `UpdateTrustPolicy.isScanSafeDirectory`; public Downloads/external dirs are NEVER
   scanned, B1-PLAT-7), `:60` (`inspectApkFile` — classifies via the policy, trust-neutral copy), `:175`

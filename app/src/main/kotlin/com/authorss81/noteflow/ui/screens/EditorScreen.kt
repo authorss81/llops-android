@@ -1406,29 +1406,30 @@ fun EditorScreen(
                                 scope.launch {
                                     val outcome = ImportExportService.exportPageToPsd(context, page, viewModel.repository)
                                     if (outcome.file != null) {
-                                        // B2-DOS-06 (phase-82): when the layer budget
-                                        // dropped layers, tell the user once — non-alarming,
-                                        // no silent degradation.
-                                        if (outcome.wasLayerCapped) {
-                                            viewModel.showSnackbar(
-                                                PsdExportPolicy.noticeMessage(
-                                                    outcome.exportedLayerCount,
-                                                    outcome.omittedLayerCount
-                                                ),
-                                                isLong = true
-                                            )
-                                        }
-                                        exporter.export(
-                                            ExportDestinationPolicy.ExportKind.LAYERED_PSD,
-                                            outcome.file
-                                        ) { ok ->
-                                            if (!ok) {
-                                                viewModel.showSnackbar("Export cancelled")
+                                            exporter.export(
+                                                ExportDestinationPolicy.ExportKind.LAYERED_PSD,
+                                                outcome.file
+                                            ) { ok ->
+                                                if (!ok) {
+                                                    viewModel.showSnackbar("Export cancelled")
+                                                } else if (outcome.wasLayerCapped) {
+                                                    // B2-DOS-06 (phase-82): when the layer budget
+                                                    // dropped layers, tell the user once — but only
+                                                    // AFTER the export completed, so a cancelled
+                                                    // picker can never hide the omission info behind
+                                                    // "Export cancelled". Non-alarming, never silent.
+                                                    viewModel.showSnackbar(
+                                                        PsdExportPolicy.noticeMessage(
+                                                            outcome.exportedLayerCount,
+                                                            outcome.omittedLayerCount
+                                                        ),
+                                                        isLong = true
+                                                    )
+                                                }
                                             }
+                                        } else {
+                                            viewModel.showSnackbar("PSD export failed")
                                         }
-                                    } else {
-                                        viewModel.showSnackbar("PSD export failed")
-                                    }
                                 }
                             }
                         )
