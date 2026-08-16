@@ -42,8 +42,6 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.authorss81.noteflow.data.model.NotePageEntity
-import com.authorss81.noteflow.services.ImportExportService
-import com.authorss81.noteflow.services.NoteBodyVaultPolicy
 import com.authorss81.noteflow.theme.NoteflowTheme
 import com.authorss81.noteflow.ui.screens.EditorScreen
 import com.authorss81.noteflow.ui.screens.HomeScreen
@@ -431,16 +429,13 @@ class MainActivity : FragmentActivity() {
                                         com.authorss81.noteflow.ui.components.FluidPageReveal(pageKey = page.id) {
                                         if (page.title.endsWith(".md") || page.title.endsWith(".txt")) {
                                             val contentText by produceState(initialValue = "", page.id) {
-                                                // B1-DB-4 (phase-44): the body is read from the field-encrypted
-                                                // extractedText column; a legacy plaintext source file is only
-                                                // coalesced transiently if it still exists (and is deleted on save).
+                                                // B2-UI-5 (phase-74): the body read awaits any in-flight body
+                                                // save for the page and re-reads the freshly-committed body from
+                                                // the repository — never a possibly-stale flow snapshot — so
+                                                // navigating the same page back-and-forth can never present
+                                                // truncated/stale content that would be re-saved over newer data.
                                                 value = withContext(Dispatchers.IO) {
-                                                    // B1-AUTH-05 (phase-69): a legacy source file may only be
-                                                    // read when it is confined under the app-private imports root.
-                                                    com.authorss81.noteflow.services.NoteBodyVaultPolicy.resolveBodyForDisplay(
-                                                        page.extractedText, page.sourceFilePath, page.sourceFileType,
-                                                        ImportExportService.getImportsDir(this@MainActivity)
-                                                    )
+                                                    viewModel.readMarkdownNoteBody(page.id, page.extractedText, page.sourceFilePath, page.sourceFileType)
                                                 }
                                             }
                                             MarkdownPreviewScreen(
@@ -532,16 +527,13 @@ class MainActivity : FragmentActivity() {
                                                     if (page != null) {
                                                         if (page.title.endsWith(".md") || page.title.endsWith(".txt")) {
                                                             val contentText by produceState(initialValue = "", page.id) {
-                                                                // B1-DB-4 (phase-44): body read from the field-encrypted
-                                                                // extractedText column; legacy plaintext source files are
-                                                                // only coalesced transiently (and deleted on save).
+                                                                // B2-UI-5 (phase-74): the body read awaits any in-flight body
+                                                                // save for the page and re-reads the freshly-committed body
+                                                                // from the repository — never a possibly-stale flow snapshot —
+                                                                // so flipping the same page back-and-forth can never present
+                                                                // truncated/stale content that would be re-saved over newer data.
                                                                 value = withContext(Dispatchers.IO) {
-                                                                    // B1-AUTH-05 (phase-69): legacy source-file reads are
-                                                                    // only allowed under the app-private imports root.
-                                                                    com.authorss81.noteflow.services.NoteBodyVaultPolicy.resolveBodyForDisplay(
-                                                                        page.extractedText, page.sourceFilePath, page.sourceFileType,
-                                                                        ImportExportService.getImportsDir(this@MainActivity)
-                                                                    )
+                                                                    viewModel.readMarkdownNoteBody(page.id, page.extractedText, page.sourceFilePath, page.sourceFileType)
                                                                 }
                                                             }
                                                             MarkdownPreviewScreen(

@@ -165,6 +165,25 @@
     locked interval loses the last stashed page delta/body. A durable pending-queue is impossible
     without writing the data to disk while locked (i.e. plaintext), which is exactly what this
     finding forbids, so the in-memory stash is deliberate and bounded (latest-wins per page).
+  - **Implemented in phase-74** (B2-UI-5, see `workspace/phase-74/REPORT.md`): the markdown-body
+    save+read ARE serialized and latest-wins now, closing the last non-atomic body path (the old
+    dispose-flush `File.writeText` / `produceState` `File.readText` truncate-race is gone; bodies
+    live only in the field-encrypted `pages.extractedText` column). New pure-JVM
+    `services/MarkdownBodySaveCoordinator.kt` serializes every body write through a per-page
+    `kotlinx.coroutines.Mutex`, stamps a monotonic `seq` at `issue(...)` time, and `commitLatest`
+    refuses (never runs the write; settles so awaiters release) any request that is no longer the
+    latest issued one — the latest-wins comparator is issue-ORDER, never time-based, so touching a
+    page before a slow older write can never let a stale snapshot win. `saveMarkdownNoteBody`
+    (`NoteflowViewModel.kt:2214-2278`) issues on the calling (UI) thread, then
+    `commitLatest { repository.updatePageBody(...); NoteBodyVaultPolicy.deleteLegacyNoteTextBody(...Defaults.importsDir) }`
+    on `Dispatchers.IO`; the new `readMarkdownNoteBody` (`:2291-2336`) awaits settle + RE-FETCHES
+    `repository.getPageById` (never a stale flow snapshot; deflates to the in-memory snapshot only
+    on a transient decrypt failure so a key-lost race can never surface as an empty editor that gets
+    saved over the real body); `flushPendingEditorSaves` (`:2929-2988`) re-issues each deferred body
+    on the calling thread BEFORE any write. Both markdown `produceState` blocks (`MainActivity.kt:438/536`)
+    now read `viewModel.readMarkdownNoteBody(page.id, …snapshot fallbacks)` — MainActivity no longer
+    resolves note bodies or touches body files at all. B2-UI-1 lock semantics (defer, never drop)
+    and B1-AUTH-05 imports-root confinement are retained.
   - **Implemented in phase-50** (B2-DOS-01, see `workspace/phase-50/REPORT.md`): stroke geometry is
     bounded at EVERY hop between DB bytes and the composable, so a crafted backup (B1-DB-7) or an
     organic heavy page can no longer OOM/ANR page-open or scale renderer work linearly. New pure-JVM

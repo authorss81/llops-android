@@ -259,17 +259,17 @@ class B2Ui1LockedFlushTest {
     fun `markdown body saves defer and re-write encrypted after unlock`() {
         val source = java.io.File(repoRoot(), "app/src/main/kotlin/com/authorss81/noteflow/ui/viewmodel/NoteflowViewModel.kt").readText()
 
-        val markdown = source.substringAfter("fun saveMarkdownNoteBody", "END").take(1200)
+        val markdown = source.substringAfter("fun saveMarkdownNoteBody", "END").take(2400)
         assertTrue("markdown save must gate on the DEK before persisting", markdown.contains("VaultWriteGate.persistNow"))
         assertTrue("a lock-beaten markdown save must be stashed, never dropped", markdown.contains("deferBody(deferred)"))
         assertTrue("a mid-write lock must be stashed too, not turned into a loss snackbar", markdown.contains("VaultLockedWriteException"))
 
-        val flush = source.substringAfter("private fun flushPendingEditorSaves", "END").take(2000)
+        val flush = source.substringAfter("private fun flushPendingEditorSaves", "END").take(2600)
         assertTrue("the unlock flush must drain deferred markdown bodies", flush.contains("drainBodies()"))
-        assertTrue("the unlock flush must write the body through the encrypted column", flush.contains("repository.updatePageBody(body.pageId, body.body)"))
+        assertTrue("the unlock flush must write the body through the encrypted column", flush.contains("repository.updatePageBody(request.pageId, request.body)"))
         assertTrue(
             "the unlock flush deletes the legacy plaintext file only after the column write",
-            Regex("""NoteBodyVaultPolicy\.deleteLegacyNoteTextBody\(\s*body\.legacySourceFilePath""")
+            Regex("""NoteBodyVaultPolicy\.deleteLegacyNoteTextBody\(\s*request\.legacySourceFilePath""")
                 .containsMatchIn(flush)
         )
         assertTrue(

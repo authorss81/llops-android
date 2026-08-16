@@ -316,12 +316,20 @@ class B1Auth05SourceFilePathTest {
         assertTrue("restore must sanitize the restored sourceFilePath column", importer.contains("sanitizeRestoredSourceFilePaths(db, getImportsDir(context))"))
         assertTrue("the restore sanitizer drops unconfined rows", importer.contains("SourceFilePathPolicy.isConfined(stored, importsRoot)"))
 
+        // B2-UI-5 (phase-74): the markdown-body READ moved out of MainActivity's
+        // produceState into NoteflowViewModel.readMarkdownNoteBody (fresh
+        // repository fetch + settle-await); the imports-root confinement for the
+        // legacy-file coalesce now lives there.
+        val vmSource = repoSource("app/src/main/kotlin/com/authorss81/noteflow/ui/viewmodel/NoteflowViewModel.kt")
         assertTrue(
-            "MainActivity must pass the imports root into the body resolver",
-            repoSource("app/src/main/kotlin/com/authorss81/noteflow/MainActivity.kt")
+            "the fresh body read must pass the imports root into the body resolver",
+            vmSource.contains("resolveBodyForDisplay(")
+                && vmSource.contains("ImportExportService.getImportsDir(appContext)")
+        )
+        assertTrue(
+            "MainActivity must no longer resolve note bodies inline",
+            !repoSource("app/src/main/kotlin/com/authorss81/noteflow/MainActivity.kt")
                 .contains("resolveBodyForDisplay(")
-                && repoSource("app/src/main/kotlin/com/authorss81/noteflow/MainActivity.kt")
-                    .contains("ImportExportService.getImportsDir(this@MainActivity)")
         )
         assertTrue(
             "NoteflowViewModel.updatePageSource must confine before persisting",

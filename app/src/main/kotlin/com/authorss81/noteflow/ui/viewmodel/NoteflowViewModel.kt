@@ -72,6 +72,7 @@ import com.authorss81.noteflow.services.EditorFlushPolicy
 import com.authorss81.noteflow.services.EncryptionService
 import com.authorss81.noteflow.services.ImportExportService
 import com.authorss81.noteflow.services.KeystoreKeyLostException
+import com.authorss81.noteflow.services.MarkdownBodySaveCoordinator
 import com.authorss81.noteflow.services.NoteBodyVaultPolicy
 import com.authorss81.noteflow.services.PasswordStrengthPolicy
 import com.authorss81.noteflow.services.SecurityService
@@ -130,6 +131,12 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     // EditorScreen flushes route through this: DEK present ⇒ persist now;
     // DEK zeroized ⇒ defer here and flush encrypted after the next unlock.
     private val editorFlushPolicy = EditorFlushPolicy()
+
+    // B2-UI-5 (phase-74): serializes + latest-wins every markdown/text note-body
+    // save, so a slow older write can never land after a newer one (torn-file
+    // analog moved into the DB), and coordinates the body READ with any in-flight
+    // save so a re-opened page never shows stale content that would be re-saved.
+    private val markdownBodySaveCoordinator = MarkdownBodySaveCoordinator()
 
     // B2-DOS-01 (phase-50): the geometry-cap notice is a ONE-TIME message per
     // page per session (AGENTS.md "never silent degradation — one-time
@@ -2204,6 +2211,16 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
      * B2-UI-1 (phase-49 review-fix): a lock racing this save no longer drops the
      * body behind an error snackbar — the snapshot is stashed in the same
      * defer/re-write-encrypted-after-unlock policy as the ink flushes.
+     *
+     * B2-UI-5 (phase-74): the save is REGISTERED here on the calling (UI) thread
+     * via [MarkdownBodySaveCoordinator.issue] so the latest-wins order is the UI
+     * issue order; the actual encrypted-column write runs inside
+     * [MarkdownBodySaveCoordinator.commitLatest], which only commits when this
+     * request is still the newest for the page (a superseded older write never
+     * lands after a newer one). The reader side waits out the settle via
+     * [readMarkdownNoteBody] before reading the body back, so a re-opened page
+     * can never show a stale snapshot that later gets edited + saved over newer
+     * content.
      */
     fun saveMarkdownNoteBody(page: NotePageEntity, body: String) {
         val pageId = page.id
@@ -2214,14 +2231,22 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
             editorFlushPolicy.deferBody(deferred)
             return
         }
-        viewModelScope.launch {
+        val request = markdownBodySaveCoordinator.issue(pageId, body, legacyPath, legacyType)
+        viewModelScope.launch(Dispatchers.IO) {
             try {
-                repository.updatePageBody(pageId, body)
-                // B1-AUTH-05 (phase-69): only a legacy file confined under the
-                // imports root may be deleted.
-                NoteBodyVaultPolicy.deleteLegacyNoteTextBody(
-                    legacyPath, legacyType, ImportExportService.getImportsDir(appContext)
-                )
+                val committed = markdownBodySaveCoordinator.commitLatest(request) {
+                    repository.updatePageBody(pageId, body)
+                    // B1-AUTH-05 (phase-69): only a legacy file confined under the
+                    // imports root may be deleted.
+                    NoteBodyVaultPolicy.deleteLegacyNoteTextBody(
+                        legacyPath, legacyType, ImportExportService.getImportsDir(appContext)
+                    )
+                }
+                if (!committed) {
+                    // A newer save for this page superseded this stale snapshot —
+                    // that request commits the body; this one must not overwrite it.
+                    return@launch
+                }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: VaultLockedWriteException) {
@@ -2236,6 +2261,48 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
                 }
             }
         }
+    }
+
+    /**
+     * B2-UI-5 (phase-74): the READ side of the markdown-body save contract — with
+     * the settle of any in-flight save for [pageId] awaited AND a fresh repository
+     * read (never the possibly-stale flow snapshot), a page that was just
+     * navigated away and back shows the latest committed body, so editing +
+     * flushing can never write a stale snapshot back over newer content.
+     *
+     * The composition's in-memory snapshot ([fallbackExtractedText] etc.) is used
+     * only as a deflate fallback if the fresh read cannot decrypt (a lock wiping
+     * the DEK racing the read) — so a transient key-lost race can never surface as
+     * an empty editor that would then be saved over the real body. Blocking file
+     * I/O (legacy coalesce) — call on a background dispatcher (the produceState
+     * callers do). The body is only ever held in memory; nothing persists
+     * plaintext anywhere.
+     */
+    suspend fun readMarkdownNoteBody(
+        pageId: String,
+        fallbackExtractedText: String? = null,
+        fallbackSourceFilePath: String? = null,
+        fallbackSourceFileType: String? = null
+    ): String {
+        markdownBodySaveCoordinator.awaitSettled(pageId)
+        val fresh = try {
+            repository.getPageById(pageId)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // A lock zeroized the DEK / disposed the pool mid-read — fall back to
+            // the in-memory snapshot the composition already holds (decrypted by
+            // the pages flow). Never surface this as a corrupt/empty body.
+            null
+        }
+        // B1-AUTH-05 (phase-69): a legacy source file is read only when confined
+        // under the app-private imports root (null root refuses the file read).
+        return NoteBodyVaultPolicy.resolveBodyForDisplay(
+            fresh?.extractedText ?: fallbackExtractedText,
+            fresh?.sourceFilePath ?: fallbackSourceFilePath,
+            fresh?.sourceFileType ?: fallbackSourceFileType,
+            ImportExportService.getImportsDir(appContext)
+        )
     }
 
     // ---------- Security & Master Password ----------
@@ -2907,15 +2974,27 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
                 }
             }
         }
+        // B2-UI-5 (phase-74): deferred markdown bodies are issued on the calling
+        // (main) thread — BEFORE any user save can be issued for the page — so
+        // the unlock flush is strictly older than any subsequent edit; the
+        // latest-wins commitLatest skip then guarantees the newest body wins even
+        // if a user save races the flush.
         for (body in toFlushBodies) {
+            val request = markdownBodySaveCoordinator.issue(
+                body.pageId, body.body, body.legacySourceFilePath, body.legacySourceFileType
+            )
             viewModelScope.launch(Dispatchers.IO) {
                 try {
-                    repository.updatePageBody(body.pageId, body.body)
-                    // B1-AUTH-05 (phase-69): only a legacy file confined under
-                    // the imports root may be deleted.
-                    NoteBodyVaultPolicy.deleteLegacyNoteTextBody(
-                        body.legacySourceFilePath, body.legacySourceFileType, ImportExportService.getImportsDir(appContext)
-                    )
+                    val committed = markdownBodySaveCoordinator.commitLatest(request) {
+                        repository.updatePageBody(request.pageId, request.body)
+                        // B1-AUTH-05 (phase-69): only a legacy file confined under
+                        // the imports root may be deleted.
+                        NoteBodyVaultPolicy.deleteLegacyNoteTextBody(
+                            request.legacySourceFilePath, request.legacySourceFileType,
+                            ImportExportService.getImportsDir(appContext)
+                        )
+                    }
+                    if (!committed) return@launch
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     throw e
                 } catch (e: VaultLockedWriteException) {
