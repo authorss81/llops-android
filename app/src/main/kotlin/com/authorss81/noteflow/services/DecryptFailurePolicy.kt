@@ -25,10 +25,11 @@ package com.authorss81.noteflow.services
  *    a genuine ciphertext failed authentication. A raw ciphertext blob can never
  *    be rendered as note content.
  *  - [isPersistent] escalates a session in which [PERSISTENT_FAILURE_THRESHOLD]
- *    DISTINCT records (deduped `table:recordId`) failed to decrypt — the DEK is
- *    present and correct by construction there, so this is a re-key/restore
- *    mismatch or a manipulated DB, not an isolated row — to a corruption/restore
- *    event: the caller raises the corruption flag so the existing recovery
+ *    DISTINCT NOTES (deduped `note:<pageId>` — one note counting once no matter
+ *    how many of its rows/fields fail) failed to decrypt — the DEK is present
+ *    and correct by construction there, so this is a re-key/restore mismatch or
+ *    a manipulated DB, not an isolated note — to a corruption/restore event:
+ *    the caller raises the corruption flag so the existing recovery
  *    screen offers restore/re-key instead of silently degrading to a vault full
  *    of markers.
  *
@@ -62,14 +63,6 @@ object DecryptFailurePolicy {
     const val PERSISTENT_DECRYPT_FAILURE_NOTICE =
         "Many notes could not be decrypted \u2014 your vault may be damaged or was restored with a " +
             "different key. Use the recovery screen to restore a recent backup or start fresh."
-
-    /**
-     * Minimum byte length a structurally-plausible payload can span:
-     * `PAYLOAD_VERSION` (1) + [EncryptionService.GCM_IV_LENGTH] (12). Mirrors
-     * [EncryptionService.isEncryptedPayload]; exposed here so the render
-     * decision table stays self-contained.
-     */
-    const val STRUCTURAL_CIPHERTEXT_MIN_BYTES = 13
 
     /** A session with >= [PERSISTENT_FAILURE_THRESHOLD] distinct failed records is persistent. */
     fun isPersistent(distinctFailedRecords: Int): Boolean =

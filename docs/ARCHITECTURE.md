@@ -376,6 +376,12 @@
     non-alarming `PERSISTENT_DECRYPT_FAILURE_NOTICE` snackbar, never silent degradation. The ledger
     + in-memory escalation are reset at every legitimate session boundary (`lock()`, re-key
     `changeMasterPassword`, WebDAV restore, and every `initializeData`), so a fresh unlock recounts.
+    Phase-88 review fixes: the ledger is deduped per NOTE (`note:<pageId>`, `NoteRepository.kt:101-106`)
+    so a single broken note — however many of its rows/fields fail — can never trip the threshold on
+    its own; `decryptPageIfNeeded` no longer early-returns the raw page when the DEK is null (the
+    `lock()` zeroize-before-dispose race now renders the marker, consistent with the other three
+    sinks); and `loadSearchCorpus` drops undecryptable pages (`decryptPageOrNullForCorpus`, fails
+    recorded only by the display reads, never a rankable marker).
 - **Canvas**: `ui/components/AnnotationCanvas.kt:83` (ink canvas, gestures, layers, `pointerInteropFilter`);
   `services/WetBrushEngine.kt:13` (AGSL wet-mixing gating); `ui/components/ShaderCapabilityHelper.kt:5`
   (`isAgslSupported` = SDK ≥ 33); `services/ShapeRecognitionHelper.kt:13` (`trySnapShape()` :27).

@@ -60,10 +60,14 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
     // -----------------------------------------------------------------------
 
     /**
-     * Distinct records whose field ciphertext failed to decrypt THIS SESSION
-     * ("record" = `table:recordId:field`, deduped so one broken row read by
-     * several flows — Home list, search window, editor — is counted ONCE).
-     * When [DecryptFailurePolicy.PERSISTENT_FAILURE_THRESHOLD] distinct records
+     * Distinct NOTES with ciphertext that failed to decrypt THIS SESSION
+     * (deduped on `note:<pageId>` — one note counts once no matter how many of
+     * its rows/fields fail, so a single corrupted note can never trip the
+     * threshold, while a whole-vault re-key/restore mismatch still does; the
+     * review of phase-88 changed the key from `table:recordId:field`, which let
+     * one note's several strokes/embeds cross [DecryptFailurePolicy.PERSISTENT_FAILURE_THRESHOLD]
+     * on their own).
+     * When [DecryptFailurePolicy.PERSISTENT_FAILURE_THRESHOLD] DISTINCT NOTES
      * fail, the failure is judged PERSISTENT (the DEK is present and correct by
      * construction on the read path, so this is a re-key/restore mismatch or a
      * manipulated DB, not an isolated note) and [decryptFailureListener] fires
@@ -98,8 +102,8 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
         decryptFailureRecordIds.clear()
     }
 
-    private fun recordDecryptFailure(table: String, recordId: String, fieldName: String) {
-        val key = "$table:$recordId:$fieldName"
+    private fun recordDecryptFailure(noteId: String) {
+        val key = "note:$noteId"
         if (decryptFailureRecordIds.add(key) && decryptFailuresPersistent) {
             decryptFailureListener?.invoke()
         }
@@ -118,8 +122,20 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
      *    fallbacks are gone. A locked read is reported (recorded) only when a
      *    DEK is actually present, so a locked vault can never inflate the
      *    persistent ledger.
+     *
+     * [noteId] keys the persistent ledger (one entry per note, so a single
+     * corrupted note cannot trip the threshold by itself); [recordFailures]
+     * disables ledger recording for non-display reads (search corpus) that must
+     * never render markers nor inflate the persistent count.
      */
-    private fun decryptFieldForDisplay(storedValue: String, table: String, recordId: String, fieldName: String): String {
+    private fun decryptFieldForDisplay(
+        storedValue: String,
+        table: String,
+        recordId: String,
+        fieldName: String,
+        noteId: String,
+        recordFailures: Boolean = true
+    ): String {
         if (storedValue.isBlank()) return storedValue
         val structural = DecryptFailurePolicy.isStructuralCiphertext(storedValue)
         val key = encryptionKey
@@ -132,8 +148,8 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
         } else {
             null
         }
-        if (structural && decrypted == null && key != null) {
-            recordDecryptFailure(table, recordId, fieldName)
+        if (structural && decrypted == null && key != null && recordFailures) {
+            recordDecryptFailure(noteId)
         }
         return DecryptFailurePolicy.render(storedValue, decrypted, structural)
     }
@@ -143,16 +159,17 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
      * the marker (there is no text surface), so a failed row yields an EMPTY
      * payload — nothing is parsed (never raw ciphertext into
      * [EncryptionService.deserializeStrokes]), so an unreadable row produces no
-     * phantom ink, while still recording the failure for the persistent ledger.
+     * phantom ink, while still recording the failure (keyed on [noteId]) for the
+     * persistent ledger.
      */
-    private fun decryptStoredGeometryOrBlank(storedValue: String, recordId: String): String {
+    private fun decryptStoredGeometryOrBlank(storedValue: String, recordId: String, noteId: String): String {
         if (storedValue.isBlank()) return storedValue
         if (!DecryptFailurePolicy.isStructuralCiphertext(storedValue)) return storedValue
         val key = encryptionKey ?: return ""
         return try {
             String(EncryptionService.decryptField(storedValue, key, "strokes", recordId, "pointsJson"))
         } catch (e: Exception) {
-            recordDecryptFailure("strokes", recordId, "pointsJson")
+            recordDecryptFailure(noteId)
             ""
         }
     }
@@ -220,7 +237,12 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
             }
             val generationAtStart = synchronized(searchCorpusLock) { searchCorpusGeneration }
             val window = db.pageDao().getAllActivePagesBounded(VaultSearchPolicy.SEARCH_CORPUS_CAP)
-                .map { decryptPageIfNeeded(it) }
+                // B1-DB-8 (phase-88 review fix): undecryptable pages are dropped
+                // from the search corpus (never a rankable "Unreadable" marker)
+                // and their failures are NOT recorded against the persistent
+                // ledger here (the Home-list/display reads already count them).
+                .map { decryptPageOrNullForCorpus(it) }
+                .filterNotNull()
             val totalActive = db.pageDao().getActivePageCountOnce()
             synchronized(searchCorpusLock) {
                 if (generationAtStart == searchCorpusGeneration) {
@@ -944,7 +966,7 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
                 // the explicit UNREADABLE_MARKER (via the single policy decision),
                 // never the raw base64 ciphertext blob the old catch returned.
                 val decryptedText = if (rawText.isNotBlank()) {
-                    decryptFieldForDisplay(rawText, "strokes", entity.id, "textContent")
+                    decryptFieldForDisplay(rawText, "strokes", entity.id, "textContent", pageId)
                 } else {
                     rawText
                 }
@@ -954,7 +976,7 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
                 // (no phantom ink from ciphertext, nothing fed to deserializeStrokes),
                 // and every failure is recorded for the persistent ledger.
                 val decryptedPointsJson = if (rawPointsJson.isNotBlank()) {
-                    decryptStoredGeometryOrBlank(rawPointsJson, entity.id)
+                    decryptStoredGeometryOrBlank(rawPointsJson, entity.id, pageId)
                 } else {
                     rawPointsJson
                 }
@@ -1200,7 +1222,7 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
             // explicit UNREADABLE_MARKER (never the raw ciphertext `catch { text }`
             // returned) and is recorded for the persistent ledger.
             val decryptedText = if (text.isNotBlank()) {
-                decryptFieldForDisplay(text, "media_embeds", entity.id, "textContent")
+                decryptFieldForDisplay(text, "media_embeds", entity.id, "textContent", pageId)
             } else {
                 text
             }
@@ -1414,12 +1436,12 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
         // `decryptFieldOrNull(...) ?: v.title` fallback returned the raw blob.
         versions.map { v ->
             val decTitle = if (v.title.isNotBlank()) {
-                decryptFieldForDisplay(v.title, "note_versions", v.id, "title")
+                decryptFieldForDisplay(v.title, "note_versions", v.id, "title", v.pageId)
             } else {
                 v.title
             }
             val decText = if (!v.extractedText.isNullOrBlank()) {
-                decryptFieldForDisplay(v.extractedText, "note_versions", v.id, "extractedText")
+                decryptFieldForDisplay(v.extractedText, "note_versions", v.id, "extractedText", v.pageId)
             } else {
                 v.extractedText
             }
@@ -1433,17 +1455,40 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
      * rendered as raw base64 AES-GCM blobs. Now the title and extractedText
      * follow the single policy decision table: genuine ciphertext that fails to
      * authenticate renders [DecryptFailurePolicy.UNREADABLE_MARKER] (never the
-     * blob), and the failure is recorded for the persistent ledger.
+     * blob), and the failure is recorded for the persistent ledger. This applies
+     * even with a zeroized DEK (phase-88 review fix): the old `encryptionKey ==
+     * null` early-return passed the raw encrypted page through, unlike the
+     * strokes/embeds/versions sinks, which already rendered the marker.
      */
     private fun decryptPageIfNeeded(page: NotePageEntity): NotePageEntity {
-        val key = encryptionKey
-        if (key == null) return page
-        val decryptedTitle = decryptFieldForDisplay(page.title, "pages", page.id, "title")
+        val decryptedTitle = decryptFieldForDisplay(page.title, "pages", page.id, "title", page.id)
         val decryptedExtracted = if (!page.extractedText.isNullOrBlank()) {
-            decryptFieldForDisplay(page.extractedText, "pages", page.id, "extractedText")
+            decryptFieldForDisplay(page.extractedText, "pages", page.id, "extractedText", page.id)
         } else {
             page.extractedText
         }
+        return page.copy(title = decryptedTitle, extractedText = decryptedExtracted)
+    }
+
+    /**
+     * B1-DB-8 (phase-88 review fix): decrypt for the SEARCH CORPUS only — a page
+     * that fails to authenticate is dropped from the corpus (null), so an
+     * undecryptable note can never surface as a searchable/rankable
+     * "Unreadable (decryption failed)" marker, and — because this is a
+     * filter/rank context, not a display sink — the failure is NOT recorded in
+     * the persistent ledger (it inflates the count a second time on top of the
+     * Home-list read and would double-trip the threshold). Legacy plaintext and
+     * authenticated ciphertext render exactly as in [decryptPageIfNeeded].
+     */
+    private fun decryptPageOrNullForCorpus(page: NotePageEntity): NotePageEntity? {
+        val decryptedTitle = decryptFieldForDisplay(page.title, "pages", page.id, "title", page.id, recordFailures = false)
+        if (decryptedTitle == DecryptFailurePolicy.UNREADABLE_MARKER) return null
+        val decryptedExtracted = if (!page.extractedText.isNullOrBlank()) {
+            decryptFieldForDisplay(page.extractedText, "pages", page.id, "extractedText", page.id, recordFailures = false)
+        } else {
+            page.extractedText
+        }
+        if (decryptedExtracted == DecryptFailurePolicy.UNREADABLE_MARKER) return null
         return page.copy(title = decryptedTitle, extractedText = decryptedExtracted)
     }
 }

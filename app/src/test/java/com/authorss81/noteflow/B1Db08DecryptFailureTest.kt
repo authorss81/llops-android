@@ -152,10 +152,10 @@ class B1Db08DecryptFailureTest {
             .substringAfter("fun getStrokesForPage")
             .substringBefore("fun saveStrokesForPage")
 
-        assertTrue("stroke text must go through the single render decision",
-            region.contains("decryptFieldForDisplay(rawText, \"strokes\", entity.id, \"textContent\")"))
+        assertTrue("stroke text must go through the single render decision, keyed on the note",
+            region.contains("decryptFieldForDisplay(rawText, \"strokes\", entity.id, \"textContent\", pageId)"))
         assertTrue("stroke geometry must go through the geometry path (never raw ciphertext into a parser)",
-            region.contains("decryptStoredGeometryOrBlank(rawPointsJson, entity.id)"))
+            region.contains("decryptStoredGeometryOrBlank(rawPointsJson, entity.id, pageId)"))
         assertFalse("the raw-ciphertext text fallback must be gone",
             region.contains("catch (e: Exception) {\n                        rawText\n                    }"))
         assertFalse("the raw-ciphertext points fallback must be gone",
@@ -167,8 +167,8 @@ class B1Db08DecryptFailureTest {
         val region = repoSource
             .substringAfter("fun getMediaEmbedsForPage")
             .substringBefore("fun getNotebookCounts")
-        assertTrue("embed text must go through the single render decision",
-            region.contains("decryptFieldForDisplay(text, \"media_embeds\", entity.id, \"textContent\")"))
+        assertTrue("embed text must go through the single render decision, keyed on the note",
+            region.contains("decryptFieldForDisplay(text, \"media_embeds\", entity.id, \"textContent\", pageId)"))
         assertFalse("the old embed text `catch { text }` raw fallback must be gone",
             region.contains("catch (e: Exception) { text }"))
     }
@@ -178,10 +178,10 @@ class B1Db08DecryptFailureTest {
         val region = repoSource
             .substringAfter("fun getNoteVersions")
             .substringBefore("private fun decryptPageIfNeeded")
-        assertTrue("version title must go through the single render decision",
-            region.contains("decryptFieldForDisplay(v.title, \"note_versions\", v.id, \"title\")"))
-        assertTrue("version body must go through the single render decision",
-            region.contains("decryptFieldForDisplay(v.extractedText, \"note_versions\", v.id, \"extractedText\")"))
+        assertTrue("version title must go through the single render decision, keyed on the note",
+            region.contains("decryptFieldForDisplay(v.title, \"note_versions\", v.id, \"title\", v.pageId)"))
+        assertTrue("version body must go through the single render decision, keyed on the note",
+            region.contains("decryptFieldForDisplay(v.extractedText, \"note_versions\", v.id, \"extractedText\", v.pageId)"))
         assertFalse("the `?: v.title` raw fallback (code usage) must be gone",
             region.contains("EncryptionService.decryptFieldOrNull(v.title"))
         assertFalse("the `?: v.extractedText` raw fallback (code usage) must be gone",
@@ -193,10 +193,12 @@ class B1Db08DecryptFailureTest {
         val region = repoSource
             .substringAfter("private fun decryptPageIfNeeded")
             .substringBefore("}")
-        assertTrue("page title must go through the single render decision",
-            region.contains("decryptFieldForDisplay(page.title, \"pages\", page.id, \"title\")"))
-        assertTrue("page body must go through the single render decision",
-            region.contains("decryptFieldForDisplay(page.extractedText, \"pages\", page.id, \"extractedText\")"))
+        assertTrue("page title must go through the single render decision, keyed on the note id",
+            region.contains("decryptFieldForDisplay(page.title, \"pages\", page.id, \"title\", page.id)"))
+        assertTrue("page body must go through the single render decision, keyed on the note id",
+            region.contains("decryptFieldForDisplay(page.extractedText, \"pages\", page.id, \"extractedText\", page.id)"))
+        assertTrue("the locked-vault early-return that passed raw ciphertext through must be gone",
+            !region.contains("if (key == null) return page"))
         assertFalse("the pre-fix catch-all that returned the page (ciphertext) unchanged must be gone",
             region.contains("catch (e: Exception) {\n            page\n        }"))
     }
@@ -213,9 +215,12 @@ class B1Db08DecryptFailureTest {
 
     @Test
     fun `the viewmodel wires the persistent-failure listener on every initialize`() {
+        // Scoped to the B1-DB-8 block at the top of initializeDataCore — bounded
+        // on the NEXT statement's boundary (below the comment is the migration
+        // block), not on a function name that also appears earlier in the file.
         val region = viewModelSource
             .substringAfter("private suspend fun initializeDataCore()")
-            .substringBefore("private fun initializeData()")
+            .substringBefore("\n            if (!settings.fieldAadMigrated)")
 
         assertTrue("a fresh per-session ledger must be reset at initialize",
             region.contains("repository.resetDecryptFailures()"))
@@ -232,15 +237,17 @@ class B1Db08DecryptFailureTest {
     @Test
     fun `the viewmodel resets the ledger at every legitimate session boundary`() {
         // lock(): the reset sits immediately after the DEK zeroization and before
-        // the data-layer teardown (B1-AUTH-02 / phase-47).
-        assertTrue("lock() resets the session ledger after zeroizing the DEK",
-            viewModelSource.contains(
-                "repository.zeroizeKey()\n        // B1-DB-8 (phase-88): the session ledger must not survive a lock"
-            ))
+        // the data-layer teardown (B1-AUTH-02 / phase-47). Bound on stable code
+        // tokens (scrub -> hasMasterPassword teardown), never on comment text.
+        val lockRegion = viewModelSource
+            .substringAfter("ClipboardGuard.scrubIfOwnCopy(appContext)")
+            .substringBefore("\n        if (settings.hasMasterPassword)")
+        assertTrue("lock() zeroizes the DEK before resetting the ledger",
+            lockRegion.contains("repository.zeroizeKey()"))
         assertTrue("lock()'s reset sits at the top of the teardown, before the connection drop",
-            viewModelSource.contains(
-                "repository.resetDecryptFailures()\n        // B1-AUTH-02 (phase-47): the lock boundary must reach the DATA LAYER"
-            ))
+            lockRegion.contains("repository.resetDecryptFailures()"))
+        assertFalse("the lock-region reset must precede the connection drop, not follow it",
+            lockRegion.contains("NoteflowDatabase.dispose()"))
 
         val rekeyRegion = viewModelSource
             .substringAfter("fun changeMasterPassword")
