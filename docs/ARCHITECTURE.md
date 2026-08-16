@@ -108,6 +108,13 @@
     `sanitizeMessage` (`:91-93`) redacts ANY `/data/user/<uid>/...` or `/data/data/...`
     path — covers both the namespace and the real applicationId dir. Tests:
     `B2Log01CrashReportingTest` (7) — 1020 unit tests green.
+  - **Verified in phase-89** (B1-PLAT-5, verify-only — see `workspace/phase-89/REPORT.md`):
+    the path-redaction fix above was re-confirmed against the finding's real
+    applicationId (`com.aistudio.inkflow.app.bkxjrz`, `app/build.gradle.kts:15`). The
+    generic `/data/user/\d+/...` + `/data/data/...` rules in `sanitizeMessage`
+    (`PrivacyCrashReporter.kt:94-95`) cover BOTH the namespace and the runtime app-package
+    dir — pinned by `B2Log01CrashReportingTest:80-90` (`crash entry redacts the real
+    runtime applicationId data dir too`). No code change was required or made.
   - **Implemented in phase-70** (B2-LOG-02, see `workspace/phase-70/REPORT.md`):
     `app_startup.log` is capped, rotated and pruned — the pre-fix append-only
     `FileWriter(logFile, true)` (no length check / rotation / delete, unbounded growth on
