@@ -602,6 +602,13 @@
   Room schema → `app/schemas`, R8 minify on for release, `jniLibs.useLegacyPackaging = true`.
 - **No Gradle wrapper** — use system `gradle`. Tests: `gradle testDebugUnitTest`; build: `gradle assembleDebug`
   / `assembleRelease`. Runs in GitHub Actions (gradle 8.13, JDK 17).
+  - **Implemented in phase-75** (B2-DEPS-03, `workspace/phase-75/REPORT.md`): `gradle/verification-metadata.xml`
+    is committed — Gradle 8.13 auto-enables STRICT checksum verification (deps + metadata + build plugins)
+    whenever that file exists. To add/upgrade a dependency, regenerate with
+    `gradle --write-verification-metadata sha256 testDebugUnitTest assembleDebug`, review the diff, then
+    commit. There is NO `dependencyVerification {}` settings DSL in Gradle 8.13 — do NOT add one (it breaks
+    settings compilation). The `google()` content filters (`com.android.*`/`com.google.*`/`androidx.*`) are
+    mirrored in `dependencyResolutionManagement` and must stay in sync with `pluginManagement`.
 - Tests: `app/src/test/java/com/authorss81/noteflow/` (~110 unit tests, pure JVM, no androidTest).
 - **Do NOT run Gradle on the Windows dev machine** (no SDK; CI-only builds).
 - Version: `VERSION_CODE`/`VERSION_NAME` env (default 2 / "1.0.0"); release falls back to debug keystore.
