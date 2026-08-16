@@ -1,4 +1,4 @@
-# Phase 128: Restore horizontal floating ink bar + aspect-correct minimap [NOT STARTED]
+# Phase 128: Restore horizontal floating ink bar + aspect-correct, draggable minimap [NOT STARTED]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/phase-status.md` and
@@ -22,6 +22,13 @@ in `AnnotationCanvas.kt`.
   the horizontal default** — e.g. snap-to-edge and dock persistence become
   **optional settings**, default OFF (restore-beautiful-first; do not bury the
   simple horizontal bar behind configuration).
+- **Make the ink bar draggable**: the restored floating bar can be **dragged
+  to reposition it** anywhere on screen (drag persists for the session), gated
+  behind a **settings toggle** (`SettingsManager` boolean, e.g.
+  `inkBarDraggable`, default OFF) — when disabled the bar sits at its default
+  bottom-center anchor. Dragging must not break tap targets, auto-hide while
+  drawing, or the landscape side posture; the bar must not clip outside safe
+  insets.
 - **Fix the minimap**: replace the fixed 120×140dp box with a minimap whose
   size is **proportional to the page aspect ratio** (fit within a max box,
   preserving aspect) and whose pan/viewport mapping matches the actual canvas
@@ -38,14 +45,17 @@ in `AnnotationCanvas.kt`.
 
 ## Verification
 - Pure-JVM unit tests: minimap aspect-fit math (width/height from page ratio,
-  max-box clamping), dock posture decision (portrait → horizontal).
+  max-box clamping), dock posture decision (portrait → horizontal), draggable
+  anchor/position helpers (default anchor vs dragged offset; settings gate).
 - `gradle testDebugUnitTest` + `gradle assembleDebug` must pass (or a
   documented pre-existing-only failure).
 
 ## Definition of done
 - Portrait shows the old horizontal floating pill; landscape keeps a side
   vertical posture; snap-to-edge/dock extras are opt-in settings default OFF;
-  minimap is aspect-correct with working pan/viewport mapping.
+  minimap is aspect-correct with working pan/viewport mapping; **both the ink
+  bar and the minimap are draggable when their respective settings toggles are
+  enabled** (default OFF).
 - `workspace/phase-128/REPORT.md` committed with file:line evidence
   (before/after).
 
