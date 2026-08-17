@@ -62,6 +62,10 @@ object WebDavFailurePolicy {
     const val TOO_LARGE_DOWNLOAD_MESSAGE: String =
         "The remote backup archive exceeded the download size limit; the download was stopped."
 
+    /** Fixed "listing too large" text (B2-DOS-08 — never echoes size or URL text). */
+    const val LISTING_TOO_LARGE_MESSAGE: String =
+        "The WebDAV server's file listing was too large to process safely; the sync was stopped."
+
     /**
      * Fixed "unusable URL" text. The pre-fix
      * `Invalid WebDAV server URL: <e.message>` wrapped the `MalformedURLException`

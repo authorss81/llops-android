@@ -402,12 +402,11 @@ fun HomeScreen(
                     // and must never be swept.
                     path?.let { orphanRun.markCommitted(it) }
                 }
-            }
 
-            if (importedCount > 0) {
-                viewModel.showSnackbar("Imported $importedCount page(s)")
-            }
-        } catch (e: kotlinx.coroutines.CancellationException) {
+                if (importedCount > 0) {
+                    viewModel.showSnackbar("Imported $importedCount page(s)")
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
             // B2-UI-6 (phase-96): the run was cancelled between a persist and its
             // page create. Delete every tracked file whose page row was never
             // created so no orphaned plaintext/binary artifacts stay in imports/;
@@ -418,6 +417,7 @@ fun HomeScreen(
                 viewModel.showSnackbar(OrphanImportCleanupPolicy.CANCELLED_NOTICE, isLong = true)
             }
             throw e
+            }
         }
     }
 

@@ -25,8 +25,11 @@ import java.time.ZoneOffset
  *    routed uploads/downloads at unintended server paths.
  *
  * This policy:
- *  - [findBackupHrefs] parses the PROPFIND body (regex unchanged from the
- *    pre-fix code so old and new names keep matching);
+ *  - [findBackupHrefs] parses a full PROPFIND body (regex unchanged from the
+ *    pre-fix code so old and new names keep matching); the service instead uses
+ *    [scanBackupHrefs], which reads the SAME body incrementally under a hard
+ *    cap ([MAX_LISTING_BYTES], B2-DOS-08) and aborts mid-stream on a hostile
+ *    multi-GB/endless-drip response instead of buffering it for the regex;
  *  - [filenameTimestampMillis] extracts each remote filename's timestamp — the
  *    legacy `noteflow_vault_backup_<epochMillis>.nfb` form AND the current
  *    day-granular `noteflow_vault_backup_<yyyy-MM-dd>_<token>.nfb` form
@@ -55,6 +58,17 @@ object WebDavRemoteListingPolicy {
     /** Copy buffer for the bounded download (bounds the over-read on abort). */
     const val COPY_BUFFER_BYTES: Int = 64 * 1024
 
+    /**
+     * Hard ceiling for a single PROPFIND listing body (bytes). A legitimate
+     * `Depth: 1` listing is a handful of small XML responses; anything bigger is
+     * a malicious/endless-drip body (B2-DOS-08) and the scan must abort instead
+     * of buffering it for the href regex.
+     */
+    const val MAX_LISTING_BYTES: Long = 4L * 1024 * 1024
+
+    /** Chunk size for the bounded listing scan (bounds the over-read on abort). */
+    const val LISTING_CHUNK_BYTES: Int = 8 * 1024
+
     private const val BACKUP_PREFIX = "noteflow_vault_backup_"
     private val LEGACY_MILLIS_REGEX = Regex("${Regex.escape(BACKUP_PREFIX)}(\\d{10,})\\.nfb$")
     private val DAY_STAMP_REGEX = Regex("${Regex.escape(BACKUP_PREFIX)}(\\d{4}-\\d{2}-\\d{2})_.*\\.nfb$")
@@ -64,6 +78,9 @@ object WebDavRemoteListingPolicy {
 
     /** Raised by [copyBounded] mid-stream when the download budget is exceeded. */
     class DownloadTooLargeException(message: String) : IOException(message)
+
+    /** Raised by [scanBackupHrefs] mid-stream when the listing budget is exceeded. */
+    class ListingTooLargeException(message: String) : IOException(message)
 
     /**
      * The remote-listing href regex. Kept byte-identical to the pre-fix
@@ -80,6 +97,152 @@ object WebDavRemoteListingPolicy {
      */
     fun findBackupHrefs(xmlResponse: String): List<String> =
         BACKUP_HREF_REGEX.findAll(xmlResponse).map { it.groupValues[1] }.toList()
+
+    private const val OPEN_TAG = "<d:href>"
+    private const val CLOSE_TAG = "</d:href>"
+    private const val MARKER = "noteflow_vault_backup_"
+
+    /**
+     * Bounded, incremental PROPFIND listing scan (B2-DOS-08). Reads the response
+     * body from [input] under a hard cap of [maxBytes] (default
+     * [MAX_LISTING_BYTES]) and returns the candidate backup hrefs in document
+     * order.
+     *
+     * Unlike [findBackupHrefs] — which needs the WHOLE document in one String —
+     * each href is committed to the result the moment its `</d:href>` closing
+     * tag arrives, so only the current candidate (never the full body) is held
+     * in memory. A multi-GB or endless-drip body therefore aborts on the first
+     * chunk that crosses the cap with [ListingTooLargeException]; it is never
+     * fully buffered. The extraction rules mirror [BACKUP_HREF_REGEX]
+     * byte-for-byte, so old and new listings match identically.
+     */
+    fun scanBackupHrefs(
+        input: InputStream,
+        maxBytes: Long = MAX_LISTING_BYTES
+    ): List<String> {
+        require(maxBytes >= 0L) { "maxBytes must be non-negative" }
+        val result = ArrayList<String>()
+        val extractor = HrefExtractor(result)
+        val buf = ByteArray(LISTING_CHUNK_BYTES)
+        var total = 0L
+        var carry = ByteArray(0)
+        var idleReads = 0
+        while (true) {
+            val n = input.read(buf)
+            if (n < 0) break
+            if (n == 0) {
+                if (++idleReads > IDLE_READ_LIMIT) {
+                    throw IOException("Listing stream made no progress; aborting bounded listing")
+                }
+                continue
+            }
+            idleReads = 0
+            total += n
+            if (total > maxBytes) {
+                throw ListingTooLargeException(
+                    "WebDAV file listing too large — exceeded the ${maxBytes / (1024L * 1024L)} MB cap; " +
+                        "refusing to buffer the full response."
+                )
+            }
+            val combined = ByteArray(carry.size + n)
+            carry.copyInto(combined)
+            buf.copyInto(combined, carry.size, 0, n)
+            val (text, nextCarry) = decodeKeepingTail(combined)
+            carry = nextCarry
+            extractor.feed(text)
+        }
+        if (carry.isNotEmpty()) {
+            extractor.feed(String(carry, Charsets.UTF_8))
+        }
+        return result
+    }
+
+    /**
+     * Decodes [combined] but holds back the trailing bytes that might be part of
+     * a UTF-8 character straddling the chunk boundary, so the returned text is
+     * guaranteed to end on a character boundary. A trailing U+FFFD (the JVM's
+     * replacement for a truncated sequence) is the signal to trim and retry.
+     */
+    private fun decodeKeepingTail(combined: ByteArray): Pair<String, ByteArray> {
+        var decodeLen = combined.size
+        var text = String(combined, 0, decodeLen, Charsets.UTF_8)
+        var guard = 0
+        while (decodeLen > 0 && text.isNotEmpty() && text.last() == '\uFFFD' && guard < 4) {
+            decodeLen--
+            guard++
+            text = String(combined, 0, decodeLen, Charsets.UTF_8)
+        }
+        return text to combined.copyOfRange(decodeLen, combined.size)
+    }
+
+    /**
+     * Streams [buf] through a two-state machine (scan for `<d:href>`, capture
+     * until `</d:href>`) that mirrors [BACKUP_HREF_REGEX]'s acceptance rules:
+     * the captured text must be non-empty, contain no `<`, have at least one
+     * char before AND after the `noteflow_vault_backup_` marker, and end in
+     * `.nfb` (case-insensitive, matching the regex's IGNORE_CASE). [buf] stays
+     * bounded to the largest tag prefix/suffix; only the current candidate is
+     * accumulated in [content].
+     */
+    private class HrefExtractor(private val sink: MutableList<String>) {
+        private var buf = ""
+        private var capturing = false
+        private val content = StringBuilder()
+
+        fun feed(text: String) {
+            buf += text
+            while (true) {
+                if (capturing) {
+                    val close = buf.lowercase().indexOf(CLOSE_TAG)
+                    val anyLt = buf.indexOf('<')
+                    if (close >= 0 && anyLt >= 0 && anyLt < close) {
+                        // The candidate contains a '<' before its closing tag —
+                        // the regex (`[^<]+…`) could never match it; discard and
+                        // resume scanning at that '<' (mirrors regex findAll).
+                        buf = buf.substring(anyLt)
+                        content.setLength(0)
+                        capturing = false
+                        continue
+                    }
+                    if (close < 0) {
+                        // Keep back only the tail that might be a partial
+                        // `</d:href>` (or a partial `<`) for the next feed.
+                        val keep = maxOf(0, buf.length - (CLOSE_TAG.length - 1))
+                        content.append(buf, 0, keep)
+                        buf = buf.substring(keep)
+                        return
+                    }
+                    content.append(buf, 0, close)
+                    val candidate = content.toString()
+                    if (matchesHref(candidate)) sink.add(candidate)
+                    content.setLength(0)
+                    buf = buf.substring(close + CLOSE_TAG.length)
+                    capturing = false
+                } else {
+                    val idx = buf.lowercase().indexOf(OPEN_TAG)
+                    if (idx < 0) {
+                        if (buf.length > OPEN_TAG.length) {
+                            buf = buf.takeLast(OPEN_TAG.length)
+                        }
+                        return
+                    }
+                    buf = buf.substring(idx + OPEN_TAG.length)
+                    content.setLength(0)
+                    capturing = true
+                }
+            }
+        }
+
+        private fun matchesHref(content: String): Boolean {
+            if (content.isEmpty() || content.contains('<')) return false
+            val lower = content.lowercase()
+            val markerIdx = lower.indexOf(MARKER)
+            if (markerIdx <= 0) return false
+            val after = lower.substring(markerIdx + MARKER.length)
+            // `[^<]+\.nfb$` after the marker: ≥1 char before the literal `.nfb`.
+            return after.length >= ".nfb".length + 1 && after.endsWith(".nfb")
+        }
+    }
 
     /**
      * Picks the href whose remote filename carries the MAXIMUM timestamp —

@@ -287,15 +287,18 @@ class WebDavSyncService(private val context: Context) {
                 return@withContext SyncResult(false, "Failed to list remote folder (HTTP $listCode)")
             }
 
-            val xmlResponse = listConn.inputStream.bufferedReader().use { it.readText() }
-            listConn.disconnect()
-
-            // B1-NET-07 (phase-86): parse the listing via the policy. The href
-            // with the MAXIMUM filename timestamp is chosen — never the last href
-            // in XML document order — so a server returning non-chronological
-            // hrefs can no longer silently roll "Download & Restore" back to an
-            // older archive. The .nfb GET below is additionally size-capped.
-            val matches = WebDavRemoteListingPolicy.findBackupHrefs(xmlResponse)
+            // B2-DOS-08 (phase-98): the PROPFIND body is read under a hard cap
+            // (MAX_LISTING_BYTES = 4 MB). scanBackupHrefs commits each href as
+            // its closing tag arrives and ABORTS mid-stream on the first chunk
+            // that crosses the cap — a hostile server can no longer make the
+            // app buffer a multi-GB XML document for the regex (OOM).
+            val matches = try {
+                listConn.inputStream.use { input ->
+                    WebDavRemoteListingPolicy.scanBackupHrefs(input)
+                }
+            } finally {
+                listConn.disconnect()
+            }
 
             if (matches.isEmpty()) {
                 return@withContext SyncResult(false, "No remote vault backup archives found on WebDAV server.")
@@ -365,6 +368,10 @@ class WebDavSyncService(private val context: Context) {
                 downloadConn.disconnect()
                 SyncResult(false, "Download failed with HTTP response $downCode")
             }
+        } catch (e: WebDavRemoteListingPolicy.ListingTooLargeException) {
+            // B2-DOS-08 (phase-98): the listing scan hit its 4 MB cap — surface
+            // the fixed message, never the size/URL details.
+            SyncResult(false, WebDavFailurePolicy.LISTING_TOO_LARGE_MESSAGE)
         } catch (e: WebDavRemoteListingPolicy.DownloadTooLargeException) {
             // Review-fix (phase-86): never leave a multi-hundred-MB partial
             // archive behind; the caller only proceeds when `success`, so

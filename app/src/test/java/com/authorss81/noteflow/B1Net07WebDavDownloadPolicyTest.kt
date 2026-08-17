@@ -249,7 +249,10 @@ class B1Net07WebDavDownloadPolicyTest {
             .readText()
         assertTrue("download selection must route through the policy", source.contains("newestBackupHref"))
         assertFalse("the XML-order matches.last() must be gone", source.contains("matches.last()"))
-        assertTrue("the listing must be parsed by the policy regex", source.contains("findBackupHrefs"))
+        // B2-DOS-08 (phase-98): the service now reads the listing through the
+        // bounded scanner, not the full-buffer regex path.
+        assertTrue("the listing must be parsed via the bounded scan", source.contains("scanBackupHrefs"))
+        assertFalse("the full-buffer readText() must be gone", source.contains("readText()"))
         assertFalse("the inline listing regex must be gone", source.contains("val zipRegex"))
     }
 
