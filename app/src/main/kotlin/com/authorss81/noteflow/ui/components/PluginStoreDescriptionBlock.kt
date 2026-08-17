@@ -9,8 +9,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowDown
-import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowUp
+import androidx.compose.material.icons.outlined.KeyboardArrowDown
+import androidx.compose.material.icons.outlined.KeyboardArrowUp
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -69,9 +69,9 @@ fun PluginStoreDescriptionBlock(
                 Spacer(Modifier.width(2.dp))
                 Icon(
                     if (expanded) {
-                        Icons.AutoMirrored.Outlined.KeyboardArrowUp
+                        Icons.Outlined.KeyboardArrowUp
                     } else {
-                        Icons.AutoMirrored.Outlined.KeyboardArrowDown
+                        Icons.Outlined.KeyboardArrowDown
                     },
                     contentDescription =
                         if (expanded) "Show less" else "Show more",

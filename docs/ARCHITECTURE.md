@@ -882,6 +882,19 @@
 - **Glass theme**: `theme/GlassSurfaces.kt:44` (`GlassBlurGate`), :80 (`GlassSurfaceMath`), :140
   (`FrostedGlassSurface`), :192 (`innerLuminescence`); `theme/Motion.kt:50` (`MotionSystem`, `LocalReduceMotion` :16);
   `theme/Type.kt:70`; `theme/Theme.kt:239` (`NoteflowTheme`, dynamic + paper/sepia/dark/AMOLED).
+  - **Implemented in phase-128** (UI text hygiene, see `workspace/phase-128/REPORT.md`): UI chrome
+    typography normalised to the standard `theme/TypeScale.kt` M3 ladder. All-caps gone:
+    `UnifiedSidebar.kt:124/:164` ("QUICK NOTES"/"ALL NOTEBOOKS" → sentence case) and the tutorial
+    section chip's `.uppercase()` (`InteractiveTutorial.kt:181`). Extreme weight/tracking gone: the
+    Step-kicker was the app's ONLY `FontWeight.ExtraBold` + `letterSpacing=1.sp`
+    (`InteractiveTutorial.kt:210-214` → plain `labelLarge`); the tutorial slide title
+    `headlineSmall`+`Bold` → `titleLarge` (`:218-223`, dialog-chrome size cap). Near-sibling fix:
+    `EditorScreen.kt:3533` "×" delete glyph `titleMedium`→`labelSmall` (matches `:3179`).
+    Documented-as-fine: markdown H1/H2 heading ladders, the consistent `headlineMedium`
+    lock/recovery screen-title family, canvas ink UI, emoji glyphs, capped data values.
+    Also fixed a phase-127 **pre-existing build blocker**: `PluginStoreDescriptionBlock.kt:12-13/:72-74`
+    used non-existent `Icons.AutoMirrored.Outlined.KeyboardArrowUp/Down` → `Icons.Outlined.*`
+    (as `UnifiedSidebar.kt:296`). No schema change, no new deps.
 - **ViewModel/nav**: `ui/viewmodel/NoteflowViewModel.kt:105` (builds SecurityService/NoteRepository/PluginRegistry
   :121/PluginManager :131/PluginRuntime :170/PluginStoreController :196; ~60 capability suspend fns);
   `MainActivity.kt:73` (single activity, **`mutableStateOf` nav** — NOT Navigation Compose).

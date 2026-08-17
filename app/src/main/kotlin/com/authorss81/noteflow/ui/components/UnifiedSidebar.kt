@@ -121,7 +121,7 @@ fun UnifiedSidebar(
                 // Quick Access Header
                 item {
                     Text(
-                        text = "QUICK NOTES",
+                        text = "Quick Notes",
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
@@ -161,7 +161,7 @@ fun UnifiedSidebar(
                         modifier = Modifier.padding(vertical = 8.dp, horizontal = 16.dp)
                     )
                     Text(
-                        text = "ALL NOTEBOOKS",
+                        text = "All Notebooks",
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),

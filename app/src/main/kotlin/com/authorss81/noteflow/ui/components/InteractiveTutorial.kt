@@ -178,7 +178,7 @@ fun InteractiveTutorial(
                     modifier = Modifier.padding(bottom = 14.dp)
                 ) {
                     Text(
-                        text = "${slide.section.displayName.uppercase()} · " +
+                        text = "${slide.section.displayName} · " +
                             "${ui.session.slideNumberInSection}/${ui.session.slidesInSection}",
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.Bold,
@@ -210,18 +210,15 @@ fun InteractiveTutorial(
                 Text(
                     text = "Step ${ui.session.index + 1} of ${ui.session.total}",
                     style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.ExtraBold,
-                    letterSpacing = 1.sp
+                    color = MaterialTheme.colorScheme.primary
                 )
 
                 Spacer(modifier = Modifier.height(8.dp))
 
                 Text(
                     text = slide.title,
-                    style = MaterialTheme.typography.headlineSmall,
+                    style = MaterialTheme.typography.titleLarge,
                     color = MaterialTheme.colorScheme.onSurface,
-                    fontWeight = FontWeight.Bold,
                     textAlign = TextAlign.Center
                 )
 

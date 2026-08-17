@@ -3530,7 +3530,7 @@ private fun WidthPickerBottomSheet(
                                         onClick = { onDeletePreset(preset.id) },
                                         modifier = Modifier.size(18.dp)
                                     ) {
-                                        Text("×", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.error)
+                                        Text("×", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
                                     }
                                 }
                             )
