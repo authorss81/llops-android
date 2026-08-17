@@ -67,6 +67,10 @@ fun PluginStoreDialog(
     var pendingDeleteId by remember { mutableStateOf<String?>(null) }
     // pluginId → inline message (e.g. an enable refusal with its reason).
     var localMessages by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    // Phase 127: per-card description reveal. Collapsed by default so the list
+    // fits more plugins per screen; remembered ONLY while the dialog is open
+    // (a fresh open starts every card collapsed again) — never persisted.
+    var expandedDescriptionIds by remember { mutableStateOf<Set<String>>(emptySet()) }
 
     val colorScheme = MaterialTheme.colorScheme
     val statusColor: (PluginLifecycleState?) -> Color = { state ->
@@ -185,10 +189,17 @@ fun PluginStoreDialog(
                                             style = MaterialTheme.typography.titleSmall,
                                             fontWeight = FontWeight.Bold
                                         )
-                                        Text(
-                                            entry.description,
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = colorScheme.onSurfaceVariant
+                                        PluginStoreDescriptionBlock(
+                                            description = entry.description,
+                                            expanded = entry.pluginId in expandedDescriptionIds,
+                                            onToggle = {
+                                                expandedDescriptionIds =
+                                                    if (entry.pluginId in expandedDescriptionIds) {
+                                                        expandedDescriptionIds - entry.pluginId
+                                                    } else {
+                                                        expandedDescriptionIds + entry.pluginId
+                                                    }
+                                            }
                                         )
                                         Text(
                                             buildString {
