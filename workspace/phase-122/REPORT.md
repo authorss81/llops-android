@@ -79,3 +79,13 @@ The PROMPT's headline feature (rainbow modes, chips, per-point render, per-strok
 ## Constraints honoured
 
 - NO DB schema change, no migration, no new dependencies, `.github/workflows/` untouched, no `INTERNET` change, `allowBackup=false`/`ClipboardGuard`/FLAG_SECURE intact, no keys/log content logged.
+
+## Post-review fixes (2026-08-17)
+
+Responding to the phase-122 review findings:
+
+1. **GRADIENT/SHIMMER restore was half-broken** — only the MODE persisted; the base colour and gradient-end colour reset to the default navy on every reopen, so a persisted GRADIENT reopened as a navy→navy (visually solid) stroke. Fixed: `SettingsManager.brushColorArgb` (`SettingsManager.kt:212-221`, keys `brush_color_key`/`brush_gradient_to_key`, no schema) now accompanies the mode; `EditorScreen` restores `currentColor`/`currentGradientToColor` from it on open (`EditorScreen.kt:127`, `:142`) and every selection path persists it (`handleColorModeChange`/`handleGradientToColorSelect`/`onColorSelect`/`onColorSampled`).
+2. **Two byte-identical handler copies** (colour picker + width picker) replaced by ONE shared pair `handleColorModeChange` / `handleGradientToColorSelect` (`EditorScreen.kt:144-165`) — no drift possible. (The earlier REPORT line about `:1878`/`:1894` lambdas is superseded.)
+3. **Bottom sheets were non-scrollable** — the new chips row added to the width picker risked clipping its tail (live-nib-preview/sliders) on small/landscape screens. Both `ModalBottomSheet` Columns (`ColorPickerBottomSheet` + `WidthPickerBottomSheet`) now `verticalScroll`; the shared chips row is `horizontalScroll`-wrapped so 4 chips can never overflow a narrow width (`ColorModeChipsRow.kt:40`).
+4. **Accidental reset-to-solid persisted across sessions** — re-tapping the active mode chip is now a NO-OP (idempotent) instead of silently reverting to SOLID (`ColorModeChipsRow.kt:58-64`).
+5. **Byte-identical claim unpinned** — added `rainbowColorAt is pinned by exact ARGB goldens` (literal `0xFF400080`/`0xFF408000`/`0xFF80FF00`/`0xFFB78000`/`0xFF805900`, computed independently, not via the production helpers) + source pins for the colour persistence keys.

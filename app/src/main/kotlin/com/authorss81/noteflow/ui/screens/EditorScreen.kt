@@ -124,7 +124,7 @@ fun EditorScreen(
             lastDrawingTool = currentTool
         }
     }
-    var currentColor by remember { mutableStateOf(Color(0xFF1B365D)) }
+    var currentColor by remember { mutableStateOf(Color(viewModel.settings.brushColorArgb)) }
     var currentWidth by remember { mutableFloatStateOf(4f) }
     // Phase 27 + 122: multi-color brush modes (RAINBOW / GRADIENT / SHIMMER). The
     // mode + seed + optional gradient end color persist ON each stroke and the
@@ -139,7 +139,36 @@ fun EditorScreen(
         )
     }
     var currentColorSeed by remember { mutableIntStateOf(0) }
-    var currentGradientToColor by remember { mutableStateOf(Color(0xFF1B365D)) }
+    var currentGradientToColor by remember { mutableStateOf(Color(viewModel.settings.brushGradientToArgb)) }
+
+    // Phase 122 (review fix): ONE shared handler pair for the colour-MODE selection so
+    // the colour picker and the width/quick picker can never drift apart. Each handler
+    // persists the chosen mode AND the colour parameters it depends on (base colour +
+    // gradient end) via SettingsManager — a reopened GRADIENT/SHIMMER session therefore
+    // restores its real colours, not the default navy.
+    val handleColorModeChange: (StrokeColorMode, Color, Color?) -> Unit = { mode, baseColor, gradientTo ->
+        currentColorMode = mode
+        viewModel.settings.brushColorModeKey = mode.persistenceKey
+        viewModel.settings.brushColorArgb = baseColor.toArgb()
+        when (mode) {
+            StrokeColorMode.SOLID -> currentColor = baseColor
+            StrokeColorMode.RAINBOW, StrokeColorMode.SHIMMER -> {
+                currentColor = baseColor
+                currentColorSeed = (Math.random() * 360).toInt()
+            }
+            StrokeColorMode.GRADIENT -> {
+                currentColor = baseColor
+                currentGradientToColor = gradientTo ?: baseColor
+                viewModel.settings.brushGradientToArgb = currentGradientToColor.toArgb()
+            }
+        }
+    }
+    val handleGradientToColorSelect: (Color) -> Unit = { gradientTo ->
+        currentGradientToColor = gradientTo
+        currentColorMode = StrokeColorMode.GRADIENT
+        viewModel.settings.brushColorModeKey = StrokeColorMode.GRADIENT.persistenceKey
+        viewModel.settings.brushGradientToArgb = gradientTo.toArgb()
+    }
     var template by remember { mutableStateOf(page.template ?: "blank") }
     var strokes by remember { mutableStateOf<List<Stroke>>(emptyList()) }
     var stickyNotes by remember { mutableStateOf<List<CanvasStickyNote>>(emptyList()) }
@@ -1603,6 +1632,7 @@ fun EditorScreen(
                 },
                 onColorSampled = { sampledColor ->
                     currentColor = sampledColor
+                    viewModel.settings.brushColorArgb = sampledColor.toArgb()
                     // Eyedropper returns a concrete pixel color → back to SOLID (a
                     // reasonable default the user can re-override with a mode chip).
                     if (currentColorMode.isMultiColor) {
@@ -1817,33 +1847,14 @@ fun EditorScreen(
                     // Picking a concrete solid color → SOLID mode (multi-color modes
                     // are re-engaged explicitly via the mode chips).
                     currentColor = color
+                    viewModel.settings.brushColorArgb = color.toArgb()
                     currentColorMode = StrokeColorMode.SOLID
                     viewModel.settings.brushColorModeKey = StrokeColorMode.SOLID.persistenceKey
                     activePresetId = null
                     activeCustomPresetId = null
                 },
-                onColorModeChange = { mode, baseColor, gradientTo ->
-                    currentColorMode = mode
-                    // Phase 122: persist the selected brush mode so Rainbow etc.
-                    // survives restarts (SharedPreferences via SettingsManager).
-                    viewModel.settings.brushColorModeKey = mode.persistenceKey
-                    when (mode) {
-                        StrokeColorMode.SOLID -> currentColor = baseColor
-                        StrokeColorMode.RAINBOW, StrokeColorMode.SHIMMER -> {
-                            currentColor = baseColor
-                            currentColorSeed = (Math.random() * 360).toInt()
-                        }
-                        StrokeColorMode.GRADIENT -> {
-                            currentColor = baseColor
-                            currentGradientToColor = gradientTo ?: baseColor
-                        }
-                    }
-                },
-                onGradientToColorSelect = { gradientTo ->
-                    currentGradientToColor = gradientTo
-                    currentColorMode = StrokeColorMode.GRADIENT
-                    viewModel.settings.brushColorModeKey = StrokeColorMode.GRADIENT.persistenceKey
-                },
+                onColorModeChange = handleColorModeChange,
+                onGradientToColorSelect = handleGradientToColorSelect,
                 onSaveSwatch = { color ->
                     viewModel.insertPaletteItem(
                         PaletteItemEntity(
@@ -1873,26 +1884,8 @@ fun EditorScreen(
                 currentTool = currentTool,
                 currentColorMode = currentColorMode,
                 currentGradientToColor = currentGradientToColor,
-                onColorModeChange = { mode, baseColor, gradientTo ->
-                    currentColorMode = mode
-                    viewModel.settings.brushColorModeKey = mode.persistenceKey
-                    when (mode) {
-                        StrokeColorMode.SOLID -> currentColor = baseColor
-                        StrokeColorMode.RAINBOW, StrokeColorMode.SHIMMER -> {
-                            currentColor = baseColor
-                            currentColorSeed = (Math.random() * 360).toInt()
-                        }
-                        StrokeColorMode.GRADIENT -> {
-                            currentColor = baseColor
-                            currentGradientToColor = gradientTo ?: baseColor
-                        }
-                    }
-                },
-                onGradientToColorSelect = { gradientTo ->
-                    currentGradientToColor = gradientTo
-                    currentColorMode = StrokeColorMode.GRADIENT
-                    viewModel.settings.brushColorModeKey = StrokeColorMode.GRADIENT.persistenceKey
-                },
+                onColorModeChange = handleColorModeChange,
+                onGradientToColorSelect = handleGradientToColorSelect,
                 onWidthSelect = { w ->
                     currentWidth = w
                     activePresetId = null
@@ -2900,6 +2893,7 @@ private fun ColorPickerBottomSheet(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 20.dp, vertical = 8.dp)
+                .verticalScroll(rememberScrollState())
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -3438,6 +3432,7 @@ private fun WidthPickerBottomSheet(
                 .fillMaxWidth()
                 .padding(horizontal = 20.dp, vertical = 8.dp)
                 .navigationBarsPadding()
+                .verticalScroll(rememberScrollState())
         ) {
             Text(
                 text = "Stroke Width & Presets",

@@ -95,6 +95,22 @@ class Phase122RainbowColorTest {
         assertEquals(BrushColorModeMath.hsvToArgb(hue, 1f, 1f), brightArgb)
     }
 
+    @Test
+    fun `rainbowColorAt is pinned by exact ARGB goldens`() {
+        // Literal goldens (not recomputed from the same helpers) so ANY drift in the
+        // hue-advance/value/hsv round-trip — value floor, hue wrap, channel rounding —
+        // fails the pipeline instead of quietly passing a helper-vs-helper comparison.
+        val base = 0xFF1B365D.toInt()
+        assertTrue(BrushColorModeMath.rainbowColorAt(base, 0.5f, 90) == 0xFF400080.toInt())
+        assertTrue(BrushColorModeMath.rainbowColorAt(base, 0.0f, 90) == 0xFF408000.toInt())
+        // white base keeps v=1.0 (bright seed-less sweep mid-quadrant).
+        assertTrue(BrushColorModeMath.rainbowColorAt(0xFFFFFFFF.toInt(), 0.25f, 0) == 0xFF80FF00.toInt())
+        // rust base keeps its own high value (~0.718) instead of the 0.5 floor.
+        assertTrue(BrushColorModeMath.rainbowColorAt(0xFFB7410E.toInt(), 1f, 42) == 0xFFB78000.toInt())
+        // dark base with a seed near the wheel start, full sweep.
+        assertTrue(BrushColorModeMath.rainbowColorAt(base, 1f, 42) == 0xFF805900.toInt())
+    }
+
     // ---- persistence decision table (ColorModePersistencePolicy) -------------
 
     @Test
@@ -186,6 +202,18 @@ class Phase122RainbowColorTest {
         // Restore on open from the persisted key.
         assertTrue(editor.contains("ColorModePersistencePolicy"))
         assertTrue(editor.contains("viewModel.settings.brushColorModeKey"))
+    }
+
+    @Test
+    fun `gradient and shimmer sessions restore their real colours not the default navy`() {
+        val editor = readMainFile("ui/screens/EditorScreen.kt")
+        // Base colour + gradient-end colour are persisted alongside the mode so a
+        // reopened GRADIENT/SHIMMER session keeps the user's colours (review fix).
+        assertTrue(editor.contains("viewModel.settings.brushColorArgb"))
+        assertTrue(editor.contains("viewModel.settings.brushGradientToArgb"))
+        val settings = readMainFile("services/SettingsManager.kt")
+        assertTrue(settings.contains("brush_color_key"))
+        assertTrue(settings.contains("brush_gradient_to_key"))
     }
 
     @Test

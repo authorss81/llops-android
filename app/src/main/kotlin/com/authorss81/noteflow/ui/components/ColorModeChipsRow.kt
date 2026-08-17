@@ -3,6 +3,7 @@ package com.authorss81.noteflow.ui.components
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -12,6 +13,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.LocalContentColor
@@ -45,7 +47,9 @@ fun ColorModeChipsRow(
     onGradientToColorSelect: (Color) -> Unit
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         StrokeColorMode.entries.forEach { mode ->
@@ -53,9 +57,11 @@ fun ColorModeChipsRow(
             FilterChip(
                 selected = selected,
                 onClick = {
-                    if (selected) {
-                        onColorModeChange(StrokeColorMode.SOLID, currentColor, currentGradientToColor)
-                    } else {
+                    // Phase 122 (review fix): the chip is intentionally idempotent —
+                    // re-tapping the active mode is a NO-OP instead of silently
+                    // reverting to SOLID, so an accidental tap can no longer reset a
+                    // now-persisted mode across sessions.
+                    if (!selected) {
                         onColorModeChange(mode, currentColor, currentGradientToColor)
                     }
                 },

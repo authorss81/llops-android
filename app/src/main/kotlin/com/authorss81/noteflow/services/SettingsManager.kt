@@ -209,6 +209,19 @@ class SettingsManager(context: Context) {
             .putString(ColorModePersistencePolicy.PREF_KEY_COLOR_MODE, value)
             .apply()
 
+    // Phase 122 (review fix): the brush BASE colour and the GRADIENT end colour
+    // (ARGB ints) accompany the persisted MODE so a reopened GRADIENT/SHIMMER/Rainbow
+    // session restores its real colours instead of falling back to the default navy.
+    // SharedPreferences, never the DB schema. Default matches the editor's long-standing
+    // default base colour 0xFF1B365D.
+    var brushColorArgb: Int
+        get() = prefs.getInt("brush_color_key", 0xFF1B365D.toInt())
+        set(value) = prefs.edit().putInt("brush_color_key", value).apply()
+
+    var brushGradientToArgb: Int
+        get() = prefs.getInt("brush_gradient_to_key", 0xFF1B365D.toInt())
+        set(value) = prefs.edit().putInt("brush_gradient_to_key", value).apply()
+
     // Phase 19: render-time vibrancy/saturation boost. OFF by default so stored
     // colors and existing notes render unchanged; stored colorInt is never mutated.
     var vibrancyEnabled: Boolean
