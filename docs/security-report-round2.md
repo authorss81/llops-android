@@ -45,17 +45,23 @@
 
 | Severity | Batch 1 | Batch 2 | Total |
 |----------|---------|---------|-------|
-| CRITICAL | 0       |         |       |
-| HIGH     | 0       |         |       |
-| MEDIUM   | 6       |         |       |
-| LOW      | 11      |         |       |
-| INFO     | 2       |         |       |
-| **Total**| **19**  |         |       |
+| CRITICAL | 0       | 0       | 0     |
+| HIGH     | 0       | 0       | 0     |
+| MEDIUM   | 5       | 7       | 12    |
+| LOW      | 12      | 14      | 26    |
+| INFO     | 3       | 2       | 5     |
+| **Total**| **20**  | **23**  | **43**|
 
-> Batch-1 subtotal = 19 unique findings (21 raw agent findings minus the
+> Batch-1 subtotal = 20 unique findings (21 raw agent findings minus the
 > R2-B1C-01 duplicate folded into R2-B1D-02).
 > Per area (Batch 1): crypto (`b1-crypto`): 2 · data-at-rest/DB (`b1-datarest`): 5 ·
 > network/plugins (`b1-net`): 5 · platform (`b1-platform`): 5 · app logic/auth (`b1-applogic`): 3.
+> Batch-2 subtotal = 23 unique findings (24 raw agent findings minus the
+> R2-b2b5-FEA-07 duplicate of R2-b2b4-DOS-03 — the minimap per-frame draw is reported
+> once, under DOS-03).
+> Per area (Batch 2): Compose/UI+concurrency (`b2b1-ui`): 6 · dependencies/CVE
+> (`b2b2-deps`): 4 · logging/info-disclosure (`b2b3-log`): 4 · resource-exhaustion/DoS
+> (`b2b4-dos`): 3 · phase-34-38 feature attack surface (`b2b5-feat`): 6.
 
 ---
 
@@ -514,5 +520,265 @@
   `lock()` runs instead of deferring indefinitely.
 
 ---
+*Batch 1 complete (2026-08-17).*
 
-*Batch 1 complete (2026-08-17). Batch 2 findings appended below as they finish.*
+# Batch 2 — findings (5 parallel subagents, c813c99)
+
+> Round-2 Batch-2 source audit of the same audited commit (`c813c99`; HEAD
+> re-verified against `c3a1789` — only CI/pipeline commits separate the two, no app
+> code delta). Dedup: 24 raw agent findings minus R2-b2b5-FEA-07 (minimap per-frame
+> draw) folded into R2-b2b4-DOS-03 = **23 unique findings**. Area counts: Compose/UI+
+> concurrency (`b2b1-ui`): 6 · dependencies/CVE (`b2b2-deps`): 4 · logging/info-
+> disclosure (`b2b3-log`): 4 · resource-exhaustion/DoS (`b2b4-dos`): 3 · phase-34-38
+> feature attack surface (`b2b5-feat`): 6.
+
+## Quick lookup
+
+| ID | Severity | Area | Status |
+|----|----------|------|--------|
+| R2-b2b1-UI-01 | MEDIUM | Compose/UI — read-side loads vs lock | open |
+| R2-b2b1-UI-02 | LOW | Compose/UI — dialog window FLAG_SECURE | open |
+| R2-b2b1-UI-03 | LOW | Compose/UI — restore re-entrancy race | open |
+| R2-b2b1-UI-04 | LOW | Compose/UI — snackbar channel vs lock | open |
+| R2-b2b1-UI-05 | LOW | Compose/UI — voice recording discard on lock | open |
+| R2-b2b1-UI-06 | LOW | Compose/UI — recovery-screen state not saveable | open |
+| R2-b2b2-DEP-01 | MEDIUM | dependencies/supply-chain — CI actions unpinned | open |
+| R2-b2b2-DEP-02 | LOW | dependencies/supply-chain — build toolchain unverified | open |
+| R2-b2b2-DEP-03 | INFO | dependencies/supply-chain — stale POM-only graph entries | open |
+| R2-b2b2-DEP-04 | LOW | dependencies/supply-chain — lockfile TOFU, unfiltered central | open |
+| R2-b2b3-LOG-01 | LOW | logging/info-disclosure — raw e.message in restore/backup UI | open |
+| R2-b2b3-LOG-02 | LOW | logging/info-disclosure — VoiceNoteManager e.message to logcat | open |
+| R2-b2b3-LOG-03 | INFO | logging/info-disclosure — ProtobufBrushLoader echoes name+message | open |
+| R2-b2b3-LOG-04 | LOW | logging/info-disclosure — Export Engine leaks note title in subject | open |
+| R2-b2b4-DOS-01 | MEDIUM | resource-exhaustion — note_versions unbounded | open |
+| R2-b2b4-DOS-02 | MEDIUM | resource-exhaustion — live layer count/bitmap uncapped | open |
+| R2-b2b4-DOS-03 | LOW | resource-exhaustion — minimap per-frame geometry re-walk | open |
+| R2-b2b5-FEA-01 | MEDIUM | phase-34-38 — knowledge-graph uncapped edge loop | open |
+| R2-b2b5-FEA-02 | MEDIUM | phase-34-38 — MarkdownInlineMath quadratic scans | open |
+| R2-b2b5-FEA-03 | MEDIUM | phase-34-38 — hybrid editor re-tokenizes whole doc per keystroke | open |
+| R2-b2b5-FEA-04 | LOW | phase-34-38 — dynamicPageCount unbounded by coordinate value | open |
+| R2-b2b5-FEA-05 | LOW | phase-34-38 — palette per-keystroke full-corpus lowercase | open |
+| R2-b2b5-FEA-06 | LOW | phase-34-38 — non-finite waveform samples into bar geometry | open |
+
+## Detail
+
+### Compose/UI + concurrency + TOCTOU (b2b1-ui)
+
+### [R2-b2b1-UI-01] Composition-scoped READ-side vault loads crash on lock — multi-second full-corpus decrypts live in `LaunchedEffect(page.id)`/`LaunchedEffect(Unit)` with no catch, and `lock()` disposes the SQLCipher pool underneath them
+- **Status:** OPEN
+- **Severity:** MEDIUM
+- **Area:** Batch 2 · Compose/UI, concurrency, TOCTOU (lock-vs-read races, read paths)
+- **Agent:** b2b1-ui
+- **Evidence:** `EditorScreen.kt:424-444` (`LaunchedEffect(page.id)` → `repository.getStrokesForPage(page.id)` `:425`, `getLayersForPage` `:428`, `getCanvasItemsForPage` `:432`, all hitting the pool on `Dispatchers.Default` with no `runCatching`), `KnowledgeGraphScreen.kt:155-157` (`LaunchedEffect(Unit)` → `repository.getAllActivePages()` which decrypts the WHOLE vault — `NoteRepository.kt:313-315` `getAllActivePages` → `decryptPageIfNeeded` after `withContext(Dispatchers.IO)`), `BacklinksInspector.kt:48-64`, `TagExplorerView.kt:43-55`, `TagManagerDialog.kt:40-59`, `VersionHistoryBottomSheet.kt:38-42`, `UnifiedSidebar.kt:54,61`. The write guard exists ONLY for writes (`writeGuardedAgainstLock` `NoteflowViewModel.kt:3187` + `VaultLockedWriteException`); reads are unguarded. `lock()` disposes the pool (`NoteflowDatabase.kt:431-436`).
+- **Exploit scenario / Reproducer:** Open the knowledge graph over a large decrypted vault (the whole corpus is decryptable, seconds on big vaults), then trigger the default idle auto-lock (`MainActivity.kt:248-263`) or screen-off (`:122-128`) mid-load. The in-flight `getAllActivePages` DAO round trip throws `IllegalStateException("connection pool has been closed")` inside the composition-scoped `LaunchedEffect` coroutine — no `catch`, so it escapes to the composition scope's uncaught handler → process crash. Smaller windows, same mechanism: opening a heavy canvas note during the foregrounded idle poll, backlinks/tag/version-history/sidebar previews on slow 2-core devices. Unlike R2-B1A-02 the loads are re-keyed by composition (page.id/Unit), not by the auth gate, so there is no in-flight-cancel coordination with `lock()` at all.
+- **Fix:** A shared, checked accessor for all read-side page loads (e.g. `withLockedPoolGuard { }` that catches the closed-pool `IllegalStateException`, classifies it via `isLockRacedWrite`, and suppresses it — or cancels/joins a tracked loads job inside `lock()` exactly like the R2-B1A-02 search fix); each `LaunchedEffect` should also re-check `authenticated` before assigning the loaded list into state.
+
+### [R2-b2b1-UI-02] FLAG_SECURE is activity-window-only — every Compose `Dialog`/`AlertDialog` renders in a separate window without the flag, so decrypted content in dialogs is capturable by screenshot/recents
+- **Status:** OPEN
+- **Severity:** LOW
+- **Area:** Batch 2 · Android platform surface (window flags)
+- **Agent:** b2b1-ui
+- **Evidence:** `MainActivity.kt:138-141` (FLAG_SECURE set only `window.addFlags`), `CommandPaletteOverlay.kt:160` (`Dialog(...)` — lists decrypted note titles from the cached corpus for quick-switch), `OcrResultDialog.kt:92` (`AlertDialog(...)` — full OCR'd note text), `MarkdownPreviewScreen.kt:732,749,797,805,819,832,841` (WebSearch/TextTools/LanguageDetection/Dictation/ReadAloud/Translation dialogs over a file whose content is already decrypted on screen). Compose dialogs are `WindowManager` windows that do NOT inherit the activity's window flags.
+- **Exploit scenario / Reproducer:** On a rooted/adb-enabled device take a `screencap` while the Command Palette or OCR dialog is foreground: the dialogs' pixels are captured even though the main window is FLAG_SECURE'd — the OCR snippet or note-title list leaks in the screenshot with no bypass of the activity flag itself. Distinct from R2-B1A-03 (content left on screen under an overlay cover while unlocked): here the content is fully inside a properly-locked UI, the gap is purely the missing per-window flag.
+- **Fix:** Apply FLAG_SECURE to dialog windows as they open (a small `remember`-hook per dialog), or render these overlays as composition layers inside the activity instead of separate windows.
+
+### [R2-b2b1-UI-03] All four restore entry points run unguarded `viewModelScope.launch { closeDatabase → importBackup → reopen/exitProcess }` — a double trigger races two file swaps of the same SQLCipher file, and the WebDAV/local restore can run to completion AFTER a lock
+- **Status:** OPEN
+- **Severity:** LOW
+- **Area:** Batch 2 · Compose/UI, concurrency, TOCTOU (restore re-entrancy)
+- **Agent:** b2b1-ui
+- **Evidence:** `NoteflowViewModel.kt:2129-2168` (`attemptRecoveryFromBackup` — `repository.closeDatabase()` `:2143`, `importBackup` `:2144`, `exitProcess(0)` `:2160`; no `isRestoring`/in-flight guard), `:2179-2203` (`attemptKeystoreKeyLostRecoveryFromBackup` — `closeDatabase` `:2198`, `importBackup` `:2199`), `:3367-3407` (`restoreEncryptedBackupFromZip` (WebDAV Download & Restore) — `closeDatabase` `:3382`, `importBackup` `:3383`, reopen-on-failure `:3397/3403`), `HomeScreen.kt:138-202` (`performRestore` — the local backup dialog, `closeDatabase` `:146`, `reopenDatabase` `:157`), made reachable with no disabled-confirm from `MainActivity.kt:860` (RestoreBlockedScreen), `:919` (CorruptionRecoveryScreen), `:1001` (KeystoreKeyLostScreen), and `WebDavSyncDialog.kt:249`. The DB singleton rebuild is `NoteflowDatabase.kt:408,431-436`.
+- **Exploit scenario / Reproducer:** (a) On a recovery/restore screen, double-tap "Choose Backup & Restore" (or confirm twice before the first import finishes — the buttons stay enabled for the whole read+close+import, seconds on a 400 MB backup): two coroutines each run `closeDatabase`+`importBackup` on the same backing files and both schedule `exitProcess(0)` 500 ms after their import, so the second process kill can land mid-file-swap of the first → torn/mismatched `noteflow.sqlite`, the corruption/tamper flags armed on a user-triggered restore. (b) WebDAV "Download & Restore" started while unlocked: a lock (idle poll, ON_STOP) disposes the pool mid-download, yet `restoreEncryptedBackupFromZip` continues (`viewModelScope` survives lock) and imports into the locked vault, reopening a live DB under a zeroized DEK. R2-B1D-02/04 cover invalid-input acceptance and OOM respectively — neither covers this re-entrancy/lock-latency race.
+- **Fix:** A single shared `restoreMutex`/`isRestoring` gate (machine + dialog button `enabled = isRestoring || !authenticated`), and make the WebDAV restore path check `authenticated` before `closeDatabase()` and abort+reopen if the vault locked mid-download; serialize the WebDAV and local restore paths on the same gate.
+
+### [R2-b2b1-UI-04] The root SnackbarHost is composed OUTSIDE the `LockScreen` conditional — vault-content-bearing messages (restore/import `e.message`, note titles) enqueue past `lock()` and render over the locked UI
+- **Status:** OPEN
+- **Severity:** LOW
+- **Area:** Batch 2 · Compose/UI, concurrency, TOCTOU (post-lock UI channel)
+- **Agent:** b2b1-ui
+- **Evidence:** Snackbar state + collector at activity root `MainActivity.kt:211-219`; the host is a direct child of the nav `Box` — `MainActivity.kt:577-580` (`.align(Alignment.BottomCenter)` inside the `Box` at `:317-320`) — i.e. NOT inside the `if (hasMasterPassword && !authenticated) LockScreen(viewModel)` branch at `:352-353`, so it stays composed and draws above the LockScreen. Message pipeline: `NoteflowViewModel.kt:1305-1309` (`MutableSharedFlow` + `tryEmit`). Dynamic-content producers: `HomeScreen.kt:161,202` (`"Restore failed: ${e.message}"`), `:256,269,290` (`"Import skipped: ${e.message}"`), `:600` (`"Backup failed: ${e.message}"`), `EditorScreen.kt:1154,1188` (`"Screenshot saved as note: ${note.title}"`), `NoteflowViewModel.kt:1452` (persistent decrypt-failure notice, `isLong`).
+- **Exploit scenario / Reproducer:** B2-UI-6's phase-96 fix deliberately moved import/export/restore completions onto the `viewModelScope` + `snackbarMessages` pipeline so they finish after HomeScreen tears down — which is exactly the lock window: a WebDAV/local/keystore restore or multi-file import that errors while the vault is simultaneously locking (idle poll, ON_STOP, or a manual "Lock Vault Now") posts `"Restore failed: <e.message>"` — `e.message` from `ImportExportService.importBackup`/`createPage` can embed decrypted note/file titles — and the host presents it over the LockScreen for the full `Long` duration. Also the decrypt-failure notice (`:1452`) can surface after the vault re-locked mid-edit-discipline. Distinct from R2-B1P-05 (the Clip-confirm `AlertDialog` floating above the lock); this is the general message channel.
+- **Fix:** Route the host message consumption through the same `dbGate`/`authenticated` state (gate `snackbarHostState.showSnackbar` on `authenticated`, or clear the `SharedFlow` in `lock()`), and vet dynamic `e.message` slots so import/restore errors never echo vault content.
+
+### [R2-b2b1-UI-05] Locking mid-voice-recording silently destroys the finished recording — the "could not be saved securely" error is published AFTER the editor's observing `LaunchedEffect` is cancelled, so no user sees it
+- **Status:** OPEN
+- **Severity:** LOW
+- **Area:** Batch 2 · Compose/UI, concurrency, TOCTOU (lock-vs-recording, availability)
+- **Agent:** b2b1-ui
+- **Evidence:** `VoiceNoteManager` is per-editor composition: `EditorScreen.kt:183` (`remember { VoiceNoteManager(context) }`), `EditorScreen.kt:186-187` (`DisposableEffect` `onDispose { voiceNoteManager.release() }`); error observed via `EditorScreen.kt:297` (`voiceNoteManager.recordingError.collectAsState()` inside the editor subtree). On lock, `lock()` zeroizes the DEK first (main thread), then recomposition dips to `LockScreen` and disposes the editor → `release()` (`VoiceNoteManager.kt:432-437`: `stopRecording` + `sweepPlaintextTemps`) → `finalizeRecording` (`:248-257`): `dek == null` short-circuits `encryptRecordingFile` (`:249-250`), plaintext temp is swept (`:436`), and `_recordingError.value = "The recording could not be saved securely…"` (`:255`) is set — by then the editor's collector is gone, and `_recordingError` is not re-surfaced on the LockScreen/Home screen.
+- **Exploit scenario / Reproducer:** User records a voice note; the 1 s idle auto-lock (`MainActivity.kt:248-263`) or screen-off fires before they hit stop. The whole finished recording is silently discarded (fail-closed: no plaintext at rest — correct), but the only feedback (`VoiceNoteManager.kt:255`) is published to a state nobody is observing, so the user believes the recording was saved. Availability/integrity-only; the at-rest behavior is the literal intent of B1-DB-3.
+- **Fix:** On the lock path, publish the discard notice through the persistent `snackbarMessages` pipeline (and/or keep the session error in `_recordingError` for re-display after unlock until explicitly cleared) instead of relying on the editor's short-lived collector.
+
+### [R2-b2b1-UI-06] Recovery screens retain `backupPassword` and restore-triggering state in `remember { mutableStateOf }` — a process death on the recovery path drops the password silently and the buttons re-arm mid-restore; combined with UI-03's missing gate, the gating data is not `rememberSaveable`
+- **Status:** OPEN
+- **Severity:** LOW
+- **Area:** Batch 2 · Compose/UI, concurrency, TOCTOU (recovery-screen state)
+- **Agent:** b2b1-ui
+- **Evidence:** `MainActivity.kt:849-900` (`RestoreBlockedScreen`: `backupPassword`/`errorMessage` in `remember { mutableStateOf }` `:852-853`, picker launcher + restore `:860`), `MainActivity.kt:908-…` (`CorruptionRecoveryScreen` same pattern `:911-919`), and the keystore-lost screen (`:1001`). No `rememberSaveable`, no `enabled = isRestoring` on the restore button (`:890`), so a rotation/process-death during the (seconds-long) `attemptRecoveryFromBackup` read+close+import leaves the screen able to fire a SECOND restore against the newly-rebuilt DB.
+- **Exploit scenario / Reproducer:** User on a recovery screen picks a backup and confirms; during the import the activity is recreated (rotation on many devices, or a background kill). The password field is now empty, the error message is gone, and the button is re-enabled — the user (or an accidental second tap) triggers `attemptRecoveryFromBackup` again, which re-runs `closeDatabase()`+`importBackup()` while the first coroutine may still be executing → the UI-03 double-swap race, with the "which password did I type" state lost on top. LOW because it needs a mid-restore lifecycle event, but it is a concrete contributor to UI-03's precondition.
+- **Fix:** Hoist the recovery-state + in-flight flag into `rememberSaveable`/view-model state, disable the restore button while a restore is running (shared `isRestoring` gate), and have the restore entry point refuse to start if one is already in flight.
+
+### Dependencies / CVE / supply-chain (b2b2-deps)
+
+### [R2-b2b2-DEP-01] Release-signing CI runs unpinned mutable-tag third-party Actions with the keystore secrets in job env — a compromised action version silently signs APKs with the attacker's key
+- **Status:** OPEN
+- **Severity:** MEDIUM
+- **Area:** Batch 2 · dependencies/supply-chain (CI/runner chain)
+- **Agent:** b2b2-deps
+- **Evidence:** `.github/workflows/release.yml:13,32,40,51,61` (`actions/checkout@v4`, `setup-java@v4`, `gradle/actions/setup-gradle@v3`, `upload-artifact@v4`), `android.yml:32,36,41`, `llops.yml:124,129,135,140,240,296,301,308,313,363` (incl. community `android-actions/setup-android@v3` at `:140,:313`). Repo permissions `llops.yml:20-23` (`contents/pull-requests/issues: write`), bot commits auto-pushed to main (`llops.yml:202-231`), and the release APK is signed in this pipeline with `KEYSTORE_PASSWORD`/`KEY_ALIAS`/`KEY_PASSWORD` in job env (`release.yml:44-47`, `llops.yml:192-195`).
+- **Exploit scenario / Reproducer:** `git grep "#v[0-9]" .github/workflows` — every `uses:` is a mutable major-version tag; no commit-SHA pin anywhere. An attacker who compromises the upstream repo (or a typo-squat mirrors `actions/checkout@v4` resolution) gets code execution inside the signing job with the keystore secrets in env; a malicious action can read `KEYSTORE_B64`/`KEYSTORE_PASSWORD` and exfiltrate the signing key or sign a backdoored APK.
+- **Fix:** Pin every action to a commit SHA (Dependabot update-git-hashes + release-notes PRs), prefer trusted-publishers/attested action versions for `gradle/actions` and `setup-java`, and give the llops agent the minimum `contents: write` scope on a separate non-master branch.
+
+### [R2-b2b2-DEP-02] The toolchain that signs the release APK is downloaded with zero integrity verification — Gradle 8.13 dist and the opencode CLI are fetched by mutable script, un-checksummed (B2-DEPS-03 residual, never closed)
+- **Status:** OPEN
+- **Severity:** LOW
+- **Area:** Batch 2 · dependencies/supply-chain (build toolchain)
+- **Agent:** b2b2-deps
+- **Evidence:** no `gradle/wrapper/` and no `gradlew` in the repo; `git grep distributionSha256Sum` → none. Gradle 8.13 is provisioned without a checksum at `android.yml:40-43`, `release.yml:21-24`, `llops.yml:134-137` / `:307-310`; the opencode CLI used for phase work is `curl -fsSL https://opencode.ai/install | bash -s -- --version 1.15.12` (`llops.yml:147,320`). phase-75's own row acknowledges these as "EXTERNAL notes" (`docs/security-report.md:977`) — never actually fixed.
+- **Exploit scenario / Reproducer:** `ls gradle/wrapper` → absent; the runner's pre-provisioned Gradle dist is used as-is. A poisoned Gradle distribution / opencode installer can transform the verified/pinned dependency chain at the very point that produces + signs the release APK — the one link with zero integrity check.
+- **Fix:** commit a wrapper with `distributionSha256Sum` (or pass `distribution-sha256-sum` to setup-gradle), and pin the opencode installer to a checksum-verified release download.
+
+### [R2-b2b2-DEP-03] Stale build-graph-only dependency entries (`okhttp-3.0.0`, `okio-1.6.0`, netty 4.1.93, grpc 1.57.0, flatbuffers 1.12.0, guava 27.0.1-android) are POM-only or LLM-graph-only — not exploitable, but an audit blind spot
+- **Status:** OPEN
+- **Severity:** INFO
+- **Area:** Batch 2 · dependencies/supply-chain (dependency graph)
+- **Agent:** b2b2-deps
+- **Evidence:** `gradle/verification-metadata.xml:2423-2426` (`okhttp-3.0.0.pom` only — the jar is NEVER pinned/downloaded), `:2441-2444` (`okio-1.6.0.pom` only), plus dated jar-bearing lines resolved only in the `:plugins:llm` graph: `grpc-netty 1.57.0` (`:2632`), `netty 4.1.93.Final` (`:2669`), `flatbuffers-java 1.12.0` (`:2090`), `guava 27.0.1-android` (`:2107`). `plugins/llm/build.gradle.kts:96-112,118-122` packages only `com/google/mediapipe/**` + `jni/**` into the downloadable artifact, so netty/grpc/protobuf never ship anywhere; app source uses no okhttp (grep zero hits). The `okhttp-3.0.0` POM-only line sits inside CVE-2021-0341's affected range (`< 3.12.13`/`< 4.9.1`, gzip/content-length decompression DoS), but the jar never resolves, so the DoS is NOT reachable in any artifact.
+- **Exploit scenario / Reproducer:** Maintenance blind spot only — a future version bump could pull one of these stale jars into a shipped artifact without the pin set flagging it. No current reachability.
+- **Fix:** run `gradle :app:dependencyInsight --dependency okhttp` (and per-module) to confirm 3.0.0 is a losing conflict-resolution candidate in the AGP tooling graph, then accept as-is or exclude the stale metadata; track these dated LLM-graph lines for the tasks-genai bump.
+
+### [R2-b2b2-DEP-04] Lockfile validation is checksum-only trust-on-first-use — `verify-signatures=false`, no `<trusted-keys>`, and `mavenCentral()` is unfiltered in `dependencyResolutionManagement`
+- **Status:** OPEN
+- **Severity:** LOW
+- **Area:** Batch 2 · dependencies/supply-chain (verification posture)
+- **Agent:** b2b2-deps
+- **Evidence:** `gradle/verification-metadata.xml:3-6` — `<verify-metadata>true</verify-metadata>` + `<verify-signatures>false</verify-signatures>`, no `<trusted-keys>` block (confirmed absent). The lockfile freezes 941 trust-on-first-use sha256 hashes from the bootstrap resolution; `settings.gradle.kts:32-41` describes generation-by-inspection but nothing authenticates the *first* fetch — a poisoned aapt2/AGP/Kotlin artifact MITM'd or cache-poisoned during `--write-verification-metadata` becomes eternally "trusted". Separately, `settings.gradle.kts:28` exposes `mavenCentral()` unfiltered, so the google-group content filter (`:22-27`) is one-way — any non-google group, or an `androidx.*`/`com.google.*` version google() doesn't host, resolves from Central with no allow-list.
+- **Exploit scenario / Reproducer:** A compromised first bootstrap (compromised mirror, DNS/registry poisoning, poisoned Gradle cache) pins attacker checksums into the committed lockfile; every later build silently accepts the poisoned artifact (the exact class of attack B2-DEPS-03 aimed at). Central-supplied artifacts of any group bypass the google-only filter.
+- **Fix:** enable `verify-signatures` with a committed `<trusted-keys>` set (PGP over the highest-signal artifacts: AGP, Kotlin, KSP), scope `mavenCentral()` with the same `includeGroupByRegex` allow-list in the opposite direction (Central = `org.jetbrains|io.coil|com.squareup|org.commonmark|org.jsoup|net.zetetic|com.github|junit`), and document lockfile-regeneration provenance so a clean/verified mirror is the TOFU source.
+
+### Logging / telemetry / info disclosure (b2b3-log)
+
+### [R2-b2b3-LOG-01] Restore/recovery/backup failure surfaces render raw `${e.message}` — phase-94's scrub was WebDAV-only, and `importBackup`'s `unsafe relative path: $entryName` echoes attacker-carried text
+- **Status:** OPEN
+- **Severity:** LOW
+- **Area:** Batch 2 · logging/info-disclosure (UI error text)
+- **Agent:** b2b3-log
+- **Evidence:** `HomeScreen.kt:159,161` (`restartDialogMessage = "Restore failed: ${e.message}…"` + snackbar), `:202` (restore-picker catch), `:600` (`"Backup failed: ${e.message}"`), `:1417` (`backupPasswordError = "Backup failed: ${e.message}"`); `MainActivity.kt:860-862, 919-921, 1001-1003` (`errorMessage = msg` → rendered at `:895-898`/`:972-975` — the three recovery screens); `NoteflowViewModel.kt:2166, 2216` (`onError(e.message ?: "Recovery failed.")`). Contrast: phase-94 (`B2-LOG-05`) scrubbed *WebDAV* dialog text but never these paths.
+- **Exploit scenario / Reproducer:** Craft an NFLB3/legacy archive whose inner zip entry name is hostile — `importBackup` interpolates it verbatim into the rejection: `ImportExportService.kt:1835,1846` (`"Backup contains unsafe relative path: $entryName"`) — that text then renders raw in the restart dialog / recovery screen. Genuine failures (SQLCipher/file-IO) can likewise carry `/data/user/0/…` paths into the screen text. Same-class residuals: `ui/components/Dialogs.kt:136` (`"Error reading APK: ${e.message}"`), `EditorScreen.kt:865` (`"Failed to attach photo: ${e.message}"`), `services/localsend/LocalSendSender.kt:378` + `:588-595` (`mapTransportError` returns `e.message` verbatim).
+- **Fix:** Route all of these through a `WebDavFailurePolicy.scrubForDisplay`-style fixed-text decision table (assert URL/userinfo/absolute-path stripped), or `FailureLogPolicy`-style class-name tokens; only fixed, user-meaningful strings may reach snackbars and recovery screens.
+
+### [R2-b2b3-LOG-02] VoiceNoteManager logs raw `${e.message}` to logcat from 8 call sites — the encrypted-voice subsystem leaks app-private file paths
+- **Status:** OPEN
+- **Severity:** LOW
+- **Area:** Batch 2 · logging/info-disclosure (logcat)
+- **Agent:** b2b3-log
+- **Evidence:** `services/VoiceNoteManager.kt:182,224` (MediaRecorder start/stop), `:347` (playback — `MediaPlayer.setDataSource` on the decrypted temp `voice_pb_<ts>.m4a` under cacheDir), `:360,390,401,413,428` (pause/speed/seek/release/temp-remove). The file's *own* comment at `:232-234` bans path-bearing log lines ("the path reveals the private vault file layout in logcat") — yet every `e.message` here is exactly that on a benign MediaPlayer/MediaRecorder fault. New phase-54 subsystem; round-1 `B2-LOG-01/03` pinned only AppStartupLogger + ImportExportService.
+- **Exploit scenario / Reproducer:** With a logcat observer attached (adb, dumpstate, device-owner), play a voice note and kill the app mid-playback / trigger a recorder error — the exception text includes the `.enc` blob/temp paths under `filesDir/voice_notes` and `cacheDir`, exposing vault layout + recording-activity timing.
+- **Fix:** log `FailureLogPolicy.classNameToken(e)` only; never `e.message`.
+
+### [R2-b2b3-LOG-03] ProtobufBrushLoader echoes `${e.message}` and the caller-supplied brush `name` into logcat (dormant API — no production caller today)
+- **Status:** OPEN
+- **Severity:** INFO
+- **Area:** Batch 2 · logging/info-disclosure (logcat)
+- **Agent:** b2b3-log
+- **Evidence:** `services/ProtobufBrushLoader.kt:67` (`"Failed to parse .inkbrush protobuf for $name: ${e.message}"`), `:80` (same); `:88-96` `loadFromFile` passes the raw `file.name` as `$name`. Today only fixed bundled asset names reach it and `loadFromFile`/`loadFromByteArray` have **no production caller** (dormant API), so impact is nil unless a brush-import feature wires in — then `name` becomes a user file name and `e.message` carries protobuf/IO parse text.
+- **Exploit scenario / Reproducer (once wired):** place a brush file with a hostile name so `getBrushFamilyForTool`/`loadFromFile` fails.
+- **Fix:** drop `e.message` (class-name token only) and, if `loadFromFile` ever gains a caller, omit or sanitize `name`.
+
+### [R2-b2b3-LOG-04] Export Engine ACTION_SEND publishes the note title as the share subject and the shared file name — metadata echo into every share target + Android share-history
+- **Status:** OPEN
+- **Severity:** LOW
+- **Area:** Batch 2 · logging/info-disclosure (share metadata)
+- **Agent:** b2b3-log
+- **Evidence:** `plugins/export/ExportEnginePlugin.kt:66-71` — `Intent(ACTION_SEND)` with `EXTRA_SUBJECT = file.name` and `FLAG_GRANT_READ_URI_PERMISSION`; `file.name = "${sanitizeBaseName(title)}.$ext"` (`plugins/export/ExportPayloadAssembler.kt:95`); launched chooser-less at `EditorScreen.kt:1383-1387`. A default handler for the MIME gets the note title twice (subject + file name), and the title persists in Android's share-history/notifications. Complementary to `R2-B1P-03` (chooser absence + cacheRoot retention), which cites the same lines but not the subject/metadata echo.
+- **Exploit scenario / Reproducer:** set a default "share to" app; note overflow → "Share via Export Engine…" on a note titled e.g. `TaxReturn_2026` — the receiving app's intent carries `EXTRA_SUBJECT=TaxReturn_2026.md`.
+- **Fix:** drop `EXTRA_SUBJECT` (or make it the generic "Exported note"), and route the send through `Intent.createChooser(...)` (also required by R2-B1P-03).
+
+### Resource exhaustion / DoS (b2b4-dos)
+
+### [R2-b2b4-DOS-01] `note_versions` grows WITHOUT any retention/prune and is decrypted wholesale into heap — full-body snapshot per save, no cap, then on every open/backup/restore the whole table is materialized
+- **Status:** OPEN
+- **Severity:** MEDIUM
+- **Area:** Batch 2 · resource exhaustion (persistent-storage/DB growth + in-heap decrypt)
+- **Agent:** b2b4-dos
+- **Evidence:** A full title + full extractedText snapshot is written on EVERY manual save (`MarkdownPreviewScreen.kt:287`), on the editor autosave path (`:770`), and BEFORE every on-device translation replace (`MarkdownPreviewScreen.kt:848-853`). `NoteRepository.createNoteVersion` (`NoteRepository.kt:1412-1430`) encrypts and inserts each full body with NO pruning in the insert path; `NoteVersionDao` (`Daos.kt:290-304`) has `getVersionsForPage` (no `LIMIT`), `getAllVersionsForReencrypt` (whole table), and only `deleteVersionsForPage` (whole-page wipe) — no count/age/TTL retention query exists anywhere. Opening history decrypts EVERY stored body at once: `NoteRepository.getNoteVersions` (`NoteRepository.kt:1432-1442`) → `VersionHistoryBottomSheet.kt:38-42` materializes every row into a `LazyColumn`. The backup writer serializes the whole `note_versions` table (`ImportExportService.kt:1253`), so monotonic growth also inflates every export and WebDAV upload forever; cross-device restore re-encrypts the whole table in heap (`getAllVersionsForReencrypt`).
+- **Exploit scenario / Reproducer:** Restore a crafted vault backup whose `note_versions` table holds e.g. 5,000 rows with ~50 KB bodies (whole-DB import carries every row with no table-level cap), then open Editor → Version History: ~250 MB of decrypted bodies materialize in heap → OOM/freeze. The same state accrues benignly: one translation or edit per version with no retention means a long-lived vault degrades into ever-larger histories where every history-open, backup export, and restore re-processes all rows. (Not a duplicate of R2-B1D-04, which covers the two ≤400 MB archive loads; this is the unbounded per-page version table and its uncapped in-heap decrypt.)
+- **Fix:** Cap retained versions per page (e.g. keep newest N=20, prune oldest in `createNoteVersion`), LIMIT + batch/paginate the decrypt in `getNoteVersions` with lazy row materialization in `VersionHistoryBottomSheet`, and trim/cap the version table in the backup writer (B2-DOS-07 streaming budget).
+
+### [R2-b2b4-DOS-02] Live-canvas layer count is UNBOUNDED and each visible layer with strokes materializes a full-page ARGB bitmap that lives for the page's lifetime — export is capped at 16 layers, the on-screen render path is not
+- **Status:** OPEN
+- **Severity:** MEDIUM
+- **Area:** Batch 2 · resource exhaustion (native memory)
+- **Agent:** b2b4-dos
+- **Evidence:** `EditorScreen.onAddLayer` (`EditorScreen.kt:566-585`) has no maximum; `LayerDao.getLayersForPage` (`Daos.kt:273-274`) returns ALL rows (no `LIMIT`); the whole-DB vault restore imports any layer count into the live canvas. The renderer caches ONE full-`pageWidth × pageHeight` ARGB_8888 bitmap per visible layer that has strokes, keyed `${pageIdx}_${layer.id}_${symmetryMode}_v${vibrancyBoost}` (`AnnotationCanvas.kt:2552-2570`, `BitmapPool.acquire` at `:2567`), retained until a strokes/layers change clears the cache (`:455-460`) or disposal (`:522-528`) — i.e. resident for the whole open session. The only cap in the stack is `PsdExportPolicy` on the EXPORT path (`PsdExportPolicy.kt:29,35-44`, applied at `ImportExportService.kt:2660-2677`); nothing bounds the on-screen render.
+- **Exploit scenario / Reproducer:** Restore a crafted backup whose `layers` table spreads strokes across 40 layers on a 1080×2400 page → each layer holds one ~10.4 MB page bitmap, so the idle editor retains ~416 MB native (2048×2732 tablets → ~22 MB/layer, ~880 MB) → OOM / process kill on page open; no further interaction needed. With the ~4-page render window with stroke content per page, multiple pages multiply it higher.
+- **Fix:** Cap live layers per page at the same 16 as the export path (fail-closed with the existing non-alarming message + settings re-enable pattern per the hardware-reality rule), and bound the resident layer-bitmap map with a fixed byte/LRU budget instead of one never-evicted bitmap per layer.
+
+### [R2-b2b4-DOS-03] Minimap HUD re-walks EVERY stroke and point and issues a `drawLine` per sample of a fixed 4× stride on the main thread — ~50k draw-commands per frame at the phase-50 geometry cap
+- **Status:** OPEN
+- **Severity:** LOW
+- **Area:** Batch 2 · resource exhaustion (main-thread per-frame work)
+- **Agent:** b2b4-dos (R2-b2b5-FEA-07 reported the same vector by the phase-34-38 agent — folded here)
+- **Evidence:** `AnnotationCanvas.kt:1789-1815` — the minimap `Canvas` iterates all strokes (`step ≤ 4`) and all points (`step ≤ 4`) and calls `drawLine` per retained pair with no work budget; at `StrokeGeometryPolicy.MAX_POINTS_PER_PAGE` (~200k) that is ~50k `drawLine` calls inside the normal draw pass, recomputed every pan/zoom frame. The only mitigation is a coarse low-end toggle (`EditorScreen.kt:388-399`, off by default only on detected low-end devices).
+- **Exploit scenario / Reproducer:** Open a restored page near the 200k-point cap with the minimap enabled on a mid/low device and pan continuously → per-frame compose draw spends seconds issuing ~50k draw commands → dropped frames / ANR. Attacker-influenceable because page geometry comes from restore (only the at-rest geometry is capped, not the per-frame re-walk).
+- **Fix:** Give the minimap a fixed work budget (e.g. sample to a few hundred polyline points by deriving stride from total geometry), or render the thumbnail from the already-cached layer/page bitmap (`layerBitmapCache`) instead of re-walking stroke geometry every frame. Re-run `AnnotationCanvas`-level tests if one exists for the minimap path.
+
+### Phase 34-38 feature attack surface (b2b5-feat)
+
+### [R2-b2b5-FEA-01] Knowledge graph — uncapped per-frame edge iteration over the whole vault (nodes are culled, edges are not)
+- **Status:** OPEN
+- **Severity:** MEDIUM
+- **Area:** Batch 2 · phase-34-38 (knowledge graph)
+- **Agent:** b2b5-feat
+- **Evidence:** `ui/screens/KnowledgeGraphScreen.kt:165` — edges built from the *entire* vault: `val graphEdges = wikiEdges.map { GraphEdge(it.sourcePageId, it.targetPageId) }` (WikiLinkParser scans up to `MAX_SCAN_PAGES` = 2000 pages, `services/WikiLinkParser.kt:482`, with **no per-page link-count cap**, `extractWikiLinks` `:186-200`). The node cull (`KnowledgeGraphScreen.kt:184-191`, `cullToCap` → 120/220/400) bounds *nodes only*; `edges` (line 166) and `edgeRefs` (line 167) are never culled. The Canvas draw block runs `for (edge in edges)` **every frame** (`:481`), with `isFilteredOut(src.page)` per edge (`:484`), and the pulse loop re-iterates edges again (`:509-511`).
+- **Exploit scenario / Reproducer:** Restore/import a vault of ~2,000 interlinked pages (each page body with `[[x]]` repeated, e.g. a synthetic Obsidian vault shared via WebDAV/LocalSend) → ~10⁶ edges → opening Knowledge Graph performs 10⁶+ `drawLine`/tag-split operations per frame during any pan/zoom/selection → frozen UI, near-ANR; `edgeList.distinct()` at `WikiLinkParser.kt:496` also materializes the whole edge set in memory.
+- **Fix:** Build the rendered edge set only over edges whose **both endpoints survived `cullToCap`** (drop edges referencing culled pages) and cap the edge count (e.g. keep top-K by recency/degree); memoize the per-frame tag-filter result instead of re-splitting per edge.
+
+### [R2-b2b5-FEA-02] Markdown — `MarkdownInlineMath` quadratic scans on adversarial paragraphs (uncloseable backtick runs + O(codeRanges) `insideAny`)
+- **Status:** OPEN
+- **Severity:** MEDIUM
+- **Area:** Batch 2 · phase-34-38 (markdown hybrid editor, main-thread composition)
+- **Agent:** b2b5-feat
+- **Evidence:** `services/MarkdownInlineMath.kt:36` `val closing = findClosingBackticks(text, i + run, run)` — for each backtick run, `findClosingBackticks` (`:47-61`) does a **linear scan to end-of-string** (with a `substring(...).all{}` allocation per step, `:50`) when no equal-length closer exists → total **O(n²)** for a line with many uncloseable runs. `findMathRuns` calls `insideAny(text, i, codeRanges)` (`:79`, `:106`), and `insideAny` is `codeRanges.any { index in it }` (`:117-118`) → **O(codeRanges) per `$`**, i.e. O(n·R) on `$`-dense text with many code spans. Reachable on the **main thread during composition**: `ui/components/markdown/MarkdownRenderer.kt:574-576` `remember(text, primaryColor) { buildMarkdownAnnotatedString(text, primaryColor) }` per paragraph, which calls `findCodeRanges`/`findMathRuns` (`:634-635`).
+- **Exploit scenario / Reproducer:** Import a `.md` whose single paragraph is a data/log blob of ~100 KB with increasing backtick runs (`` `x``x```x````x`````x… ``) and scattered `$` → opening the note in preview/hybrid editor stalls the UI for seconds-to-minutes (≈n²/2 char ops, plus n² substring allocations).
+- **Fix:** Make `findClosingBackticks` a single left-to-right pass over the text (compute closing runs once), and replace the `insideAny` linear scan with a binary-searched/interval-merged range index.
+
+### [R2-b2b5-FEA-03] Markdown — hybrid editor re-tokenizes the whole document per keystroke (2× full pass + full line-split/join) on the main thread
+- **Status:** OPEN
+- **Severity:** MEDIUM
+- **Area:** Batch 2 · phase-34-38 (markdown hybrid editor)
+- **Agent:** b2b5-feat
+- **Evidence:** `ui/components/markdown/HybridMarkdownEditor.kt:86-87`: `val blocks = remember(text) { MarkdownBlockTokenizer.blocks(text) }` and `val candidates = remember(text) { MarkdownBlockTokenizer.checkboxCandidates(text) }` — both recompute on **every keystroke** (each `emit` sets `text`), and `checkboxCandidates` internally calls `blocks(content)` a **second time** (`services/MarkdownBlockTokenizer.kt:239`). `HybridMarkdownEditor.kt:117` `emit(MarkdownBlockTokenizer.replaceBlockSource(text, blocks, index, newRaw))` — per keystroke `replaceBlockSource` does `content.lines()` + `ArrayList(lines)` + `joinToString("\n")` over the whole document (`MarkdownBlockTokenizer.kt:285-294`). `HybridMarkdownEditor.kt:133` `cursorOrder = remember(index) { candidates.filter { it.blockIndex == index } }` — **O(blocks × checkbox-candidates)** per keystroke.
+- **Exploit scenario / Reproducer:** Open an imported ~50 KB / 5k-line `.md` in the default SPLIT mode and type one character → 2 full-document tokenizations (every line × ~8 regex checks) + full line-split/join on the **main thread** per keystroke → multi-hundred-ms lag per key on a 2-core device, effectively freezing editing on large notes.
+- **Fix:** Tokenize only the edited block (or debounce the full re-tokenize off-main), keep `checkboxCandidates` cached per tokenization pass, and pre-index candidates by `blockIndex` instead of `filter` per block.
+
+### [R2-b2b5-FEA-04] Canvas — `dynamicPageCount` unbounded by stroke coordinate VALUE (length caps only), so a single crafted point can explode the per-frame page loop
+- **Status:** OPEN
+- **Severity:** LOW
+- **Area:** Batch 2 · phase-34-38 (canvas pagination)
+- **Agent:** b2b5-feat
+- **Evidence:** `ui/components/AnnotationCanvas.kt:950-952`: `val maxY = kotlin.math.max(maxStrokeY, visibleBottomY)`; `val calculatedPages = (maxY / (pageHeightPx + pageGapPx)).toInt() + 1` — `maxStrokeY` is the max `pt.y` over all stroke points (`:942-949`) with **no upper clamp**; the DAO/restore guards cap `pointsJson` by *length* only (`data/db/Daos.kt:201`, `ImportExportService.kt:1968`), never by coordinate value. `:1412-1415` `val renderPageCount = dynamicPageCount` … `for (pageIdx in 0 until renderPageCount)` — runs **every draw frame** (viewport culling is `continue`, so the O(pageCount) loop is still paid). `:1479` `val pageStrokes = activeStrokeList.filter { it.pdfPage == pageIdx }` — full stroke-list filter per non-culled page.
+- **Exploit scenario / Reproducer:** Restore a crafted backup whose `pointsJson` contains a single stroke point `{"x":0,"y":1e9}` (short JSON, passes the length cap) → `dynamicPageCount ≈ 628,000`; any pan/zoom/draw frame now iterates ~628k pages.
+- **Fix:** Clamp `maxStrokeY` to a world-size ceiling (or clamp `calculatedPages` to a sane max), and hoist the per-page stroke filter into a precomputed `Map<Int, List<Stroke>>`.
+
+### [R2-b2b5-FEA-05] Command palette — per-keystroke full-corpus lowercasing (~75 MB of allocations per keystroke at the corpus cap), no cross-keystroke cache
+- **Status:** OPEN
+- **Severity:** LOW
+- **Area:** Batch 2 · phase-34-38 (command palette)
+- **Agent:** b2b5-feat
+- **Evidence:** `services/graph/CommandPaletteMath.kt:97` `if (doc.body.lowercase().contains(lq)) return 40f …` — every non-title/tag-matching doc is fully lowercased per keystroke; `lowerLog` (`:128`, `:142`) caches only *within* a single `rank()` call, so there is **no cache across keystrokes**. `ui/viewmodel/NoteflowViewModel.kt:3496` `CommandPaletteMath.rank(query, index.docs, selectedTags, requireAllTags)` — runs per keystroke (debounced 250 ms, IO dispatcher, cancelled — so main thread is safe).
+- **Exploit scenario / Reproducer:** Vault of ~1500 pages (`VaultSearchPolicy.SEARCH_CORPUS_CAP`, `services/VaultSearchPolicy.kt:31`) whose imported bodies average ~50 KB → each keystroke allocates ~75 MB of lowercased strings; typing continuously at 4 keys/sec churns ~300 MB/s on a low-RAM 2-core device → GC stalls / OOM pressure.
+- **Fix:** Lowercase `title`/`body` once when the `PaletteIndex` is built (cache it in `PaletteDoc`), so `rank()` never re-lowercases per keystroke.
+
+### [R2-b2b5-FEA-06] Waveform — non-finite samples from a crafted stored `waveformJson` propagate into bar geometry (NaN coerces through `coerceIn`)
+- **Status:** OPEN
+- **Severity:** LOW
+- **Area:** Batch 2 · phase-34-38 (waveform scrub/playback)
+- **Agent:** b2b5-feat
+- **Evidence:** `data/repository/NoteRepository.kt:1204` `List(n) { index -> arr.getDouble(index).toFloat() }` — org.json's `JSONArray.getDouble` accepts `NaN`/`Infinity` literals from a crafted stored `waveformJson` (only the *count* is bounded, `:1203`). `services/WaveformPeakMath.kt:35-43` min/max decimation never filters non-finite values (NaN comparisons are false, so NaN survives to output). `ui/components/AudioPlaybackCard.kt:253` `val amp = amplitudes[i].coerceIn(0.1f, 1.0f)` — `coerceIn` does **not** remove NaN → `barHeight = canvasHeight * NaN` → `drawRoundRect` fed NaN geometry (`:256-259`).
+- **Exploit scenario / Reproducer:** Crafted restore/WebDAV archive with an audio-embed `waveformJson` of `[NaN,…]` → opening that note draws NaN-height bars (undefined/glitchy rasterization, debug-assert failures, or a dropped frame) in the playback card.
+- **Fix:** In `downsample` (or at parse time), replace non-finite samples with the clamped value (`v.takeIf { it.isFinite() } ?: 0f`), and use `amp.coerceIn(0.1f, 1.0f).takeIf { it.isFinite() } ?: 0.1f` in the renderer.
+
+---
+
+*Batch 2 complete (2026-08-17). Phase-118 dynamic/APK findings (and any post-phase-117 build additions) append below.*
