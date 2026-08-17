@@ -73,7 +73,11 @@ class WebDavSyncService(private val context: Context) {
             val url = try {
                 URL(if (trimmed.endsWith("/")) trimmed.dropLast(1) else trimmed)
             } catch (e: Exception) {
-                throw IllegalArgumentException("Invalid WebDAV server URL: ${e.message}")
+                // B2-LOG-05 (phase-94): the JVM MalformedURLException message dumps
+                // the user's RAW input (a paste like `https://user:pass@…` would
+                // export its credentials through the exception text) — echo a
+                // FIXED string instead, never e.message.
+                throw IllegalArgumentException(WebDavFailurePolicy.INVALID_URL_MESSAGE)
             }
             if ((url.host ?: "").isBlank()) {
                 throw IllegalArgumentException(
@@ -91,7 +95,11 @@ class WebDavSyncService(private val context: Context) {
                     )
                 }
             }
-            return if (trimmed.endsWith("/")) trimmed.dropLast(1) else trimmed
+            // B2-LOG-05 (phase-94): the string returned to the caller is stripped
+            // of any `scheme://<userinfo>@` the user may have pasted — embedded
+            // credentials belong ONLY in the username/password fields (the
+            // Authorization header) and must never survive in the stored/echoed URL.
+            return WebDavFailurePolicy.stripUrlUserInfo(if (trimmed.endsWith("/")) trimmed.dropLast(1) else trimmed)
         }
 
         /**
@@ -203,9 +211,9 @@ class WebDavSyncService(private val context: Context) {
                 SyncResult(false, "Server returned HTTP response $responseCode")
             }
         } catch (e: IllegalArgumentException) {
-            SyncResult(false, e.message ?: "Invalid WebDAV server URL.")
+            SyncResult(false, WebDavFailurePolicy.configFailureText(e, WebDavFailurePolicy.INVALID_URL_MESSAGE))
         } catch (e: Exception) {
-            SyncResult(false, "Connection failed: ${e.localizedMessage ?: e.message}")
+            SyncResult(false, WebDavFailurePolicy.CONNECT_FAILURE_MESSAGE)
         }
     }
 
@@ -250,9 +258,9 @@ class WebDavSyncService(private val context: Context) {
                 SyncResult(false, "Upload failed with HTTP response $responseCode")
             }
         } catch (e: IllegalArgumentException) {
-            SyncResult(false, e.message ?: "Invalid WebDAV server URL.")
+            SyncResult(false, WebDavFailurePolicy.configFailureText(e, WebDavFailurePolicy.INVALID_URL_MESSAGE))
         } catch (e: Exception) {
-            SyncResult(false, "Upload failed: ${e.localizedMessage ?: e.message}")
+            SyncResult(false, WebDavFailurePolicy.UPLOAD_FAILURE_MESSAGE)
         }
     }
 
@@ -308,8 +316,9 @@ class WebDavSyncService(private val context: Context) {
             } catch (e: IllegalArgumentException) {
                 return@withContext SyncResult(
                     false,
-                    "Sync refused: the server returned a link that points outside your " +
-                        "configured WebDAV server. ${e.message}"
+                    // B2-LOG-05 (phase-94): the resolver messages carried the raw
+                    // href and the configured URL — the UI gets a FIXED reason token.
+                    "Sync refused: ${WebDavFailurePolicy.refusalReason(e)}"
                 )
             }
 
@@ -322,7 +331,7 @@ class WebDavSyncService(private val context: Context) {
                 return@withContext SyncResult(
                     false,
                     "Sync refused: the app will not connect to a host other than your " +
-                        "configured WebDAV server. ${e.message}"
+                        "configured WebDAV server."
                 )
             }
             val downCode = downloadConn.responseCode
@@ -361,11 +370,11 @@ class WebDavSyncService(private val context: Context) {
             // archive behind; the caller only proceeds when `success`, so
             // dropping the truncated file is always safe here.
             runCatching { targetLocalFile.delete() }
-            SyncResult(false, e.message ?: "Remote backup archive is too large to download.")
+            SyncResult(false, WebDavFailurePolicy.TOO_LARGE_DOWNLOAD_MESSAGE)
         } catch (e: IllegalArgumentException) {
-            SyncResult(false, e.message ?: "Invalid WebDAV server URL.")
+            SyncResult(false, WebDavFailurePolicy.configFailureText(e, WebDavFailurePolicy.INVALID_URL_MESSAGE))
         } catch (e: Exception) {
-            SyncResult(false, "Download failed: ${e.localizedMessage ?: e.message}")
+            SyncResult(false, WebDavFailurePolicy.DOWNLOAD_FAILURE_MESSAGE)
         }
     }
 }

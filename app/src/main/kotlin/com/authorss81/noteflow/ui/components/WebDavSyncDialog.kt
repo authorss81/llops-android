@@ -19,6 +19,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.authorss81.noteflow.services.BiometricAuthHelper
 import com.authorss81.noteflow.services.WebDavCredentialStore
+import com.authorss81.noteflow.services.WebDavFailurePolicy
 import com.authorss81.noteflow.services.WebDavSyncService
 import com.authorss81.noteflow.ui.viewmodel.NoteflowViewModel
 import kotlinx.coroutines.launch
@@ -213,7 +214,7 @@ fun WebDavSyncDialog(
                                     scope.launch {
                                         val res = syncService.uploadEncryptedVault(cfg, backupZip)
                                         isLoading = false
-                                        syncStatus = res.message
+                                        syncStatus = WebDavFailurePolicy.scrubForDisplay(res.message)
                                         statusIsError = !res.success
                                         if (res.success) rememberCredentialsIfRequested()
                                     }
@@ -253,13 +254,18 @@ fun WebDavSyncDialog(
                                         onRestoreSuccess()
                                     } else {
                                         statusIsError = true
-                                        syncStatus = failureMessage
-                                            ?: "Failed to restore the downloaded backup — your vault on disk is unchanged. Restart the app to reopen your vault."
+                                        // B2-LOG-05 (phase-94): the rendered status
+                                        // surface is scrubbed as defense-in-depth —
+                                        // no URL-derived text can reach the dialog.
+                                        syncStatus = WebDavFailurePolicy.scrubForDisplay(
+                                            failureMessage
+                                                ?: "Failed to restore the downloaded backup — your vault on disk is unchanged. Restart the app to reopen your vault."
+                                        )
                                     }
                                 }
                             } else {
                                 isLoading = false
-                                syncStatus = res.message
+                                syncStatus = WebDavFailurePolicy.scrubForDisplay(res.message)
                                 statusIsError = !res.success
                             }
                         }

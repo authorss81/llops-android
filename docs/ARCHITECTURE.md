@@ -712,6 +712,23 @@
     lineage): the too-large catch deletes the partial cache file, and the download
     source pins are scoped to the download path only (the upload PUT legitimately keeps
     `input.copyTo(output)`). See `workspace/phase-86/REPORT.md`.
+  - **Implemented in phase-94** (B2-LOG-05, see `workspace/phase-94/REPORT.md`):
+    the WebDAV failure surfaces are credential/URL-proof. New pure-JVM
+    `services/WebDavFailurePolicy.kt` maps every failure category to a FIXED string
+    (`CONNECT_FAILURE_MESSAGE`/`UPLOAD_FAILURE_MESSAGE`/`DOWNLOAD_FAILURE_MESSAGE`/
+    `TOO_LARGE_DOWNLOAD_MESSAGE`/`INVALID_URL_MESSAGE`) and provides the two
+    sanitizers `stripUrlUserInfo` (regex-drops `scheme://<userinfo>@`) and
+    `scrubForDisplay` (userinfo + `scheme://host/path` → `host/...`). `WebDavSyncService.kt`
+    no longer reads-hostile-path text: the malformed-catch throws the FIXED
+    `INVALID_URL_MESSAGE` (was `"Invalid WebDAV server URL: ${e.message}"`, which
+    exported the raw paste including any `user:pass@`), `validateServerUrl` returns
+    the userinfo-stripped URL, connect/upload/download blanket catches return the
+    category FIXED string, the too-large catch returns `TOO_LARGE_DOWNLOAD_MESSAGE`,
+    and the resolver-defusal + origin-gate paths report FIXED tokens
+    (`refusalReason(e)`, never the href/URL). `WebDavSyncDialog.kt` scrubs all three
+    status renders via `scrubForDisplay` (defense in depth). Grep-pinned: no
+    `localizedMessage`, no `${e.message}`, no bare `res.message` assign in either file.
+    Tests: `B2Log05WebDavFailureTextTest` (13) — 1619 green (0 failures).
 - **LocalSend**: `services/localsend/LocalSendProtocol.kt:29`, `LocalSendSender.kt:48`.
   - **Implemented in phase-41**: confirmed-pairing gate for sends. Pure-JVM
     `services/localsend/LocalSendPairing.kt` (`gate` = HTTPS-only +
