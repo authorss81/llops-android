@@ -75,6 +75,15 @@ fun PenNibVisualPreview(
             cubicTo(w * 0.35f, h * 0.15f, w * 0.65f, h * 0.85f, w - 16f, h * 0.5f)
         }
 
+        // Phase 121: the preview must show the SAME edge geometry the real
+        // stroke renders. Every tool renders round except the palette knife's
+        // documented flat smear — derived here from the pure-JVM BrushEdgePolicy
+        // so the swatch never misrepresents the stroke.
+        val previewCap = when (com.authorss81.noteflow.services.BrushEdgePolicy.edgeStyleFor(tool).cap) {
+            com.authorss81.noteflow.services.BrushEdgePolicy.LineCap.ROUND -> StrokeCap.Round
+            com.authorss81.noteflow.services.BrushEdgePolicy.LineCap.SQUARE -> StrokeCap.Square
+        }
+
         // Wetness bleed: a wide, faint under-glow that feathers past the core
         // stroke — the visual "pigment bleeding into the paper" the slider models.
         if (feather > 0f) {
@@ -123,7 +132,7 @@ fun PenNibVisualPreview(
                 drawPath(
                     path = path,
                     color = ink,
-                    style = DrawStrokeStyle(width = effWidth.coerceIn(1.2f, 4f), cap = StrokeCap.Square)
+                    style = DrawStrokeStyle(width = effWidth.coerceIn(1.2f, 4f), cap = previewCap)
                 )
             }
             StrokeTool.CHISEL_MARKER, StrokeTool.CALLIGRAPHIC -> {
@@ -167,7 +176,7 @@ fun PenNibVisualPreview(
                 drawPath(
                     path = path,
                     color = ink.copy(alpha = 0.45f),
-                    style = DrawStrokeStyle(width = effWidth.coerceIn(8f, 24f), cap = StrokeCap.Square)
+                    style = DrawStrokeStyle(width = effWidth.coerceIn(8f, 24f), cap = previewCap)
                 )
             }
             StrokeTool.CHARCOAL -> {
@@ -190,12 +199,12 @@ fun PenNibVisualPreview(
                 drawPath(
                     path = path,
                     color = ink.copy(alpha = 0.9f),
-                    style = DrawStrokeStyle(width = effW, cap = StrokeCap.Square)
+                    style = DrawStrokeStyle(width = effW, cap = previewCap)
                 )
                 drawPath(
                     path = path,
                     color = Color.White.copy(alpha = 0.35f),
-                    style = DrawStrokeStyle(width = effW * 0.2f, cap = StrokeCap.Square)
+                    style = DrawStrokeStyle(width = effW * 0.2f, cap = previewCap)
                 )
             }
             StrokeTool.INK_WASH -> {
@@ -216,7 +225,7 @@ fun PenNibVisualPreview(
                 drawPath(
                     path = path,
                     color = ink.copy(alpha = 0.95f),
-                    style = DrawStrokeStyle(width = effW, cap = StrokeCap.Square)
+                    style = DrawStrokeStyle(width = effW, cap = previewCap)
                 )
             }
             StrokeTool.DRY_BRUSH -> {

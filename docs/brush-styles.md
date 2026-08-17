@@ -89,7 +89,9 @@ Render:
 ### Palette Knife — style 10
 Look: thick flat sweeps of paint scraped straight onto the canvas, smearing and
 dragging the paint underneath. Flat, squared, directional — none of the rounded
-pen feel.
+pen feel. (Phase 121: this is the ONLY intentional non-round edge in the app;
+everything else renders round caps/joins — see `services/BrushEdgePolicy.kt`. The
+palette preview keeps the square-cap swatch to match the real smear.)
 Render:
 - AGSL: knife kernel does directional smearing of the wet sheet (strongest
   mixStrength 0.95 among the new tools).
