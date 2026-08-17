@@ -3008,7 +3008,7 @@ private fun ColorPickerBottomSheet(
                             value = h,
                             onValueChange = {
                                 h = it
-                                onColorSelect(derivedColor)
+                                onColorSelect(Color(android.graphics.Color.HSVToColor(floatArrayOf(it, s, v))))
                             },
                             valueRange = 0f..360f,
                             modifier = Modifier.weight(1f)
@@ -3023,7 +3023,7 @@ private fun ColorPickerBottomSheet(
                             value = s,
                             onValueChange = {
                                 s = it
-                                onColorSelect(derivedColor)
+                                onColorSelect(Color(android.graphics.Color.HSVToColor(floatArrayOf(h, it, v))))
                             },
                             valueRange = 0f..1f,
                             modifier = Modifier.weight(1f)
@@ -3038,7 +3038,7 @@ private fun ColorPickerBottomSheet(
                             value = v,
                             onValueChange = {
                                 v = it
-                                onColorSelect(derivedColor)
+                                onColorSelect(Color(android.graphics.Color.HSVToColor(floatArrayOf(h, s, it))))
                             },
                             valueRange = 0f..1f,
                             modifier = Modifier.weight(1f)

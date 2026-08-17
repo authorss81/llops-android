@@ -244,7 +244,7 @@ fun AnnotationCanvas(
     var textFontSizeSp by remember { mutableFloatStateOf(20f) }
     var textBgHex by remember { mutableStateOf<String?>(null) }
     var textAlign by remember { mutableStateOf("LEFT") }
-    var textSelectedColorInt by remember { mutableIntStateOf(currentColor.toArgb()) }
+    var textSelectedColorInt by remember(currentColor) { mutableIntStateOf(currentColor.toArgb()) }
 
     // Floating Sticky Note Creation Dialog
     var showStickyNoteDialog by remember { mutableStateOf(false) }
@@ -625,8 +625,13 @@ fun AnnotationCanvas(
                 )
             }
 
-            // 3. Drawing / Eyedropper / Single-Finger Pan Gestures
-            .pointerInput(currentTool, currentColor, currentWidth, pdfPageFilter, isContinuousMode, activeRawBitmapMap, isLayerLocked, symmetryMode, stabilizerEnabled, eraserMode) {
+            // 3. Drawing / Eyedropper / Single-Finger Pan Gestures.
+            // Phase 123: `activeLayerId` + `layers` are keys too, otherwise a
+            // layer switch (unlocked -> unlocked) never restarted this block and
+            // the stroke-commit closure below kept capturing the PREVIOUS layer
+            // until some other key (tool/colour/width) forced a restart — i.e.
+            // the "new layer only takes effect after switching pens" bug.
+            .pointerInput(currentTool, currentColor, currentWidth, pdfPageFilter, isContinuousMode, activeRawBitmapMap, isLayerLocked, symmetryMode, stabilizerEnabled, eraserMode, activeLayerId, layers) {
                 // Phase 07: with a view-time mirror active, erasing a stroke must
                 // also work through the mirrored copy — the user sees a mirrored
                 // stroke and expects to erase it in place. Uses the SAME axis as the

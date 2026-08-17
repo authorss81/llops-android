@@ -1,4 +1,4 @@
-# Phase 123: Immediate effect when selecting colour / layer / tool [NOT STARTED]
+# Phase 123: Immediate effect when selecting colour / layer / tool [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/phase-status.md` and

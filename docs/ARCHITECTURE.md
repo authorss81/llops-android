@@ -496,6 +496,17 @@
   `services/WetBrushEngine.kt:13` (AGSL wet-mixing gating); `ui/components/ShaderCapabilityHelper.kt:5`
   (`isAgslSupported` = SDK ≥ 33); `services/ShapeRecognitionHelper.kt:13` (`trySnapShape()` :27).
   Supporting math: `WetCanvasEngine.kt`, `WetMixingMath.kt`, `BrushStrokeMath.kt`, `StrokeStabilizer.kt`.
+  - **Implemented in phase-123**: colour/layer/tool selections are effective for the VERY NEXT stroke.
+    `AnnotationCanvas.kt:634` — `activeLayerId` + `layers` were missing from the drawing `pointerInput`
+    restart-key list, so a layer switch (unlocked→unlocked) left the stroke-commit closure
+    (`:855` `val actLayerId = activeLayerId` → `:877` `layerId = actLayerId`) capturing the PREVIOUS
+    layer until another key (tool/colour/width) forced a restart — the "must switch pens first" bug;
+    both are now keys. `AnnotationCanvas.kt:247` — the TEXT-tool colour `textSelectedColorInt` was a
+    keyless `remember` snapshot of the brush colour at first composition; now `remember(currentColor)`
+    so the next text stroke follows a newly picked colour. `EditorScreen.kt:3011/:3026/:3041` — the
+    three HSV sliders called `onColorSelect(derivedColor)` (the previous composition's colour, so the
+    final slider position never landed); each now converts its just-changed channel inline
+    (`HSVToColor(floatArrayOf(it,s,v))` / `(h,it,v)` / `(h,s,it)`). Tests: `Phase123ImmediateSelectionTest` (12).
 - **Plugins**: `plugin-sdk` → `plugins/FrameworkPlugin.kt:58` (`interface NoteflowPlugin`),
   `plugins/PluginCapability.kt:28` (sealed capability set); `plugins/PluginRegistry.kt:75`,
   `plugins/PluginManager.kt:83`; store: `plugins/store/PluginStoreCatalog.kt:57`, `PluginStoreController.kt:45`.
