@@ -1030,6 +1030,9 @@ androidx.biometric 1.1.0 · coroutines 1.9.0.
 9. Duplicate `WikiLinkParser` (`utils/` vs `services/`) — `services/` is the one screens use.
 10. Two plugin-state persistence layers exist (`SettingsPlugin*Store.kt` vs `plugins/runtime/Plugin*Store.kt`) —
     keep them in sync when changing install/update state.
+11. **Round-2 security audit** (phase-116, 2026-08-17): full source re-audit on the post-fix tree — 43 findings
+    (0 CRITICAL · 0 HIGH · 12 MEDIUM · 26 LOW · 5 INFO) live in `docs/security-report-round2.md`; phase-118
+    appends dynamic/APK findings to the same file. Audit-only, no code changed; fixes are phase-119's job.
 
 ## Phase status truth table
 See `docs/phase-status.md` — per-phase `DONE`/`PARTIAL`/`NOT STARTED` with verified commit evidence.
