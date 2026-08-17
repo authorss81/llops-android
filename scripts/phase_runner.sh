@@ -138,6 +138,15 @@ build_context_header() {
     echo "## Phase status truth table (docs/phase-status.md — read + update your row)"
     if [ -f docs/phase-status.md ]; then cat docs/phase-status.md; fi
     echo ""
+    if [ -f "${PHASE_DIR}/.checkpoint" ]; then
+      echo "## CONTINUATION MODE"
+      echo "A previous run started this phase and its partial work was already"
+      echo "committed and pushed (see the working tree + prior commits). DO NOT"
+      echo "start over: inspect what is already done, CONTINUE from the current"
+      echo "state, refine it, and finish the phase. If the phase is already"
+      echo "complete in the tree, verify it and mark it done."
+      echo ""
+    fi
     echo "## Your task"
     echo "Execute the phase described in ${PROMPT_FILE}. Read that file now and"
     echo "complete it fully. The context above is orientation only."
@@ -183,8 +192,64 @@ git_available() {
   git rev-parse --git-dir >/dev/null 2>&1
 }
 
+# --- Survive-cancellation checkpoint machinery (Fix 12) ------------------------
+# A job timeout/cancel kills the VM mid-run and erases everything done since the
+# last push. To make partial work survive, a background loop snapshots the
+# working tree every CHECKPOINT_INTERVAL_SECONDS into a commit on a dedicated
+# WIP branch and force-pushes it. The next tick merges that branch back and the
+# agent CONTINUES refining (it does not restart). The WIP branch is deleted once
+# the phase reaches DONE.
+CHECKPOINT_INTERVAL="${CHECKPOINT_INTERVAL_SECONDS:-300}"
+WIP_BRANCH="llops-wip/${PHASE}"
+
+# Snapshot real working-tree changes into a commit on the WIP branch and
+# force-push it. The main branch is never touched. Empty/log-only states are
+# skipped so we don't spam commits.
+checkpoint_wip() {
+  if ! git status --porcelain 2>/dev/null \
+       | grep -vE '^\?\? (logs/|workspace/\.)' | grep -q .; then
+    return 0
+  fi
+  git add -A 2>/dev/null || true
+  local tree commit base
+  tree="$(git write-tree 2>/dev/null)" || return 0
+  base="$(git rev-parse HEAD 2>/dev/null || echo HEAD)"
+  commit="$(git commit-tree "${tree}" -p "${base}" -m "llops: ${PHASE} checkpoint $(date -u +%s)" 2>/dev/null)" || return 0
+  if git push origin "${commit}:refs/heads/${WIP_BRANCH}" --force 2>/dev/null; then
+    echo "== [checkpoint] WIP pushed: ${WIP_BRANCH} @ ${commit:0:8} =="
+  fi
+  git reset -q 2>/dev/null || true   # unstage; keep files in the working tree
+}
+
+# Loop while an opencode run is active. Killed by the caller on exit.
+checkpoint_loop() {
+  while true; do
+    sleep "${CHECKPOINT_INTERVAL}"
+    checkpoint_wip
+  done
+}
+
+# Merge prior partial work back into the tree so this run CONTINUES the phase
+# instead of starting from scratch. Marks the phase as continued via .checkpoint.
+resume_wip() {
+  if git ls-remote --exit-code origin "refs/heads/${WIP_BRANCH}" >/dev/null 2>&1; then
+    echo "== [phase] continuing from prior partial work (${WIP_BRANCH}) =="
+    git fetch origin "${WIP_BRANCH}" 2>/dev/null || true
+    git merge --no-edit FETCH_HEAD 2>/dev/null || true
+    git push origin main 2>/dev/null || true
+    touch "${PHASE_DIR}/.checkpoint"
+  fi
+}
+
+# Drop the WIP branch once the phase is finished.
+clear_wip() {
+  git push origin --delete "${WIP_BRANCH}" 2>/dev/null || true
+  rm -f "${PHASE_DIR}/.checkpoint"
+}
+
 run_phase() {
   echo "== [phase] Running: ${PHASE} =="
+  resume_wip
   build_context_header
   set +e
   # Keep the full ctx+PROMPT as a committed audit record (logs/<phase>.prompt),
@@ -195,6 +260,8 @@ run_phase() {
     cat "${LOG_DIR}/${PHASE}.ctx"
     cat "${PROMPT_FILE}"
   } > "${LOG_DIR}/${PHASE}.prompt"
+  checkpoint_loop &
+  local CHECK_PID=$!
   opencode run \
     --model "${MODEL}" \
     --agent build \
@@ -203,6 +270,7 @@ run_phase() {
     < "${LOG_DIR}/${PHASE}.ctx" \
     > "${LOG_DIR}/${PHASE}.log" 2>&1
   local code=$?
+  kill "${CHECK_PID}" 2>/dev/null || true
   set -e
   # Stale-session recovery: opencode stores sessions on the CI VM's local disk,
   # which is wiped between runs. A `.session` marker committed by an earlier tick
@@ -232,11 +300,14 @@ run_review() {
   if grep -qiE "FINDINGS:[[:space:]]*[0-9]+|^[[:space:]]*[0-9]+\." "${LOG_DIR}/${PHASE}.review.log"; then
     echo "== [fix] Applying fixes for review findings =="
     set +e
+    checkpoint_loop &
+    local CHECK_PID=$!
     opencode run --model "${MODEL}" --agent build \
       --continue \
       "Apply fixes for the review FINDINGS above. Do not break other code. After applying every fix, commit and push them yourself: git add -A; git commit -m 'llops: ${PHASE} review fixes'; git push (pull --rebase on rejection). If the working tree is clean, push nothing." \
       > "${LOG_DIR}/${PHASE}.fix.log" 2>&1
     code=$?
+    kill "${CHECK_PID}" 2>/dev/null || true
     set -e
     echo "== [fix] exit: ${code} =="
   fi
@@ -322,6 +393,7 @@ if run_phase; then
     echo "== [phase] SUCCESS + evidence gate passed: ${PHASE} left working-tree changes =="
     touch "${DONE_FILE}"
     rm -f "${DEFERRED_FILE}" "${SESSION_FILE}" "${BLOCKED_FILE}" "${ATTEMPTS_FILE}" "${DEFERRED_ATTEMPTS_FILE}" "${NOWORK_FILE}"
+    clear_wip
 
     # Fix 9: do NOT run review inline here — the workflow commits the phase work
     # first, then invokes this script again with --review-only. That way the phase
