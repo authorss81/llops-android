@@ -557,6 +557,24 @@
     = false`, per-hop `StrictRedirectPolicy` re-validation) is retained so every redirect hop carries its
     own 10 MB budget. API-26+ floor, pure java.io, no new deps, no fallback needed.
     Tests: `B2Dos04FacadeGetStreamingCapTest` (7).
+  - **Implemented in phase-77** (B2-DEPS-05, see `workspace/phase-77/REPORT.md`): the downloadable-assistant
+    GGUF model now carries a PINNED identity. `plugins/llm/.../policy/AssistantStoragePolicy.kt` publishes
+    the real git-LFS SHA-256 (`DEFAULT_MODEL_SHA256 = f0a42bb9…ab81a8`) + exact byte count
+    (`DEFAULT_MODEL_SIZE_BYTES = 397_805_248`, the stale 398 MiB approximation removed; both re-verified
+    against the HF repo tree API) and `DEFAULT_MODEL_URL` is no longer overridable (the
+    `plugins.<id>.model_url` setting and `LocalLlmPlugin`'s settings capture were deleted). The download
+    is orchestrated by two new pure-JVM classes inside `plugins/llm` (the module can't import `app`
+    services, so the B1-NET-05 redirect pattern is re-implemented here): `policy/ModelDownloadPolicy.kt`
+    (entry/hop validation vs huggingface.co + `*.huggingface.co` + `*.hf.co` — the real CDN family the
+    resolve endpoint 302s to — RFC-3986 hop resolution, `MAX_REDIRECTS = 5`, and `verifyDownload`:
+    size FIRST then constant-time full-length SHA-256) and `engine/AssistantModelDownloadRunner.kt`
+    (manual `instanceFollowRedirects = false` loop, per-hop re-validation before the next connection,
+    body streamed into `.part` while hashing, accept ONLY on exact size+SHA-256 match, type-safe
+    failure otherwise). Rewritten `engine/AssistantModelDownloader.kt` — `download(context, onProgress)`
+    only, re-verifies an existing on-disk model against the pin at every call (stale/poisoned file
+    deleted + re-downloaded), StatFs free-space preflight, atomic rename, cancellation cleans the temp.
+    UI display fallback literal `398L`→`379L` in `OnDeviceSmartAssistant.kt`. Tests: `ModelDownloadPolicyTest`
+    (21) + `AssistantModelDownloadTest` (12, scripted `HttpURLConnection` fake) + updated `AssistantPromptTest`.
   - **Implemented in phase-46** (B1-AUTH-01, see `workspace/phase-46/REPORT.md`): plugin bytecode no
     longer resolves app-private classes AND artifacts that merely mention them are rejected before any
     bytecode materializes. `plugins/runtime/PluginFrameworkClassLoader.kt:45` — a scoped parent between

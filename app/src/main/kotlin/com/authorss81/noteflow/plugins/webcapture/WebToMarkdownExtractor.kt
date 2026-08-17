@@ -101,7 +101,23 @@ object WebToMarkdownExtractor {
                 }
                 "hr" -> sb.append("---\n\n")
                 "br" -> sb.append("\n")
-                else -> convert(child, sb, depth)
+                else -> {
+                    // Unknown/non-structural element (article, section, span,
+                    // custom tags, and on the jsoup-1.23.1 fixed line control-
+                    // char "script<ESC>") — emit its DIRECT text as inert content,
+                    // then recurse into its children. Direct text is captured
+                    // here so it is never silently dropped (B2-DEPS-01: the CVE
+                    // payload's content must survive as plain text, never be
+                    // re-serialized as active markup); containers carry no direct
+                    // text, so nothing is duplicated.
+                    for (node in child.childNodes()) {
+                        if (node is TextNode) {
+                            val direct = node.text().trim()
+                            if (direct.isNotEmpty()) sb.append(direct).append("\n\n")
+                        }
+                    }
+                    convert(child, sb, depth)
+                }
             }
         }
     }

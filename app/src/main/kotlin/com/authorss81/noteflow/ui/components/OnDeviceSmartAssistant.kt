@@ -141,7 +141,7 @@ fun OnDeviceSmartAssistantBottomSheet(
                 else -> {
                     if (!modelDownloaded) {
                         ModelDownloadCard(
-                            expectedSizeMb = plugin?.expectedModelSizeBytes()?.let { it / (1024 * 1024) } ?: 398L,
+                            expectedSizeMb = plugin?.expectedModelSizeBytes()?.let { it / (1024 * 1024) } ?: 379L,
                             downloading = downloading,
                             progress = downloadProgress,
                             onDownload = {

@@ -391,7 +391,7 @@ class B2Dos07BackupExportStreamingTest {
         assertTrue("the device-keyed path streams through a Base64 encoder", source.contains("Base64.getEncoder().wrap("))
         assertTrue("the device-keyed path uses the app FIELD_AAD domain", source.contains("EncryptionService.FIELD_AAD"))
         assertTrue("the device-keyed path writes the versioned wire format", source.contains("EncryptionService.PAYLOAD_VERSION"))
-        assertTrue("the device-keyed path uses the 12-byte IV length", source.contains("EncryptionService.GCM_IV_LENGTH"))
+        assertTrue("the device-keyed path draws the IV from the centralized 12-byte helper", source.contains("EncryptionService.newIv()"))
     }
 
     @Test

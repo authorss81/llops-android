@@ -377,14 +377,22 @@ default, and individually toggleable in Settings → Plugins.
 - **Core:** pure `AssistantPrompts` (per-task prompt assembly; long notes are
   truncated to a 6 000-char word-boundary context cap) and pure
   `AssistantStoragePolicy` (default model identity — Qwen2-0.5B-Instruct GGUF,
-  398 MB — plus the free-space guard with a 64 MB safety margin).
+  379.4 MiB = `397_805_248` bytes, PINNED SHA-256 `f0a42bb9…ab81a8` — plus the
+  free-space guard with a 64 MB safety margin).
 - **Glue:** `MediaPipeLlmEngine` runs the GGUF via MediaPipe `tasks-genai`
-  (pure-Java, minSdk 21, LLM Inference API, 4 ABIs); `AssistantModelDownloader`
-  streams the model into `filesDir/noteflow/assistant` via a `.part` temp file
-  (atomic rename, cancellation cleanup, progress callback).
+  (pure-Java, minSdk 21, LLM Inference API, 4 ABIs);
+  `AssistantModelDownloader` streams the model into
+  `filesDir/noteflow/assistant` via a `.part` temp file (atomic rename,
+  cancellation cleanup, progress callback). B2-DEPS-05 (phase-77): the download
+  is a PINNED identity — fixed URL, host allow-listed to huggingface.co +
+  the HF CDN family, manual `instanceFollowRedirects=false` loop with per-hop
+  re-validation, and the file is accepted ONLY when its exact byte count AND
+  SHA-256 match the published digest (an existing file is re-verified at every
+  download call; stale/poisoned files are deleted + re-downloaded).
 - **Low-end gate:** on low-RAM / ≤2-core devices the plugin is `Unavailable`
   with an explicit reason (a real low-token GGUF keeps memory bounded).
-  `model_url` is overridable via the per-plugin `plugins.<id>.model_url` setting.
+  The URL is deliberately NOT overridable — the arbitrary
+  `plugins.<id>.model_url` override was removed in phase-77.
 - **UI:** the existing `OnDeviceSmartAssistantBottomSheet` now runs the real LLM
   (Summarize / Auto-Tags / Action Items / Ask) with a model-download consent +
   progress card; a low-end or disabled device shows the reason.
@@ -560,7 +568,7 @@ about the "no dynamic APK loading" rule:
   instance. Progress is reported (0f → 1f) and the install runs off the main
   thread, but nothing is ever loaded from outside the app.
 - **Delete** removes a plugin **completely**: downloaded assets are deleted
-  (e.g. the assistant's 398 MB on-device GGUF via `deleteDownloadedAssets`),
+  (e.g. the assistant's 379 MB on-device GGUF via `deleteDownloadedAssets`),
   the opt-in flag, ever-enabled history and every `plugins.<id>.*` setting are
   wiped, and the plugin disappears from the registry, enabling and capability
   routing until re-downloaded. Re-download starts fresh from `REGISTERED` (off).

@@ -138,7 +138,7 @@ class B2Dos08WebDavListingBoundTest {
     }
 
     @Test
-    fun `an href whose content contains a '<' is skipped exactly like the regex`() {
+    fun `an href whose content contains a left angle bracket is skipped exactly like the regex`() {
         val xml = """
             <d:multistatus>
               <d:response><d:href>/dav/F/noteflow_vault_backup_2026-08-16_good.nfb</d:href></d:response>
@@ -184,9 +184,11 @@ class B2Dos08WebDavListingBoundTest {
         val expected = WebDavRemoteListingPolicy.findBackupHrefs(xml)
 
         // A 3-byte read stream forces every tag and href to straddle feeds.
+        val bytes = xml.toByteArray(Charsets.UTF_8)
         val drip = DripInputStream(
-            totalBytes = xml.toByteArray(Charsets.UTF_8).size.toLong(),
-            chunkBytes = 3
+            totalBytes = bytes.size.toLong(),
+            chunkBytes = 3,
+            payload = bytes
         )
         val scanned = WebDavRemoteListingPolicy.scanBackupHrefs(drip)
         assertEquals(expected, scanned)
@@ -201,9 +203,11 @@ class B2Dos08WebDavListingBoundTest {
 
         // 1-byte reads guarantee the é (2 UTF-8 bytes) straddles two feeds; the
         // scanner must not emit a replacement char into the href.
+        val bytes = xml.toByteArray(Charsets.UTF_8)
         val drip = DripInputStream(
-            totalBytes = xml.toByteArray(Charsets.UTF_8).size.toLong(),
-            chunkBytes = 1
+            totalBytes = bytes.size.toLong(),
+            chunkBytes = 1,
+            payload = bytes
         )
         val scanned = WebDavRemoteListingPolicy.scanBackupHrefs(drip)
         assertEquals(expected, scanned)
@@ -237,7 +241,12 @@ class B2Dos08WebDavListingBoundTest {
 
         val failSrc = File(repoRoot(), "app/src/main/kotlin/com/authorss81/noteflow/services/WebDavFailurePolicy.kt").readText()
         assertTrue("the fixed message constant must exist", failSrc.contains("LISTING_TOO_LARGE_MESSAGE"))
-        assertFalse("a fixed message must never interpolate", failSrc.contains("LISTING_TOO_LARGE_MESSAGE"))
+        val listingLine = failSrc.lines()
+            .dropWhile { !it.contains("LISTING_TOO_LARGE_MESSAGE") }
+            .drop(1)
+            .firstOrNull { it.contains("\"") }
+            ?: error("the LISTING_TOO_LARGE_MESSAGE literal line must exist")
+        assertFalse("a fixed message must never interpolate", listingLine.contains("\$"))
         assertEquals(
             "the UI text must be a fixed, human sentence",
             "The WebDAV server's file listing was too large to process safely; the sync was stopped.",
@@ -260,12 +269,15 @@ class B2Dos08WebDavListingBoundTest {
 
     /**
      * Synthetic "chunked" stream: hands out at most [chunkBytes] per read and
-     * counts what it yielded, so a test can prove the bounded scan stopped early
-     * instead of draining the whole body (which pre-fix `readText()` did).
+     * counts what it yielded. With a [payload] it feeds the REAL bytes in small
+     * chunks (so tag/href/UTF-8-boundary splits are exercised); without one it
+     * yields 'A' fill bytes (so a test can prove the bounded scan stopped early
+     * instead of draining the whole body, which pre-fix `readText()` did).
      */
     private class DripInputStream(
         val totalBytes: Long,
-        private val chunkBytes: Int
+        private val chunkBytes: Int,
+        private val payload: ByteArray? = null
     ) : InputStream() {
         private var pos = 0L
         var yielded: Long = 0L
@@ -273,15 +285,20 @@ class B2Dos08WebDavListingBoundTest {
 
         override fun read(): Int {
             if (pos >= totalBytes) return -1
+            val value = (payload?.get(pos.toInt()) ?: 0x41.toByte()).toInt() and 0xFF
             pos++
             yielded = pos
-            return 0x41
+            return value
         }
 
         override fun read(b: ByteArray, off: Int, len: Int): Int {
             if (pos >= totalBytes) return -1
             val n = minOf(len.toLong(), chunkBytes.toLong(), totalBytes - pos).toInt()
-            Arrays.fill(b, off, off + n, 0x41.toByte())
+            if (payload != null) {
+                payload.copyInto(b, off, pos.toInt(), pos.toInt() + n)
+            } else {
+                Arrays.fill(b, off, off + n, 0x41.toByte())
+            }
             pos += n
             yielded = pos
             return n

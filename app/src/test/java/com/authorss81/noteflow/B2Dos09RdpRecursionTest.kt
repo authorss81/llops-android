@@ -5,7 +5,7 @@ import com.authorss81.noteflow.utils.RamerDouglasPeucker
 import kotlin.math.abs
 import kotlin.math.sqrt
 import kotlin.random.Random
-import kotlin.test.assertFailsWith
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
@@ -94,7 +94,7 @@ class B2Dos09RdpRecursionTest {
         // Documents that the degenerate input above is GENUINELY deep (would have thrown in
         // the pre-fix recursive implementation under any default JVM/ART stack). The iterative
         // production implementation completing on the identical 20k-point input proves the fix.
-        assertFailsWith<StackOverflowError> {
+        assertThrows(StackOverflowError::class.java) {
             recursiveReference(squareWave(50_000), epsilon = 0.2f)
         }
     }

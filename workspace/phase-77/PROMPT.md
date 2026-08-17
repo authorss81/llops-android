@@ -1,4 +1,4 @@
-# Phase 77: B2-DEPS-05 - Downloaded LLM model (GGUF) is neither hash-pinned nor... [NOT STARTED]
+# Phase 77: B2-DEPS-05 - Downloaded LLM model (GGUF) is neither hash-pinned nor... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

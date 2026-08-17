@@ -44,6 +44,11 @@ import java.io.File
  * the artifact; the model GGUF is downloaded once (consent + progress) into
  * app-private files, after which everything runs offline and keyless.
  *
+ * B2-DEPS-05 (phase-77): the model download is pinned — fixed URL, allow-listed
+ * huggingface.co host family, `instanceFollowRedirects = false` + per-hop
+ * re-validation, exact size AND SHA-256 must match the published digest. The
+ * old arbitrary `model_url` override is gone.
+ *
  * @param engine injected inference engine (fake in JVM tests). Null → the
  *   platform MediaPipe engine is created lazily on device.
  */
@@ -63,11 +68,9 @@ class LocalLlmPlugin(
         permissions = setOf(PluginPermission.Internet)
     )
 
-    /** Settings slice captured at enable; holds the optional `model_url` override. */
-    @Volatile
-    private var settings: PluginSettings? = null
-
-    /** The capability facade the Phase-23 runtime injected at load. */
+    /**
+     * The capability facade the Phase-23 runtime injected at load.
+     */
     @Volatile
     private var injectedContext: PluginContext? = null
 
@@ -85,8 +88,10 @@ class LocalLlmPlugin(
         }
     }
 
+    // B2-DEPS-05: the plugin no longer reads any per-plugin setting (the old
+    // `model_url` override was the arbitrary-URL vector). The lifecycle hooks
+    // keep their interface shape but the download is always the pinned model.
     override fun onEnable(context: Context?, settings: PluginSettings) {
-        this.settings = settings
     }
 
     override fun onDisable(context: Context?, settings: PluginSettings) {
@@ -94,7 +99,6 @@ class LocalLlmPlugin(
     }
 
     override fun onConfigChanged(context: Context?, settings: PluginSettings) {
-        this.settings = settings
     }
 
     override fun selfCheck(context: Context?): PluginAvailability {
@@ -147,14 +151,17 @@ class LocalLlmPlugin(
     override suspend fun downloadModel(context: Context?, onProgress: (Float) -> Unit): AssistantOutcome {
         val ctx = context ?: return AssistantOutcome.Error("The on-device assistant needs a device context.")
         unavailableReason(ctx)?.let { return AssistantOutcome.Error(it) }
-        val url = settings?.getString(SETTING_MODEL_URL)?.takeIf { it != null && it.isNotBlank() }
-            ?: AssistantStoragePolicy.DEFAULT_MODEL_URL
         return try {
+            // B2-DEPS-05: the model is a PINNED identity (URL + size + SHA-256,
+            // see AssistantStoragePolicy + ModelDownloadPolicy) — there is no
+            // user-supplied URL override. The downloader verifies the host
+            // allow-list, every redirect hop, the exact byte count AND the
+            // SHA-256 before the file is accepted.
             val downloader = AssistantModelDownloader(AssistantStoragePolicy.DEFAULT_MODEL_FILE_NAME)
-            val result = downloader.download(ctx, url, expectedModelSizeBytes(), onProgress)
+            val result = downloader.download(ctx, onProgress)
             result.error?.let { return AssistantOutcome.Error(it) }
             AssistantOutcome.Success(
-                "Assistant model is downloaded and everything now runs fully offline."
+                "Assistant model is downloaded and verified — everything now runs fully offline."
             )
         } catch (e: Throwable) {
             AssistantOutcome.Error(
@@ -255,6 +262,5 @@ class LocalLlmPlugin(
         const val PLUGIN_ID = "com.authorss81.noteflow.plugins.llm"
         const val MIN_API = 26
         const val STORAGE_REL_DIR = "noteflow/assistant"
-        const val SETTING_MODEL_URL = "model_url"
     }
 }

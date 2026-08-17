@@ -144,7 +144,7 @@ class B1Plat03ExportConsentTest {
         val home = File(mainSourceRoot, "ui/screens/HomeScreen.kt").readText()
         assertTrue(
             "HomeScreen must own a SaFExporter instance",
-            home.contains("rememberSaFExporter(scope)")
+            home.contains("rememberSaFExporter(vaultScope)")
         )
         assertTrue(
             "the plain backup flow must go through the exporter",

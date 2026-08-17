@@ -64,7 +64,19 @@ class AssistantPromptTest {
         assertTrue(AssistantStoragePolicy.DEFAULT_MODEL_URL.endsWith(".gguf"))
         assertTrue(AssistantStoragePolicy.DEFAULT_MODEL_URL.contains("resolve/main"))
         assertEquals("assistant-model.gguf", AssistantStoragePolicy.DEFAULT_MODEL_FILE_NAME)
-        assertEquals(398L * 1024 * 1024, AssistantStoragePolicy.DEFAULT_MODEL_SIZE_BYTES)
+        // B2-DEPS-05 (phase-77): the exact real byte count HuggingFace publishes
+        // (the old 398 MiB approximation was wrong and never compared).
+        assertEquals(397_805_248L, AssistantStoragePolicy.DEFAULT_MODEL_SIZE_BYTES)
+        // The pin is the published git-LFS SHA-256 of the default model.
+        assertEquals(
+            "f0a42bb979ca62b5e61f3bf924ab4b6a40aa091825ee7dcb4039949980ab81a8",
+            AssistantStoragePolicy.DEFAULT_MODEL_SHA256
+        )
+        assertTrue(
+            AssistantStoragePolicy.DEFAULT_MODEL_SHA256.isNotEmpty() &&
+                AssistantStoragePolicy.DEFAULT_MODEL_SHA256.length == 64 &&
+                AssistantStoragePolicy.DEFAULT_MODEL_SHA256.all { it in "0123456789abcdef" }
+        )
     }
 
     @Test

@@ -406,6 +406,8 @@ fun HomeScreen(
                 if (importedCount > 0) {
                     viewModel.showSnackbar("Imported $importedCount page(s)")
                 }
+            }
+
             } catch (e: kotlinx.coroutines.CancellationException) {
             // B2-UI-6 (phase-96): the run was cancelled between a persist and its
             // page create. Delete every tracked file whose page row was never

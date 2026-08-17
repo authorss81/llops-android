@@ -77,7 +77,6 @@ class B2Crypto08RngHygieneTest {
         val a = EncryptionService.generateSalt()
         val b = EncryptionService.generateSalt()
         assertEquals(16, a.size)
-        assertArrayEquals(EncryptionService.newSalt(), a)
         assertNotEquals(a.toList(), b.toList())
     }
 
@@ -86,7 +85,6 @@ class B2Crypto08RngHygieneTest {
         val a = EncryptionService.generateDek()
         val b = EncryptionService.generateDek()
         assertEquals(32, a.size)
-        assertArrayEquals(EncryptionService.newDek(), a)
         assertNotEquals(a.toList(), b.toList())
     }
 
