@@ -24,7 +24,10 @@ mlkitTranslate = "17.0.3"
 mediapipeTasksGenai = "0.10.25"
 # Phase 15: productivity/knowledge plugin pack (pure-JVM, CI-testable).
 lingua = "1.2.2"
-jsoup = "1.17.2"
+# B2-DEPS-01 (phase-97): CVE-2026-71497 / GHSA-pmhh-3w7g-xqp8 (Cleaner may
+# expose markup when custom Safelists permit raw-text elements) affects
+# org.jsoup:jsoup >= 1.14.3, < 1.23.1 — pinned to 1.23.1, the security-fixed line.
+jsoup = "1.23.1"
 coroutines = "1.9.0"
 
 [libraries]
