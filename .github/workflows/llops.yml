@@ -114,8 +114,11 @@ jobs:
     needs: select-phase
     if: needs.select-phase.outputs.exists == 'true'
     runs-on: ubuntu-latest
-    # Fix 6: per-phase timeout (workspace/<phase>/.timeout), default 40 min.
+    # Fix 6: per-phase timeout (workspace/<phase>/.timeout), default 60 min.
     timeout-minutes: ${{ fromJSON(needs.select-phase.outputs.timeout) }}
+    outputs:
+      phase: ${{ steps.run.outputs.phase }}
+      done: ${{ steps.commit.outputs.done }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -154,6 +157,7 @@ jobs:
         run: |
           chmod +x scripts/phase_runner.sh
           bash scripts/phase_runner.sh "${{ needs.select-phase.outputs.phase }}"
+          echo "phase=${{ needs.select-phase.outputs.phase }}" >> "$GITHUB_OUTPUT"
         continue-on-error: true
 
       - name: Commit and push phase work (pull-rebase-retry so concurrent human pushes don't lose the bot's work)
@@ -188,44 +192,7 @@ jobs:
           # Report the final state so the status step can judge correctly.
           if [ -f "workspace/${{ needs.select-phase.outputs.phase }}/.done" ]; then
             echo "BOT_DONE=true" >> "$GITHUB_ENV"
-          fi
-
-      # Fix 9: review runs AFTER the phase work is safely committed. Only run if
-      # the phase actually completed (a .done marker exists in the committed tree).
-      - name: Review and fix phase (runs on committed work; timeout-safe)
-        id: review
-        if: env.BOT_DONE == 'true'
-        run: |
-          bash scripts/phase_runner.sh "${{ needs.select-phase.outputs.phase }}" --review-only
-        continue-on-error: true
-
-      - name: Commit and push review fixes
-        id: commit-review
-        run: |
-          git config user.name "llops-bot"
-          git config user.email "llops-bot@users.noreply.github.com"
-          git add -A
-          if git diff --cached --quiet; then
-            echo "no review changes to commit"
-          else
-            git commit -m "llops: ${{ needs.select-phase.outputs.phase }} review fixes"
-            PUSHED=0
-            for i in 1 2 3 4 5; do
-              if git push origin main; then
-                echo "push succeeded on attempt $i"
-                PUSHED=1
-                break
-              fi
-              echo "push rejected (attempt $i) — pulling latest and rebasing..."
-              git pull --rebase origin main || true
-              sleep 3
-            done
-            if [ "${PUSHED}" = "0" ]; then
-              echo "::error::Push of review fixes failed after 5 attempts — saving to recovery branch + patch."
-              git branch -f "llops-recovery/${{ needs.select-phase.outputs.phase }}" HEAD
-              git push origin "llops-recovery/${{ needs.select-phase.outputs.phase }}" --force || true
-              git format-patch --stdout -1 > "llops-${{ needs.select-phase.outputs.phase }}-review.patch" || true
-            fi
+            echo "done=true" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Upload recovery patch (if push failed)
@@ -267,3 +234,89 @@ jobs:
           else
             echo "::error::Phase failed for a non-rate-limit reason — check logs."
           fi
+
+  # Fix 11: review runs as its OWN job with its own timeout budget, so the phase
+  # work (which commits first) can never starve the review of time. Previously
+  # review shared the run-phase job's timeout and was cancelled mid-run whenever
+  # phase work consumed most of the budget — losing the review fixes entirely.
+  review:
+    needs: [select-phase, run-phase]
+    if: needs.select-phase.outputs.exists == 'true' && needs.run-phase.outputs.done == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: "8.13"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: latest
+          sdk: platforms;android-36,build-tools;36.0.0,ndk;27.0.12077973,cmake;3.22.1
+
+      - name: Install opencode (pinned 1.15.12 — CLI has no --prompt flag; message is positional)
+        run: |
+          curl -fsSL https://opencode.ai/install | bash -s -- --version 1.15.12
+          ~/.opencode/bin/opencode --version 2>/dev/null || opencode --version
+
+      - name: Pull latest main
+        run: git pull --ff-only origin main || true
+
+      - name: Review and fix phase (dedicated 90-min budget)
+        id: review
+        run: |
+          bash scripts/phase_runner.sh "${{ needs.select-phase.outputs.phase }}" --review-only
+        continue-on-error: true
+
+      - name: Commit and push review fixes
+        run: |
+          git config user.name "llops-bot"
+          git config user.email "llops-bot@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "no review changes to commit"
+          else
+            git commit -m "llops: ${{ needs.select-phase.outputs.phase }} review fixes"
+            PUSHED=0
+            for i in 1 2 3 4 5; do
+              if git push origin main; then
+                echo "push succeeded on attempt $i"
+                PUSHED=1
+                break
+              fi
+              echo "push rejected (attempt $i) — pulling latest and rebasing..."
+              git pull --rebase origin main || true
+              sleep 3
+            done
+            if [ "${PUSHED}" = "0" ]; then
+              echo "::error::Push of review fixes failed after 5 attempts — saving to recovery branch + patch."
+              git branch -f "llops-recovery/${{ needs.select-phase.outputs.phase }}" HEAD
+              git push origin "llops-recovery/${{ needs.select-phase.outputs.phase }}" --force || true
+              git format-patch --stdout -1 > "llops-${{ needs.select-phase.outputs.phase }}-review.patch" || true
+            fi
+          fi
+
+      - name: Upload recovery patch (review fixes)
+        if: always()
+        continue-on-error: true   # artifact quota failures must never fail the run
+        uses: actions/upload-artifact@v4
+        with:
+          name: llops-recovery-${{ needs.select-phase.outputs.phase }}-review
+          path: |
+            llops-${{ needs.select-phase.outputs.phase }}-review.patch
+            logs/${{ needs.select-phase.outputs.phase }}.review.log
+            logs/${{ needs.select-phase.outputs.phase }}.fix.log
+          if-no-files-found: ignore
