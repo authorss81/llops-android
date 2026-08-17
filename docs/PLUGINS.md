@@ -18,7 +18,12 @@ Future features must not be bolted into the core where they become untestable an
 unmaintainable. The plugin framework gives every future feature:
 
 - a **single registration point** (compile-time discovery),
-- **user opt-in** (a plugin is off until the user enables it in Settings → Plugins),
+- **strict user opt-in — ALL plugins are OFF by default** (Phase 126 policy): a
+  fresh install or an upgrade runs NO plugin — bundled, compiled or downloadable —
+  until the user explicitly enables it in Settings → Plugins or the Plugin Store.
+  Existing users' explicit choices are preserved (the per-plugin opt-in flag and
+  "ever enabled" history are persisted); only new/never-touched plugins default
+  OFF. Nothing is ever silently enabled or silently disabled,
 - **capability gating + dependency resolution** (availability, deps and conflicts
   are re-derived on every change — never stale),
 - **guarded invocation** (a throwing/buggy plugin is contained and surfaced as a
@@ -755,7 +760,15 @@ export routing, disabled-skip).
   its pinned cert + SHA-256 checks before ANY load and again on EVERY load. Tamper
   is a hard failure, never a partial load.
 - **No new third-party dependencies** in the framework package.
-- **Opt-in by default.** `SettingsManager.isPluginEnabled` defaults to `false`.
+- **Opt-in by default (Phase 126 policy).** `SettingsManager.isPluginEnabled`
+  defaults to `false` (`services/SettingsManager.kt:340-341`), so a fresh install
+  derives every bundled plugin as `REGISTERED` (off, never enabled —
+  `plugins/PluginRegistry.kt:731-740`). Even the store's OPTIONAL plugin
+  (`CaseChangePlugin`) is NOT in `defaultPlugins()` — it is absent until the user
+  downloads it, and a download/install starts `REGISTERED` (off). Capability
+  routing refuses before opt-in with `NONE_ENABLED` (`plugins/PluginManager.kt:188-198`),
+  and `onProcessStart` fires no lifecycle hook for an un-opted-in plugin
+  (`plugins/PluginRegistry.kt:195`). Pinned by `app/src/test/.../PluginOffByDefaultTest.kt` (6).
 - **Derived state is never stale.** `resolve()` recomputes availability, deps and
   conflicts on every change; permission loss immediately flips `UNAVAILABLE`.
 - **Guarded everywhere.** Route invocations AND lifecycle hooks are contained —

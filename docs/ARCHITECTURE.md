@@ -549,6 +549,20 @@
     `refreshPluginStates()`/`testPlugin()` no-op while `pluginRegistry.isLifecyclePaused`
     (`:361`,`:381`), and `pluginLifecycleStarted` is `@Volatile` + double-checked
     (`synchronized`) so racing unlock paths can never boot the layer twice.
+  - **Implemented in phase-126** (off-by-default policy, see `workspace/phase-126/REPORT.md`):
+    ALL plugins are disabled by default — every bundled/compiled plugin is strictly
+    opt-in, verified over the full `defaultPlugins()` set by
+    `PluginOffByDefaultTest` (6 tests). Audit found enablement already defaults off:
+    `SettingsManager.isPluginEnabled` → `prefs.getBoolean("plugin_enabled_<id>", false)`
+    (`services/SettingsManager.kt:340-341`); nothing auto-enables in
+    `PluginRegistry` (opt-in is the only write path, `PluginRegistry.setEnabled` `:273`;
+    `defaultPlugins()` `:855` registers definitions only); `onProcessStart` fires
+    hooks only for enabled plugins (`:195`); capability routing refuses un-opted-in
+    plugins with `NONE_ENABLED` (`PluginManager.kt:188-198`); store installs start
+    REGISTERED (off) (`PluginRegistry.installPlugin` `:394-405`); upgrade keeps prior
+    explicit choices via the persisted `plugin_enabled_<id>` + `plugin_ever_enabled_<id>`
+    flags (`SettingsManager.kt:340-359`). CaseChangePlugin remains the store's OPTIONAL
+    plugin (NOT in `defaultPlugins()`, downloaded → REGISTERED/off).
 - **Downloadable runtime**: `plugins/runtime/RuntimePluginLoader.kt:68`; `services/AppClassLoaderFactory.kt:23`
   (`DexClassLoader`); `services/AppFacadeHost.kt:27` (deny-by-default facade, NO direct DB/keystore handles);
   `plugins/runtime/PinnedCertHash.kt:25`; `plugins/runtime/ArtifactSignatureVerifier.kt:52`.
