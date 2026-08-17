@@ -46,6 +46,8 @@ import com.authorss81.noteflow.ui.components.WeatherDialog
 import com.authorss81.noteflow.ui.components.UnitConverterDialog
 import com.authorss81.noteflow.ui.components.OutlineGeneratorDialog
 import com.authorss81.noteflow.ui.components.CitationFormatterDialog
+import com.authorss81.noteflow.ui.components.overflowMenuScrollModifier
+import com.authorss81.noteflow.ui.components.overflowMenuScrollState
 import kotlinx.coroutines.launch
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -310,7 +312,12 @@ fun MarkdownPreviewScreen(
                         IconButton(onClick = { showPluginMenu = true }) {
                             Icon(Icons.Outlined.Extension, contentDescription = "Plugins", tint = primaryColor)
                         }
-                        DropdownMenu(expanded = showPluginMenu, onDismissRequest = { showPluginMenu = false }) {
+                        DropdownMenu(
+                            expanded = showPluginMenu,
+                            onDismissRequest = { showPluginMenu = false },
+                            scrollState = overflowMenuScrollState(),
+                            modifier = overflowMenuScrollModifier()
+                        ) {
                             val transformPlugins = viewModel.pluginRegistry.pluginsForCapability(PluginCapability.TextTransform)
                             if (transformPlugins.isEmpty()) {
                                 DropdownMenuItem(

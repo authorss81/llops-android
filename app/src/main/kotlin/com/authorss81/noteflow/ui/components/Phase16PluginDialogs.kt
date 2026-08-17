@@ -411,7 +411,9 @@ fun TranslationDialog(
                         }
                         androidx.compose.material3.DropdownMenu(
                             expanded = expanded,
-                            onDismissRequest = { expanded = false }
+                            onDismissRequest = { expanded = false },
+                            scrollState = overflowMenuScrollState(),
+                            modifier = overflowMenuScrollModifier()
                         ) {
                             languages.forEach { lang ->
                                 androidx.compose.material3.DropdownMenuItem(

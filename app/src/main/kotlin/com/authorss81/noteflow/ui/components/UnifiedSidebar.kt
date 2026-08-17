@@ -342,7 +342,12 @@ private fun SidebarNotebookRow(
                     modifier = Modifier.size(16.dp)
                 )
             }
-            DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
+            DropdownMenu(
+                expanded = menuExpanded,
+                onDismissRequest = { menuExpanded = false },
+                scrollState = overflowMenuScrollState(),
+                modifier = overflowMenuScrollModifier()
+            ) {
                 DropdownMenuItem(
                     text = { Text("Rename") },
                     leadingIcon = { Icon(Icons.Outlined.Edit, contentDescription = null) },
@@ -433,7 +438,12 @@ private fun SidebarSectionRow(
                     modifier = Modifier.size(16.dp)
                 )
             }
-            DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
+            DropdownMenu(
+                expanded = menuExpanded,
+                onDismissRequest = { menuExpanded = false },
+                scrollState = overflowMenuScrollState(),
+                modifier = overflowMenuScrollModifier()
+            ) {
                 DropdownMenuItem(
                     text = { Text("Rename") },
                     leadingIcon = { Icon(Icons.Outlined.Edit, contentDescription = null) },
@@ -499,7 +509,12 @@ private fun SidebarPageRow(
                     modifier = Modifier.size(14.dp)
                 )
             }
-            DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
+            DropdownMenu(
+                expanded = menuExpanded,
+                onDismissRequest = { menuExpanded = false },
+                scrollState = overflowMenuScrollState(),
+                modifier = overflowMenuScrollModifier()
+            ) {
                 DropdownMenuItem(
                     text = { Text(if (page.pinned) "Unpin" else "Pin") },
                     leadingIcon = { Icon(if (page.pinned) Icons.Outlined.StarOutline else Icons.Outlined.Star, contentDescription = null) },

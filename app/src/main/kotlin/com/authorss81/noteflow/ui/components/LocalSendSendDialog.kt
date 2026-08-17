@@ -285,7 +285,12 @@ fun LocalSendSendDialog(
                         .fillMaxWidth()
                         .menuAnchor(MenuAnchorType.PrimaryNotEditable)
                 )
-                ExposedDropdownMenu(expanded = payloadMenuOpen, onDismissRequest = { payloadMenuOpen = false }) {
+                ExposedDropdownMenu(
+                    expanded = payloadMenuOpen,
+                    onDismissRequest = { payloadMenuOpen = false },
+                    scrollState = overflowMenuScrollState(),
+                    modifier = overflowMenuScrollModifier()
+                ) {
                     LocalSendPayload.entries.forEach { option ->
                         DropdownMenuItem(
                             text = { Text(option.label) },
@@ -313,7 +318,12 @@ fun LocalSendSendDialog(
                             .fillMaxWidth()
                             .menuAnchor(MenuAnchorType.PrimaryNotEditable)
                     )
-                    ExposedDropdownMenu(expanded = noteMenuOpen, onDismissRequest = { noteMenuOpen = false }) {
+                    ExposedDropdownMenu(
+                        expanded = noteMenuOpen,
+                        onDismissRequest = { noteMenuOpen = false },
+                        scrollState = overflowMenuScrollState(),
+                        modifier = overflowMenuScrollModifier()
+                    ) {
                         pages.forEach { page ->
                             DropdownMenuItem(
                                 text = {

@@ -567,7 +567,12 @@ fun SecuritySettingsDialog(
                             OutlinedButton(onClick = { expanded = true }) {
                                 Text(timeoutOptions.first { it.first == autoLockTimeoutSeconds }.second)
                             }
-                            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                            DropdownMenu(
+                                expanded = expanded,
+                                onDismissRequest = { expanded = false },
+                                scrollState = overflowMenuScrollState(),
+                                modifier = overflowMenuScrollModifier()
+                            ) {
                                 timeoutOptions.forEach { (seconds, label) ->
                                     DropdownMenuItem(
                                         text = { Text(label) },

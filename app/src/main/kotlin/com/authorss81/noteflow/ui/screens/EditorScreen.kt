@@ -82,6 +82,8 @@ import com.authorss81.noteflow.ui.components.rememberSaFExporter
 import com.authorss81.noteflow.ui.components.BacklinksInspectorBottomSheet
 import com.authorss81.noteflow.ui.components.OcrResultDialog
 import com.authorss81.noteflow.ui.components.PromptNameDialog
+import com.authorss81.noteflow.ui.components.overflowMenuScrollModifier
+import com.authorss81.noteflow.ui.components.overflowMenuScrollState
 import com.authorss81.noteflow.ui.viewmodel.NoteflowViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
@@ -1057,7 +1059,9 @@ fun EditorScreen(
                     }
                     DropdownMenu(
                         expanded = showEmbedMenu,
-                        onDismissRequest = { showEmbedMenu = false }
+                        onDismissRequest = { showEmbedMenu = false },
+                        scrollState = overflowMenuScrollState(),
+                        modifier = overflowMenuScrollModifier()
                     ) {
                         DropdownMenuItem(
                             text = { Text("Sticky Note") },
@@ -1124,7 +1128,9 @@ fun EditorScreen(
                     }
                     DropdownMenu(
                         expanded = showOverflowMenu,
-                        onDismissRequest = { showOverflowMenu = false }
+                        onDismissRequest = { showOverflowMenu = false },
+                        scrollState = overflowMenuScrollState(),
+                        modifier = overflowMenuScrollModifier()
                     ) {
                         DropdownMenuItem(
                             text = { Text("Knowledge Graph & Backlinks") },
@@ -4700,7 +4706,9 @@ private fun LayersPanelBottomSheet(
                                         }
                                         DropdownMenu(
                                             expanded = showBlendMenu,
-                                            onDismissRequest = { showBlendMenu = false }
+                                            onDismissRequest = { showBlendMenu = false },
+                                            scrollState = overflowMenuScrollState(),
+                                            modifier = overflowMenuScrollModifier()
                                         ) {
                                             val blendModes = listOf("NORMAL", "MULTIPLY", "SCREEN", "OVERLAY", "DARKEN", "LIGHTEN", "COLOR_DODGE", "COLOR_BURN", "HARD_LIGHT", "SOFT_LIGHT", "DIFFERENCE", "EXCLUSION")
                                             blendModes.forEach { mode ->

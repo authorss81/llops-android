@@ -136,7 +136,9 @@ private fun SpreadsheetTableRow(
 
             DropdownMenu(
                 expanded = showStatusMenu,
-                onDismissRequest = { showStatusMenu = false }
+                onDismissRequest = { showStatusMenu = false },
+                scrollState = overflowMenuScrollState(),
+                modifier = overflowMenuScrollModifier()
             ) {
                 listOf("To Do" to "todo", "In Progress" to "in-progress", "Review" to "review", "Done" to "done").forEach { (label, tag) ->
                     DropdownMenuItem(

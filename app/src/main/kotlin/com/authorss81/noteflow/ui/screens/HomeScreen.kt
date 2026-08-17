@@ -1883,7 +1883,12 @@ private fun NotebookPanel(
                             IconButton(onClick = { expanded = true }) {
                                 Icon(Icons.Outlined.MoreVert, contentDescription = "More Options")
                             }
-                            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                            DropdownMenu(
+                                expanded = expanded,
+                                onDismissRequest = { expanded = false },
+                                scrollState = overflowMenuScrollState(),
+                                modifier = overflowMenuScrollModifier()
+                            ) {
                                 DropdownMenuItem(
                                     text = { Text("Rename") },
                                     onClick = { expanded = false; onRenameNotebook(nb) }
@@ -1975,7 +1980,12 @@ private fun SectionPanel(
                             IconButton(onClick = { expanded = true }) {
                                 Icon(Icons.Outlined.MoreVert, contentDescription = "More Options")
                             }
-                            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                            DropdownMenu(
+                                expanded = expanded,
+                                onDismissRequest = { expanded = false },
+                                scrollState = overflowMenuScrollState(),
+                                modifier = overflowMenuScrollModifier()
+                            ) {
                                 DropdownMenuItem(
                                     text = { Text("Rename") },
                                     onClick = { expanded = false; onRenameSection(sec) }
@@ -2172,7 +2182,9 @@ private fun NotebookAndSectionSelectorBar(
                                             }
                                             DropdownMenu(
                                                 expanded = menuExpanded,
-                                                onDismissRequest = { menuExpanded = false }
+                                                onDismissRequest = { menuExpanded = false },
+                                                scrollState = overflowMenuScrollState(),
+                                                modifier = overflowMenuScrollModifier()
                                             ) {
                                                 DropdownMenuItem(
                                                     text = { Text("Rename") },
@@ -2335,7 +2347,9 @@ private fun NotebookAndSectionSelectorBar(
                                             }
                                             DropdownMenu(
                                                 expanded = menuExpanded,
-                                                onDismissRequest = { menuExpanded = false }
+                                                onDismissRequest = { menuExpanded = false },
+                                                scrollState = overflowMenuScrollState(),
+                                                modifier = overflowMenuScrollModifier()
                                             ) {
                                                 DropdownMenuItem(
                                                     text = { Text("Rename") },
@@ -2468,7 +2482,12 @@ private fun NotePageCard(
                     IconButton(onClick = { menuExpanded = true }) {
                         Icon(Icons.Outlined.MoreVert, contentDescription = "More Options")
                     }
-                    DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
+                    DropdownMenu(
+                        expanded = menuExpanded,
+                        onDismissRequest = { menuExpanded = false },
+                        scrollState = overflowMenuScrollState(),
+                        modifier = overflowMenuScrollModifier()
+                    ) {
                         if (!isTrash) {
                             DropdownMenuItem(
                                 text = { Text("Rename") },
@@ -2508,7 +2527,12 @@ private fun ThemeMenu(viewModel: NoteflowViewModel) {
         IconButton(onClick = { expanded = true }) {
             Icon(Icons.Outlined.Palette, contentDescription = "Theme")
         }
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            scrollState = overflowMenuScrollState(),
+            modifier = overflowMenuScrollModifier()
+        ) {
             for (mode in AppThemeMode.values()) {
                 DropdownMenuItem(
                     text = { Text(mode.name.lowercase().capitalize()) },
@@ -2553,7 +2577,12 @@ private fun MaintenanceMenu(
         IconButton(onClick = { expanded = true }) {
             Icon(Icons.Outlined.MoreVert, contentDescription = "Settings & More")
         }
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            scrollState = overflowMenuScrollState(),
+            modifier = overflowMenuScrollModifier()
+        ) {
             DropdownMenuItem(
                 text = { Text("Unified Sidebar Layout") },
                 leadingIcon = { Icon(Icons.Outlined.ViewSidebar, contentDescription = null) },

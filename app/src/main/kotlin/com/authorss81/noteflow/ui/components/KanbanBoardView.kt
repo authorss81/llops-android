@@ -232,7 +232,9 @@ private fun KanbanCardItem(
 
                     DropdownMenu(
                         expanded = showMoveMenu,
-                        onDismissRequest = { showMoveMenu = false }
+                        onDismissRequest = { showMoveMenu = false },
+                        scrollState = overflowMenuScrollState(),
+                        modifier = overflowMenuScrollModifier()
                     ) {
                         Text(
                             text = "Move to Column:",

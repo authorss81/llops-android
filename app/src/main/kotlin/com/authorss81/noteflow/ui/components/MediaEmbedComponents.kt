@@ -325,7 +325,9 @@ fun CodeBlockCard(
                         )
                         DropdownMenu(
                             expanded = showLangMenu,
-                            onDismissRequest = { showLangMenu = false }
+                            onDismissRequest = { showLangMenu = false },
+                            scrollState = overflowMenuScrollState(),
+                            modifier = overflowMenuScrollModifier()
                         ) {
                             for (lang in languages) {
                                 DropdownMenuItem(
