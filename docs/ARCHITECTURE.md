@@ -96,6 +96,22 @@
     dbGate flows flip on, and an open failure there is zeroized — never counted as a wrong
     password. `onCleared()` also disposes. `databaseDisposedByLock` + `dataInitialized=false` let
     the next unlock re-establish observers against the fresh connection.
+  - **Implemented in phase-95** (B2-UI-4, VERIFY-ONLY, see `workspace/phase-95/REPORT.md`): the
+    post-unlock state re-initialization gap is closed and pinned. `lock()` (`NoteflowViewModel.kt:3638-3694`,
+    inside `if (settings.hasMasterPassword)` `:3668-3681`) resets `dataInitialized = false`
+    (`:3673`), cancels `sectionsJob`/`pagesJob` (`:3669-3670`), disposes the connection
+    (`:3671`), and nulls `_pages`/`_selectedPage`/`_sections`/`_selectedSection`/`_selectedNotebook`
+    (`:3686-3690`); BOTH unlock paths (`verifyMasterPassword` `:2780-2789`,
+    `verifyBiometricsAndUnlock` `:2985-2995`) reinstate the connection, flip `_authenticated`, then
+    call `initializeData()` (`:1400-1432`, re-entry-guarded) which boots `initializeDataCore()`
+    (`:1434-1563`) → restores `settings.activeNotebookId`/`settings.activeSectionId` from prefs
+    (stale/deleted pair falls back to `ensureDefaultNotebookAndSection()`) → re-arms BOTH
+    `observeSections`/`observePages` (`:1541-1542`), so the home lists repopulate WITHOUT manual
+    navigation. The six home-list flows (`notebooks`/`allSections`/`allActivePages`/`paletteItems`/
+    `recentPages`/`trashedPages`, `:1272-1376`) are dbGate-gated (`_authenticated && !_corruptionBlocked &&
+    !_keystoreKeyLost`): locked ⇒ `emptyList()`, unlocked ⇒ re-subscribe+re-emit. Passwordless
+    vaults skip the teardown (device-wrapped DEK is the boot credential). Pinned by
+    `B2Ui4UnlockReinitializesStateTest` (10 tests).
   - **Implemented in phase-48** (B2-LOG-01, see `workspace/phase-48/REPORT.md`): crash logging is
     single-owner. `utils/AppStartupLogger.kt` is a startup-EVENT timer only — it no longer installs
     an `UncaughtExceptionHandler` and its raw `logCrash` (`printStackTrace` → `Log.e` = unredacted
