@@ -126,11 +126,18 @@ fun EditorScreen(
     }
     var currentColor by remember { mutableStateOf(Color(0xFF1B365D)) }
     var currentWidth by remember { mutableFloatStateOf(4f) }
-    // Phase 27: multi-color brush modes (RAINBOW / GRADIENT / SHIMMER). The mode +
-    // seed + optional gradient end color persist ON each stroke and the per-point
-    // color is re-derived at render time. The seed is refreshed per stroke at draw
-    // start (onDrawingStart) so every multi-color stroke begins at a different hue.
-    var currentColorMode by remember { mutableStateOf(StrokeColorMode.SOLID) }
+    // Phase 27 + 122: multi-color brush modes (RAINBOW / GRADIENT / SHIMMER). The
+    // mode + seed + optional gradient end color persist ON each stroke and the
+    // per-point color is re-derived at render time. The seed is refreshed per
+    // stroke at draw start (onDrawingStart) so every multi-color stroke begins at
+    // a different hue. Phase 122: the current MODE also persists across sessions
+    // (SettingsManager.brushColorModeKey) and is restored here on editor open.
+    var currentColorMode by remember {
+        mutableStateOf(
+            com.authorss81.noteflow.services.ColorModePersistencePolicy
+                .modeFromPref(viewModel.settings.brushColorModeKey)
+        )
+    }
     var currentColorSeed by remember { mutableIntStateOf(0) }
     var currentGradientToColor by remember { mutableStateOf(Color(0xFF1B365D)) }
     var template by remember { mutableStateOf(page.template ?: "blank") }
@@ -1600,6 +1607,7 @@ fun EditorScreen(
                     // reasonable default the user can re-override with a mode chip).
                     if (currentColorMode.isMultiColor) {
                         currentColorMode = StrokeColorMode.SOLID
+                        viewModel.settings.brushColorModeKey = StrokeColorMode.SOLID.persistenceKey
                         viewModel.showSnackbar("Eyedropper sampled a solid color")
                     }
                     if (sampledColor !in customPalette) {
@@ -1810,11 +1818,15 @@ fun EditorScreen(
                     // are re-engaged explicitly via the mode chips).
                     currentColor = color
                     currentColorMode = StrokeColorMode.SOLID
+                    viewModel.settings.brushColorModeKey = StrokeColorMode.SOLID.persistenceKey
                     activePresetId = null
                     activeCustomPresetId = null
                 },
                 onColorModeChange = { mode, baseColor, gradientTo ->
                     currentColorMode = mode
+                    // Phase 122: persist the selected brush mode so Rainbow etc.
+                    // survives restarts (SharedPreferences via SettingsManager).
+                    viewModel.settings.brushColorModeKey = mode.persistenceKey
                     when (mode) {
                         StrokeColorMode.SOLID -> currentColor = baseColor
                         StrokeColorMode.RAINBOW, StrokeColorMode.SHIMMER -> {
@@ -1830,6 +1842,7 @@ fun EditorScreen(
                 onGradientToColorSelect = { gradientTo ->
                     currentGradientToColor = gradientTo
                     currentColorMode = StrokeColorMode.GRADIENT
+                    viewModel.settings.brushColorModeKey = StrokeColorMode.GRADIENT.persistenceKey
                 },
                 onSaveSwatch = { color ->
                     viewModel.insertPaletteItem(
@@ -1858,6 +1871,28 @@ fun EditorScreen(
                 advancedBrushesEnabled = advancedBrushesEnabled,
                 customPresets = paletteItems.filter { it.type == "PRESET" },
                 currentTool = currentTool,
+                currentColorMode = currentColorMode,
+                currentGradientToColor = currentGradientToColor,
+                onColorModeChange = { mode, baseColor, gradientTo ->
+                    currentColorMode = mode
+                    viewModel.settings.brushColorModeKey = mode.persistenceKey
+                    when (mode) {
+                        StrokeColorMode.SOLID -> currentColor = baseColor
+                        StrokeColorMode.RAINBOW, StrokeColorMode.SHIMMER -> {
+                            currentColor = baseColor
+                            currentColorSeed = (Math.random() * 360).toInt()
+                        }
+                        StrokeColorMode.GRADIENT -> {
+                            currentColor = baseColor
+                            currentGradientToColor = gradientTo ?: baseColor
+                        }
+                    }
+                },
+                onGradientToColorSelect = { gradientTo ->
+                    currentGradientToColor = gradientTo
+                    currentColorMode = StrokeColorMode.GRADIENT
+                    viewModel.settings.brushColorModeKey = StrokeColorMode.GRADIENT.persistenceKey
+                },
                 onWidthSelect = { w ->
                     currentWidth = w
                     activePresetId = null
@@ -3090,95 +3125,18 @@ private fun ColorPickerBottomSheet(
                     }
 Spacer(modifier = Modifier.height(16.dp))
 
-            // Phase 27: multi-color brush mode chips. Selecting RAINBOW/SHIMMER keeps
-            // the current base color (rainbow/shimmer re-derive hue/value from it),
-            // GRADIENT additionally shows a second-color row below.
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                StrokeColorMode.entries.forEach { mode ->
-                    val selected = currentColorMode == mode
-                    FilterChip(
-                        selected = selected,
-                        onClick = {
-                            if (selected) {
-                                onColorModeChange(StrokeColorMode.SOLID, currentColor, currentGradientToColor)
-                            } else {
-                                onColorModeChange(mode, currentColor, currentGradientToColor)
-                            }
-                        },
-                        label = {
-                            Text(
-                                text = mode.label,
-                                style = MaterialTheme.typography.labelMedium,
-                                color = when {
-                                    mode == StrokeColorMode.RAINBOW -> Color(0xFFE91E5A)
-                                    mode == StrokeColorMode.GRADIENT -> Color(0xFF2F80ED)
-                                    mode == StrokeColorMode.SHIMMER -> Color(0xFF9C27B0)
-                                    else -> LocalContentColor.current
-                                }
-                            )
-                        },
-                        leadingIcon = if (mode.isMultiColor) {
-                            {
-                                Box(
-                                    modifier = Modifier
-                                        .size(14.dp)
-                                        .clip(CircleShape)
-                                        .background(
-                                            when (mode) {
-                                                StrokeColorMode.RAINBOW -> Brush.sweepGradient(
-                                                    listOf(Color.Red, Color.Yellow, Color.Green, Color.Cyan, Color.Blue, Color.Magenta, Color.Red)
-                                                )
-                                                StrokeColorMode.GRADIENT -> Brush.linearGradient(listOf(currentColor, currentGradientToColor))
-                                                StrokeColorMode.SHIMMER -> Brush.linearGradient(listOf(Color.White, currentColor, Color.White))
-                                                else -> androidx.compose.ui.graphics.SolidColor(currentColor)
-                                            }
-                                        )
-                                )
-                            }
-                        } else null
-                    )
-                }
-            }
-
-            if (currentColorMode == StrokeColorMode.GRADIENT) {
-                Spacer(modifier = Modifier.height(12.dp))
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(
-                        text = "Gradient end",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(modifier = Modifier.weight(1f))
-                    // Gradient end swatch opens the mini recent-color row pick.
-                    val gradientCandidates = remember(currentColor) {
-                        listOf(currentColor) +
-                            com.authorss81.noteflow.services.PaletteCatalog.curated
-                            .map { Color(it.argb) }
-                            .filter { it != currentColor }
-                            .distinctBy { it.toArgb() }
-                            .take(10)
-                    }
-                    LazyRow(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        items(gradientCandidates, key = { it.toArgb() }) { candidate ->
-                            ColorSwatch(
-                                color = candidate,
-                                isSelected = candidate.toArgb() == currentGradientToColor.toArgb(),
-                                size = 34.dp,
-                                onClick = { onGradientToColorSelect(candidate) }
-                            )
-                        }
-                    }
-                }
-            }
+            // Phase 27 + 122: multi-color brush mode chips (shared composable so
+            // the width/quick picker exposes the same row). Selecting
+            // RAINBOW/SHIMMER keeps the current base color (rainbow/shimmer
+            // re-derive hue/value from it), GRADIENT additionally shows a
+            // second-color row below. The mode persists via SettingsManager.
+            com.authorss81.noteflow.ui.components.ColorModeChipsRow(
+                currentColorMode = currentColorMode,
+                currentColor = currentColor,
+                currentGradientToColor = currentGradientToColor,
+                onColorModeChange = onColorModeChange,
+                onGradientToColorSelect = onGradientToColorSelect
+            )
 
             Spacer(modifier = Modifier.height(8.dp))
                 }
@@ -3450,6 +3408,10 @@ private fun WidthPickerBottomSheet(
     advancedBrushesEnabled: Boolean,
     customPresets: List<PaletteItemEntity>,
     currentTool: StrokeTool,
+    currentColorMode: StrokeColorMode = StrokeColorMode.SOLID,
+    currentGradientToColor: Color = currentColor,
+    onColorModeChange: (StrokeColorMode, Color, Color?) -> Unit = { _, _, _ -> },
+    onGradientToColorSelect: (Color) -> Unit = {},
     onWidthSelect: (Float) -> Unit,
     onPresetSelect: (PenPreset) -> Unit,
     onCustomPresetSelect: (PaletteItemEntity) -> Unit,
@@ -3480,6 +3442,18 @@ private fun WidthPickerBottomSheet(
             Text(
                 text = "Stroke Width & Presets",
                 style = MaterialTheme.typography.titleLarge
+            )
+
+            // Phase 122: the same colour-MODE chips row as the colour picker, so the
+            // rainbow brush is reachable from the width/quick picker without opening
+            // the full colour sheet. Selecting a mode persists via SettingsManager.
+            Spacer(modifier = Modifier.height(12.dp))
+            com.authorss81.noteflow.ui.components.ColorModeChipsRow(
+                currentColorMode = currentColorMode,
+                currentColor = currentColor,
+                currentGradientToColor = currentGradientToColor,
+                onColorModeChange = onColorModeChange,
+                onGradientToColorSelect = onGradientToColorSelect
             )
 
             Spacer(modifier = Modifier.height(16.dp))

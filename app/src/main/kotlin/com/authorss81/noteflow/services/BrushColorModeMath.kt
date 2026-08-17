@@ -134,17 +134,38 @@ object BrushColorModeMath {
     }
 
     /**
+     * Rainbow hue-advance policy (Phase 122): the hue for a point at normalized
+     * stroke progress [0..1] is the seed's starting hue advanced by a full 360°
+     * sweep along the stroke length, wrapped via [normalizeHue]. Per-stroke-length
+     * (not per-time) so every stroke's spectrum is deterministic ± the seed and
+     * identical for the same points; progress 0 and progress 1 share a hue, giving
+     * a seamless loop. Pure scalar arithmetic — no allocation — so it is safe to
+     * call per point on low-end devices.
+     */
+    fun hueAdvance(seedHueDeg: Float, progress: Float): Float {
+        val p = progress.coerceIn(0f, 1f)
+        return normalizeHue(seedHueDeg + p * 360f)
+    }
+
+    /** [Int] value channel (max of RGB) without allocating an HSV array. */
+    private fun valueOf(argb: Int): Float {
+        val r = ((argb ushr 16) and 0xFF) / 255f
+        val g = ((argb ushr 8) and 0xFF) / 255f
+        val b = (argb and 0xFF) / 255f
+        return max(r, max(g, b))
+    }
+
+    /**
      * Rainbow: a full seamless 360° hue sweep along the stroke progress, fully
      * saturated and vibrant. The base color only contributes its value (when the
      * user picked a bright color the rainbow stays bright); the seed rotates the
      * starting hue so every stroke begins at a different place on the wheel.
+     * Allocation-free per point (uses [hueAdvance] + a scalar value read, never
+     * [argbToHsv]).
      */
     fun rainbowColorAt(baseArgb: Int, progress: Float, seed: Int): Int {
-        val p = progress.coerceIn(0f, 1f)
-        val baseHsv = argbToHsv(baseArgb)
-        val hue = normalizeHue(seedHueDeg(seed) + p * 360f)
-        val v = max(baseHsv[2], 0.5f)
-        return hsvToArgb(hue, 1f, v)
+        val v = max(valueOf(baseArgb), 0.5f)
+        return hsvToArgb(hueAdvance(seedHueDeg(seed), progress), 1f, v)
     }
 
     /**

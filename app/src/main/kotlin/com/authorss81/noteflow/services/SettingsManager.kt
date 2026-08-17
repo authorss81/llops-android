@@ -194,6 +194,21 @@ class SettingsManager(context: Context) {
         get() = prefs.getString("eraser_mode_key", "STROKE") ?: "STROKE"
         set(value) = prefs.edit().putString("eraser_mode_key", value).apply()
 
+    // Phase 122: the editor's current brush color MODE (Rainbow / Gradient /
+    // Shimmer / Solid). This is the user's brush choice, persisted across
+    // sessions so reopening a note keeps the rainbow brush selected — NOT a
+    // per-note/DB concern (per-stroke mode still round-trips through the stroke
+    // payload per phase-27). Rounded through ColorModePersistencePolicy so the
+    // pref key + fail-closed decode live in one testable decision table.
+    var brushColorModeKey: String
+        get() = prefs.getString(
+            ColorModePersistencePolicy.PREF_KEY_COLOR_MODE,
+            ColorModePersistencePolicy.DEFAULT_MODE.persistenceKey
+        ) ?: ColorModePersistencePolicy.DEFAULT_MODE.persistenceKey
+        set(value) = prefs.edit()
+            .putString(ColorModePersistencePolicy.PREF_KEY_COLOR_MODE, value)
+            .apply()
+
     // Phase 19: render-time vibrancy/saturation boost. OFF by default so stored
     // colors and existing notes render unchanged; stored colorInt is never mutated.
     var vibrancyEnabled: Boolean
