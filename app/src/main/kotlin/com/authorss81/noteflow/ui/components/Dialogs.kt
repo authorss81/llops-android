@@ -30,56 +30,6 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 @Composable
-fun WelcomeDialog(
-    onDismiss: () -> Unit
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        shape = RoundedCornerShape(24.dp),
-        title = {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Surface(
-                    shape = CircleShape,
-                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
-                    modifier = Modifier.size(64.dp)
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = Icons.Outlined.Edit,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(36.dp)
-                        )
-                    }
-                }
-                Spacer(modifier = Modifier.height(16.dp))
-                Text("Welcome to InkFlow", style = MaterialTheme.typography.headlineSmall)
-            }
-        },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                Text(
-                    "Offline-first, privacy-focused canvas & PDF document annotation.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                FeatureRow(Icons.Outlined.Security, "100% Private", "Your notes stay on your device. No cloud tracking.")
-                FeatureRow(Icons.Outlined.PictureAsPdf, "PDF & Document Annotation", "Import PDFs, images, text, or Word files to annotate.")
-                FeatureRow(Icons.Outlined.Save, "Autosave & Security", "Instant saving with local encryption at rest.")
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = onDismiss,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("Get Started")
-            }
-        }
-    )
-}
-
-@Composable
 fun AppUpdateDialog(
     onDismiss: () -> Unit,
     onSnackbar: (String, Boolean) -> Unit = { _, _ -> }
@@ -335,18 +285,6 @@ fun AppUpdateDialog(
                 }
             }
         )
-    }
-}
-
-@Composable
-private fun FeatureRow(icon: androidx.compose.ui.graphics.vector.ImageVector, title: String, subtitle: String) {
-    Row(verticalAlignment = Alignment.Top) {
-        Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
-        Spacer(modifier = Modifier.width(12.dp))
-        Column {
-            Text(title, style = MaterialTheme.typography.titleSmall)
-            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
     }
 }
 

@@ -181,9 +181,9 @@ object TutorialCurriculum {
         ),
         slide(
             "canvas_tools", TutorialSection.CANVAS, "brush",
-            "21 Brushes",
-            "InkFlow ships a full brush suite: pens, fineliners, markers, calligraphy, fountain pen, " +
-                "airbrush, spray, pencil, charcoal, oil paint and more — each with its own feel. " +
+            "A Full Brush Suite",
+            "InkFlow ships a complete brush suite: pens, fineliners, markers, calligraphy, fountain pen, " +
+                "airbrush, splatter, pencil, charcoal, oil paint and more — each with its own feel. " +
                 "Pick a tool, a width and a colour, and draw."
         ),
         slide(
@@ -294,10 +294,11 @@ object TutorialCurriculum {
         slide(
             "eraser_demo", TutorialSection.ERASERS, "erase",
             "Try Erasing",
-            "Draw something first, switch to the erase chip, then drag across your strokes to erase " +
-                "part of them.",
+            "A sample stroke is drawn for you. Drag across it to cut part of it out — that's the " +
+                "partial eraser. In the editor you can draw first, then switch to the erase chip and " +
+                "drag through your own lines.",
             action = TutorialAction.EraseStroke,
-            tip = "Draw at least one stroke, then swipe over it to erase."
+            tip = "Swipe over the sample stroke to erase part of it."
         ),
 
         // ---------------- Knowledge Graph ----------------

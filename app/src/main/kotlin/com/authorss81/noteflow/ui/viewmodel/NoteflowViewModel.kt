@@ -1650,13 +1650,6 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         _tutorialResumeIndex.value = 0
     }
 
-    fun markTutorialCompleted() {
-        settings.tutorialCompleted = true
-        _tutorialCompleted.value = true
-        settings.tutorialResumeIndex = 0
-        _tutorialResumeIndex.value = 0
-    }
-
     /** Persists the current slide so a skipped/closed run resumes there next time. */
     fun updateTutorialResumeIndex(index: Int) {
         settings.tutorialResumeIndex = index

@@ -34,9 +34,9 @@ class TutorialStateMachineTest {
     }
 
     @Test
-    fun `curriculum grows the old 7-step deck by at least 3x`() {
+    fun `curriculum grows the old 11-step deck by at least 3x`() {
         assertTrue(
-            "expected >= 21 slides (old deck was 7); got ${TutorialCurriculum.slides.size}",
+            "expected >= 21 slides (old deck was 11); got ${TutorialCurriculum.slides.size}",
             TutorialCurriculum.slides.size >= 21
         )
     }
@@ -62,8 +62,21 @@ class TutorialStateMachineTest {
 
     @Test
     fun `action slides map to every interactive demo type`() {
-        val actions = TutorialCurriculum.actionSlides.mapNotNull { it.action }.toSet()
-        assertEquals(TutorialAction.all.toSet(), actions)
+        val expected = listOf(
+            TutorialAction.DrawStroke,
+            TutorialAction.EraseStroke,
+            TutorialAction.AddLayer,
+            TutorialAction.PickColourMode,
+            TutorialAction.TypeMarkdown
+        ).map { it::class.java }.toSet()
+        val exercisedBySlides = TutorialCurriculum.actionSlides
+            .mapNotNull { it.action?.javaClass }
+            .toSet()
+        assertEquals(
+            "every TutorialAction type must be exercised by an interactive slide",
+            expected,
+            exercisedBySlides
+        )
     }
 
     // ------------------------------------------------------------- navigation

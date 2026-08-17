@@ -28,6 +28,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
@@ -43,10 +44,14 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlin.math.PI
+import kotlin.math.sin
 
 /**
  * Phase 125 — embedded interactive demos for the enhanced tutorial.
@@ -72,8 +77,12 @@ private val DEMO_INKS = listOf(
 
 /**
  * A draw/erase practice pad. In DRAW mode each completed drag adds a stroke; in
- * ERASE mode each drag paints paper-colour tracks over the strokes (a visual
- * "eraser"). [onGestureDone] fires after every completed drag gesture.
+ * ERASE mode the pad is seeded with a sample stroke and each drag paints
+ * paper-colour tracks over the ink (a visual "eraser"). [onGestureDone] fires
+ * after every completed draw drag, and — for erase — only after a swipe that
+ * actually crossed a stroke (misses are recorded for feedback but never
+ * complete the step). Paths are cached and rebuilt only when pad content
+ * changes, not on every draw pass, so the demo stays allocation-cheap.
  */
 @Composable
 fun PracticePad(
@@ -85,6 +94,35 @@ fun PracticePad(
     val erases = remember { mutableStateListOf<List<Offset>>() }
     val paper = MaterialTheme.colorScheme.surfaceContainer
 
+    // Bumped on every content change so the cached Path lists rebuild exactly once
+    // per mutation, instead of allocating new Paths on every frame.
+    var version by remember { mutableIntStateOf(0) }
+
+    // The erase demo needs a sample stroke in the SAME pixel space as the pointer
+    // coordinates, so it is seeded once the pad's measured size is known.
+    var padSize by remember { mutableStateOf(IntSize.Zero) }
+    LaunchedEffect(padSize, mode) {
+        if (mode == PracticePadMode.ERASE && strokes.isEmpty() && padSize != IntSize.Zero) {
+            strokes.add(sampleWave(padSize.width.toFloat(), padSize.height.toFloat()))
+            version++
+        }
+    }
+
+    val strokePaths = remember(version) {
+        strokes.map { pts ->
+            Path().apply {
+                pts.forEachIndexed { i, p -> if (i == 0) moveTo(p.x, p.y) else lineTo(p.x, p.y) }
+            }
+        }
+    }
+    val erasePaths = remember(version) {
+        erases.map { pts ->
+            Path().apply {
+                pts.forEachIndexed { i, p -> if (i == 0) moveTo(p.x, p.y) else lineTo(p.x, p.y) }
+            }
+        }
+    }
+
     Surface(
         color = paper,
         shape = RoundedCornerShape(16.dp),
@@ -94,7 +132,11 @@ fun PracticePad(
         ),
         modifier = modifier.fillMaxWidth()
     ) {
-        Box(modifier = Modifier.height(190.dp)) {
+        Box(
+            modifier = Modifier
+                .height(190.dp)
+                .onSizeChanged { padSize = it }
+        ) {
             Canvas(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -114,36 +156,27 @@ fun PracticePad(
                                 if (buffer.size >= 2) {
                                     if (mode == PracticePadMode.DRAW) {
                                         strokes.add(buffer.toList())
+                                        version++
+                                        onGestureDone()
                                     } else {
                                         erases.add(buffer.toList())
+                                        version++
+                                        if (overlapsAnyStroke(buffer, strokes)) onGestureDone()
                                     }
-                                    onGestureDone()
                                 }
                             },
                             onDragCancel = { buffer.clear() }
                         )
                     }
             ) {
-                var strokeIndex = 0
-                for (stroke in strokes) {
-                    val path = Path().apply {
-                        stroke.forEachIndexed { i, p ->
-                            if (i == 0) moveTo(p.x, p.y) else lineTo(p.x, p.y)
-                        }
-                    }
+                strokePaths.forEachIndexed { i, path ->
                     drawPath(
                         path = path,
-                        color = DEMO_INKS[strokeIndex % DEMO_INKS.size],
+                        color = DEMO_INKS[i % DEMO_INKS.size],
                         style = Stroke(width = 7f, cap = StrokeCap.Round)
                     )
-                    strokeIndex++
                 }
-                for (erase in erases) {
-                    val path = Path().apply {
-                        erase.forEachIndexed { i, p ->
-                            if (i == 0) moveTo(p.x, p.y) else lineTo(p.x, p.y)
-                        }
-                    }
+                erasePaths.forEach { path ->
                     drawPath(
                         path = path,
                         color = paper,
@@ -152,41 +185,88 @@ fun PracticePad(
                 }
             }
 
-            if (strokes.isEmpty()) {
-                Text(
-                    text = if (mode == PracticePadMode.DRAW)
-                        "Drag here to draw a stroke"
-                    else
-                        "Draw a stroke first, then drag over it to erase",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier
-                        .align(Alignment.Center)
-                        .padding(horizontal = 16.dp)
-                )
-            } else if (mode == PracticePadMode.DRAW) {
-                Text(
-                    text = "${strokes.size} stroke${if (strokes.size == 1) "" else "s"} drawn",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(8.dp)
-                )
-            } else {
-                val erasedCount = erases.count { it.size >= 2 }
-                Text(
-                    text = "$erasedCount erase swipe${if (erasedCount == 1) "" else "s"}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(8.dp)
-                )
+            when (mode) {
+                PracticePadMode.DRAW -> if (strokes.isEmpty()) {
+                    Text(
+                        text = "Drag here to draw a stroke",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .padding(horizontal = 16.dp)
+                    )
+                } else {
+                    Text(
+                        text = "${strokes.size} stroke${if (strokes.size == 1) "" else "s"} drawn",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(8.dp)
+                    )
+                }
+
+                PracticePadMode.ERASE -> if (erases.isEmpty()) {
+                    Text(
+                        text = "Drag across the sample stroke to erase a part of it",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .padding(horizontal = 16.dp)
+                    )
+                } else {
+                    val erasedCount = erases.count { it.size >= 2 }
+                    Text(
+                        text = "$erasedCount erase swipe${if (erasedCount == 1) "" else "s"}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(8.dp)
+                    )
+                }
             }
         }
     }
+}
+
+/**
+ * True when any point of the erase swipe lies within [ERASE_OVERLAP_RADIUS] of
+ * any point of a drawn stroke — a cheap "did the eraser actually touch ink"
+ * check in the shared pixel space of the pad.
+ */
+private fun overlapsAnyStroke(swipe: List<Offset>, strokes: List<List<Offset>>): Boolean {
+    if (swipe.isEmpty() || strokes.isEmpty()) return false
+    val radiusSq = ERASE_OVERLAP_RADIUS * ERASE_OVERLAP_RADIUS
+    for (stroke in strokes) {
+        for (s in stroke) {
+            for (e in swipe) {
+                val dx = e.x - s.x
+                val dy = e.y - s.y
+                if (dx * dx + dy * dy <= radiusSq) return true
+            }
+        }
+    }
+    return false
+}
+
+/** Erase tool half-width (18f stroke) + a little slack. */
+private const val ERASE_OVERLAP_RADIUS = 18f
+
+/** A gentle S-curve across the pad, generated in local pixel coordinates. */
+private fun sampleWave(width: Float, height: Float): List<Offset> {
+    val n = 48
+    val points = ArrayList<Offset>(n)
+    for (i in 0 until n) {
+        val t = i / (n - 1f)
+        val x = width * (0.12f + 0.76f * t)
+        val y = height * (0.3f + 0.4f * (0.5f + 0.5f * sin(t * 2f * PI.toFloat())))
+        points.add(Offset(x, y))
+    }
+    return points
 }
 
 /** Layer-stack mini demo: tap "+ Add Layer" to stack a new layer. */
@@ -385,7 +465,7 @@ fun ColourModeDemo(
     }
 }
 
-/** Markdown mini editor: typing >= 3 characters completes the check. */
+/** Markdown mini editor: typing a real "# heading" (>= 3 chars) completes the check. */
 @Composable
 fun MarkdownTypeDemo(
     onTyped: () -> Unit,
@@ -409,7 +489,7 @@ fun MarkdownTypeDemo(
                 value = text,
                 onValueChange = { new ->
                     text = new
-                    if (new.length >= 3 && !notified) {
+                    if (new.startsWith("#") && new.length >= 3 && !notified) {
                         notified = true
                         onTyped()
                     }

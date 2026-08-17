@@ -1,6 +1,6 @@
 package com.authorss81.noteflow.ui.components
 
-import androidx.compose.animation.animateDpAsState
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -95,8 +95,8 @@ fun tutorialIcon(key: String): ImageVector = when (key) {
     "picker" -> Icons.Outlined.Colorize
     "modes" -> Icons.Outlined.AutoFixHigh
     "colour" -> Icons.Outlined.FormatColorFill
-    "eraser" -> Icons.Outlined.Eraser
-    "erase" -> Icons.Outlined.Eraser
+    "eraser" -> Icons.Outlined.CleaningServices
+    "erase" -> Icons.Outlined.CleaningServices
     "graph" -> Icons.Outlined.Hub
     "backlinks" -> Icons.Outlined.Link
     "plugin" -> Icons.Outlined.Extension
@@ -141,6 +141,11 @@ fun InteractiveTutorial(
     // Snapshot read: any session mutation bumps `tick` and recomposes this screen.
     @Suppress("UNUSED_EXPRESSION")
     ui.tick
+
+    // System Back leaves the tutorial exactly like "Skip Tutorial": the resume
+    // index (already persisted via onProgress) survives so the next open resumes
+    // at the same slide.
+    BackHandler(onBack = onSkip)
 
     Box(
         modifier = Modifier
