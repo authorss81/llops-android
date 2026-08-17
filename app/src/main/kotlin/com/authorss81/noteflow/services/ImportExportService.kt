@@ -1371,8 +1371,7 @@ object ImportExportService {
                     System.arraycopy(wrapKey, BACKUP_WRAP_KEY_HALF_SIZE, wrapKeyPart2, 0, BACKUP_WRAP_KEY_HALF_SIZE)
                     try {
                         val wrappedDek = EncryptionService.encryptAad(key, wrapKey, BACKUP_DEK_WRAP_AAD)
-                        val payloadIv = ByteArray(BACKUP_IV_SIZE)
-                        java.security.SecureRandom().nextBytes(payloadIv)
+                        val payloadIv = EncryptionService.newIv()
                         val header = buildBackupHeaderV3(salt, payloadIv, wrapKeyPart1, wrappedDek)
                         // B2-DOS-07 (phase-83) + phase-84: streamed file-to-file
                         // encryption. The plaintext stream is [16B part2] || zip, so

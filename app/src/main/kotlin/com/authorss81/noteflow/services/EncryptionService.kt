@@ -38,12 +38,49 @@ object EncryptionService {
     private const val FIELD_AAD_V2_PREFIX = "Noteflow-Vault-Field-Encryption-v2|"
     private val gson = Gson()
 
-    fun generateSalt(): ByteArray {
-        val random = SecureRandom()
-        val salt = ByteArray(16)
-        random.nextBytes(salt)
-        return salt
+    // ---------- B2-CRYPTO-08 (phase-114): single random-bytes source ----------
+
+    internal const val SALT_BYTES = 16
+    internal const val DEK_BYTES = 32
+
+    /**
+     * THE single random-bytes source for every IV/salt/DEK in the app
+     * (B2-CRYPTO-08). A future provider/hardening pin (e.g. a specific
+     * algorithm/provider or `SecureRandom.getInstanceStrong()`) is a ONE-LINE
+     * change here, never a sweep across call sites.
+     *
+     * A fresh `SecureRandom()` per call is retained deliberately: it is the
+     * correct Android pattern (the platform auto-seeds each instance from the
+     * OS entropy pool at construction and self-seeds it after reuse), is
+     * thread-safe per instance, and avoids the /dev/urandom contention a single
+     * shared instance can cause on low-end devices. Only a hostile platform
+     * provider (outside app control) could weaken it — the exact residual the
+     * finding documents.
+     */
+    private fun randomBytes(size: Int): ByteArray {
+        val bytes = ByteArray(size)
+        SecureRandom().nextBytes(bytes)
+        return bytes
     }
+
+    /**
+     * Fresh 12-byte AES-GCM IV (B2-CRYPTO-08). Guarantees ONE fresh, never-
+     * reused IV per encryption call — re-encrypting the same plaintext with the
+     * same key yields a different ciphertext every time.
+     */
+    fun newIv(): ByteArray = randomBytes(GCM_IV_LENGTH)
+
+    /**
+     * Fresh random salt (default 16 bytes, the PBKDF2 per-vault salt size).
+     */
+    fun newSalt(size: Int = SALT_BYTES): ByteArray = randomBytes(size)
+
+    /** Fresh random DEK / wrap-key bytes (default 32 bytes). */
+    fun newDek(size: Int = DEK_BYTES): ByteArray = randomBytes(size)
+
+    fun generateSalt(): ByteArray = newSalt()
+
+    fun generateDek(): ByteArray = newDek()
 
     // ---------- B2-CRYPTO-07 (phase-113): Unicode normalization for passwords ----------
 
@@ -155,13 +192,6 @@ object EncryptionService {
         return factory.generateSecret(keySpec).encoded
     }
 
-    fun generateDek(): ByteArray {
-        val random = SecureRandom()
-        val dek = ByteArray(32)
-        random.nextBytes(dek)
-        return dek
-    }
-
     private fun base64Encode(data: ByteArray): String {
         return try {
             val encoded = Base64.encodeToString(data, Base64.NO_WRAP)
@@ -181,8 +211,7 @@ object EncryptionService {
     }
 
     fun encrypt(data: ByteArray, key: ByteArray): String {
-        val iv = ByteArray(GCM_IV_LENGTH)
-        SecureRandom().nextBytes(iv)
+        val iv = newIv()
         val secretKey = SecretKeySpec(key, "AES")
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         val parameterSpec = GCMParameterSpec(GCM_TAG_LENGTH, iv)
@@ -227,8 +256,7 @@ object EncryptionService {
      * (version + IV + ciphertext/tag) — callers that need Base64 encode it.
      */
     fun encryptAad(data: ByteArray, key: ByteArray, aad: ByteArray): ByteArray {
-        val iv = ByteArray(GCM_IV_LENGTH)
-        SecureRandom().nextBytes(iv)
+        val iv = newIv()
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(GCM_TAG_LENGTH, iv))
         cipher.updateAAD(aad)

@@ -148,8 +148,7 @@ object BackupExportPolicy {
         dest: OutputStream,
         key: ByteArray
     ) {
-        val iv = ByteArray(EncryptionService.GCM_IV_LENGTH)
-        java.security.SecureRandom().nextBytes(iv)
+        val iv = EncryptionService.newIv()
         val cipher = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(
             javax.crypto.Cipher.ENCRYPT_MODE,
