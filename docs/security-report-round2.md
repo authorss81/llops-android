@@ -22,12 +22,26 @@
   review, 3) Logging/telemetry/info disclosure, 4) Resource-exhaustion/DoS,
   5) NEW phase 34-38 features (glass surfaces, brush/nib preview math, minimap/HUD,
   markdown hybrid editor + callouts + waveform scrubbing, knowledge-graph layout).
-- APK target: phase-117's release build (fresh, signed, uploaded as the
-  `noteflow-release-apk` artifact). Regenerate with the documented command
-  (`RELEASE_KEYSTORE_B64=<base64> gradle assembleRelease`; the build FAILS CLOSED
-  without the keystore env — see `docs/RELEASE.md` + `B1Plat01ReleaseSigningTest`),
-  or audit the last phase-32 local artifacts (release 142.0 MB R8-minified,
-  SHA-256 `d7cdbebe…`).
+- APK target: **phase-117's release build** (fresh, signed, uploaded as the
+  `noteflow-release-apk` artifact — phase-118 reads THIS section to verify the
+  target). Exact artifact details:
+  - Filename: `app/build/outputs/apk/release/app-release.apk`
+  - Commit built from: `dd0c5f59` (`llops: phase-116`)
+  - versionCode: `2`, versionName: `1.0.0` (VERSION_CODE/VERSION_NAME env unset ⇒
+    `app/build.gradle.kts:18-19` defaults)
+  - Size: 142,234,607 bytes (~135.6 MiB), R8-minified (`:app:minifyReleaseWithR8`
+    ran), debug-related: not debuggable
+  - SHA-256: `20849bcfcc72bfc649057464d17bd26f13bd74b76a89f1f0232244816ec85d3d`
+  - Signing: v2-scheme signed, signer DN `CN=InkFlow Release, OU=Dev, O=Authorss81,
+    L=Unknown, ST=Unknown, C=US`, cert SHA-256 `69636edb9ee2487762e98f855f250ea1ec
+    66233de13b61a4c014026b82c50196` (matches the release keystore entry, alias
+    `inkflow`; NOT the Android debug key — B1-PLAT-1 fail-closed held)
+  - Build command / env: `KEYSTORE_FILE`+`KEYSTORE_PASSWORD`+`KEY_ALIAS`+`KEY_PASSWORD`
+    restored by the workflow → `gradle assembleRelease` → `BUILD SUCCESSFUL`.
+  - Regenerate (operator docs): `RELEASE_KEYSTORE_B64=<base64> gradle assembleRelease`
+    — the build FAILS CLOSED without the keystore env (`docs/RELEASE.md` +
+    `B1Plat01ReleaseSigningTest`). Fallback (unused): the last phase-32 local
+    artifacts (release 142.0 MB R8-minified, SHA-256 `d7cdbebe…`).
 
 ## Severity legend (matches round 1)
 - CRITICAL — remote or local-privilege-free compromise of confidentiality/
