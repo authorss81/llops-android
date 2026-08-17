@@ -62,20 +62,23 @@ class DownloadablePluginInstaller(
                 is PluginDownloader.DownloadOutcome.Success -> onProgress(0.5f)
                 is PluginDownloader.DownloadOutcome.Failed -> {
                     entryStore.remove(entry.id)
+                    // B2-LOG-04 (phase-93): the guard refusal text can embed the
+                    // entry's hostile downloadUrl — never log it, log a FIXED reason code.
+                    logger.error(entry.id, entry.name, "remote install refused; code=DOWNLOAD_GUARD")
                     return PluginStoreController.DownloadOutcome.Failed(entry.id, download.message)
                 }
             }
         } else {
             onProgress(0.4f)
         }
-        val sha256 = entry.sha256 ?: return failCleanup(entry, "remote entry '${entry.id}' is missing its pinned sha256.")
-        val pinnedCertHash = entry.pinnedCertHash ?: return failCleanup(entry, "remote entry '${entry.id}' is missing its pinned certificate hash.")
+        val sha256 = entry.sha256 ?: return failCleanup(entry, "remote entry '${entry.id}' is missing its pinned sha256.", "MISSING_SHA256")
+        val pinnedCertHash = entry.pinnedCertHash ?: return failCleanup(entry, "remote entry '${entry.id}' is missing its pinned certificate hash.", "MISSING_CERT_PIN")
         val artifact = PluginArtifact(entry, storage.artifactFor(entry)!!.canonicalPath, sha256, pinnedCertHash)
         onProgress(0.6f)
         when (val verification = runtime.verify(artifact)) {
             is RuntimeOutcome.Success -> onProgress(0.75f)
-            is RuntimeOutcome.Failed -> return failCleanup(entry, verification.message)
-            is RuntimeOutcome.NotYetImplemented -> return failCleanup(entry, verification.message)
+            is RuntimeOutcome.Failed -> return failCleanup(entry, verification.message, "VERIFY_FAILED")
+            is RuntimeOutcome.NotYetImplemented -> return failCleanup(entry, verification.message, "VERIFY_NOT_IMPLEMENTED")
         }
         when (val loaded = runtime.load(entry)) {
             is RuntimeOutcome.Success -> {
@@ -86,11 +89,11 @@ class DownloadablePluginInstaller(
                         logger.lifecycle("store-remote-download", entry.id, entry.name)
                         PluginStoreController.DownloadOutcome.Installed(entry.id)
                     }
-                    is PluginInstallResult.Refused -> failCleanup(entry, result.reason)
+                    is PluginInstallResult.Refused -> failCleanup(entry, result.reason, "REGISTRY_REFUSED")
                 }
             }
-            is RuntimeOutcome.Failed -> return failCleanup(entry, loaded.message)
-            is RuntimeOutcome.NotYetImplemented -> return failCleanup(entry, loaded.message)
+            is RuntimeOutcome.Failed -> return failCleanup(entry, loaded.message, "LOAD_FAILED")
+            is RuntimeOutcome.NotYetImplemented -> return failCleanup(entry, loaded.message, "LOAD_NOT_IMPLEMENTED")
         }
     }
 
@@ -99,10 +102,18 @@ class DownloadablePluginInstaller(
         entryStore.remove(entry.id)
     }
 
-    private fun failCleanup(entry: PluginEntry, message: String): PluginStoreController.DownloadOutcome {
+    // B2-LOG-04 (phase-93): failCleanup never echoes [message] into the log
+    // (it can carry the entry's hostile downloadUrl) — only a FIXED reason code.
+    // [message] remains user-facing (returned to the store dialog) but never a
+    // logcat line.
+    private fun failCleanup(
+        entry: PluginEntry,
+        message: String,
+        reasonCode: String
+    ): PluginStoreController.DownloadOutcome {
         storage.delete(entry)
         entryStore.remove(entry.id)
-        logger.error(entry.id, entry.name, "remote install failed: ${message.substringBefore('.')}")
+        logger.error(entry.id, entry.name, "remote install failed; code=$reasonCode")
         return PluginStoreController.DownloadOutcome.Failed(entry.id, message)
     }
 }

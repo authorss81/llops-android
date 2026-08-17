@@ -133,7 +133,8 @@ class PluginUpdateEngine(
             is PluginDownloader.DownloadOutcome.Failed -> return failedUpdateKeepsPrevious(
                 entry = entry,
                 target = target,
-                reason = download.message
+                reason = download.message,
+                stageCode = "download"
             )
         }
 
@@ -147,7 +148,8 @@ class PluginUpdateEngine(
                 return failedUpdateKeepsPrevious(
                     entry = entry,
                     target = target,
-                    reason = "update artifact failed signature verification: ${verification.reason}"
+                    reason = "update artifact failed signature verification: ${verification.reason}",
+                    stageCode = "verification"
                 )
             }
         }
@@ -162,7 +164,8 @@ class PluginUpdateEngine(
                 return failedUpdateKeepsPrevious(
                     entry = entry,
                     target = target,
-                    reason = "update artifact passed verification but failed its load smoke-test: ${smokeTest.message}"
+                    reason = "update artifact passed verification but failed its load smoke-test: ${smokeTest.message}",
+                    stageCode = "load-smoke-test"
                 )
             }
             is RuntimeOutcome.NotYetImplemented -> {
@@ -170,7 +173,8 @@ class PluginUpdateEngine(
                 return failedUpdateKeepsPrevious(
                     entry = entry,
                     target = target,
-                    reason = "the runtime cannot smoke-test ${target.version} yet (${smokeTest.message})"
+                    reason = "the runtime cannot smoke-test ${target.version} yet (${smokeTest.message})",
+                    stageCode = "load-smoke-test"
                 )
             }
         }
@@ -187,7 +191,8 @@ class PluginUpdateEngine(
             return failedUpdateKeepsPrevious(
                 entry = entry,
                 target = target,
-                reason = "could not persist ${target.version} as the active version"
+                reason = "could not persist ${target.version} as the active version",
+                stageCode = "swap-persist"
             )
         }
         cleanupStaleArtifacts(target, previousVersion)
@@ -258,9 +263,12 @@ class PluginUpdateEngine(
     private fun failedUpdateKeepsPrevious(
         entry: PluginEntry,
         target: PluginEntry,
-        reason: String
+        reason: String,
+        stageCode: String
     ): RuntimeOutcome<Nothing> {
-        logger.error(entry.id, target.name, "update failed (${reason.substringBefore('.')}); previous version kept")
+        // B2-LOG-04 (phase-93): [reason] can embed the target's hostile
+        // downloadUrl — log ONLY the fixed stage code, never the reason text.
+        logger.error(entry.id, target.name, "update failed; stage=$stageCode; previous version kept")
         return RuntimeOutcome.Failed(
             "Update of '${entry.id}' to ${target.version} did not complete: $reason. " +
                 "The previous verified version v${entry.version} is still active (nothing was replaced)."

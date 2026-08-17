@@ -1,6 +1,7 @@
 package com.authorss81.noteflow.plugins.runtime
 
 import com.authorss81.noteflow.plugins.PluginCapability
+import com.authorss81.noteflow.plugins.PluginLogPolicy
 import com.authorss81.noteflow.plugins.PluginPermission
 
 /**
@@ -87,11 +88,19 @@ data class PluginEntry(
         if (capabilities.isEmpty()) errors += "must declare at least one capability"
         if (category.isBlank()) errors += "category must not be blank"
         if (updateChannel.isBlank()) errors += "updateChannel must not be blank"
+        // B2-LOG-04 (phase-93): CR/LF in these fields is a logcat line-forgery
+        // vehicle (and a host field echo into future failure text) — refuse at
+        // the model, never echo the offending value in the error.
+        if (PluginLogPolicy.hasLineBreak(id)) errors += PluginLogPolicy.lineBreakError("id")
+        if (PluginLogPolicy.hasLineBreak(name)) errors += PluginLogPolicy.lineBreakError("name")
         when (source) {
             PluginEntrySource.REMOTE -> {
                 if (downloadUrl.isNullOrBlank()) errors += "remote entry must carry a downloadUrl"
                 if (!downloadUrl.isNullOrBlank() && !downloadUrl.startsWith("https://")) {
                     errors += "downloadUrl must be HTTPS (got '$downloadUrl')"
+                }
+                if (!downloadUrl.isNullOrBlank() && PluginLogPolicy.hasLineBreak(downloadUrl)) {
+                    errors += PluginLogPolicy.lineBreakError("downloadUrl")
                 }
                 if (sha256.isNullOrBlank()) errors += "remote entry must carry a sha256"
                 if (pinnedCertHash.isNullOrBlank()) errors += "remote entry must carry a pinnedCertHash"

@@ -143,6 +143,19 @@
     policy) — 1359 green in the final run (only the 2 pre-existing
     B1Plat01ReleaseSigningTest asserts + 1 documented WikiLinkParserCacheUnitTest
     flake that passes in isolation); `gradle :app:assembleDebug` green.
+  - **Implemented in phase-93** (B2-LOG-04, see `workspace/phase-93/REPORT.md`):
+    the plugin logcat sink is contract-enforced end to end. New pure-JVM decision
+    table `plugin-sdk/src/main/kotlin/com/authorss81/noteflow/plugins/PluginLogPolicy.kt`
+    (`hasLineBreak`/`lineBreakError`/`stripLineBreaks`/`safeLine` — `safeLine`
+    strips CR/LF and redacts `https?://\S+` tokens to `<url>`); `AndroidPluginLogger`
+    (`plugins/PluginLogger.kt:34-48`) routes BOTH `lifecycle` and `error` lines
+    through it; `PluginEntry.validationErrors`/`HostedPluginVersion.validationErrors`
+    refuse CR/LF in `id`/`name`/`downloadUrl` (fixed-text errors, the hostile value
+    never echoed) so a manifest leg / catalog blob / update offer with a newline is
+    rejected whole; and every download/install/update/store failure `logger.error`
+    detail is a FIXED reason code or stage token (`code=DOWNLOAD_GUARD`…,
+    `stage=download`…) — never `reason.substringBefore('.')` / `result.reason`.
+    Tests: `B2Log04PluginLogScrubbingTest` (10) — 1602 green (0 failures).
   - **Implemented in phase-49** (B2-UI-1, see `workspace/phase-49/REPORT.md`): the WRITE side of the
     lock boundary fails closed. Every editor page-write now routes through the ViewModel lock-safe
     gate: `NoteflowViewModel.flushEditorPageSave`/`autosaveStrokes`/`saveLayersGated` + private

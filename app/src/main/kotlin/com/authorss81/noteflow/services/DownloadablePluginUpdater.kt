@@ -51,9 +51,10 @@ class DownloadablePluginUpdater(
                         registry.replaceRemotePlugin(loaded.value.plugin, null)
                     is RuntimeOutcome.Failed ->
                         // The engine already smoke-tested this artifact; a load
-                        // here failing is unexpected, so log (ids only) and rely
-                        // on the persisted new entry for the next launch.
-                        logger.error(target.id, target.name, "post-update reload failed (${loaded.message.substringBefore('.')})")
+                        // here failing is unexpected, so log a FIXED token (ids
+                        // only — never the load message, B2-LOG-04 phase-93) and
+                        // rely on the persisted new entry for the next launch.
+                        logger.error(target.id, target.name, "post-update reload failed")
                     is RuntimeOutcome.NotYetImplemented ->
                         logger.error(target.id, target.name, "post-update reload not implemented")
                 }

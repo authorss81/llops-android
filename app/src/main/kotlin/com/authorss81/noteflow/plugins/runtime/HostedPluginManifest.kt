@@ -1,5 +1,6 @@
 package com.authorss81.noteflow.plugins.runtime
 
+import com.authorss81.noteflow.plugins.PluginLogPolicy
 import com.google.gson.Gson
 import com.google.gson.GsonBuilder
 
@@ -52,12 +53,18 @@ data class HostedPluginVersion(
         if (!downloadUrl.isBlank() && !downloadUrl.startsWith("https://")) {
             errors += "manifest entry for '$id' must use an HTTPS downloadUrl (got '$downloadUrl')"
         }
+        if (!downloadUrl.isBlank() && PluginLogPolicy.hasLineBreak(downloadUrl)) {
+            errors += PluginLogPolicy.lineBreakError("downloadUrl")
+        }
         if (sha256.isBlank()) errors += "manifest entry for '$id' is missing sha256"
         if (pinnedCertHash.isBlank()) errors += "manifest entry for '$id' is missing pinnedCertHash"
         if (updateChannel.isBlank()) errors += "manifest entry for '$id' has a blank updateChannel"
         if (installSizeBytes != null && installSizeBytes < 0) {
             errors += "manifest entry for '$id' has a negative installSizeBytes"
         }
+        // B2-LOG-04 (phase-93): CR/LF in these fields is a logcat line-forgery
+        // vehicle — refuse the manifest leg at parse time, never echo the value.
+        if (PluginLogPolicy.hasLineBreak(id)) errors += PluginLogPolicy.lineBreakError("manifest id")
         return errors
     }
 }

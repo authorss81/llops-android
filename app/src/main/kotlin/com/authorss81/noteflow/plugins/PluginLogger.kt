@@ -32,12 +32,16 @@ interface PluginLogger {
  * and exception class names are ever logged (see [PluginLogger] contract).
  */
 class AndroidPluginLogger : PluginLogger {
+    // B2-LOG-04 (phase-93): every line goes through PluginLogPolicy.safeLine so
+    // CR/LF (logcat line-forgery) and URL-shaped tokens (exfil echo) can never
+    // reach the logcat sink even if a caller slips. Defense in depth — callers
+    // must still send only fixed tokens per the [PluginLogger] contract.
     override fun lifecycle(event: String, pluginId: String, pluginName: String) {
-        android.util.Log.d(TAG, "lifecycle event=$event plugin=$pluginName id=$pluginId")
+        android.util.Log.d(TAG, PluginLogPolicy.safeLine("lifecycle event=$event plugin=$pluginName id=$pluginId"))
     }
 
     override fun error(pluginId: String, pluginName: String, detail: String) {
-        android.util.Log.e(TAG, "plugin failure plugin=$pluginName id=$pluginId detail=$detail")
+        android.util.Log.e(TAG, PluginLogPolicy.safeLine("plugin failure plugin=$pluginName id=$pluginId detail=$detail"))
     }
 
     private companion object {

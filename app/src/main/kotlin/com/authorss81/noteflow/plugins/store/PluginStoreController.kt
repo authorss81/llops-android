@@ -206,7 +206,9 @@ class PluginStoreController(
                 DownloadOutcome.Installed(pluginId)
             }
             is PluginInstallResult.Refused -> {
-                logger.error(pluginId, plugin.name, "store download refused: ${result.reason}")
+                // B2-LOG-04 (phase-93): reason could echo hostile plugin data —
+                // log a FIXED code, keep the reason user-facing only.
+                logger.error(pluginId, plugin.name, "store download refused; code=REGISTRY_REFUSED")
                 DownloadOutcome.Failed(pluginId, result.reason)
             }
         }
@@ -235,7 +237,8 @@ class PluginStoreController(
                 DeleteOutcome.Deleted(pluginId)
             }
             is PluginUninstallResult.Refused -> {
-                logger.error(pluginId, plugin.name, "store delete refused: ${result.reason}")
+                // B2-LOG-04 (phase-93): fixed code only, never result.reason.
+                logger.error(pluginId, plugin.name, "store delete refused; code=REGISTRY_REFUSED")
                 DeleteOutcome.Failed(pluginId, result.reason)
             }
         }
