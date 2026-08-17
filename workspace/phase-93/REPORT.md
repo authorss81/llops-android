@@ -158,3 +158,39 @@ Call sites:
   that are model-validated CR/LF-free; left as-is.
 - No DB schema change, no migration, no `.github/workflows/` edit, no new
   dependencies.
+
+## Phase-93 review fixes (commit `llops: phase-93 review fixes`)
+
+Applied against the phase-93 review FINDINGS (no new findings, no scope creep):
+
+- **FINDING #3 (defense-in-depth gap)** — `PluginLogPolicy.safeLine`'s URL token
+  regex was case-sensitive and `https?`-only, so `HTTPS://…` (or any non-http
+  `scheme://`) slipped through the backstop. Now
+  `(?i)[a-z][a-z0-9+.-]*://\S+` (`PluginLogPolicy.kt` `URL_TOKEN`),
+  pinned by `safeLine redacts uppercase and alternate url schemes`.
+- **FINDING #4 ("never echo" narrower than claimed)** — the sibling
+  validation/parse messages still echoed a CR/LF-bearing id/url verbatim
+  (`HostedPluginVersion.validationErrors`, `PluginEntry.validationErrors`'s
+  `got '$downloadUrl'`, `PluginManifestParser`'s invalid-version and
+  duplicate-id messages). New `PluginLogPolicy.redactLineBreak` yields the fixed
+  `(redacted)` marker; every value-echoing message now routes through it, so even
+  USER-FACING strings cannot carry a line-forgery vehicle. Pinned by
+  `HostedPluginVersion validation errors never echo a CR-LF id or url` and
+  `manifest parse errors never echo a CR-LF id or url`. These strings remain
+  user-facing-only (nothing in this commit logs them) — documented in the
+  `PluginLogPolicy` KDoc.
+- **FINDING #5 (silent persisted-entry drop)** — documented, not changed: a
+  CR/LF-carrying persisted entry is dropped by `PluginEntryCodec.decode`
+  (fail-closed `isValid()` gate); no UI change was made in this tight phase. A
+  non-alarming notice, if wanted, is a separate UX phase.
+- **FINDING #6 (sink untested)** — the exact logcat lines are now composed by
+  pure-JVM `PluginLogPolicy.lifecycleLine`/`errorLine` (pre-scrubbed via
+  `safeLine`); `AndroidPluginLogger` is the thin `android.util.Log` adapter.
+  Composition pinned by `the production log line compositors run through safeLine`.
+- **FINDING #7 (cosmetic)** — trailing newlines added to
+  `PluginLogPolicy.kt`, `AndroidPluginLogger` (`PluginLogger.kt`) and the test.
+
+Re-verified: `gradle :app:testDebugUnitTest` **1606 tests, 0 failures, 0 errors,
+0 skipped** (14 in `B2Log04PluginLogScrubbingTest`) + `:app:compileDebugKotlin`
+green. No schema change, no new deps; `PluginLogPolicy`/`PluginEntry` (sdk) and
+`HostedPluginManifest`/`PluginLogger` (app) compile in their own modules.

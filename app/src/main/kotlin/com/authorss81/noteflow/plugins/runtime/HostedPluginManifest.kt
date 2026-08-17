@@ -47,20 +47,27 @@ data class HostedPluginVersion(
      *  errors, or an empty list when the offer is well-formed. Never throws. */
     fun validationErrors(): List<String> {
         val errors = mutableListOf<String>()
+        // Phase-93 review fix (FINDING #4): these strings are user-facing, but
+        // they are built from attacker-influenceable fields — a CR/LF-bearing
+        // id/url must never be echoed into them either, so the labels are
+        // redacted through PluginLogPolicy.redactLineBreak (a hostile value
+        // yields the fixed "(redacted)" marker).
+        val idLabel = PluginLogPolicy.redactLineBreak(id)
+        val urlLabel = PluginLogPolicy.redactLineBreak(downloadUrl)
         if (id.isBlank()) errors += "manifest entry is missing its plugin id"
         if (version < PluginVersion.ZERO) errors += "manifest version '${version}' is not a valid Major.Minor.Patch version"
-        if (downloadUrl.isBlank()) errors += "manifest entry for '$id' is missing downloadUrl"
+        if (downloadUrl.isBlank()) errors += "manifest entry for '$idLabel' is missing downloadUrl"
         if (!downloadUrl.isBlank() && !downloadUrl.startsWith("https://")) {
-            errors += "manifest entry for '$id' must use an HTTPS downloadUrl (got '$downloadUrl')"
+            errors += "manifest entry for '$idLabel' must use an HTTPS downloadUrl (got '$urlLabel')"
         }
         if (!downloadUrl.isBlank() && PluginLogPolicy.hasLineBreak(downloadUrl)) {
             errors += PluginLogPolicy.lineBreakError("downloadUrl")
         }
-        if (sha256.isBlank()) errors += "manifest entry for '$id' is missing sha256"
-        if (pinnedCertHash.isBlank()) errors += "manifest entry for '$id' is missing pinnedCertHash"
-        if (updateChannel.isBlank()) errors += "manifest entry for '$id' has a blank updateChannel"
+        if (sha256.isBlank()) errors += "manifest entry for '$idLabel' is missing sha256"
+        if (pinnedCertHash.isBlank()) errors += "manifest entry for '$idLabel' is missing pinnedCertHash"
+        if (updateChannel.isBlank()) errors += "manifest entry for '$idLabel' has a blank updateChannel"
         if (installSizeBytes != null && installSizeBytes < 0) {
-            errors += "manifest entry for '$id' has a negative installSizeBytes"
+            errors += "manifest entry for '$idLabel' has a negative installSizeBytes"
         }
         // B2-LOG-04 (phase-93): CR/LF in these fields is a logcat line-forgery
         // vehicle — refuse the manifest leg at parse time, never echo the value.
@@ -147,7 +154,10 @@ class PluginManifestParser {
         val offers = entries.mapNotNull { dto ->
             val version = PluginVersion.parse(dto.version ?: "")
             if (version == null) {
-                errors += "manifest entry '${dto.id ?: "(no id)"}' has an invalid version '${dto.version}'"
+                // Phase-93 review fix (FINDING #4): the id is attacker-influenceable —
+                // never echo a CR/LF-bearing one, even into user-facing parse errors.
+                val versionId = dto.id?.let { PluginLogPolicy.redactLineBreak(it) } ?: "(no id)"
+                errors += "manifest entry '$versionId' has an invalid version '${dto.version}'"
                 return@mapNotNull null
             }
             val offer = HostedPluginVersion(
@@ -161,7 +171,7 @@ class PluginManifestParser {
                 updateChannel = dto.updateChannel?.takeIf { it.isNotBlank() } ?: PluginEntry.DEFAULT_CHANNEL
             )
             if (!seen.add(offer.id)) {
-                errors += "manifest lists plugin '${offer.id}' more than once"
+                errors += "manifest lists plugin '${PluginLogPolicy.redactLineBreak(offer.id)}' more than once"
                 return@mapNotNull null
             }
             val entryErrors = offer.validationErrors()

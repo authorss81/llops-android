@@ -9,6 +9,7 @@ import com.authorss81.noteflow.plugins.runtime.CompileTimePluginPinStore
 import com.authorss81.noteflow.plugins.runtime.DownloadRequest
 import com.authorss81.noteflow.plugins.runtime.DownloadTransport
 import com.authorss81.noteflow.plugins.runtime.DownloadTransportResult
+import com.authorss81.noteflow.plugins.runtime.HostedPluginVersion
 import com.authorss81.noteflow.plugins.runtime.InMemoryPluginEntryStore
 import com.authorss81.noteflow.plugins.runtime.InMemoryPluginUpdateStore
 import com.authorss81.noteflow.plugins.runtime.PinnedPluginRelease
@@ -127,6 +128,41 @@ class B2Log04PluginLogScrubbingTest {
         assertFalse(safe.contains("plugins.example.com"))
     }
 
+    @Test
+    fun `safeLine redacts uppercase and alternate url schemes`() {
+        // Phase-93 review fix (FINDING #3): the token regex used to be
+        // `https?://…` and case-sensitive — an uppercase HTTPS or a non-http
+        // scheme URL slipped straight through to the "sink".
+        assertEquals(
+            "refused <url> please retry",
+            PluginLogPolicy.safeLine("refused HTTPS://attacker.example/steal please retry")
+        )
+        assertTrue(PluginLogPolicy.safeLine("refused ftp://attacker.example/x.apk").contains("<url>"))
+        assertFalse(PluginLogPolicy.safeLine("refused ftp://attacker.example/x.apk").contains("attacker.example"))
+    }
+
+    @Test
+    fun `the production log line compositors run through safeLine`() {
+        // Phase-93 review fix (FINDING #6): the exact composed lines the
+        // AndroidPluginLogger logcat sink writes are built HERE (pure JVM) so a
+        // regression in the sink's scrubbing is caught without an Android device.
+        val hostileId = "evil\nid"
+        val hostileName = "evil\rname"
+        val hostileDetail = "verification failed for https://attacker.example/steal?note=secret\nFORGED LINE"
+        val errorLine = PluginLogPolicy.errorLine(hostileId, hostileName, hostileDetail)
+        assertTrue("no CR/LF may survive the composed error line", isLineBreakFree(errorLine))
+        assertFalse(errorLine.contains("attacker.example"))
+        assertFalse(errorLine.contains("steal?note"))
+        assertFalse(errorLine.contains("FORGED LINE"))
+        assertTrue(errorLine.contains("<url>"))
+
+        val lifecycleLine = PluginLogPolicy.lifecycleLine("store-remote-download", hostileId, hostileName)
+        assertTrue("no CR/LF may survive the composed lifecycle line", isLineBreakFree(lifecycleLine))
+    }
+
+    private fun isLineBreakFree(value: String): Boolean =
+        value.indexOf('\n') < 0 && value.indexOf('\r') < 0
+
     // ---- 2. Model rejection of CR/LF security fields ------------------------
 
     @Test
@@ -186,6 +222,51 @@ class B2Log04PluginLogScrubbingTest {
         )
         assertTrue(clean.isValid)
         assertEquals(1, (clean as com.authorss81.noteflow.plugins.runtime.ManifestParseResult.Valid).manifest.plugins.size)
+    }
+
+    @Test
+    fun `HostedPluginVersion validation errors never echo a CR-LF id or url`() {
+        // Phase-93 review fix (FINDING #4): the CR/LF-refuse checks are fixed-text,
+        // but the SIBLING validation messages still cited the id/url verbatim
+        // ("manifest entry for '<id>'…", "…(got '<url>')") — with a newline in the
+        // field the CR/LF would travel inside those strings. All value-echoing
+        // messages now redact through PluginLogPolicy.redactLineBreak.
+        val hostile = HostedPluginVersion(
+            id = "evil\nid",
+            version = PluginVersion(1, 0, 0),
+            downloadUrl = "http://bad\r.example/x.apk",
+            sha256 = "ab12cd34ef56",
+            pinnedCertHash = "sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+        )
+        val errors = hostile.validationErrors()
+        assertTrue(errors.any { it.contains("line break") })
+        assertTrue("validation errors must be CR/LF-free", errors.all { isLineBreakFree(it) })
+        assertFalse("hostile id must never be echoed", errors.any { it.contains("evil") })
+        assertFalse("hostile url must never be echoed", errors.any { it.contains("bad") })
+    }
+
+    @Test
+    fun `manifest parse errors never echo a CR-LF id or url`() {
+        // Phase-93 review fix (FINDING #4), parse level: the "invalid version" and
+        // "listed more than once" messages embed the id directly — now redacted.
+        val parser = PluginManifestParser()
+        val version = parser.parse(
+            """{"plugins":[{"id":"evil\nid","version":"not-semver","downloadUrl":"https://plugins.example.com/x.apk"}]}"""
+        )
+        assertFalse(version.isValid)
+        assertTrue("invalid-version message must be CR/LF-free", version.errors.all { isLineBreakFree(it) })
+        assertFalse("hostile id must never be echoed", version.errors.any { it.contains("evil") })
+
+        val duplicate = parser.parse(
+            """{"plugins":[""" +
+                """{"id":"dup\nid","version":"1.0.0","downloadUrl":"https://plugins.example.com/x.apk",""" +
+                """"sha256":"ab12cd34ef56","pinnedCertHash":"pin"},""" +
+                """{"id":"dup\nid","version":"1.0.0","downloadUrl":"https://plugins.example.com/y.apk",""" +
+                """"sha256":"ab12cd34ef56","pinnedCertHash":"pin"}]}"""
+        )
+        assertFalse(duplicate.isValid)
+        assertTrue("duplicate-id message must be CR/LF-free", duplicate.errors.all { isLineBreakFree(it) })
+        assertFalse("hostile id must never be echoed", duplicate.errors.any { it.contains("dup") || it.contains('\n') || it.contains('\r') })
     }
 
     // ---- 3. Call sites -------------------------------------------------------

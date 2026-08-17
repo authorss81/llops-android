@@ -97,7 +97,9 @@ data class PluginEntry(
             PluginEntrySource.REMOTE -> {
                 if (downloadUrl.isNullOrBlank()) errors += "remote entry must carry a downloadUrl"
                 if (!downloadUrl.isNullOrBlank() && !downloadUrl.startsWith("https://")) {
-                    errors += "downloadUrl must be HTTPS (got '$downloadUrl')"
+                    // Phase-93 review fix (FINDING #4): never echo a CR/LF-bearing
+                    // downloadUrl even into this user-facing string.
+                    errors += "downloadUrl must be HTTPS (got '${PluginLogPolicy.redactLineBreak(downloadUrl)}')"
                 }
                 if (!downloadUrl.isNullOrBlank() && PluginLogPolicy.hasLineBreak(downloadUrl)) {
                     errors += PluginLogPolicy.lineBreakError("downloadUrl")
