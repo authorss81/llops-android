@@ -150,10 +150,49 @@ jobs:
       - name: Pull latest main
         run: git pull --ff-only origin main || true
 
+      # Phase-117 (Build Release APK) needs the release keystore to run
+      # `gradle assembleRelease`. Restore it BEFORE the phase step. The keystore
+      # lives OUTSIDE the repo tree ($RUNNER_TEMP) — B1Plat01ReleaseSigningTest
+      # fails if any *.keystore file is inside the checkout.
+      - name: Restore Release Keystore (for phase-117 release build)
+        env:
+          RELEASE_KEYSTORE_B64: ${{ secrets.RELEASE_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$RELEASE_KEYSTORE_B64" ]; then
+            echo "$RELEASE_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+            echo "release.keystore restored to $RUNNER_TEMP ($(wc -c < "$RUNNER_TEMP/release.keystore") bytes)"
+          else
+            echo "::warning::RELEASE_KEYSTORE_B64 unset - phase-117 release build will fail closed (expected)."
+          fi
+
+      # Phase-118 (Kali dynamic pentest) must NOT spend its budget building the
+      # APK — pre-download the artifact phase-117 uploaded so Kali has it on disk.
+      - name: Download release APK artifact for Kali (phase-118)
+        if: needs.select-phase.outputs.phase == 'phase-118'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ARTIFACT_ID=$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=noteflow-release-apk&per_page=1" --jq '.artifacts[0].id' 2>/dev/null || echo "")
+          if [ -n "$ARTIFACT_ID" ] && [ "$ARTIFACT_ID" != "null" ]; then
+            mkdir -p /tmp/release-apk
+            gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip" > /tmp/release-apk/artifact.zip
+            mkdir -p app/build/outputs/apk/release
+            unzip -o /tmp/release-apk/artifact.zip -d app/build/outputs/apk/release
+            echo "Downloaded noteflow-release-apk:"
+            ls -la app/build/outputs/apk/release/
+          else
+            echo "::warning::No noteflow-release-apk artifact found - Kali must build or skip."
+          fi
+
       # Fix 9: commit the phase work BEFORE review. If the review (or the job)
       # times out, the phase is already pushed — a timeout can no longer destroy it.
       - name: Run phase (no review — phase work committed first)
         id: run
+        env:
+          KEYSTORE_FILE: ${{ runner.temp }}/release.keystore
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           chmod +x scripts/phase_runner.sh
           bash scripts/phase_runner.sh "${{ needs.select-phase.outputs.phase }}"
@@ -194,6 +233,15 @@ jobs:
             echo "BOT_DONE=true" >> "$GITHUB_ENV"
             echo "done=true" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Upload release APK artifact (phase-117 build phase)
+        if: needs.select-phase.outputs.phase == 'phase-117'
+        continue-on-error: true   # artifact quota failures must never fail the run
+        uses: actions/upload-artifact@v4
+        with:
+          name: noteflow-release-apk
+          path: app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
 
       - name: Upload recovery patch (if push failed)
         if: always()

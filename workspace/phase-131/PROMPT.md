@@ -1,38 +1,43 @@
-# Phase 131: Command Palette header — fix contracted/squished title text [NOT STARTED]
+# Phase 131: Project metadata & LLM plugin build-script alignment [NOT STARTED]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/phase-status.md` and
 `docs/ARCHITECTURE.md` first.**
 
-**THE BUG (owner-confirmed):** in the command palette header, the title
-"Command Palette" gets **contracted/squished into a narrow vertical strip** on
-portrait/mobile viewports.
+**THE TASK:** verify and finish aligning the project's **metadata** and the
+**LLM plugin's Gradle build script** so they match the project configuration
+and build environment (system Gradle 8.13, no wrapper, GitHub Actions CI).
 
 ## What to do
-- **Fix `app/src/main/kotlin/com/authorss81/noteflow/ui/components/CommandPaletteOverlay.kt`**:
-  in the header row, a long unconstrained shortcut label
-  (`"⌘ ↑/↓ · Enter · two-finger swipe down to open"`) is placed directly
-  alongside "Command Palette" with `Modifier.weight(1f)`. On portrait/mobile
-  viewports the label consumes the available width, squeezing the title.
-- Re-architect the header into a **nested Column**: title on its own line
-  (`maxLines = 1`, `TextOverflow.Ellipsis`, full width) with the shortcut hint
-  rendered **beneath the title** (also single-line, ellipsized if needed).
-  Title must keep proper horizontal width at all viewport sizes.
-- Where feasible, add a pure-JVM test for any extracted helper (e.g. hint
-  string builder / truncation logic). Layout itself is not JVM-testable —
-  document the visual verification in REPORT.md.
+- **Metadata alignment:** check for a `metadata.json` (project/plugin/app
+  metadata file) — verify its `name`, `applicationId`/namespace
+  (`com.authorss81.noteflow` / `com.aistudio.inkflow.app`), version, and
+  capability fields match the actual Gradle configuration
+  (`app/build.gradle.kts`, version catalog `gradle/libs.versions.toml`).
+  Create/fix it so it is consistent and kept in sync with the build files.
+- **LLM plugin build script:** inspect `plugins/llm/build.gradle.kts` — ensure
+  it is **command-invocation compatible** with the CI/system Gradle
+  environment (correct task names, no wrapper assumptions, dependencies
+  resolvable from the catalog, correct module wiring, and it must not break
+  `gradle assembleDebug` / `gradle testDebugUnitTest` for the whole project).
+- If the LLM plugin is a **downloadable plugin** (per the base-APK-size hard
+  rule), verify its build artifacts are produced/consumed correctly and that
+  the base app does not embed it.
+- Run the project builds to prove alignment; fix any breakage you find.
 
 ## Verification
 - `gradle testDebugUnitTest` + `gradle assembleDebug` must pass (or a
-  documented pre-existing-only failure).
-- REPORT.md with before/after (screenshot or layout description) + file:line
-  evidence.
+  documented pre-existing-only failure, proven unrelated).
+- Pure-JVM tests only where meaningful (metadata parsing/validation helper).
+- `workspace/phase-131/REPORT.md` committed: what was checked, what was
+  fixed (file:line), build outputs.
 
 ## Definition of done
-- Title renders un-squished with the hint ellipsized below it; no regression to
-  palette open/close/search behavior; REPORT.md committed.
+- `metadata.json` matches the project configuration; `plugins/llm` builds
+  under system Gradle without breaking the app; REPORT.md documents it.
 
 ## Constraints
 - NO DB schema change. Do NOT edit `.github/workflows/`. Do not add new
-  dependencies. Never log keys/decrypted content. Keep `allowBackup=false`,
-  `ClipboardGuard`, FLAG_SECURE intact. Low-end safe.
+  dependencies unless required (then justify in the commit). Never log
+  keys/decrypted content. Keep `allowBackup=false`, `ClipboardGuard`,
+  FLAG_SECURE intact. Respect the base-APK-size rule (LLM stays downloadable).

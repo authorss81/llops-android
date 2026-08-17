@@ -1,66 +1,80 @@
-# Phase 118: Round-2 Triage → Generate new phases (2-3 related features each + UI/plugin ideas) [NOT STARTED]
+# Phase 118: Kali Full-Environment Dynamic Pentest (all tools) [NOT STARTED]
 
-You are working on **InkFlow/Noteflow**. The round-2 audits are done:
-- `docs/security-report-round2.md` = the SHARED single file with BOTH phase-116
-  (source audit) and phase-117 (Kali dynamic pentest) findings.
-- `docs/ARCHITECTURE.md`, `docs/phase-status.md`, `AGENTS.md` = current state.
-- `workspace/SECURITY_FIX_PLAN.md` = round-1 workspace manifest (if present).
+You are working on **InkFlow/Noteflow**. Unlike the earlier Kali run
+(`docs/pentest-findings-2026-08-08.md`, which was static-only because the VM had
+NO sudo and NO device), THIS phase runs with the **full environment installed**:
+sudo/root, jadx, apktool, sqlite3, frida, objection, MobSF, and a rooted Android
+emulator (or rooted device). The goal is DYNAMIC, evidence-backed testing against
+a FRESH release APK.
 
-Your job: read ALL of it, triage, and **generate the next phases** of the
-pipeline. Number them DYNAMICALLY after the highest existing `phase-NN` (run
-`git ls-tree -r --name-only origin/main -- workspace` or `Get-ChildItem
-workspace -Directory -Filter "phase-*"`, find the max, start at max+1).
+## Step 0 - Environment setup (all tools, no excuses)
+- `sudo apt update && sudo apt install -y jadx apktool sqlite3 python3-pip default-jdk`
+- `pipx install mobsf` or `docker run -p 8000:8000 opensecurity/mobile-security-framework-mobsf`
+- `pip install frida-tools objection`
+- Android emulator with root (or connected rooted device): `adb devices`,
+  boot an AVD (API 33+ recommended for AGSL/dynamic-color checks). If the CI
+  runner cannot host an emulator, use a local emulator and attach - document how.
 
-## Step 1 - Triage the round-2 findings
-- Read `docs/security-report-round2.md`. Group findings into logical buckets.
-- CRITICAL/HIGH findings → one fix phase each (or tight groups). MEDIUM/LOW →
-  bundle **2-3 related findings per fix phase** (same area/theme) so the pipeline
-  is not fragmented into 80 tiny phases again.
-- Each generated phase reuses the repo PROMPT format:
-  `# Phase NN: <title> [NOT STARTED]`, context ("Read docs/phase-status.md +
-  docs/ARCHITECTURE.md first"), real `file:line` references, Definition of done,
-  Constraints (no `.github/workflows/` edits, no DB schema change without user
-  approval, base-APK-size rule, reduce-motion/low-end rules, never log
-  decrypted content, keep security model intact).
+## Step 1 - Get the target APK (built by phase-117)
+- The release APK was built and verified by phase-117 and is already available:
+  - The workflow restores/keeps it at `app/build/outputs/apk/release/app-release.apk`.
+  - If it is missing, download the `noteflow-release-apk` artifact (which the
+    phase-117 run uploaded), or as a last resort build:
+    `gradle assembleRelease`. Record APK SHA256 + versionCode/Name in
+    `docs/security-report-round2.md` (the SHARED file with phase-116) and cross-check
+    against phase-117's recorded SHA256 in that file so you know you have the right target.
+- Run MobSF on the APK and record its report (manifest analysis, exported
+  components, permissions, code/binary analysis) into the shared md.
 
-## Step 2 - Add improvement/feature phases (2-3 related features each)
-- Beyond fixes, think as a product engineer and add NEW feature phases. Bundle
-  2-3 RELATED features per phase (not one-per-feature).
-- Include at least:
-  - **UI/UX improvements**: derive from the codebase (glass theme, editor,
-    canvas, knowledge graph, empty states) - what would a user love? List
-    concrete ideas (e.g. split-view, quick-note widget, gesture shortcuts,
-    theme store, onboarding, accessibility passes).
-  - **Plugin ecosystem improvements**: from `docs/PLUGINS.md`,
-    `docs/plugin-architecture.md`, the capability set in
-    `plugin-sdk/.../plugins/PluginCapability.kt`, and any round-2 plugin-runtime
-    findings - new capabilities, store improvements, update UX.
-- Each generated phase must be REAL and actionable: name real files/anchors,
-  real tests to add, real DoD.
+## Step 2 - Static re-verification (jadx/apktool on the BUILT APK)
+- Decompile with jadx/apktool. Re-verify round-1 claims that the fix phases
+  claim to have closed (e.g. plaintext auxiliary files, restore non-
+  transactionality, tamper-HMAC cleared on restore, dex/fileProvider exposure).
+- Confirm R8 hardening holds (obfuscated classes, no mapping.txt, string
+  literals survive).
 
-## Step 3 - Manifest + status update
-- Append every new phase (fix + feature) to `workspace/PHASES.md` and add rows
-  to `docs/phase-status.md` (status `NOT STARTED`).
-- Write `workspace/phase-118/REPORT.md`: triage table (finding → phase), the
-  list of new phases with their rationale, and the UI/plugin idea list.
+## Step 3 - Dynamic (frida/objection on the rooted emulator)
+- Frida hooks to PROVE behavior, not guess:
+  - PBKDF2 iteration count (600k) and whether it runs on the main thread.
+  - `SecurityService.readDek` - is DEK obtainable WITHOUT user-auth?
+  - `lock()` - is the DEK zeroized AND are decrypted StateFlows cleared?
+  - `NoteRepository.saveStrokes` - does pointsJson go out plaintext?
+  - The downloadable-plugin runtime (`RuntimePluginLoader`,
+    `SignatureVerifiedPluginRuntime`) - can pinning/verification be bypassed or
+    a crafted artifact be loaded? Can the capability facade be asked for a
+    direct DB/keystore handle?
+- objection: `android root disable`, `memory dump` / heap search for
+  "password"/"dek"/decrypted content after unlock + after lock.
+- DB forensics: `adb shell run-as ... databases/`; pull `noteflow.sqlite`;
+  verify which columns are field-encrypted vs plaintext.
+- Restore/import attacks (crafted `.nfbackup` / path-traversal import names) on
+  the emulator to confirm non-transactional restore is really closed.
+- Voice-note / imports plaintext check in `filesDir`.
+
+## Step 4 - Append ALL findings to the SHARED file
+- Append every finding to **`docs/security-report-round2.md`** (SAME file as
+  phase-116), schema `R2-xxx | Severity | Area | Evidence (file:line or command
+  output) | Reproducer | Suggested fix`. Mark each with `[dynamic]` or
+  `[static]` and which tool proved it.
+- Write INCREMENTALLY as each test batch finishes; commit + push after each
+  batch so no work is lost.
 
 ## Definition of done
-- `docs/security-report-round2.md` findings all triaged (each maps to a phase or
-  is explicitly marked `resolved at triage` with a reason, mirroring round 1).
-- New phases generated: fix phases (CRITICAL/HIGH single, MEDIUM/LOW bundled
-  2-3) + feature phases (2-3 related features each, incl. UI + plugin ideas).
-  All with real file refs + DoD + constraints.
-- Numbering is dynamic (after the true highest existing phase at generation
-  time) and sequential - no gaps, no overlap with existing phases.
-- `workspace/PHASES.md` + `docs/phase-status.md` updated. REPORT.md written.
+- Full env (sudo, jadx/apktool/frida/objection/MobSF, rooted emulator) actually
+  used - no "no sudo / no device" excuse. If a tool truly cannot run, say why
+  with evidence.
+- MobSF report + static re-verification + dynamic frida/objection tests + DB
+  forensics all performed on the CURRENT release APK.
+- Every finding appended to `docs/security-report-round2.md` (shared with
+  phase-116), evidence-backed, severity-rated, `[dynamic]`/`[static]` marked.
+- `workspace/phase-118/REPORT.md` documents env, target APK sha, tool versions,
+  and what was dynamically proven vs still not testable.
 - Commit + push.
 
 ## Constraints
-- Do NOT create the phases' implementation code - only the PROMPT.md files
-  (planning). The pipeline will run them in order.
-- Do NOT edit `.github/workflows/`. Do NOT change app code in this phase.
-- Respect AGENTS.md hard rules: architectural changes (DB schema, nav model,
-  heavy deps) still need USER approval before implementation - flag any generated
-  phase that would need approval in its PROMPT (e.g. "USER APPROVAL REQUIRED").
-- Keep the base-APK-size rule: any heavy native feature must be a downloadable
-  plugin, never baked into the base APK.
+- Attack ONLY the app + its own artifacts (the release APK). Do NOT attack
+  third-party servers/other users.
+- Do NOT edit `.github/workflows/`. Do NOT fix findings in app code - findings go
+  to the shared md; phase-119 turns them into fix phases.
+- Never log real secrets/decrypted content beyond what's needed as evidence.
+- If a dynamic test would break the app data, use a throwaway emulator/AVD.

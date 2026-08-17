@@ -1,42 +1,36 @@
-# Phase 132: Add Page FAB & Daily Journal — new pages must open immediately [NOT STARTED]
+# Phase 132: Command Palette header — fix contracted/squished title text [NOT STARTED]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/phase-status.md` and
 `docs/ARCHITECTURE.md` first.**
 
-**THE BUG (owner-confirmed):** after creating a new note via the Add Page FAB,
-or opening/creating a Daily Journal entry, the new page **does not open / the
-click appears to do nothing** — the screen transition is lost on the immediate
-frame.
+**THE BUG (owner-confirmed):** in the command palette header, the title
+"Command Palette" gets **contracted/squished into a narrow vertical strip** on
+portrait/mobile viewports.
 
 ## What to do
-- **`app/src/main/kotlin/com/authorss81/noteflow/MainActivity.kt`**: the active
-  page state is currently resolved only against `viewModel.pages` (which is
-  filtered to the currently active section). When a new note or daily journal
-  entry is created, **asynchronous Room emissions** mean
-  `pages.find { it.id == activePageId }` returns **null on the immediate
-  frame**, preventing the transition.
-  - Add **synchronous in-memory tracking** (`activePageObject`) so newly
-    created pages open on the exact frame of creation.
-  - Resolve `activePage` with **fallback matching** against
-    `activePageObject`, `allActivePages`, and `pages` (in that order).
-- **`app/src/main/kotlin/com/authorss81/noteflow/ui/viewmodel/NoteflowViewModel.kt`**:
-  `openOrCreateDailyNote` and `openPageByTitle` must (a) synchronize the active
-  **section observation** (`observePages(sec.id)`) and (b) guarantee the
-  `onOpen` callback is dispatched safely via `withContext(Dispatchers.Main)`.
-- Where feasible, extract the fallback-resolution logic into a pure-JVM
-  testable helper and add unit tests (null-immediate-frame → fallback wins,
-  order of precedence).
+- **Fix `app/src/main/kotlin/com/authorss81/noteflow/ui/components/CommandPaletteOverlay.kt`**:
+  in the header row, a long unconstrained shortcut label
+  (`"⌘ ↑/↓ · Enter · two-finger swipe down to open"`) is placed directly
+  alongside "Command Palette" with `Modifier.weight(1f)`. On portrait/mobile
+  viewports the label consumes the available width, squeezing the title.
+- Re-architect the header into a **nested Column**: title on its own line
+  (`maxLines = 1`, `TextOverflow.Ellipsis`, full width) with the shortcut hint
+  rendered **beneath the title** (also single-line, ellipsized if needed).
+  Title must keep proper horizontal width at all viewport sizes.
+- Where feasible, add a pure-JVM test for any extracted helper (e.g. hint
+  string builder / truncation logic). Layout itself is not JVM-testable —
+  document the visual verification in REPORT.md.
 
 ## Verification
 - `gradle testDebugUnitTest` + `gradle assembleDebug` must pass (or a
   documented pre-existing-only failure).
-- REPORT.md with file:line evidence (before/after).
+- REPORT.md with before/after (screenshot or layout description) + file:line
+  evidence.
 
 ## Definition of done
-- New notes (Add Page FAB) and Daily Journal entries open immediately on click;
-  no regression to section switching, back-navigation, or page restoration;
-  REPORT.md committed.
+- Title renders un-squished with the hint ellipsized below it; no regression to
+  palette open/close/search behavior; REPORT.md committed.
 
 ## Constraints
 - NO DB schema change. Do NOT edit `.github/workflows/`. Do not add new

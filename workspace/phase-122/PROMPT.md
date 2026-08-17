@@ -1,38 +1,36 @@
-# Phase 122: Immediate effect when selecting colour / layer / tool [NOT STARTED]
+# Phase 122: Rainbow colour support for brushes [NOT STARTED]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/phase-status.md` and
 `docs/ARCHITECTURE.md` first.**
 
-**THE BUG:** when the user selects a **new colour, layer, or tool** it does
-**not take effect immediately** — the user must switch pens (or perform another
-gesture) for the selection to apply. State changes are being deferred or
-snapshotted instead of applied live.
+**THE FEATURE:** add a **rainbow colour mode** so brush strokes transition
+through the colour spectrum as they are drawn (e.g. hue cycles along the
+stroke length, or over time), in addition to the existing solid colours.
 
 ## What to do
-- Trace the selection → apply path in `EditorScreen.kt` /
-  `AnnotationCanvas.kt` / `NoteflowViewModel.kt` for: colour changes, layer
-  switches, tool changes (and eraser type where applicable).
-- Find where the change is queued/deferred (e.g. applied only on next
-  `onDraw` of a different tool, or a stale `remember` value that doesn't
-  recompose) and make it **apply immediately**: the next stroke, the current
-  picker preview, and the live canvas state must reflect the selection at once.
-- Ensure the picker UI itself updates instantly (selection highlight follows
-  the tap) and the canvas cursor/preview follows.
-- Add regression coverage proving a selection is effective for the very next
-  stroke without any intermediate action.
+- Add a "Rainbow" option to the colour picker (`EditorScreen.kt` colour
+  picker + `SettingsManager` persisted state). Rainbow is a **mode**, not a
+  single colour: stroke colour is computed per-point from a hue wheel
+  (e.g. `Color.hsv(hue, 1f, 1f)` with hue advancing along the stroke or
+  over time).
+- Wire it through `AnnotationCanvas.kt` stroke recording and rendering so
+  per-point hue is applied (reuse the existing per-point stroke data; no new
+  schema). Define the hue-advance policy clearly (per-stroke-length vs
+  per-time) and keep it deterministic for tests.
+- Expose it in the width/colour quick pickers and persist the choice.
+- Low-end safe: hue math must be cheap and allocation-free per point.
 
 ## Verification
-- Pure-JVM unit tests (state propagation: select colour → next stroke uses it;
-  switch layer → next stroke lands on it; switch tool → next stroke is that
-  tool). Reuse existing test layout in `app/src/test`.
+- Pure-JVM unit tests: hue advance function (deterministic, wraps at 360°),
+  rainbow-mode state persistence, and that non-rainbow strokes are unchanged.
 - `gradle testDebugUnitTest` + `gradle assembleDebug` must pass (or a
   documented pre-existing-only failure).
 
 ## Definition of done
-- Colour/layer/tool changes take effect immediately — no pen-switch needed.
-- `workspace/phase-122/REPORT.md` committed with file:line evidence
-  (before/after).
+- Rainbow mode is selectable, persists, and renders spectrum-coloured
+  strokes; normal colours unchanged.
+- `workspace/phase-122/REPORT.md` committed with file:line evidence.
 
 ## Constraints
 - NO DB schema change. Do NOT edit `.github/workflows/`. Do not add new

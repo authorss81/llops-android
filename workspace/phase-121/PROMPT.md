@@ -1,38 +1,42 @@
-# Phase 121: Rainbow colour support for brushes [NOT STARTED]
+# Phase 121: Rounder, smoother non-pen brush edges [NOT STARTED]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/phase-status.md` and
 `docs/ARCHITECTURE.md` first.**
 
-**THE FEATURE:** add a **rainbow colour mode** so brush strokes transition
-through the colour spectrum as they are drawn (e.g. hue cycles along the
-stroke length, or over time), in addition to the existing solid colours.
+**THE BUG:** all brushes except pens have **sharp edges** — strokes look
+jagged/pointy at stroke joins, ends, and width transitions. The pen tools
+render round/smooth; the other brushes (and possibly eraser edges) need the
+same roundness and smoothing treatment.
 
 ## What to do
-- Add a "Rainbow" option to the colour picker (`EditorScreen.kt` colour
-  picker + `SettingsManager` persisted state). Rainbow is a **mode**, not a
-  single colour: stroke colour is computed per-point from a hue wheel
-  (e.g. `Color.hsv(hue, 1f, 1f)` with hue advancing along the stroke or
-  over time).
-- Wire it through `AnnotationCanvas.kt` stroke recording and rendering so
-  per-point hue is applied (reuse the existing per-point stroke data; no new
-  schema). Define the hue-advance policy clearly (per-stroke-length vs
-  per-time) and keep it deterministic for tests.
-- Expose it in the width/colour quick pickers and persist the choice.
-- Low-end safe: hue math must be cheap and allocation-free per point.
+- Locate the stroke rendering / geometry pipeline in
+  `ui/components/AnnotationCanvas.kt` and the brush definitions in
+  `services/BrushPreset.kt` / `data/model/StrokeModels.kt`.
+- Find where pen strokes get round caps/joins and smooth width interpolation,
+  and apply the **same roundness to all non-pen brushes**: round line caps,
+  round joins, and smooth (non-stepped) width transitions at stroke start/end
+  and at pressure changes.
+- Fix any place where a brush's edge polygon is drawn with sharp corners
+  (e.g. missing `StrokeCap.ROUND`/`StrokeJoin.ROUND`, or a
+  polyline that should be a smooth curve).
+- Keep the existing brush *character* (wet mixing, texture, etc.) — only the
+  edge geometry must become rounder/smoother. Do not regress AGSL wet-mixing.
 
 ## Verification
-- Pure-JVM unit tests: hue advance function (deterministic, wraps at 360°),
-  rainbow-mode state persistence, and that non-rainbow strokes are unchanged.
+- Pure-JVM unit tests for the geometry helpers (cap/join roundness, width
+  interpolation smoothness) where the code is testable; otherwise document
+  file:line proof of round caps/joins on every non-pen brush path.
 - `gradle testDebugUnitTest` + `gradle assembleDebug` must pass (or a
   documented pre-existing-only failure).
 
 ## Definition of done
-- Rainbow mode is selectable, persists, and renders spectrum-coloured
-  strokes; normal colours unchanged.
+- Every non-pen brush renders with round caps/joins and smooth width
+  transitions — no sharp edges.
 - `workspace/phase-121/REPORT.md` committed with file:line evidence.
 
 ## Constraints
 - NO DB schema change. Do NOT edit `.github/workflows/`. Do not add new
   dependencies. Never log keys/decrypted content. Keep `allowBackup=false`,
-  `ClipboardGuard`, FLAG_SECURE intact.
+  `ClipboardGuard`, FLAG_SECURE intact. Low-end safe: geometry math must be
+  cheap (no per-frame allocations).

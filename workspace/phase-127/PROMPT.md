@@ -1,37 +1,34 @@
-# Phase 127: Normal text style everywhere (no exaggerated typography) [NOT STARTED]
+# Phase 127: Plugin Store — compact/collapsed descriptions [NOT STARTED]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/phase-status.md` and
 `docs/ARCHITECTURE.md` first.**
 
-**THE BUG:** some UI text uses **exaggerated/non-standard typography** —
-oversized display styles, all-caps, extreme weights, or inconsistent styles
-that make parts of the UI look off (e.g. dialogs, menus, pickers, empty
-states). Most text in the app is normal; the outliers should be normalized.
+**THE BUG:** in the **Plugin Store** (`PluginStoreDialog`, reachable from
+HomeScreen ⋮ → "Plugin Store"; see `docs/PLUGINS.md`), plugin descriptions
+**take too much vertical space** — long text makes each card huge and the list
+hard to scan.
 
 ## What to do
-- Audit `Text(...)` usages across `ui/` (screens, components, dialogs,
-  `theme/` typography) for non-standard styles (e.g. `displayLarge/Medium`
-  used for body content, all-caps labels, heavy weights on secondary text,
-  giant empty-state copy).
-- Normalize them to the app's standard body/label/title styles
-  (`MaterialTheme.typography.*` defaults as already used by the majority of
-  the app), preserving hierarchy (titles stay titles) but removing
-  exaggeration.
-- Keep accessibility: no tiny text; contrast unchanged; do not touch the
-  canvas ink UI's purposefully styled elements (e.g. brush previews) unless
-  they are clearly broken.
-- Do not change any content strings, only their presentation.
+- Make plugin cards **compact**: show a short one/two-line summary (ellipsized
+  with `maxLines` + `TextOverflow.Ellipsis`) by default, with the full
+  description **collapsible/expandable** on tap (or a chevron "more" control).
+- Keep the install/enable action and any badges (e.g. version, size) visible
+  and tappable without opening the expand.
+- Ensure the collapsed state is the default so the list fits more plugins per
+  screen; the expanded state is per-card, remembered only while the dialog is
+  open (no persistence needed).
+- Do not change plugin metadata or install behavior.
 
 ## Verification
-- Verify by review with file:line evidence of each change; add pure-JVM tests
-  only where a style helper exists.
+- Pure-JVM unit tests where feasible (summary truncation logic, expand/collapse
+  state per card); otherwise verify by review with file:line evidence.
 - `gradle testDebugUnitTest` + `gradle assembleDebug` must pass (or a
   documented pre-existing-only failure).
 
 ## Definition of done
-- UI text is consistent and normal across screens/dialogs; no exaggerated
-  styles remain.
+- Plugin Store cards are compact with ellipsized summaries and expandable full
+  descriptions; install/enable actions remain one tap.
 - `workspace/phase-127/REPORT.md` committed with file:line evidence.
 
 ## Constraints

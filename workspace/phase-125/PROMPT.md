@@ -1,40 +1,39 @@
-# Phase 125: All plugins OFF by default [NOT STARTED]
+# Phase 125: Enhanced interactive tutorial (more slides, more interactive) [NOT STARTED]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/phase-status.md` and
-`docs/ARCHITECTURE.md` first.**
+`docs/ARCHITECTURE.md` first.** The existing tutorial lives in
+`ui/components/InteractiveTutorial.kt` (entry from `HomeScreen.kt`, first-run
+gate in `SettingsManager`/`NoteflowViewModel`).
 
-**THE CHANGE:** make **all plugins disabled by default** — every plugin,
-including bundled/compiled ones, must be **opt-in**. A fresh install (or an
-upgrade) must not run any plugin until the user explicitly enables it.
+**THE GOAL:** make the interactive tutorial **much more enhanced** — more
+slides, more interaction, more helpful — covering the app's real feature
+surface.
 
 ## What to do
-- Audit the plugin enablement defaults in `plugins/` registry and
-  `SettingsManager` (`plugin_enabled_<id>`, `defaultPlugins()`,
-  `PluginRegistry`, `PluginStoreController`, `SettingsPluginInstallStore`).
-- Change every default to **disabled** — including the currently
-  default-enabled compiled plugins (per `docs/PLUGINS.md` and
-  `docs/ARCHITECTURE.md`; e.g. `CaseChangePlugin` and any others in
-  `defaultPlugins()`).
-- Handle the **upgrade path safely**: existing users who already enabled
-  plugins keep their choice (only *new/never-touched* plugins default OFF).
-  Never silently disable something the user explicitly enabled; never silently
-  enable anything.
-- Keep the Plugin Store / settings UI accurate: show the true (disabled)
-  state, with a clear "Enable" action.
-- Update docs (`docs/PLUGINS.md`, `docs/ARCHITECTURE.md`) to state the
-  off-by-default policy.
+- Expand the tutorial from its current slide set to a **substantially larger,
+  structured curriculum** (at least 3–4× the current slides), organized in
+  sections: getting started, note-taking & markdown, canvas & brushes, layers,
+  colours (incl. the new rainbow mode), erasers (both types), knowledge graph,
+  plugins (off-by-default), backup/sync, and security features.
+- Make it **interactive, not just text**: include step-through demos where the
+  user performs a real action (e.g. "draw a stroke", "tap the eraser", "create
+  a layer") and the tutorial advances/progress-checks on completion; progress
+  indicator; skip/back/resume; persisted completion state.
+- Respect the **low-end hardware rule**: animations must be cheap; offer a
+  "skip" and a "don't show again" that truly persists.
+- Do not ship tutorial content that claims features that don't exist — keep it
+  aligned with the app's actual capabilities (check `docs/ARCHITECTURE.md`).
 
 ## Verification
-- Pure-JVM unit tests: fresh-state default = all disabled; explicit enable
-  persists; upgrade with prior explicit enable keeps it on; no plugin runs
-  before explicit opt-in.
+- Pure-JVM unit tests where feasible (tutorial state machine: slide advance,
+  progress-check completion, persistence, skip/resume).
 - `gradle testDebugUnitTest` + `gradle assembleDebug` must pass (or a
   documented pre-existing-only failure).
 
 ## Definition of done
-- All plugins off by default for fresh installs; explicit user choices
-  preserved; UI and docs accurate.
+- Tutorial is expanded (3–4× slides) and interactive with progress-checked
+  actions, skip/resume, and persisted state.
 - `workspace/phase-125/REPORT.md` committed with file:line evidence.
 
 ## Constraints

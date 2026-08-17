@@ -1,34 +1,40 @@
-# Phase 126: Plugin Store — compact/collapsed descriptions [NOT STARTED]
+# Phase 126: All plugins OFF by default [NOT STARTED]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/phase-status.md` and
 `docs/ARCHITECTURE.md` first.**
 
-**THE BUG:** in the **Plugin Store** (`PluginStoreDialog`, reachable from
-HomeScreen ⋮ → "Plugin Store"; see `docs/PLUGINS.md`), plugin descriptions
-**take too much vertical space** — long text makes each card huge and the list
-hard to scan.
+**THE CHANGE:** make **all plugins disabled by default** — every plugin,
+including bundled/compiled ones, must be **opt-in**. A fresh install (or an
+upgrade) must not run any plugin until the user explicitly enables it.
 
 ## What to do
-- Make plugin cards **compact**: show a short one/two-line summary (ellipsized
-  with `maxLines` + `TextOverflow.Ellipsis`) by default, with the full
-  description **collapsible/expandable** on tap (or a chevron "more" control).
-- Keep the install/enable action and any badges (e.g. version, size) visible
-  and tappable without opening the expand.
-- Ensure the collapsed state is the default so the list fits more plugins per
-  screen; the expanded state is per-card, remembered only while the dialog is
-  open (no persistence needed).
-- Do not change plugin metadata or install behavior.
+- Audit the plugin enablement defaults in `plugins/` registry and
+  `SettingsManager` (`plugin_enabled_<id>`, `defaultPlugins()`,
+  `PluginRegistry`, `PluginStoreController`, `SettingsPluginInstallStore`).
+- Change every default to **disabled** — including the currently
+  default-enabled compiled plugins (per `docs/PLUGINS.md` and
+  `docs/ARCHITECTURE.md`; e.g. `CaseChangePlugin` and any others in
+  `defaultPlugins()`).
+- Handle the **upgrade path safely**: existing users who already enabled
+  plugins keep their choice (only *new/never-touched* plugins default OFF).
+  Never silently disable something the user explicitly enabled; never silently
+  enable anything.
+- Keep the Plugin Store / settings UI accurate: show the true (disabled)
+  state, with a clear "Enable" action.
+- Update docs (`docs/PLUGINS.md`, `docs/ARCHITECTURE.md`) to state the
+  off-by-default policy.
 
 ## Verification
-- Pure-JVM unit tests where feasible (summary truncation logic, expand/collapse
-  state per card); otherwise verify by review with file:line evidence.
+- Pure-JVM unit tests: fresh-state default = all disabled; explicit enable
+  persists; upgrade with prior explicit enable keeps it on; no plugin runs
+  before explicit opt-in.
 - `gradle testDebugUnitTest` + `gradle assembleDebug` must pass (or a
   documented pre-existing-only failure).
 
 ## Definition of done
-- Plugin Store cards are compact with ellipsized summaries and expandable full
-  descriptions; install/enable actions remain one tap.
+- All plugins off by default for fresh installs; explicit user choices
+  preserved; UI and docs accurate.
 - `workspace/phase-126/REPORT.md` committed with file:line evidence.
 
 ## Constraints
