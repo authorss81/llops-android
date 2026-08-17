@@ -496,6 +496,24 @@
   `services/WetBrushEngine.kt:13` (AGSL wet-mixing gating); `ui/components/ShaderCapabilityHelper.kt:5`
   (`isAgslSupported` = SDK ≥ 33); `services/ShapeRecognitionHelper.kt:13` (`trySnapShape()` :27).
   Supporting math: `WetCanvasEngine.kt`, `WetMixingMath.kt`, `BrushStrokeMath.kt`, `StrokeStabilizer.kt`.
+  - **Implemented in phase-124**: TWO eraser modes — whole-stroke delete (STROKE) & smooth,
+    pressure-aware partial erase (PARTIAL). Mode enum + picker + persistence were phase-19
+    (`EraserMode` in `services/StrokeSegmenter.kt:14`, `SettingsManager.eraserModeKey`, tool-picker
+    chips in `EditorScreen.kt:1813`); phase-124 added the pressure/per-radii plumbing + cursor
+    preview + hit-test hardenings: `services/EraserGeometryPolicy.kt:23` is the pure-JVM radius
+    decision table (`stampRadius(baseWidth,pressure)` pressure-aware round mask, `coverageRadius`
+    = stamp + half nib so the cut is always round, `previewRadius` for the cursor circle,
+    `legacyRadius` byte-compatible fallback). `EraseSample(pos,pressure)` (`AnnotationCanvas.kt:85`)
+    lets each erase-path sample carry its touch pressure; `applyEraser` (`:699`) stamps them as
+    `ErasePoint(..., radius)` (`:705`) → `StrokeSegmenter.segment` (`StrokeSegmenter.kt:110`) now
+    splits per-sample via `coverageRadiusFor` (`:52`), so a heavy press carves a wider round swath.
+    Cursor preview: non-consuming pointer tracker (`AnnotationCanvas.kt:594`) mirrors the pointer
+    into world coords; the canvas draws the round mask (PARTIAL, `:1595`) or the whole-stroke
+    highlight (STROKE, `:1604`, symmetry-mirror aware). Hit-test hardenings: pure-JVM
+    `StrokeSegmenter.hitStrokeAt` (`:68`, topmost + symmetry) and `strokeContainsPoint` now also
+    hits `stroke.end` (`AnnotationCanvas.kt:3753`) so shape-stroke tips erase. Undo covers both
+    modes (every erase change flows through `EditorScreen.handleStrokesChange` pre-state capture,
+    `EditorScreen.kt:588`). Tests: `Phase124EraserTest` (17) + existing `StrokeSegmenterTest` (16).
   - **Implemented in phase-123**: colour/layer/tool selections are effective for the VERY NEXT stroke.
     `AnnotationCanvas.kt:634` — `activeLayerId` + `layers` were missing from the drawing `pointerInput`
     restart-key list, so a layer switch (unlocked→unlocked) left the stroke-commit closure

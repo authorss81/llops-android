@@ -77,6 +77,13 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 
+/**
+ * Phase 124: one point of the accumulated eraser path — canvas (world)
+ * coordinates plus the touch pressure sampled at capture time, so the PARTIAL
+ * eraser stamps a pressure-aware round mask (see EraserGeometryPolicy).
+ */
+data class EraseSample(val pos: Offset, val pressure: Float)
+
 @Suppress("DEPRECATION")
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
@@ -228,7 +235,15 @@ fun AnnotationCanvas(
     // Phase 19: sampled erase path (canvas coords) accumulated for the whole
     // duration of one eraser drag, so the PARTIAL eraser splits each stroke by
     // the FULL erase path rather than only the latest sample.
-    val eraseSamples = remember { mutableStateListOf<androidx.compose.ui.geometry.Offset>() }
+    // Phase 124: each sample also carries the touch pressure at capture time, so
+    // the round mask is pressure-aware (heavier press = wider smooth swath).
+    val eraseSamples = remember { mutableStateListOf<EraseSample>() }
+
+    // Phase 124: current eraser pointer position in canvas (world) coords, used
+    // to draw the eraser cursor preview (round mask for PARTIAL, matched-stroke
+    // highlight for STROKE). Updated by a non-consuming pointer tracker; cleared
+    // when no pointer is pressed.
+    var eraserCursorCanvas by remember { mutableStateOf<androidx.compose.ui.geometry.Offset?>(null) }
 
     // Phase 07: stroke stabilizer (one filter instance per continuous stroke).
     val stabilizerFilter = remember { StrokeStabilizer.create() }
@@ -576,6 +591,31 @@ fun AnnotationCanvas(
                     }
                 }
             }
+            // Phase 124: non-consuming eraser-cursor tracker. While the ERASER
+            // tool is active this mirrors the pointer into canvas (world) coords
+            // for the cursor preview (round mask / stroke highlight). It never
+            // consumes, so the two-finger zoom, tap and drag detectors above and
+            // below are unaffected; the cursor is cleared as soon as no pointer
+            // is pressed (a tap-to-erase still flashes the preview, the drag
+            // keeps it live, and it disappears on lift).
+            .pointerInput(currentTool) {
+                if (currentTool != StrokeTool.ERASER) {
+                    eraserCursorCanvas = null
+                    return@pointerInput
+                }
+                awaitPointerEventScope {
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val pressed = event.changes.firstOrNull { it.pressed }?.position
+                        eraserCursorCanvas = pressed?.let { screenPos ->
+                            Offset(
+                                x = (screenPos.x - internalPanOffset.x) / internalZoomScale,
+                                y = (screenPos.y - internalPanOffset.y) / internalZoomScale
+                            )
+                        }
+                    }
+                }
+            }
             // 2. Tap Gestures for Text Input, Eyedropper & Sticky Notes
             .pointerInput(currentTool, pdfPageFilter, isContinuousMode, activeRawBitmapMap) {
                 detectTapGestures(
@@ -652,10 +692,18 @@ fun AnnotationCanvas(
                 // using the full accumulated erase path; non-polyline strokes
                 // (text, shapes) fall back to whole-stroke removal — an honest
                 // gate, matching the classic eraser, not a fake "partial".
+                // Phase 124: each erase sample carries the touch pressure captured
+                // at that instant, so PARTIAL stamps a pressure-aware round mask
+                // (heavier press = wider circle), and the sample radius drives the
+                // split geometry via StrokeSegmenter.
                 fun applyEraser(canvasOffset: Offset) {
                     val partial = eraserMode == com.authorss81.noteflow.services.EraserMode.PARTIAL
                     val samples = eraseSamples.map {
-                        com.authorss81.noteflow.services.StrokeSegmenter.ErasePoint(it.x, it.y)
+                        com.authorss81.noteflow.services.StrokeSegmenter.ErasePoint(
+                            x = it.pos.x,
+                            y = it.pos.y,
+                            radius = com.authorss81.noteflow.services.EraserGeometryPolicy.stampRadius(currentWidth, it.pressure)
+                        )
                     }
                     val newList = mutableListOf<Stroke>()
                     var changed = false
@@ -747,7 +795,7 @@ fun AnnotationCanvas(
                                 sampledColorPreview = sampleColorAt(canvasOffset, targetPage)
                             } else if (currentTool == StrokeTool.ERASER) {
                                 eraseSamples.clear()
-                                eraseSamples.add(canvasOffset)
+                                eraseSamples.add(EraseSample(canvasOffset, lastPressure))
                                 applyEraser(canvasOffset)
                             } else {
                                 activeStart = startPoint
@@ -794,7 +842,7 @@ fun AnnotationCanvas(
                                 sampledColorPreview = sampleColorAt(canvasPosition, activeTargetPage)
                             } else if (currentTool == StrokeTool.ERASER) {
                                 val canvasPosition = Offset(rawCanvasX, rawCanvasY)
-                                eraseSamples.add(canvasPosition)
+                                eraseSamples.add(EraseSample(canvasPosition, lastPressure))
                                 applyEraser(canvasPosition)
                             } else if (currentTool.isFreehandTool) {
                                 // Phase 07: stabilizer (per-axis EWMA) smooths touch jitter
@@ -1531,6 +1579,50 @@ Stroke(
                             liveStrokeSeed = currentStrokeSeed,
                             vibrancyBoost = vibrancyBoost
                         )
+                    }
+                }
+
+                // Phase 124: live eraser cursor preview. The erase path itself is
+                // pressure-aware (heavier press = wider stamp); this preview shows
+                // what the NEXT erase removes so the user can aim precisely:
+                //   PARTIAL -> the round mask circle the stamp will carve, drawn at
+                //              the full-pressure coverage radius of the current width
+                //   STROKE  -> highlight every whole stroke the classic hit-test
+                //              (including the symmetry mirror) predicts as removed.
+                if (currentTool == StrokeTool.ERASER) {
+                    val cursorPos = eraserCursorCanvas
+                    if (cursorPos != null) {
+                        if (eraserMode == com.authorss81.noteflow.services.EraserMode.PARTIAL) {
+                            val previewR = com.authorss81.noteflow.services.EraserGeometryPolicy.previewRadius(currentWidth, currentWidth)
+                            drawCircle(currentColor.copy(alpha = 0.22f), radius = previewR, center = cursorPos)
+                            drawCircle(
+                                currentColor.copy(alpha = 0.6f),
+                                radius = previewR,
+                                center = cursorPos,
+                                style = DrawStrokeStyle(width = 2f)
+                            )
+                        } else {
+                            val axisCenter = symmetryCenterFor(size.width, cursorPos.y)
+                            for (stroke in activeStrokeList) {
+                                val hits = if (symmetryMode == SymmetryMode.OFF) {
+                                    strokeContainsPoint(stroke, cursorPos)
+                                } else {
+                                    val mirror = SymmetryHelper.mirrorPoint(cursorPos.x, cursorPos.y, symmetryMode, axisCenter.x, axisCenter.y)
+                                    strokeContainsPoint(stroke, cursorPos) || strokeContainsPoint(stroke, Offset(mirror.x, mirror.y))
+                                }
+                                if (!hits) continue
+                                if (stroke.points.size > 1) {
+                                    val path = androidx.compose.ui.graphics.Path().apply {
+                                        moveTo(stroke.points.first().x, stroke.points.first().y)
+                                        stroke.points.drop(1).forEach { lineTo(it.x, it.y) }
+                                    }
+                                    drawPath(path, currentColor.copy(alpha = 0.25f), style = DrawStrokeStyle(width = stroke.width + 10f, cap = androidx.compose.ui.graphics.StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round))
+                                } else {
+                                    val anchor = stroke.start ?: stroke.end ?: continue
+                                    drawCircle(currentColor.copy(alpha = 0.25f), radius = (stroke.width + 18f), center = Offset(anchor.x, anchor.y))
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -3650,7 +3742,15 @@ private fun strokeContainsPoint(stroke: Stroke, point: Offset): Boolean {
         val dy = p.y - point.y
         if (dx * dx + dy * dy <= threshold * threshold) return true
     }
+    // Phase 124: the anchor hit check previously covered only `start` — shape
+    // strokes (rect/arrow/ellipse) keep geometry in `start`/`end`, so a tap on
+    // the far tip/anchor of a shape could miss. Test both anchors now.
     stroke.start?.let {
+        val dx = it.x - point.x
+        val dy = it.y - point.y
+        if (dx * dx + dy * dy <= threshold * threshold) return true
+    }
+    stroke.end?.let {
         val dx = it.x - point.x
         val dy = it.y - point.y
         if (dx * dx + dy * dy <= threshold * threshold) return true

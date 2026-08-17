@@ -23,7 +23,13 @@ enum class EraserMode(val key: String, val label: String) {
 
 object StrokeSegmenter {
 
-    data class ErasePoint(val x: Float, val y: Float)
+    /**
+     * One erase-path sample. [radius] is the round-mask stamp radius for this
+     * sample (Phase 124 — pressure-aware, see [EraserGeometryPolicy.stampRadius]).
+     * A null radius falls back to the legacy `stroke.width + extraRadius` rule,
+     * keeping the pre-Phase 124 partial eraser byte-compatible.
+     */
+    data class ErasePoint(val x: Float, val y: Float, val radius: Float? = null)
     data class SegmentResult(val surviving: List<Stroke>, val affected: Boolean)
 
     /**
@@ -31,6 +37,63 @@ object StrokeSegmenter {
      * whole-stroke eraser threshold in AnnotationCanvas (`stroke.width + 18f`).
      */
     const val DEFAULT_EXTRA_RADIUS = 18f
+
+    /**
+     * Coverage radius of one [ErasePoint] against [stroke]'s centerline.
+     *
+     * - A point with an explicit [ErasePoint.radius] (Phase 124) removes every
+     *   centerline point inside `radius + stroke.width / 2` — the round mask
+     *   must swallow the whole nib half so a surviving run's boundary point is
+     *   always OUTSIDE the mask, giving a smooth, round carve.
+     * - A null radius keeps the legacy `stroke.width + extraRadius` rule.
+     *
+     * Pure JVM, allocation-free.
+     */
+    fun coverageRadiusFor(stroke: Stroke, sample: ErasePoint, extraRadius: Float): Float {
+        val r = sample.radius
+        return if (r != null && r.isFinite() && r > 0f) {
+            com.authorss81.noteflow.services.EraserGeometryPolicy.coverageRadius(r, stroke.width)
+        } else {
+            com.authorss81.noteflow.services.EraserGeometryPolicy.legacyRadius(stroke.width, extraRadius)
+        }
+    }
+
+    /**
+     * Phase 124: whole-stroke hit-test used by the STROKE eraser (and its cursor
+     * highlight). Mirrors the canvas `strokeContainsPoint` threshold
+     * (`stroke.width + 18`) and honors the same symmetry mirror the canvas uses,
+     * returning the LAST (topmost) matching stroke — a tap therefore yields the
+     * exact stroke id the eraser would delete. Pure JVM.
+     */
+    fun hitStrokeAt(
+        strokes: List<Stroke>,
+        x: Float,
+        y: Float,
+        extraRadius: Float = DEFAULT_EXTRA_RADIUS,
+        symmetryMode: SymmetryMode = SymmetryMode.OFF,
+        symmetryCenterX: Float = 0f,
+        symmetryCenterY: Float = 0f
+    ): Stroke? {
+        if (strokes.isEmpty()) return null
+        fun hit(s: Stroke, px: Float, py: Float): Boolean {
+            val threshold = (s.width + extraRadius).coerceAtLeast(1f)
+            val r2 = threshold * threshold
+            fun inRange(qx: Float, qy: Float): Boolean {
+                val dx = qx - px
+                val dy = qy - py
+                return dx * dx + dy * dy <= r2
+            }
+            for (p in s.points) if (inRange(p.x, p.y)) return true
+            s.start?.let { if (inRange(it.x, it.y)) return true }
+            s.end?.let { if (inRange(it.x, it.y)) return true }
+            return false
+        }
+        val mirror = SymmetryHelper.mirrorPoint(x, y, symmetryMode, symmetryCenterX, symmetryCenterY)
+        val checkMirror = symmetryMode != SymmetryMode.OFF
+        return strokes.lastOrNull { s ->
+            hit(s, x, y) || (checkMirror && hit(s, mirror.x, mirror.y))
+        }
+    }
 
     /**
      * Splits [stroke]'s polyline into contiguous runs of points that are NOT
@@ -63,16 +126,15 @@ object StrokeSegmenter {
             )
         }
 
-        val radius = (stroke.width + extraRadius).coerceAtLeast(1f)
-        val r2 = radius * radius
         val covered = BooleanArray(stroke.points.size)
         var anyCovered = false
         for (i in stroke.points.indices) {
             val p = stroke.points[i]
             for (e in eraseSamples) {
+                val r = coverageRadiusFor(stroke, e, extraRadius).coerceAtLeast(1f)
                 val dx = p.x - e.x
                 val dy = p.y - e.y
-                if (dx * dx + dy * dy <= r2) {
+                if (dx * dx + dy * dy <= r * r) {
                     covered[i] = true
                     anyCovered = true
                     break
@@ -110,17 +172,18 @@ object StrokeSegmenter {
 
     /**
      * Whole-stroke hit test over a point list (equivalent to the classic eraser
-     * threshold). Used for the empty-points fallback rule above.
+     * threshold). Radius per sample follows [coverageRadiusFor] so a Phase 124
+     * stamp (radius-aware) and a legacy stamp behave consistently. Used for the
+     * empty-points fallback rule above.
      */
     fun strokeTouchedBy(stroke: Stroke, eraseSamples: List<ErasePoint>, extraRadius: Float): Boolean {
         if (eraseSamples.isEmpty()) return false
-        val radius = (stroke.width + extraRadius).coerceAtLeast(1f)
-        val r2 = radius * radius
         fun hit(x: Float, y: Float): Boolean {
             for (e in eraseSamples) {
+                val r = coverageRadiusFor(stroke, e, extraRadius).coerceAtLeast(1f)
                 val dx = x - e.x
                 val dy = y - e.y
-                if (dx * dx + dy * dy <= r2) return true
+                if (dx * dx + dy * dy <= r * r) return true
             }
             return false
         }
