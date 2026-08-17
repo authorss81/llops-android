@@ -1,4 +1,4 @@
-# Phase 93: B2-LOG-04 - Plugin download/install failure messages echo the... [NOT STARTED]
+# Phase 93: B2-LOG-04 - Plugin download/install failure messages echo the... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first
@@ -17,7 +17,8 @@ finding per phase - so keep the diff small and targeted.
 ## The fix (where & how)
 
 `PluginDownloader.kt:133-137`, `DownloadablePluginInstaller.kt:105`, `PluginStoreController.kt:206,235` - enforce the PluginLogger contract mechanically: log `e::class.java.simpleName`-style tokens or a fixed reason code, NEVER `message`/`reason` strings that embed URLs; reject `
-`/`` in plugin ids and log fields.
+`/`
+` in plugin ids and log fields.
 
 
 ## Verification

@@ -1,4 +1,4 @@
-# Phase 67: B1-AUTH-03 - Downloadable-plugin lifecycle hooks (onProcessStart ->... [NOT STARTED]
+# Phase 67: B1-AUTH-03 - Downloadable-plugin lifecycle hooks (onProcessStart ->... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

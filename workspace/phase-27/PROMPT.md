@@ -1,4 +1,4 @@
-# Phase 27: Brush rendering — fix sharp edges, add rainbow & unique colors, fix color picking [NOT STARTED]
+# Phase 27: Brush rendering — fix sharp edges, add rainbow & unique colors, fix color picking [DONE]
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an AGSL GPU wet-mixing engine + vector fallback, and brush styles added
 in Phase 18 (charcoal, oil pastel, ink wash, gouache, dry brush, palette knife),

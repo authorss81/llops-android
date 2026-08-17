@@ -1,4 +1,4 @@
-# Phase 111: B2-LOG-07 - JankStatsHelper logs screen names and per-frame timing... [NOT STARTED]
+# Phase 111: B2-LOG-07 - JankStatsHelper logs screen names and per-frame timing... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

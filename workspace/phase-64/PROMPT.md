@@ -1,4 +1,4 @@
-# Phase 64: B1-CRYPTO-05 - getOrCreateDek silently mints a brand-new DEK when the... [NOT STARTED]
+# Phase 64: B1-CRYPTO-05 - getOrCreateDek silently mints a brand-new DEK when the... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

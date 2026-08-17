@@ -1,4 +1,4 @@
-# Phase 100: B2-DOS-10 - lastSavedStrokeHash grows for every edited stroke... [NOT STARTED]
+# Phase 100: B2-DOS-10 - lastSavedStrokeHash grows for every edited stroke... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

@@ -1,4 +1,4 @@
-# Phase 87: B1-DB-6 - Tamper HMAC covers only the main .sqlite file (not WAL... [NOT STARTED]
+# Phase 87: B1-DB-6 - Tamper HMAC covers only the main .sqlite file (not WAL... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

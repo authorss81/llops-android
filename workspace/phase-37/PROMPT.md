@@ -1,4 +1,4 @@
-# Phase 37: Markdown & Hybrid Editor Experience [NOT STARTED]
+# Phase 37: Markdown & Hybrid Editor Experience [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with a Markdown editor (`ui/screens/EditorScreen.kt`), a Markdown preview

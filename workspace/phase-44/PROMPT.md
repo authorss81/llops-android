@@ -1,4 +1,4 @@
-# Phase 44: B1-DB-4 - Markdown/text note BODIES are stored as PLAINTEXT... [NOT STARTED]
+# Phase 44: B1-DB-4 - Markdown/text note BODIES are stored as PLAINTEXT... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

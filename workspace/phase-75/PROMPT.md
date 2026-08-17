@@ -1,4 +1,4 @@
-# Phase 75: B2-DEPS-03 - No Gradle dependency verification: online resolution... [NOT STARTED]
+# Phase 75: B2-DEPS-03 - No Gradle dependency verification: online resolution... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

@@ -1,4 +1,4 @@
-# Phase 114: B2-CRYPTO-08 - RNG hygiene audit: fresh SecureRandom per IV/salt/DEK... [NOT STARTED]
+# Phase 114: B2-CRYPTO-08 - RNG hygiene audit: fresh SecureRandom per IV/salt/DEK... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

@@ -1,4 +1,4 @@
-# Phase 29: API-key integration + downloadable local-LLM plugin + APK build [NOT STARTED]
+# Phase 29: API-key integration + downloadable local-LLM plugin + APK build [DONE]
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with a hardened plugin framework and a plugin store (Phases 10–11, 21) and a
 **runtime downloadable-plugin infrastructure (Phase 23: download → signature-verify →

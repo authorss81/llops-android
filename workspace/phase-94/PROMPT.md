@@ -1,4 +1,4 @@
-# Phase 94: B2-LOG-05 - WebDAV failure paths echo raw exception text (which... [NOT STARTED]
+# Phase 94: B2-LOG-05 - WebDAV failure paths echo raw exception text (which... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

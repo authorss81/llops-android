@@ -1,4 +1,4 @@
-# Phase 63: B1-CRYPTO-04 - Weak-password policy + process-local-only lockout =>... [NOT STARTED]
+# Phase 63: B1-CRYPTO-04 - Weak-password policy + process-local-only lockout =>... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

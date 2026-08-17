@@ -1,4 +1,4 @@
-# Phase 60: B1-PLAT-4 - Auto-lock is OFF by default and lock() fires only on... [NOT STARTED]
+# Phase 60: B1-PLAT-4 - Auto-lock is OFF by default and lock() fires only on... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

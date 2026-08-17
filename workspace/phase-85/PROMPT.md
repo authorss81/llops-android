@@ -1,4 +1,4 @@
-# Phase 85: B1-NET-06 - LocalSend: opening the Send dialog actively probes... [NOT STARTED]
+# Phase 85: B1-NET-06 - LocalSend: opening the Send dialog actively probes... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

@@ -1,4 +1,4 @@
-# Phase 81: B2-DOS-05 - Attachment/import ingestion slurps attacker- or... [NOT STARTED]
+# Phase 81: B2-DOS-05 - Attachment/import ingestion slurps attacker- or... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

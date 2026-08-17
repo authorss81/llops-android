@@ -1,4 +1,4 @@
-# Phase 78: B2-DOS-02 - Vault search re-decrypts the ENTIRE vault on every... [NOT STARTED]
+# Phase 78: B2-DOS-02 - Vault search re-decrypts the ENTIRE vault on every... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

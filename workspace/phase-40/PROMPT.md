@@ -1,4 +1,4 @@
-# Phase 40: B1-NET-01 - WebDAV sync: server-controlled PROPFIND href steers... [NOT STARTED]
+# Phase 40: B1-NET-01 - WebDAV sync: server-controlled PROPFIND href steers... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

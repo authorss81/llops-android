@@ -1,4 +1,4 @@
-# Phase 32: APK attack — download the built APK and bombard it with hacking tools [NOT STARTED]
+# Phase 32: APK attack — download the built APK and bombard it with hacking tools [DONE]
 You are working on **InkFlow/Noteflow**. The owner has EXPLICITLY CONSENTED to a
 full offensive audit of the built APK. Phase 30 did source review; this phase
 attacks the actual APK artifact with real security tooling on the Linux CI

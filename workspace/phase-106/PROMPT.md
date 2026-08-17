@@ -1,4 +1,4 @@
-# Phase 106: B2-CRYPTO-06 - Exact-to-the-millisecond timestamps in backup/sync... [NOT STARTED]
+# Phase 106: B2-CRYPTO-06 - Exact-to-the-millisecond timestamps in backup/sync... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

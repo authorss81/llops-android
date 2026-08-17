@@ -1,4 +1,4 @@
-# Phase 31: False-implementation audit & general audit (non-security) [NOT STARTED]
+# Phase 31: False-implementation audit & general audit (non-security) [DONE]
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app. Phase 30 audits SECURITY; this phase audits EVERYTHING ELSE: false/claimed
 implementations, broken wiring, dead UI, and general code quality. The owner

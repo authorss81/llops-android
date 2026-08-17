@@ -1,4 +1,4 @@
-# Phase 103: B2-CRYPTO-02 - Plugin artifact SHA-256 verification uses... [NOT STARTED]
+# Phase 103: B2-CRYPTO-02 - Plugin artifact SHA-256 verification uses... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

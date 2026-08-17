@@ -1,4 +1,4 @@
-# Phase 113: B2-CRYPTO-07 - No Unicode normalization for master/backup passwords -... [NOT STARTED]
+# Phase 113: B2-CRYPTO-07 - No Unicode normalization for master/backup passwords -... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

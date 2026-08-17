@@ -1,4 +1,4 @@
-# Phase 76: B2-DEPS-04 - Downloadable-plugin signing key: hardcoded default... [NOT STARTED]
+# Phase 76: B2-DEPS-04 - Downloadable-plugin signing key: hardcoded default... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

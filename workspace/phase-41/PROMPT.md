@@ -1,4 +1,4 @@
-# Phase 41: B1-NET-02 - LocalSend: unauthenticated one-way transfer lets a... [NOT STARTED]
+# Phase 41: B1-NET-02 - LocalSend: unauthenticated one-way transfer lets a... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

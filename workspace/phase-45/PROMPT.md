@@ -1,4 +1,4 @@
-# Phase 45: B1-CRYPTO-02 - Master password is bypassable: a... [NOT STARTED]
+# Phase 45: B1-CRYPTO-02 - Master password is bypassable: a... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

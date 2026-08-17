@@ -1,4 +1,4 @@
-# Phase 38: Knowledge Graph & Spatial Navigation [NOT STARTED]
+# Phase 38: Knowledge Graph & Spatial Navigation [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with wikilinks/tags/daily notes and a **`KnowledgeGraphScreen`**

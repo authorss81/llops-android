@@ -1,4 +1,4 @@
-# Phase 70: B2-LOG-02 - app_startup.log is appended without any size cap,... [NOT STARTED]
+# Phase 70: B2-LOG-02 - app_startup.log is appended without any size cap,... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

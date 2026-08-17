@@ -1,4 +1,4 @@
-# Phase 72: B2-UI-2 - In-app lock paths (manual 'Lock Vault Now', idle... [NOT STARTED]
+# Phase 72: B2-UI-2 - In-app lock paths (manual 'Lock Vault Now', idle... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

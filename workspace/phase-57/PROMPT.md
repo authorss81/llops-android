@@ -1,4 +1,4 @@
-# Phase 57: B1-PLAT-1 - Release APK is signed with the Android debug keystore... [NOT STARTED]
+# Phase 57: B1-PLAT-1 - Release APK is signed with the Android debug keystore... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

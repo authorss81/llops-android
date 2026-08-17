@@ -1,4 +1,4 @@
-# Phase 92: B1-AUTH-07 - isMasterPasswordValid is an unrestrained... [NOT STARTED]
+# Phase 92: B1-AUTH-07 - isMasterPasswordValid is an unrestrained... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

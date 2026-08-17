@@ -1,4 +1,4 @@
-# Phase 47: B1-AUTH-02 - Locking zeroizes VaultKeyHolder but leaves the keyed... [NOT STARTED]
+# Phase 47: B1-AUTH-02 - Locking zeroizes VaultKeyHolder but leaves the keyed... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

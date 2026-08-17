@@ -1,4 +1,4 @@
-# Phase 71: B2-LOG-03 - ImportExportService Log.e/w(..., e) passes the full... [NOT STARTED]
+# Phase 71: B2-LOG-03 - ImportExportService Log.e/w(..., e) passes the full... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

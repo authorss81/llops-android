@@ -1,4 +1,4 @@
-# Phase 61: B1-PLAT-7 - UpdateService auto-discovers update APKs in publicly... [NOT STARTED]
+# Phase 61: B1-PLAT-7 - UpdateService auto-discovers update APKs in publicly... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

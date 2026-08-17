@@ -1,4 +1,4 @@
-# Phase 96: B2-UI-6 - Vault-wide imports/exports run on... [NOT STARTED]
+# Phase 96: B2-UI-6 - Vault-wide imports/exports run on... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

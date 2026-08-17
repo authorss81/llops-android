@@ -1,4 +1,4 @@
-# Phase 39: B1-CRYPTO-01 - Downloadable-plugin integrity pins are... [NOT STARTED]
+# Phase 39: B1-CRYPTO-01 - Downloadable-plugin integrity pins are... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

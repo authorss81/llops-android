@@ -1,4 +1,4 @@
-# Phase 34: Visual Polish & Material 3 Expressive Design [NOT STARTED]
+# Phase 34: Visual Polish & Material 3 Expressive Design [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app (Kotlin 2.0.21, Compose BOM 2024.12.01, Material 3) that already has a Glass

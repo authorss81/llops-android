@@ -1,4 +1,4 @@
-# Phase 54: B1-DB-3 - Voice notes are recorded as UNENCRYPTED .m4a files and... [NOT STARTED]
+# Phase 54: B1-DB-3 - Voice notes are recorded as UNENCRYPTED .m4a files and... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

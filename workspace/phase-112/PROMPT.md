@@ -1,4 +1,4 @@
-# Phase 112: B2-DEPS-02 - security-crypto 1.1.0-alpha06: unmaintained alpha of a... [NOT STARTED]
+# Phase 112: B2-DEPS-02 - security-crypto 1.1.0-alpha06: unmaintained alpha of a... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

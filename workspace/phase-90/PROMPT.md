@@ -1,4 +1,4 @@
-# Phase 90: B1-PLAT-8 - Master password minimum length of 6; on-device lockout... [NOT STARTED]
+# Phase 90: B1-PLAT-8 - Master password minimum length of 6; on-device lockout... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

@@ -1,4 +1,4 @@
-# Phase 99: B2-DOS-09 - RamerDouglasPeucker.simplify recurses with depth... [NOT STARTED]
+# Phase 99: B2-DOS-09 - RamerDouglasPeucker.simplify recurses with depth... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

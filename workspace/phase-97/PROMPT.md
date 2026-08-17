@@ -1,4 +1,4 @@
-# Phase 97: B2-DEPS-01 - jsoup 1.17.2 is vulnerable to CVE-2026-71497 (XSS via... [NOT STARTED]
+# Phase 97: B2-DEPS-01 - jsoup 1.17.2 is vulnerable to CVE-2026-71497 (XSS via... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

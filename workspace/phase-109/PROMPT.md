@@ -1,4 +1,4 @@
-# Phase 109: B1-NET-08 - WebDAV credential store: keystore key not bound to any... [NOT STARTED]
+# Phase 109: B1-NET-08 - WebDAV credential store: keystore key not bound to any... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

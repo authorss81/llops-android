@@ -54,48 +54,72 @@ Per area:
 
 ### Top risks (read this first)
 
-1. **CRITICAL — Downloadable-plugin integrity pins are attacker-defined.** The
-   Phase-24 update manifest (unpinned, unsigned, redirect-following HTTPS)
-   supplies `downloadUrl` + `sha256` + `pinnedCertHash` — the values every
-   verifier then trusts — so a single DNS/CA/MITM compromise of
-   `plugin-updates.inkflow.app` yields self-consistent, user-approved **arbitrary
-   code execution** in the app process (`B1-CRYPTO-01`, `B1-NET-03`).
-2. **HIGH — The vault key is obtainable without the password.** `B1-CRYPTO-02`
-   is FIXED (phase-45): no non-user-authenticated DEK copy persists once a master
-   password exists, so the trivial root/plugin recovery is gone. `B1-AUTH-02`
-   (phase-47) also closed the locked-open gap: `lock()` now disposes the keyed
-   SQLCipher connection and the factory fails closed on any open while the DEK is
-   not in memory. Remaining: the password-wrapped DEK can still be cracked
-   offline on a copied vault (`B1-CRYPTO-04`, `B1-PLAT-8`, `B1-AUTH-07`). The
-   "5-fail lockout" remains UI-only for offline attackers.
-3. **HIGH — Note bodies live in plaintext on disk.** Markdown/text notes are
-   persisted verbatim to `filesDir/noteflow/imports` (`B1-DB-4`, `B1-AUTH-06`),
-   voice notes are unencrypted `.m4a` (`B1-DB-3`), and whole-vault exports land
-   decrypted in public `/Download` (`B1-PLAT-3`) — the "encrypted at rest"
-   claim is a no-op for these classes.
-4. **HIGH — The lock boundary does not reach the data layer.** `lock()` zeroizes
-   the in-memory key but leaves the keyed SQLCipher connection open and lets
-   saves continue writing plaintext into encrypted columns (`B1-AUTH-02`,
-   `B2-UI-1`); plugin lifecycle hooks run before unlock (`B1-AUTH-03`) and plugin
-   bytecode has full classloader access to the vault (`B1-AUTH-01`).
-5. **HIGH — Network/export trust gaps.** Server-controlled WebDAV `href`s steer
-   Basic credentials to arbitrary hosts (`B1-NET-01`); LocalSend streams
-   plaintext notes to a self-announced fake receiver (`B1-NET-02`); HTTPS→HTTP
-   redirect downgrades defeat every "HTTPS only" guard (`B1-NET-05`); backup
-   files with weak (6-char) passwords + cleartext KDF headers travel to public
-   Downloads/WebDAV for offline cracking (`B2-CRYPTO-04`).
-6. **MEDIUM — Data-loss traps.** An over-broad corruption classifier quarantines
-   healthy vaults (`B1-DB-1`), migration deletes the original DB on any failure
-   (`B1-DB-2`), non-atomic salt/DEK prefs can brick the vault (`B1-CRYPTO-03`),
-   `getOrCreateDek` silently mints a new key (`B1-CRYPTO-05`), and plain-zip
-   restore accepts attacker-crafted DBs (`B1-DB-7`).
-7. **MEDIUM — DoS / resource exhaustion.** Unbounded stroke geometry
-   (`B2-DOS-01`), unbounded import/attachment/backup buffering (`B2-DOS-04/05/07`),
-   multi-layer PSD OOM (`B2-DOS-06`), voice-note O(n²) waveform (`B2-DOS-03`),
-   and full-vault re-decrypts per search/panel (`B2-DOS-02/11`).
-8. **MEDIUM — Supply-chain.** No Gradle dependency verification, unpinned Gradle
-   distribution, jsoup 1.17.2 behind a CVE fix, and release builds signed with
-   the debug keystore when `KEYSTORE_FILE` is unset (`B2-DEPS-01/03`, `B1-PLAT-1`).
+> **Post-fix status (2026-08-17, phase-115 sweep).** All CRITICAL/HIGH/MEDIUM
+> findings are FIXED by the phase-39..114 pipeline unless noted. The remaining
+> OPEN/MEDIUM item is **`B2-DEPS-05`** (the downloadable LLM model is neither
+> hash-pinned nor signature-verified; `AssistantModelDownloader.kt:72` still
+> `instanceFollowRedirects = true`, no pin, `expectedSizeBytes` never compared —
+> the phase-77 `.done` was a false completion, removed in this sweep). The only
+> other OPEN items are INFO triage (B1-PLAT-6 namespace, B2-LOG-06, B2-DEPS-06)
+> and the Phase-32-NEW packaging/signing notes. What each original top risk now
+> means:
+
+1. **CRITICAL — Downloadable-plugin integrity pins are attacker-defined.** **FIXED**
+   (`B1-CRYPTO-01`/phase-39 + `B1-NET-03`/phase-42). The update manifest can no
+   longer define `downloadUrl`/`sha256`/`pinnedCertHash`: the update transport is
+   compile-time leaf-pinned TLS with a host allow-list, 3xx (incl. HTTPS→HTTP
+   downgrade) refused, 256 KiB cap, and the plugin pins are enforced from the
+   compile-time `CompileTimePluginPins.RELEASES` set (empty ⇒ fail closed) at
+   check/update/download — an attacker-defined "arbitrary code execution" offer
+   is refused before any byte moves.
+2. **HIGH — The vault key is obtainable without the password.** **FIXED**
+   (`B1-CRYPTO-02`/phase-45, `B1-AUTH-02`/phase-47, `B1-CRYPTO-05`/phase-64,
+   `B1-CRYPTO-07`/phase-65). No non-user-authenticated DEK copy persists once a
+   master password exists; `lock()` disposes the keyed SQLCipher connection and
+   the factory fails closed on any open while the DEK is not in memory;
+   `getOrCreateDek` never silently mints over an auth-gated blob. **Remaining by
+   design:** a password-wrapped DEK on a *copied* vault can still be cracked
+   offline — mitigated only by password entropy (≥10 graphemes + common-word
+   rejection, `B1-CRYPTO-04`/`B1-PLAT-8`), never by the on-device lockout.
+3. **HIGH — Note bodies live in plaintext on disk.** **FIXED** (`B1-DB-4`+
+   `B1-AUTH-06`/phase-44, `B1-DB-3`/phase-54, `B1-PLAT-3`/phase-59). Note bodies
+   exist only in the field-encrypted `pages.extractedText` column (legacy
+   plaintext files migrated + deleted); voice notes are encrypted `.enc`; whole
+   vault exports are encrypted archives and the public-Downloads auto-copy was
+   removed (exports require explicit user consent).
+4. **HIGH — The lock boundary does not reach the data layer.** **FIXED**
+   (`B1-AUTH-02`/phase-47, `B2-UI-1`/phase-49, `B1-AUTH-03`/phase-67,
+   `B1-AUTH-01`/phase-46). `lock()` disposes the keyed connection + cancels
+   observers; every encrypted-column write is gated by `requireEncryptionKey()`
+   (locked flushes are stashed and re-written encrypted on unlock); plugin
+   lifecycle hooks are vault-lock-gated; downloadable-plugin bytecode is
+   classloader-isolated + statically scanned for vault-handle/egress primitives.
+5. **HIGH — Network/export trust gaps.** **FIXED** (`B1-NET-01`/phase-40,
+   `B1-NET-02`/phase-41, `B1-NET-04`/phase-51, `B1-NET-05`/phase-52,
+   `B1-NET-06`/phase-85, `B1-NET-07`/phase-86, `B2-CRYPTO-04`/phase-84). WebDAV
+   `href`s are origin-resolved + never forward Basic auth off-server; LocalSend
+   requires a confirmed pairing + human consent per send; redirect downgrades are
+   refused at every transport; backup passwords are strength-gated and the v3
+   header holds only half a key. No export path discloses credentials or
+   plaintext backups to third parties.
+6. **MEDIUM — Data-loss traps.** **FIXED** (`B1-DB-1`/phase-43, `B1-DB-2`/phase-53,
+   `B1-CRYPTO-03`/phase-62, `B1-CRYPTO-05`/phase-64, `B1-DB-7`/phase-56).
+   Corruption classification is narrowed to genuine corruption; migration never
+   deletes the original on failure (quarantine preserves bytes); salt/DEK writes
+   are atomic; plain-zip restore is rejected.
+7. **MEDIUM — DoS / resource exhaustion.** **FIXED** (`B2-DOS-01`/phase-50,
+   `B2-DOS-02`/phase-78, `B2-DOS-03`/phase-79, `B2-DOS-04/05/07`/phases 80/81/83,
+   `B2-DOS-06`/phase-82, `B2-DOS-08..11`/phases 98..101). All buffering,
+   recursion, geometry, waveform, PSD-export and search paths are bounded
+   mid-read with explicit non-alarming caps.
+8. **MEDIUM — Supply-chain.** **FIXED** (`B2-DEPS-01`/phase-97, `B2-DEPS-03`/
+   phase-75, `B2-DEPS-04`/phase-76, `B1-PLAT-1`/phase-57, `B1-PLAT-2`/phase-58).
+   Gradle dependency verification is on (913 artifacts sha256-pinned), jsoup is
+   bumped off the CVE, plugin signing identity fails closed without the real
+   keystore, and release signing fails closed without `RELEASE_KEYSTORE_B64`/
+   `KEYSTORE_FILE`. **Remaining:** `B2-DEPS-05` (LLM model pin — OPEN) and the
+   operator-side substitution of the production plugin-manifest cert pin
+   (Phase-32-NEW-04; intentional fail-closed until then).
 
 ### Reconciliation notes (dedupe/merge)
 
@@ -159,6 +183,7 @@ No DB schema, workflow, or dependency changes were made.
 -->
 
 ### [B1-NET-01] WebDAV sync: server-controlled PROPFIND `href` steers downloads to an arbitrary host and the app forwards the user's Basic credentials there (incl. cleartext via the `allowInsecureHttp` opt-in)
+- **Status:** `FIXED` — phase-40 (see fix-phase table row)
 - **Severity:** HIGH
 - **Area:** Batch 1 · Data-in-transit & network
 - **Agent:** b1-net
@@ -167,6 +192,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Fix:** Only follow `href`s that resolve under the configured `config.serverUrl` origin (compare scheme+host+port against the normalized base); reject any absolute URL whose host differs, or re-resolve it against the base path. Set `instanceFollowRedirects=false` and strip the `Authorization` header on any cross-host redirect. Never attach Basic auth to a host other than the user's configured server.
 
 ### [B1-NET-02] LocalSend: unauthenticated one-way transfer lets a same-LAN attacker's fake receiver obtain PLAINTEXT note/vault content; the "human-accept" and TLS fingerprint are both receiver-announced
+- **Status:** `FIXED` — phase-41 (see fix-phase table row)
 - **Severity:** HIGH
 - **Area:** Batch 1 · Data-in-transit & network
 - **Agent:** b1-net
@@ -194,6 +220,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Fix:** Enforce a loopback/link-local/private/metadata blocklist (RFC1918, `127.0.0.0/8`, `169.254.0.0/16`, `::1`, `.local`) both at `validateUrl` and on every redirect hop (re-parse the resolved Location and re-apply the same validation before connecting); consider HTTPS-only for capture; keep the 5-hop cap.
 
 ### [B1-NET-05] HTTPS→HTTP redirect downgrades: default redirect-following defeats every "HTTPS only / never cleartext" guard in all HttpURLConnection-based transports
+- **Status:** `FIXED` — phase-52 (see fix-phase table row)
 - **Severity:** MEDIUM
 - **Area:** Batch 1 · Data-in-transit & network
 - **Agent:** b1-net
@@ -203,6 +230,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Status: FIXED (phase-52, 2026-08-15).** New shared pure-JVM hop policy `services/StrictRedirectPolicy.kt` (`checkTlsHop` + `resolveNextTlsHop`, `RedirectRefusedException`, `MAX_REDIRECTS = 5`): every hop — the entry URL and every resolved 3xx `Location` — must be `https` and must pass the B1-NET-04 `SsrfHostPolicy` blocklist; loops, malformed targets and blank `Location`s are rejected. Wired with `instanceFollowRedirects = false` into `DuckDuckGoClient`, `OpenMeteoClient` (`WeatherClient.kt`), `DictionaryClient` (all previously default-following) and `AppFacadeHost.httpGet` (previously `instanceFollowRedirects = true`); the plugin transports (`PinnedTlsConnector`), `WebDavSyncService` and `LocalSendSender` (incl. its legacy `httpRegisterProbe`, review-fixed 2026-08-15) are non-following and source-pinned. The `plugins/llm` module's `AssistantModelDownloader` (separate, non-base downloadable artifact) still sets `= true` — documented as out-of-scope in `workspace/phase-52/REPORT.md`. Tests: `B1Net05RedirectDowngradeTest` (28). Prior related fixes: WebDAV phase-40, local pair-gate phase-41, plugin-pinned phase-39/42, Web-Capture + Citation phase-51.
 
 ### [B1-NET-06] LocalSend: opening the Send dialog actively probes every IP in the Wi-Fi /24 and broadcasts device-model + presence
+- **Status:** `FIXED` — phase-85 (see fix-phase table row)
 - **Severity:** LOW
 - **Area:** Batch 1 · Data-in-transit & network
 - **Agent:** b1-net
@@ -215,6 +243,7 @@ No DB schema, workflow, or dependency changes were made.
   3. **The /24 HTTP register sweep is gated behind an explicit per-search opt-in** — the sweep's default flips OFF: `LocalSendSender.discoverDevices` (`LocalSendSender.kt:104-118`) now defaults `includeLegacyHttpScan` to `LocalSendDiscoveryPolicy.LEGACY_HTTP_SCAN_ENABLED_BY_DEFAULT` (`false`) and routes the probe through `LocalSendDiscoveryPolicy.mayRunLegacyHttpScan(...)`, so a plain search emits ONLY the UDP announce/listen. The dialog seeds a "Also check every address on this Wi-Fi…" checkbox from that same `false` default and feeds the user's choice (`legacyHttpScanOptIn`) into the single discovery call — never a hard-coded `true`. A default search can no longer blast 254 HTTP `POST /api/localsend/v2/register` probes at the subnet. See `workspace/phase-85/REPORT.md`. Tests: `B1Net06LocalSendDiscoveryGateTest` (7 tests: policy decision table, sender-default wiring, dialog opt-in seeding + no-auto-discover, identity wiring, repo-wide no-`Build.MODEL`-in-code scan; comment lines stripped so KDoc that merely documents the ban is not a false positive).
 
 ### [B1-NET-07] WebDAV download: no size cap, "latest" chosen by XML order not timestamp, `remoteFolderName` URL-unsafe (path traversal into other server dirs)
+- **Status:** `FIXED` — phase-86 (see fix-phase table row)
 - **Severity:** LOW
 - **Area:** Batch 1 · Data-in-transit & network
 - **Agent:** b1-net
@@ -223,6 +252,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Fix:** Cap the download at a fixed max and abort beyond it; parse the timestamp from the filename and pick the maximum; URL-encode `remoteFolderName` as a single path segment and reject `.`/`..`/control characters.
 
 ### [B1-NET-08] WebDAV credential store: keystore key not bound to any user-authentication gate; silent save failures leave stale credentials
+- **Status:** `FIXED` — phase-109 (see fix-phase table row)
 - **Severity:** INFO
 - **Area:** Batch 1 · Data-in-transit & network
 - **Agent:** b1-net
@@ -231,6 +261,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Fix:** Optional `setUserAuthenticationRequired(true)` (+ `setInvalidatedByBiometricEnrollment(true)`) when the user opts into biometric unlock; at minimum surface save failures to the UI so stale credentials are not silently kept.
 
 ### [B1-NET-09] User-Agent / metadata fingerprinting: app+version+OS leaked to every server contacted
+- **Status:** `FIXED` — phase-110 (see fix-phase table row)
 - **Severity:** INFO
 - **Area:** Batch 1 · Data-in-transit & network
 - **Agent:** b1-net
@@ -239,6 +270,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Fix:** Use a generic, version-less User-Agent; remove `Build.MODEL` from LocalSend announces.
 
 ### [B1-DB-1] Over-broad "corruption" classifier quarantines HEALTHY vaults on any SQLiteException and silently replaces them with an empty DB
+- **Status:** `FIXED` — phase-43 (see fix-phase table row)
 - **Severity:** HIGH
 - **Area:** Batch 1 · Data-at-rest & DB
 - **Agent:** b1-datarest
@@ -247,6 +279,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Fix:** Match only the specific corruption conditions (`android.database.sqlite.SQLiteDatabaseCorruptException`, `msg.contains("file is not a database"/"malformed"/"database disk image is malformed")`); never treat "database is locked"/I/O/ENOSPC class exceptions as corruption. Additionally, quarantine alone should not auto-create a replacement DB — surface recovery first and only create an empty vault after the user's explicit choice, so a spurious event never leaves a healthy vault displaced by an empty one.
 
 ### [B1-DB-2] Plaintext→SQLCipher migration deletes the original database file on ANY failure (contradicts the Phase-09 never-delete guarantee)
+- **Status:** `FIXED` — phase-53 (see fix-phase table row)
 - **Severity:** MEDIUM
 - **Area:** Batch 1 · Data-at-rest & DB
 - **Agent:** b1-datarest
@@ -256,6 +289,7 @@ No DB schema, workflow, or dependency changes were made.
 - **RESOLVED:** phase-53 (2026-08-15, `workspace/phase-53/REPORT.md`). `migratePlaintextIfNeeded` (`NoteflowDatabase.kt:201-258`) no longer deletes the original plaintext database on ANY failure: the swap is now atomic (the verified encrypted scratch file is renamed DIRECTLY over the original — `rename()` atomically replaces the target on bionic/Linux — so the delete-then-rename window in which the user had NO database file is gone), and the catch block routes through the new pure-JVM `quarantineMigrateFailed` (`NoteflowDatabase.kt:487-510`) which drops ONLY the scratch copy, preserves the original + its `-wal`/`-shm`/`-journal` companions under `noteflow.sqlite.migrate-failed-<ts>`, and returns a timestamp so `DatabaseSecurityHelper.setCorruptionDetected` (same flag the phase-43 open-path uses) surfaces the corruption-recovery screen, then rethrows so phase-43 `initializeData` shows it in-session. Companion cleanup happens only AFTER the verified encrypted file is in place.
 
 ### [B1-DB-3] Voice notes are recorded as UNENCRYPTED .m4a files and excluded from field encryption, backups, and permanent-delete
+- **Status:** `FIXED` — phase-54 (see fix-phase table row)
 - **Severity:** MEDIUM
 - **Area:** Batch 1 · Data-at-rest & DB
 - **Agent:** b1-datarest
@@ -265,6 +299,7 @@ No DB schema, workflow, or dependency changes were made.
 - **RESOLVED:** phase-54 (2026-08-15, `workspace/phase-54/REPORT.md`). Only encrypted AES-256-GCM `.enc` blobs ever sit at rest under `filesDir/voice_notes/`, encrypted with the vault DEK under the AAD `Noteflow-Voice-Note-v1|<blob name>` (blob-bound — cannot be renamed/relocated). `VoiceNoteManager` records to a transient cacheDir temp and encrypts at stop (`startRecording`/`stopRecording`, `VoiceNoteManager.kt:79,182`; the app-clock AAD is bound to the exact DEK); a LOCKED vault (null DEK) fails closed and destroys the plaintext temp. Playback decrypts to a transient cacheDir scratch that is deleted on stop/complete/release (`VoiceNoteManager.kt:210-222`). Raw AAC exists on disk only while a recording/playback is actively in progress, and the cacheDir temps are OS-scrubbed + never backed up. New pure-JVM `services/VoiceNoteCrypto.kt` (encrypt/decrypt/re-key/migrate/sweep, 40 MB blob cap) is fully unit-tested (`B1Db03VoiceNoteEncryptionTest`, 18 tests) including fail-closed symmetry (encrypt refuses any non-`.enc` target — a test-driven discovery). `deletePagePermanently` now deletes AUDIO_NOTE `.enc` blobs before dropping rows (`NoteRepository.kt:635`); `emptyTrash` routes through it transitively. Legacy plaintext `.m4a` is migrated one-time by `NoteRepository.migrateLegacyPlaintextVoiceNotes` (`:667`) gated on `SettingsManager.voiceNotesEncryptedMigrated`, plaintext PRESERVED on any failure (never destroyed when its encryption didn't complete), WAL checkpointed + DB HMAC re-stamped before the flag is set. `exportBackup` packs ONLY `.enc` blobs (`ImportExportService.kt:1270`); restore extracts `voice_notes/` entries under the existing traversal/zip-bomb guards and `rekeyVoiceNoteBlobs` re-keys blobs to the restoring device's DEK on cross-device restore (`ImportExportService.kt:1696-1712`).
 
 ### [B1-DB-4] Markdown/text note BODIES are stored as PLAINTEXT files in `filesDir/noteflow/imports` even when a master password is set
+- **Status:** `FIXED` — phase-44 (see fix-phase table row)
 - **Severity:** HIGH
 - **Area:** Batch 1 · Data-at-rest & DB
 - **Agent:** b1-datarest
@@ -274,6 +309,7 @@ No DB schema, workflow, or dependency changes were made.
 - **RESOLVED:** phase-44 (commit `c23a11c`, `workspace/phase-44/REPORT.md`). Note bodies no longer live in plaintext files at all: the encrypted `extractedText` column is the ONLY body store. `persistFile` is no longer called for `.md`/`.txt`/DOCX/HTML/Obsidian bodies (HomeScreen, ImportExportService, NoteflowViewModel journal/daily/wiki pages); the editor save path (`MainActivity` both layouts) writes via the new `viewModel.saveMarkdownNoteBody` → `NoteRepository.updatePageBody` (AES-GCM field-encryption) instead of `File.writeText`; readers (`WikiLinkParser.readFullText`, `BacklinksInspector`, `DocumentTextExtractor`) follow the column, coalescing a legacy file only transiently; a one-time `migrateLegacyPlaintextNoteBodies` (flagged by `SettingsManager.noteBodyPlaintextMigrated`, `fieldAadMigrated` pattern) moves any pre-fix file body into the encrypted column and deletes the file, checkpointing the WAL and re-stamping the DB HMAC.
 
 ### [B1-DB-5] HTML/Obsidian ZIP import reads entries with unbounded `readBytes()` — zip-bomb DoS with no byte/size caps
+- **Status:** `FIXED` — phase-55 (see fix-phase table row)
 - **Severity:** MEDIUM
 - **Area:** Batch 1 · Data-at-rest & DB
 - **Agent:** b1-datarest
@@ -283,6 +319,7 @@ No DB schema, workflow, or dependency changes were made.
 - **RESOLVED:** phase-55 (commit …, `workspace/phase-55/REPORT.md`). New pure-JVM `services/ImportArchivePolicy.kt` is the single budget owner (per-entry 50MB, total 200MB, 100× declared-vs-actual ratio with 4KB floor, 10k entries, 200MB archive input) with exact single-settle accounting + `ImportSizeLimitException`. `readUriBytes` (`ImportExportService.kt:89-118`) reads under a hard byte cap and fails open on oversize; both zip import readers (`importHtmlZipOrFolder` `:2063`, `importObsidianVaultZip` `:2250` — now a single pass) route EVERY entry through `claimEntry`/`readEntryBounded` and re-throw the clean rejection; wholesale `zis.readBytes()` is gone repo-wide. Restore callers keep the explicit 400MB `MAX_BACKUP_INPUT_BYTES` cap (`:1137`) so legitimate large vaults still restore; HomeScreen surfaces one non-alarming `"Import skipped: …"` snackbar. `B1Db05ImportZipBombTest` (13).
 
 ### [B1-DB-6] Tamper HMAC covers only the main .sqlite file (not WAL frames) and can be silenced by defaulting the check off
+- **Status:** `FIXED` — phase-87 (see fix-phase table row)
 - **Severity:** LOW
 - **Area:** Batch 1 · Data-at-rest & DB
 - **Agent:** b1-datarest
@@ -292,6 +329,7 @@ No DB schema, workflow, or dependency changes were made.
 - **RESOLVED:** phase-87 (commit …, `workspace/phase-87/REPORT.md`). (1) WAL coverage — the HMAC now authenticates `main + -wal`: the pre-fix main-file-only inline loop is gone, and `DatabaseSecurityHelper.computeDatabaseHmac` (`DatabaseSecurityHelper.kt:50-65`) routes every baseline computation through the new pure-JVM `services/DatabaseHmacPolicy.kt` (`streamDbAndWal` `:42` streams main then `-wal` through the same initialised `Mac`, returning the total bytes consumed). A WAL-only mutation committed between two checkpoints is now detected at the next verification. Because every baseline-arming site already checkpoints the WAL first or reads a closed raw file (the export/migration sites `NoteflowViewModel.kt:1348-1350`/`:1375-1377`/`:2466-2471`/`:3126-3128`, `HomeScreen.kt:529-531`/`:1320-1322`, the restore `rearmBaselineFromFile` at `ImportExportService.kt:1805`, and the migration stamp at `NoteflowDatabase.kt:250`), a freshly armed baseline covers `(main + empty/absent wal)` and any post-arm WAL frame is captured. (2) Per-session dismissal — `NoteflowViewModel.kt:1106-1109` no longer writes `databaseIntegrityCheckEnabled = false` and neither dismissal path touches the persisted `databaseIntegrityWarningDismissed` latch (zero `settings.databaseIntegrityWarningDismissed` references remain in the VM); the banner now routes through the new pure-JVM `services/IntegrityWarningDismissalGate.kt` (in-memory per-session latch, re-armed on every launch) via `integrityWarningDismissal.mayShow()` `:1091`, `.onDismiss` `:1107` and `.onReenable()` `:1115`, and the checkbox is honestly relabelled "Don't show again this session" (`MainActivity.kt:362`). Documented trade-offs (phase-87 review): a process kill after a baseline arm leaves `-wal` frames that flag at the next launch (the intended detection flip-side of the WAL coverage fix — pre-fix this ordering silently passed); and a pre-phase-87 stored main-only checksum fails the first post-upgrade verify ONLY when a leftover non-empty `-wal` is present at verify time (a clean state is byte-identical, empty-WAL ≡ absent-WAL) — both surfaces are per-session-dismissible banners, never a permanent disable. The B1-CRYPTO-06 fail-open re-baseline at `verifyDatabaseIntegrity` `:147-152` is UNTOUCHED (separate phase-91 finding — the phase-91 fix MUST account for the re-arm now hashing `main + wal`, which blesses whatever `-wal` state exists at that moment). Tests: `B1Db06WalCoverageAndDismissalTest` (16 — WAL-frame mutation / appended-WAL / WAL-removal / main-mutation detection, empty-WAL=absent-WAL sameness, per-session dismissal lifecycle incl. a two-session never-permanently-disabled model, + source pins).
 
 ### [B1-DB-7] Restore accepts a legacy PLAIN zip and validates it with an EMPTY-key SQLCipher candidate — an attacker-crafted database can be swapped into the live vault
+- **Status:** `FIXED` — phase-56 (see fix-phase table row)
 - **Severity:** MEDIUM
 - **Area:** Batch 1 · Data-at-rest & DB
 - **Agent:** b1-datarest
@@ -309,6 +347,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Status:** `FIXED`, phase-88 (see `workspace/phase-88/REPORT.md` + table row below).
 
 ### [B1-PLAT-1] Release APK is signed with the Android debug keystore (well-known password) whenever KEYSTORE_FILE is unset — the default build path
+- **Status:** `FIXED` — phase-57 (see fix-phase table row)
 - **Severity:** MEDIUM
 - **Area:** Batch 1 · Android platform surface
 - **Agent:** b1-platform
@@ -317,6 +356,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Fix:** Fail the release build when `KEYSTORE_FILE` is unset instead of silently falling back to a debug key; never decode a keystore from an in-repo base64 blob; store the production key in a real secret store; affirm in `docs/RELEASE.md` that debug-fallback builds must not be distributed.
 
 ### [B1-PLAT-2] Exported `singleTask` MainActivity accepts ACTION_SEND from ANY app, bypassing the system share chooser, and ingests attacker content into the vault
+- **Status:** `FIXED` — phase-58 (see fix-phase table row)
 - **Severity:** MEDIUM
 - **Area:** Batch 1 · Android platform surface
 - **Agent:** b1-platform
@@ -352,6 +392,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Fix:** Build the redaction patterns from `context.packageName` / `context.dataDir.path` at runtime instead of a hardcoded string. **Applied:** generic `/data/user/<uid>/...` + `/data/data/...` redaction (covers namespace and applicationId paths without hardcoding either package).
 
 ### [B1-PLAT-6] applicationId vs namespace mismatch (`com.aistudio.inkflow.app.bkxjrz` vs `com.authorss81.noteflow`)
+- **Status:** `RESOLVED` — resolved at triage (applicationId vs namespace misalign; aligning namespace is a MAJOR architectural change, Phase 21.10, requires user approval)
 - **Severity:** INFO
 - **Area:** Batch 1 · Android platform surface
 - **Agent:** b1-platform
@@ -360,6 +401,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Fix:** Align `namespace` to the applicationId (known Phase 21.10 work) or add a build-time check that greps main-source tree for the stale package string.
 
 ### [B1-PLAT-7] UpdateService auto-discovers update APKs in publicly writable directories and offers them as official updates
+- **Status:** `FIXED` — phase-61 (see fix-phase table row)
 - **Severity:** MEDIUM
 - **Area:** Batch 1 · Android platform surface
 - **Agent:** b1-platform
@@ -368,6 +410,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Fix:** Never treat public Downloads (or any locally-present APK) as a trusted update source. Only trust updates from an official channel with signature verification against a known/remote-verified signing key, and gate any self-install with a strong "update is not from a trusted source" confirmation.
 
 ### [B1-PLAT-8] Master password minimum length of 6; on-device lockout does not protect against offline brute force - **STATUS: FIXED (phase-90, `workspace/phase-90/REPORT.md`)**
+- **Status:** `FIXED` — phase-90 (see fix-phase table row)
 - **Severity:** LOW
 - **Area:** Batch 1 · Android platform surface
 - **Agent:** b1-platform
@@ -376,6 +419,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Fix:** Enforce a stronger minimum (≥10 chars) and reject common/sequential/prefix-suffix patterns; document that offline brute force is only mitigated by password entropy, not by the on-device lockout.
 
 ### [B1-CRYPTO-01] Downloadable-plugin integrity pins are supplied by an unauthenticated, unpinned HTTP(S) manifest — artifact verification collapses to "trust me"
+- **Status:** `FIXED` — phase-39 (see fix-phase table row)
 - **Severity:** CRITICAL
 - **Area:** Batch 1 · Cryptography & key management
 - **Agent:** b1-crypto
@@ -384,6 +428,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Fix:** Bind the manifest itself: fetch through a pinned transport using a **compile-time** cert hash (same mechanism as the artifact transport), or sign the manifest body with a compile-time-pinned key and verify before trusting any field. Update offers must never be allowed to re-define `sha256`/`pinnedCertHash` from an unauthenticated source; if the manifest is signed, the signature must commit the artifact pins.
 
 ### [B1-CRYPTO-02] Master password is bypassable: a non-user-authenticated AndroidKeyStore copy of the vault DEK persists after the password is set - **STATUS: FIXED (phase-45, `workspace/phase-45/REPORT.md`)**
+- **Status:** `FIXED` — phase-45 (see fix-phase table row)
 - **Severity:** HIGH
 - **Area:** Batch 1 · Cryptography & key management
 - **Agent:** b1-crypto
@@ -392,6 +437,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Fix:** In `setMasterPassword` (and on every password unlock) call `SecurityService.clearDek()` so the only at-rest wrapping of the DEK is under the password-derived KEK in settings. Re-persist the device copy ONLY when the user explicitly enables biometrics, and then with `authRequired = true` (biometric-gated key).
 
 ### [B1-CRYPTO-03] Salt and wrapped-DEK are written in two non-atomic `.apply()` steps; a process kill between them permanently bricks the vault - **STATUS: FIXED (phase-62, `workspace/phase-62/REPORT.md`)**
+- **Status:** `FIXED` — phase-62 (see fix-phase table row)
 - **Severity:** MEDIUM
 - **Area:** Batch 1 · Cryptography & key management
 - **Agent:** b1-crypto
@@ -400,6 +446,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Fix:** Store salt + wrappedDEK (+ format) as ONE versioned blob in a single `commit()` (disk-sync-acknowledged), or write the new pair to a scratch key and atomically swap; validate round-trip (decrypt the wrapped DEK) before reporting success.
 
 ### [B1-CRYPTO-04] Weak-password policy + process-local-only lockout ⇒ offline brute-force of the wrapped DEK on a copied vault
+- **Status:** `FIXED` — phase-63 (see fix-phase table row)
 - **Severity:** MEDIUM
 - **Area:** Batch 1 · Cryptography & key management
 - **Agent:** b1-crypto
@@ -409,6 +456,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Resolved — phase-63 (commit `llops/phase-63`, see `workspace/phase-63/REPORT.md`):** a NEW master password must now clear the pure-JVM `services/PasswordStrengthPolicy.kt` (the single decision table): ≥ 8 NFKC-normalized graphemes (`MIN_STRENGTH_GRAPHEMES`, stronger than the old 6 floor, still ≤ the 128 cap), no sequential/keyboard-row/single-run-repeat patterns (`12345678`, `qwerty`, `abcdefgh`, `aaaaaaaa`, `1qaz2wsx` — the exact patterns a GPU wordlist exhausts first), ≥ 3 distinct graphemes, and — for passwords under 12 graphemes — at least 3 of the 4 character classes (upper/lower/digit/symbol); passphrases ≥ 12 pass on length alone so `correct horse battery staple` inputs aren't rejected. The policy measures the NFKC-normalized password (`EncryptionService.normalizePassword`), i.e. the exact byte string `deriveKey` hashes (B2-CRYPTO-07), so full-width `１２３４５６７８` folds to `12345678` and is rejected as sequential. Enforced as the authoritative gate in `NoteflowViewModel.setMasterPassword` (`:2071`) + `changeMasterPassword` (`:2134`, NEW password only) and surfaced with the verdict's human-readable message by both Dialogs.kt master-password dialogs — never at `verifyMasterPassword`/`unwrapMasterDek`/`isMasterPasswordValid`, so a pre-existing weaker vault keeps unlocking and rotating. The finding's "lockout is UI-only / vault is only as strong as the password" caveat is documented in the policy KDoc (TEE-bound attempt gating or an Argon2id KDF remain tracked follow-ups — not introduced, no new deps, no API-floor change). Pinned by `B1Crypto04PasswordStrengthTest` (10 tests, incl. source pins). `gradle testDebugUnitTest` 1237 green + 2 pre-existing `B1Plat01ReleaseSigningTest` failures (proven unrelated on a clean stashed tree, as in phases 55/59/60/61/62); `gradle assembleDebug` green.
 
 ### [B1-CRYPTO-05] `getOrCreateDek` silently mints a brand-new DEK when the stored one becomes undecryptable → silent re-key destroys access to existing data
+- **Status:** `FIXED` — phase-64 (see fix-phase table row)
 - **Severity:** MEDIUM
 - **Area:** Batch 1 · Cryptography & key management
 - **Agent:** b1-crypto
@@ -418,6 +466,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Resolved — phase-64 (2026-08-15, see `workspace/phase-64/REPORT.md`):** the sealed pure-JVM `DekReadResult` distinguishes `NoBlob` (true first run ⇒ mint) from `KeyLost` (blob present but its AndroidKeyStore wrapping key is gone ⇒ NEVER mint). `getOrCreateDek` throws the typed `KeystoreKeyLostException` on `KeyLost` at every mint site, so the stored wrapper can never be overwritten by a fresh DEK and the phase-43 quarantiner is never tripped for this cause. The passwordless boot, `setMasterPassword` and the DB factory route through the sealed read; the VM surfaces a `keystoreKeyLost` recovery state (gated into `dbGate` so no open races it) and `MainActivity` renders `KeystoreKeyLostScreen` with restore-from-backup (mints a fresh DEK and persists its device copy only AFTER the restore succeeds) and an explicit start-fresh that moves the old vault aside as `noteflow.sqlite.keystore-lost-<ts>` (bytes preserved, never quarantined as corrupt). A non-secret `dek_wrapper_alias`/`dek_wrapper_version` marker is stamped on every stored blob. Pinned by `B1Crypto05SilentRekeyTest` (16 tests).
 
 ### [B1-CRYPTO-06] `DatabaseSecurityHelper` tamper check fails OPEN (missing/undecryptable checksum ⇒ trust and re-baseline)
+- **Status:** `FIXED` — phase-91 (see fix-phase table row)
 - **Severity:** LOW
 - **Area:** Batch 1 · Cryptography & key management
 - **Agent:** b1-crypto
@@ -427,6 +476,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Resolved — phase-91 (2026-08-16, see `workspace/phase-91/REPORT.md`):** `verifyDatabaseIntegrity` is now FAIL-CLOSED and write-free. It returns a sealed `DatabaseIntegrityVerdict` (`services/DatabaseIntegrityPolicy.kt`, the single pure-JVM three-outcome decision table) — NEVER a bare boolean: `Verified` (stored baseline present + matching current main+`-wal` HMAC), `Mismatch` (baseline present + differing bytes → genuine tamper), `CannotVerify` (baseline MISSING or current HMAC UN-COMPUTABLE → "cannot verify / possibly tampered"). Both pre-fix collapses are gone: `stored == null` no longer runs `updateStoredChecksum(context); return true` (no silent re-baseline — an attacker deleting the `db_hmac_checksum` pref now trips `CannotVerify` instead of blessing the tampered file) and `computeDatabaseHmac() ?: return true` is replaced by an explicit `null → CannotVerify`. The function NEVER writes; the pref is write-only through `updateStoredChecksum`/`rearmBaselineFromFile` at the trusted arm sites (fresh-vault creation, migration, re-encrypt, backup, validate-then-arm restore). `NoteflowViewModel.verifyDatabaseIntegrityNow` (`NoteflowViewModel.kt:1188-1193`) maps the verdict: `Mismatch` keeps the existing per-session tamper banner (B1-DB-6 gate), `CannotVerify` surfaces a DISTINCT non-alarming banner (`MainActivity.kt` tertiaryContainer notice, wording from `DatabaseIntegrityPolicy.CANNOT_VERIFY_NOTICE`) — vault NOT locked, NOT proven compromised, just unable to verify — shared per-session dismissal, and `Verified` clears both. The ONE legitimate auto-arm is a brand-new vault: `initializeDataCore` re-arms the baseline ONLY when `!vaultFilePresentAtStart && !hasStoredChecksum(appContext)` (a first-run vault has no prior state to tamper and would otherwise false-alarm the fail-closed notice forever). Comparison stays constant-time via `ConstantTime.hexEqual` (B2-CRYPTO-01 full-length `MessageDigest.isEqual`). **Phase-91 review fixes (commit `llops: phase-91 review fixes`)**: (a) the "fresh" probe is WAL-aware (`vaultFilePresentAtStart` counts a populated `-wal`; `computeDatabaseHmac` stays computable for an empty main + populated `-wal`) so a WAL-resident existing vault can never be silently re-baselined; (b) the first passwordless verification is deferred past the initial data open (`firstDataInitDone` gate) so a mid-WAL-recovery hash cannot false-Mismatch — unlocked-at-init (locked/master-password) vaults still verify at startup; (c) `CannotVerify` honors the same per-session dismissal gate as `Mismatch`; (d) the two `MainActivity` banners are deduplicated into one `IntegrityBannerCard` composable. No schema change, no migration, no new deps, `.github/workflows/` untouched, API-26+ pure JVM. Tests: `B1Crypto06DatabaseIntegrityPolicyTest` (11 — decision table incl. both fail-closed sides, constant-time compare pin, write-free helper, read-only `hasStoredChecksum`, distinct VM state + verdict-mapping incl. fresh-unarmed suppression, per-session dismissal reuse, MainActivity notice pins); `gradle testDebugUnitTest` 1577 total green (0 failures, 0 skipped) + `gradle assembleDebug` green (debug APK 173,792,606 B, SHA-256 `8ecac53f…`).
 
 ### [B1-CRYPTO-07] Biometric DEK key is only biometric-gated on API 30+; below that it is satisfiable by any device credential
+- **Status:** `FIXED` — phase-65 (see fix-phase table row)
 - **Severity:** MEDIUM
 - **Area:** Batch 1 · Cryptography & key management
 - **Agent:** b1-crypto
@@ -435,6 +485,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Fix:** Store an explicit marker of the API level at key creation; refuse to enable biometric lock (or fall back to a clear warning + password-only) when the platform cannot create a biometric-STRONG-bound key; use `AUTH_BIOMETRIC_STRONG` in `setUserAuthenticationParameters` unconditionally once a minimum-SDK bump is feasible.
 
 ### [B1-CRYPTO-08] Artifact signer pin binds only ONE entry's cert (last-signed-entry-wins) instead of the full signer set — no chain/expiry/key-usage validation
+- **Status:** `FIXED` — phase-66 (see fix-phase table row)
 - **Severity:** MEDIUM
 - **Area:** Batch 1 · Cryptography & key management
 - **Agent:** b1-crypto
@@ -444,6 +495,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Resolved — phase-66 (commit `llops/phase-66`):** The exploit path is closed. `ArtifactSignatureVerifier.kt` no longer takes a last-signed-entry cert: `collectSignerSet` (`ArtifactSignatureVerifier.kt:162`) force-verifies the JAR (`JarFile(verify=true)`) and requires EVERY non-META-INF entry to be covered by exactly one signer (an unsigned entry inside a verified jar — the attacker-key-on-`classes.dex` shape — is a hard `Result.Invalid`), rejects any multi-signer entry, rejects any archive whose entries mix different signers (`:189`), and fails hard on an EMPTY verified signer set (`:199`) — never a fallback to a last-seen value. "One signer" is judged per signer CHAIN (`singleSignerChain`, `:235`), so a single CA-issued signer (leaf + issuers) is accepted while a second signer's chain is a hard boundary. New pure-JVM `SignerCertificatePolicy.kt` is the single decision table run by `verify()` (`:115`): `checkValidity(now)` rejects an expired/not-yet-valid pinned cert (previously silently accepted) and a `KeyUsage` extension lacking the digitalSignature bit (bit 0) is rejected; an absent extension is unrestricted (RFC 5280). As defense in depth, a key-usage-invalid cert is ALSO refused by the signer-set gate when the platform JAR verifier surfaces such entries with `null` certificates. The pin compare runs first (`:107`), so a wrong key reports the accurate pin-mismatch reason. Pure JVM, runs unchanged on the API 26+ floor (no new platform requirement). Tests: `B1Crypto08SignerSetTest` (19 — single-pinned-signer passes; CA-chain-signed single signer passes; two-signer jar over every entry fails; signed+unsigned mixed jar fails; unsigned artifact fails; expired cert fails even with a matching pin hash; KeyUsage-excluded cert refused; policy table accepts absent/digitalSignature usage and rejects expired/not-yet-valid/non-signing certs; synthetic `singleSignerChain`/`sameChain` decision-table tests; source pins for `collectSignerSet`/`SignerCertificatePolicy.validate`/`singleSignerChain` and absence of the `certs.firstOrNull()` fallback). `gradle testDebugUnitTest` 1294 total (only the 2 pre-existing `B1Plat01ReleaseSigningTest` failures, untouched build.gradle/RELEASE.md asserts documented since phase-55) + `gradle assembleDebug` green (173.7 MB debug APK SHA-256 `41f94289…`). No schema change, no migration, no new deps, `.github/workflows/` untouched.
 
 ### [B1-AUTH-01] Downloadable plugin bytecode executes with the app classloader as parent — the capability facade is a convention, not an isolation boundary; DEK/DB/keystore are directly reachable in-process
+- **Status:** `FIXED` — phase-46 (see fix-phase table row)
 - **Severity:** HIGH
 - **Area:** Batch 1 · App logic & auth
 - **Agent:** b1-applogic
@@ -457,6 +509,7 @@ No DB schema, workflow, or dependency changes were made.
   4. Proven by `PluginBytecodeIsolationTest` (20 tests now): hostile `VaultKeyHolder`-touching bytecode loads under the pre-fix raw parent (control) and fails under the sandbox and under `verify()`; a whitelisted plugin (own package, `plugins.*`-only) loads + executes; wiring pins guard both gates. The B1-AUTH-03 hook-privilege aspect remains that finding's scope (phase-47/48).
 
 ### [B1-AUTH-02] Locking zeroizes `VaultKeyHolder` but leaves the keyed SQLCipher connection open, and the DB factory silently re-derives the DEK from prefs while the vault is locked — the lock is not enforced at the data layer
+- **Status:** `FIXED` — phase-47 (see fix-phase table row)
 - **Severity:** HIGH
 - **Area:** Batch 1 · App logic & auth
 - **Agent:** b1-applogic
@@ -465,6 +518,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Fix:** `lock()` must also `NoteflowDatabase.dispose()` (close/forget the SQLCipher connection so no keyed handle survives) and re-open only after a successful explicit unlock; `NoteflowSqlcipherFactory.create` must fail closed when `VaultKeyHolder.dek == null` instead of calling `getOrCreateDek()` (no key → throw/route to a recovery screen, never silently mint or restore a key on a locked vault).
 
 ### [B1-AUTH-03] Downloadable-plugin lifecycle hooks (`onProcessStart` → `onEnable`) execute on every cold start while the vault is still locked
+- **Status:** `FIXED` — phase-67 (see fix-phase table row)
 - **Severity:** MEDIUM
 - **Area:** Batch 1 · App logic & auth
 - **Agent:** b1-applogic
@@ -473,6 +527,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Fix:** Gate all plugin runtime loading and lifecycle hooks (including store re-materialization) behind `authenticated == true`; do not run any plugin code before a successful unlock, and stop/disable hooks on lock.
 
 ### [B1-AUTH-04] Markdown image references resolve arbitrary absolute and `..`-traversing paths (local file disclosure + existence oracle)
+- **Status:** `FIXED` — phase-68 (see fix-phase table row)
 - **Severity:** MEDIUM
 - **Area:** Batch 1 · App logic & auth
 - **Agent:** b1-applogic
@@ -481,6 +536,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Fix:** Resolve image destinations only inside an allowlisted app-private subtree via `file.canonicalPath.startsWith(rootDir.canonicalPath)`; reject absolute paths and any path segment `..`.
 
 ### [B1-AUTH-05] `note.sourceFilePath` is stored unencrypted and never validated — a crafted vault backup can point it at arbitrary files (read/write primitive inside the app sandbox)
+- **Status:** `FIXED` — phase-69 (see fix-phase table row)
 - **Severity:** MEDIUM
 - **Area:** Batch 1 · App logic & auth
 - **Agent:** b1-applogic
@@ -489,6 +545,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Fix:** Canonicalize `sourceFilePath` at restore/import time and confine it under the imports root (reject non-matching absolute paths and any `..`); enforce the same confinement in `updatePageSource` and on every read/write in MainActivity/WikiLinkParser.
 
 ### [B1-AUTH-06] `.md`/`.txt` note bodies and imported text files are stored in cleartext on disk while only the DB columns are encrypted
+- **Status:** `FIXED` — grouped into phase-44 with B1-DB-4 (same root cause)
 - **Severity:** MEDIUM
 - **Area:** Batch 1 · App logic & auth
 - **Agent:** b1-applogic
@@ -498,6 +555,7 @@ No DB schema, workflow, or dependency changes were made.
 - **RESOLVED:** phase-44 (commit `c23a11c`, `workspace/phase-44/REPORT.md`) — same root cause as B1-DB-4, fixed by the same change: no plaintext `.md`/`.txt` note-body file is written or left behind at rest (`NoteBodyVaultPolicy` classification + `updatePageBody`/`migrateLegacyPlaintextNoteBodies`), so the plaintext "duplicate" flagged here no longer exists.
 
 ### [B1-AUTH-07] `isMasterPasswordValid` is an unrestrained master-password oracle that bypasses the 5-attempt exponential lockout
+- **Status:** `FIXED` — phase-92 (see fix-phase table row)
 - **Severity:** LOW
 - **Area:** Batch 1 · App logic & auth
 - **Agent:** b1-applogic
@@ -506,6 +564,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Fix:** Route `isMasterPasswordValid` through the same counters/lockout as `verifyMasterPassword` (or reject it entirely and reuse the throttled verifier at a single call site); require in-app re-authentication immediately before a password-protected export.
 
 ### [B2-LOG-01] AppStartupLogger's uncaught-exception handler dumps the RAW, unsanitized stack trace to logcat AND `app_startup.log`, and because it is registered after PrivacyCrashReporter it runs FIRST — the entire "privacy-first sanitized crash reporting" guarantee is dead on arrival
+- **Status:** `FIXED` — phase-48 (see fix-phase table row)
 - **Severity:** HIGH
 - **Area:** Batch 2 · Logging / telemetry / info disclosure
 - **Agent:** b2-log
@@ -514,6 +573,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Fix:** Remove the crash-dump behavior from AppStartupLogger entirely (keep it for startup timing events only) and let a single handler (PrivacyCrashReporter) own uncaught-exception logging; or route AppStartupLogger's `logCrash` through the same `sanitizeMessage`/stack-scrubbing as PrivacyCrashReporter and never write the raw trace to logcat.
 
 ### [B2-LOG-02] `app_startup.log` is appended without any size cap, rotation, or pruning — unbounded disk growth plus indefinite retention of raw crash data on the app-private partition
+- **Status:** `FIXED` — phase-70 (see fix-phase table row)
 - **Severity:** MEDIUM
 - **Area:** Batch 2 · Logging / telemetry / info disclosure
 - **Agent:** b2-log
@@ -522,6 +582,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Fix:** Cap the file (e.g. reuse the 500KB budget), rotate on size (keep last N), prune on init, and exclude raw stack dumps (see B2-LOG-01). `getLogs`/`clearLogs` (`AppStartupLogger.kt:90-112`) are also currently dead code with no caller — if any "export/share logs" UI is ever added, this file must be sanitized before leaving the device.
 
 ### [B2-LOG-03] ImportExportService `Log.e/w(..., e)` passes the full exception, printing app-private file paths whose filenames ARE note titles into logcat on every import/export failure
+- **Status:** `FIXED` — phase-71 (see fix-phase table row)
 - **Severity:** MEDIUM
 - **Area:** Batch 2 · Logging / telemetry / info disclosure
 - **Agent:** b2-log
@@ -530,6 +591,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Fix:** Log only the sanitized exception class name (never the exception object/message) for these import/export failures, or wrap I/O in a routine that converts exceptions to user-facing text without the path; audit every `Log.(e|w)(tag, msg, e)` call site to strip embedded app-private paths.
 
 ### [B2-LOG-04] Plugin download/install failure messages echo the attacker-controllable download URL into logcat, violating PluginLogger's "ids/names/exception-classes only" contract
+- **Status:** `FIXED` — phase-93 (see fix-phase table row)
 - **Severity:** LOW
 - **Area:** Batch 2 · Logging / telemetry / info disclosure
 - **Agent:** b2-log
@@ -538,6 +600,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Fix:** Enforce the PluginLogger contract mechanically: `DownloadablePluginInstaller.failCleanup` and `PluginStoreController` should log `e::class.java.simpleName`-style tokens or a fixed reason code, never `message`/`reason` strings that embed URLs; reject `\n`/`\r` in plugin ids and log fields.
 
 ### [B2-LOG-05] WebDAV failure paths echo raw exception text (which can carry the full server URL and, if the user pasted `user:pass@` into the URL field, the credentials) into the sync-status UI with no scrubbing
+- **Status:** `FIXED` — phase-94 (see fix-phase table row)
 - **Severity:** LOW
 - **Area:** Batch 2 · Logging / telemetry / info disclosure
 - **Agent:** b2-log
@@ -546,6 +609,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Fix:** Never include `e.message` in user-facing sync results; map known failures (connect, auth, HTTP status) to fixed strings; when echoing any URL-derived text, strip `userinfo` and scrub `://host/path` to `host/...`.
 
 ### [B2-LOG-06] No telemetry/crash-reporting SDK ships in the base APK (positive) — grep-confirmed; the disclosure surface is purely the accidental channels documented in B2-LOG-01/03
+- **Status:** `RESOLVED` — resolved at triage (no telemetry/crash SDK is the intended posture; no independent fix)
 - **Severity:** INFO
 - **Area:** Batch 2 · Logging / telemetry / info disclosure
 - **Agent:** b2-log
@@ -554,6 +618,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Fix:** None required beyond the B2-LOG-01/03 fixes; keep the no-SDK posture and, if a log-viewing feature is ever added, route it through the sanitizer.
 
 ### [B2-LOG-07] JankStatsHelper logs screen names and per-frame timing to logcat on every janky frame; MainActivity logs every lifecycle event — routine device-activity fingerprinting from logcat
+- **Status:** `FIXED` — phase-111 (see fix-phase table row)
 - **Severity:** INFO
 - **Area:** Batch 2 · Logging / telemetry / info disclosure
 - **Agent:** b2-log
@@ -562,6 +627,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Fix:** Gate jank logging behind `BuildConfig.DEBUG` (or an opt-in developer flag) and reduce lifecycle events to a single process-start event; never log screen names of screens that reveal note titles.
 
 ### [B2-UI-1] Post-lock autosave / dispose-flush saves write PLAINTEXT into field-encrypted columns (encrypt-or-plaintext fallback with saves left running past `lock()`)
+- **Status:** `FIXED` — phase-49 (see fix-phase table row)
 - **Severity:** HIGH
 - **Area:** Batch 2 · Compose/UI, concurrency, TOCTOU
 - **Agent:** b2-ui
@@ -570,6 +636,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Fix:** Fail closed in the repository — when `encryptionKey == null`, throw/skip the write instead of storing plaintext. In `lock()` cancel `saveJob` and join the dispose-flush, or gate both flushes on `viewModel.authenticated.value` and re-queue them to run encrypted after the next unlock.
 
 ### [B2-UI-2] In-app lock paths (manual "Lock Vault Now", idle auto-lock) leave copied note/code/OCR text on the system clipboard — scrubbing only runs on ON_PAUSE
+- **Status:** `FIXED` — phase-72 (see fix-phase table row)
 - **Severity:** MEDIUM
 - **Area:** Batch 2 · Compose/UI, concurrency, TOCTOU
 - **Agent:** b2-ui
@@ -578,6 +645,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Fix:** Call `ClipboardGuard.scrubIfOwnCopy(context)` inside `NoteflowViewModel.lock()` (via the application context) or in every `viewModel.lock()` call site (auto-lock, manual, ON_STOP), so a lock always scrubs regardless of which lifecycle event preceded it; and clear the guard timestamp on scrub so foreign copies aren't wiped.
 
 ### [B2-UI-3] Unsynchronized shared `lastSavedStrokeHash` HashMap + concurrent `saveStrokesForPage` calls (debounced autosave vs NonCancellable dispose flush) → lost stroke updates / map corruption
+- **Status:** `FIXED` — phase-73 (see fix-phase table row)
 - **Severity:** MEDIUM
 - **Area:** Batch 2 · Compose/UI, concurrency, TOCTOU
 - **Agent:** b2-ui
@@ -586,6 +654,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Fix:** Serialize per-page saves (per-page `Mutex`, or route all page writes through a single actor/coroutine); make `lastSavedStrokeHash` a `ConcurrentHashMap` keyed by pageId+strokeId (or move it inside the DAO transaction under Room's writer lock); have the dispose flush cancel the pending debounce job and await it.
 
 ### [B2-UI-4] `lock()` clears the session StateFlows but `unlock()` never re-establishes them (`dataInitialized` sticky) — post-unlock state re-validation gap leaves empty/stale vault lists
+- **Status:** `FIXED` — phase-95 (see fix-phase table row)
 - **Severity:** LOW
 - **Area:** Batch 2 · Compose/UI, concurrency, TOCTOU
 - **Agent:** b2-ui
@@ -594,6 +663,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Fix:** Reset `dataInitialized = false` in `lock()` and have unlock success call `initializeData()` (restoring active notebook/section from prefs and re-arming `observeSections`/`observePages`) before any page content is re-shown; alternatively keep the observers alive and emit a key/state generation that forces re-collection on unlock.
 
 ### [B2-UI-5] Markdown note body saves are non-atomic `File.writeText` racing a concurrent `produceState` read and concurrent writes on navigation — torn/truncated note files, lost tail content
+- **Status:** `FIXED` — phase-74 (see fix-phase table row)
 - **Severity:** MEDIUM
 - **Area:** Batch 2 · Compose/UI, concurrency, TOCTOU
 - **Agent:** b2-ui
@@ -602,6 +672,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Fix:** Serialize+atomicize markdown saves: write to a temp file in the same directory and `renameTo` (atomic on the same filesystem), or hold a per-path `Mutex` around read+write; cancel/await in-flight writes in `onDispose` before allowing the target screen's read.
 
 ### [B2-UI-6] Vault-wide imports/exports run on `rememberCoroutineScope`, which lock/teardown cancels mid-loop — partial plaintext imports orphaned in the vault dir, torn artifacts possible in public Downloads
+- **Status:** `FIXED` — phase-96 (see fix-phase table row)
 - **Severity:** LOW
 - **Area:** Batch 2 · Compose/UI, concurrency, TOCTOU
 - **Agent:** b2-ui
@@ -610,6 +681,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Fix:** Run imports/exports/restore on `viewModelScope` (survives composition teardown) with an explicit completion path that posts a snackbar via the `snackbarMessages` pipeline; in the import loop, delete the just-persisted source file if the `createPage` step was cancelled, so no orphaned plaintext files accumulate on lock.
 
 ### [B2-DEPS-01] jsoup 1.17.2 is vulnerable to CVE-2026-71497 (XSS via cleaner misparse, fixed in 1.23.1) — confirmed CVE on the pinned version; vulnerable path not exercised
+- **Status:** `FIXED` — phase-97 (see fix-phase table row)
 - **Severity:** LOW
 - **Area:** Batch 2 · Dependencies / CVE / supply chain
 - **Agent:** b2-deps
@@ -618,6 +690,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Fix:** Upgrade `jsoup` to `>= 1.23.1` (libs.versions.toml:28/74). If jsoup is only used for `Jsoup.parse`, optionally pin to the current release and re-audit the tag-name handling; document that the Cleaner must never be configured with custom raw-text `Safelist` elements until the upgrade lands.
 
 ### [B2-DEPS-02] `security-crypto 1.1.0-alpha06`: unmaintained alpha of a Google-deprecated library AND a dead dependency (never used in app code). NOTE: the commonly-cited "CVE-2024-37150 / Elliptic Curve forgery" is a MISATTRIBUTION — that CVE is a Deno npm-registry bug, not androidx.security
+- **Status:** `FIXED` — phase-112 (see fix-phase table row)
 - **Severity:** INFO
 - **Area:** Batch 2 · Dependencies / CVE / supply chain
 - **Agent:** b2-deps
@@ -626,6 +699,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Fix:** Delete the unused `implementation(libs.security.crypto)` line (`app/build.gradle.kts:142`) plus the version/catalog entry unless a real use appears; if encrypted prefs are ever needed, use AndroidKeyStore + Tink directly (or `datastore-tink`) per Google's guidance — do not adopt the deprecated library. Do not cite CVE-2024-37150 for this library anywhere; it does not exist.
 
 ### [B2-DEPS-03] No Gradle dependency verification: online resolution against google()/mavenCentral() is the root supply-chain trust anchor, and the Gradle distribution itself is not checksum-pinned
+- **Status:** `FIXED` — phase-75 (see fix-phase table row)
 - **Severity:** MEDIUM
 - **Area:** Batch 2 · Dependencies / CVE / supply chain
 - **Agent:** b2-deps
@@ -634,6 +708,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Fix:** Enable Gradle dependency verification (`dependencyVerification { verify = ... }`), generate and commit `gradle/verification-metadata.xml` (starting with `--write-verification-metadata sha256`), add content filters to `dependencyResolutionManagement` mirroring the `pluginManagement` ones, commit the Gradle wrapper with `distributionSha256Sum` (or pass a pinned checksum to setup-gradle), and download the opencode CLI from a checksum-verified artifact instead of `curl | bash`.
 
 ### [B2-DEPS-04] Downloadable-plugin signing key: hardcoded default password committed in source + ephemeral self-signed keystore fallback = per-build signing identities with a public secret; the "compile-time pin" (`:app:generateLlmPluginSeed`) is referenced but never implemented
+- **Status:** `FIXED` — phase-76 (see fix-phase table row)
 - **Severity:** MEDIUM
 - **Area:** Batch 2 · Dependencies / CVE / supply chain
 - **Agent:** b2-deps
@@ -642,6 +717,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Fix:** Delete the ephemeral `keytool -genkeypair` fallback and the hardcoded `DEFAULT_KEY_PASSWORD`; make `plugins/llm` build FAIL when `PLUGIN_SIGNING_KEYSTORE_B64`/`PLUGIN_SIGNING_STORE_PASS` are unset. Keep the signing key in a secret store, rotate credentials, and actually implement `:app:generateLlmPluginSeed` (or remove the claim) so the app's compiled-in pin matches the one real CI key identity — never a build-bred one.
 
 ### [B2-DEPS-05] Downloaded LLM model (GGUF) is neither hash-pinned nor signature-verified — arbitrary model accepted after a redirectable TLS download with only a ">1 MB" plausibility check
+- **Status:** `OPEN` — NOT STARTED. The phase-77 `.done` was a FALSE COMPLETION (removed in the phase-115 sweep); no fix exists yet — see the fix-phase table row. The vulnerable code at `AssistantModelDownloader.kt:72` (`instanceFollowRedirects = true`, no SHA-256 pin, `expectedSizeBytes` never compared) is UNCHANGED.
 - **Severity:** MEDIUM
 - **Area:** Batch 2 · Dependencies / CVE / supply chain
 - **Agent:** b2-deps
@@ -650,6 +726,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Fix:** Publish and verify the expected SHA-256 (and ideally a detached signature) of the default GGUF; pin the download host (huggingface.co) and set `instanceFollowRedirects=false` or re-validate redirect targets; drop the user-editable arbitrary URL (or gate it behind strong confirmation + show the hash); verify `expectedSizeBytes` equals actual bytes after download.
 
 ### [B2-DEPS-06] Dependency age / known-CVE sweep — no additional confirmed CVEs on the pinned versions; SQLCipher/Coil/OkHttp/Gson verified clean; licenses are all permissive
+- **Status:** `RESOLVED` — resolved at triage (no confirmed CVE beyond B2-DEPS-01/phase-97; cadence + CI scanner are process items)
 - **Severity:** INFO
 - **Area:** Batch 2 · Dependencies / CVE / supply chain
 - **Agent:** b2-deps
@@ -658,6 +735,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Fix:** Establish a dependency-bump cadence (e.g., quarterly) and a CI advisory scanner (OSV-Scanner or Gradle `dependency-analysis` + `blockOnUnknown`); specifically plan Room 2.7+, Compose BOM 2026.x, biometric/fingerprint API migration, and re-baseline the BOM on the next AGP/Kotlin upgrade; keep SQLCipher, Gson, OkHttp, Coil as-is (no action until new advisories appear).
 
 ### [B2-DOS-01] Unbounded stroke geometry: no caps on stroke count or points-per-stroke at write or load → OOM / permanent jank when a page with millions of points is opened
+- **Status:** `FIXED` — phase-50 (see fix-phase table row)
 - **Severity:** HIGH
 - **Area:** Batch 2 · Resource-exhaustion / DoS
 - **Agent:** b2-dos
@@ -666,6 +744,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Fix:** Enforce caps at both ends: max points per stroke and max strokes per page (e.g. 200k points/page) at `saveStrokesForPage` (truncate/reject) and at restore/import (drop oversized rows in `restoreFromZip`); add `LIMIT`/lazy paging to `getStrokesForPage`; render with viewport/zoom culling and an off-main raster so point count does not scale per-frame cost linearly.
 
 ### [B2-DOS-02] Vault search re-decrypts the ENTIRE vault on every query when the corpus exceeds 1500 pages (cache deliberately disabled), and all page-list reads are LIMIT-less
+- **Status:** `FIXED` — phase-78 (see fix-phase table row)
 - **Severity:** MEDIUM
 - **Area:** Batch 2 · Resource-exhaustion / DoS
 - **Agent:** b2-dos
@@ -674,6 +753,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Fix:** Always cap the searched window (e.g. first 1500 rows with an explicit "refine" path), or build a real incremental encrypted search index; keep the debounce and additionally cancel the previous in-flight search (share a Job) so concurrent full-decrypts cannot pile up; add `LIMIT` to `getAllActivePagesFlow`/`getPagesForSection` consumers or virtualize loads.
 
 ### [B2-DOS-03] Voice notes: unbounded recording duration/size, and the waveform list is rebuilt by copy-on-write on the MAIN thread every 100 ms (O(n²) over the session)
+- **Status:** `FIXED` — phase-79 (see fix-phase table row)
 - **Severity:** MEDIUM
 - **Area:** Batch 2 · Resource-exhaustion / DoS
 - **Agent:** b2-dos
@@ -682,6 +762,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Fix:** Enforce a maximum recording length (e.g. 30 min) and a max file size in `startRecording`/the sampler (abort + surface the error); write amplitudes into a preallocated `MutableList`/`FloatArray` and emit a down-sampled fixed-budget view (≤600 entries) so appends are O(1); run the sampler off the main dispatcher.
 
 ### [B2-DOS-04] `AppFacadeHost.httpGet` buffering is unbounded during the read: the size cap is checked only after `readBytes()` has already slurped the entire response (chunked/no-Content-Length and redirect chains bypass it)
+- **Status:** `FIXED` — phase-80 (see fix-phase table row)
 - **Severity:** MEDIUM
 - **Area:** Batch 2 · Resource-exhaustion / DoS
 - **Agent:** b2-dos
@@ -690,6 +771,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Fix:** Replace `readBytes()` with a bounded streaming loop enforcing `MAX_FACADE_GET_BYTES` during the read (abort mid-stream), and set `instanceFollowRedirects = false` with per-hop re-validation (mirror `WebPageFetcher.readCapped`).
 
 ### [B2-DOS-05] Attachment/import ingestion slurps attacker- or user-supplied files wholly into heap with zero size cap (`readBytes`/`readText` on the full file)
+- **Status:** `FIXED` — phase-81 (see fix-phase table row)
 - **Severity:** MEDIUM
 - **Area:** Batch 2 · Resource-exhaustion / DoS
 - **Agent:** b2-dos
@@ -698,6 +780,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Fix:** Query `OpenableColumns.SIZE`/`ContentResolver` before reading and reject above a cap (25 MB), or stream-copy to the app-private file with a running-byte counter that aborts over budget (as `copyWithLimit` does for restores, `ImportExportService.kt:1216-1253`, but applied at ingestion time); bound `DocumentTextExtractor` reads to the first N MB.
 
 ### [B2-DOS-06] Multi-layer PSD export materializes N full-page ARGB bitmaps plus N per-layer channel buffers simultaneously → OOM on many-layer pages (no layer-count cap) - **STATUS: FIXED (phase-82, `workspace/phase-82/REPORT.md`)**
+- **Status:** `FIXED` — phase-82 (see fix-phase table row)
 - **Severity:** MEDIUM
 - **Area:** Batch 2 · Resource-exhaustion / DoS
 - **Agent:** b2-dos
@@ -715,6 +798,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Status:** `FIXED` 2026-08-16 (phase-83) — see `workspace/phase-83/REPORT.md`.
 
 ### [B2-DOS-08] WebDAV PROPFIND listing is read into memory via `readText()` with no size cap (server-controlled network stream free to blow the heap)
+- **Status:** `FIXED` — phase-98 (see fix-phase table row)
 - **Severity:** LOW
 - **Area:** Batch 2 · Resource-exhaustion / DoS
 - **Agent:** b2-dos
@@ -723,6 +807,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Fix:** Read the response into a capped buffer (e.g. 4 MB hard limit) and fail the sync listing if exceeded; process hrefs incrementally rather than buffering the whole document.
 
 ### [B2-DOS-09] `RamerDouglasPeucker.simplify` recurses with depth proportional to worst-case point count → StackOverflowError on a single very long stroke
+- **Status:** `FIXED` — phase-99 (see fix-phase table row)
 - **Severity:** LOW
 - **Area:** Batch 2 · Resource-exhaustion / DoS
 - **Agent:** b2-dos
@@ -731,6 +816,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Fix:** Convert `simplify` to an iterative stack implementation or cap the segment size / terminate recursion at a fixed budget (e.g. depth 2000 → fall back to no-op smoothing); alternatively cap accumulated `activePoints` (e.g. 20k) in the touch handler.
 
 ### [B2-DOS-10] `lastSavedStrokeHash` grows for every edited stroke across the whole session (entry added at `saveStrokesForPage`, removed only on explicit delete) — unbounded session-tonal growth
+- **Status:** `FIXED` — phase-100 (see fix-phase table row)
 - **Severity:** LOW
 - **Area:** Batch 2 · Resource-exhaustion / DoS
 - **Agent:** b2-dos
@@ -739,6 +825,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Fix:** Clear `lastSavedStrokeHash` on page switch / unlock (or bound it with an LRU cap at e.g. 10k entries).
 
 ### [B2-DOS-11] Backlink/tag-hierarchy and knowledge-graph builders re-read and re-scan the ENTIRE vault per invocation with no caching or LIMIT — O(n × avg-note-size) aggregate each time the panel opens
+- **Status:** `FIXED` — phase-101 (see fix-phase table row)
 - **Severity:** LOW
 - **Area:** Batch 2 · Resource-exhaustion / DoS
 - **Agent:** b2-dos
@@ -747,6 +834,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Fix:** Cache computed backlinks/tag-hierarchy per unlock epoch, cap the scanned set (LIMIT), cache `getFullTextForPage` results in-memory (bounded), and bound the tag-tree recursion depth; run the builds on `Dispatchers.Default` with cancellation when the panel closes.
 
 ### [B2-CRYPTO-01] Tamper HMAC is compared with non-constant-time `String.equals` — a byte-by-byte timing oracle on the 256-bit checksum
+- **Status:** `FIXED` — phase-102 (see fix-phase table row)
 - **Severity:** LOW
 - **Area:** Batch 2 · Crypto side-channels & edge cases
 - **Agent:** b2-crypto
@@ -755,6 +843,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Fix:** Compare with `MessageDigest.isEqual(stored.toByteArray(), current.toByteArray())` (or fold both through `PinnedCertHash`-style constant-time bytes comparison) and consider `==`/`equals` banned for any HMAC/tag/pin comparison in the codebase.
 
 ### [B2-CRYPTO-02] Plugin artifact SHA-256 verification uses non-constant-time `String.equals` (and `ignoreCase`) for the digest gate
+- **Status:** `FIXED` — phase-103 (see fix-phase table row)
 - **Severity:** LOW
 - **Area:** Batch 2 · Crypto side-channels & edge cases
 - **Agent:** b2-crypto
@@ -763,6 +852,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Fix:** Compare digests with `MessageDigest.isEqual` on the raw/hex bytes (drop `ignoreCase`, normalize case once at parse time); enforce a single constant-time comparison helper for ALL digest/pin checks.
 
 ### [B2-CRYPTO-03] Backup v2 payload is NOT bound to its own header by AAD, and the KEK does double duty (wrap DEK + encrypt payload) with only IV separation
+- **Status:** `FIXED` — phase-104 (see fix-phase table row)
 - **Severity:** LOW
 - **Area:** Batch 2 · Crypto side-channels & edge cases
 - **Agent:** b2-crypto
@@ -780,6 +870,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Status:** `FIXED` 2026-08-16 (phase-84) — see `workspace/phase-84/REPORT.md`.
 
 ### [B2-CRYPTO-05] `EncryptionService.decrypt` version-byte-guessing fallback runs a SECOND full GCM decrypt only on `AEADBadTagException` — a measurable timing/tag-behavior oracle distinguishing versioned from legacy ciphertext
+- **Status:** `FIXED` — phase-105 (see fix-phase table row)
 - **Severity:** LOW
 - **Area:** Batch 2 · Crypto side-channels & edge cases
 - **Agent:** b2-crypto
@@ -788,6 +879,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Fix:** Pick the format deterministically (legacy formats are exactly 12-byte-IV + ciphertext with no version prefix; versioned are ≥ 13 with byte 0 = 1 — distinguish by a committed length/format marker, or drop legacy support and fail closed) so a tag failure never triggers a second decrypt on guessed layout.
 
 ### [B2-CRYPTO-06] Exact-to-the-millisecond timestamps in backup/sync filenames and corruption markers leak vault-activity patterns to public storage, MTP/USB, and the WebDAV server
+- **Status:** `FIXED` — phase-106 (see fix-phase table row)
 - **Severity:** LOW
 - **Area:** Batch 2 · Crypto side-channels & edge cases
 - **Agent:** b2-crypto
@@ -796,6 +888,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Fix:** Name exported backups with random tokens or day-granularity strings (never epoch-millis in public/remote filenames); keep internal temp names private where possible.
 
 ### [B2-CRYPTO-07] No Unicode normalization for master/backup passwords — raw UTF-16 code units enter PBKDF2, so NFC vs NFD "identical" passwords permanently mismatch (denial, fail-safe) and long passwords shift PBKDF2 cost
+- **Status:** `FIXED` — phase-113 (see fix-phase table row)
 - **Severity:** INFO
 - **Area:** Batch 2 · Crypto side-channels & edge cases
 - **Agent:** b2-crypto
@@ -804,6 +897,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Fix:** Normalize to NFKC (and document it) at both `setMasterPassword`/`changeMasterPassword` and at every verify/decrypt call site; cap password length at a sane maximum and measure it in graphemes.
 
 ### [B2-CRYPTO-08] RNG hygiene audit: fresh `SecureRandom` per IV/salt/DEK (no IV reuse on re-encryption, no seedable instances) — but no provider pinning anywhere
+- **Status:** `FIXED` — phase-114 (see fix-phase table row)
 - **Severity:** INFO
 - **Area:** Batch 2 · Crypto side-channels & edge cases
 - **Agent:** b2-crypto
@@ -812,6 +906,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Fix:** (Optional) use `SecureRandom.getInstanceStrong()` once and share it, or at least centralize IV/salt generation through one helper so a future provider pin is a single-point change; keep the guaranteed fresh-IV-per-encryption invariant (already held).
 
 ### [B2-CRYPTO-09] Field AEAD AAD is a single global constant — ciphertext is not bound to its record/column, so records are transplantable with no field-layer detection, and legacy rows skip AAD entirely
+- **Status:** `FIXED` — phase-107 (see fix-phase table row)
 - **Severity:** LOW
 - **Area:** Batch 2 · Crypto side-channels & edge cases
 - **Agent:** b2-crypto
@@ -820,6 +915,7 @@ No DB schema, workflow, or dependency changes were made.
 - **Fix:** Include a per-record binding in the AAD (table + record id + field name, e.g. `pages|$pageId|title`) so a ciphertext can never authenticate in a different record; stop writing legacy no-AAD rows; migrate existing versioned rows to the per-record AAD in the same pass that fixes B2-CRYPTO-05.
 
 ### [B2-CRYPTO-10] Blank/empty plaintext fields are stored raw and unauthenticated, and `isBlank` doubles as the "is encrypted?" classifier — silent-selective-erasure and ambiguity in the field layer
+- **Status:** `FIXED` — phase-108 (see fix-phase table row)
 - **Severity:** LOW
 - **Area:** Batch 2 · Crypto side-channels & edge cases
 - **Agent:** b2-crypto
@@ -844,7 +940,7 @@ No DB schema, workflow, or dependency changes were made.
 | B1-CRYPTO-01 | CRITICAL | phase-39 | `FIXED` 2026-08-15 (commit `4d72a6a`, see `workspace/phase-39/REPORT.md`) |
 | B1-NET-01 | HIGH | phase-40 | `FIXED` 2026-08-15 (commit `4165931`, see `workspace/phase-40/REPORT.md`) |
 | B1-NET-02 | HIGH | phase-41 | `FIXED` 2026-08-15 (commit `f1020a1`, see `workspace/phase-41/REPORT.md`) |
-| B1-NET-03 | HIGH | phase-42 | `NOT STARTED` (planned) |
+| B1-NET-03 | HIGH | phase-42 | `FIXED` 2026-08-15 (commit `060c8f1`, see `workspace/phase-42/REPORT.md`) |
 | B1-DB-1 | HIGH | phase-43 | `FIXED` 2026-08-15 (commit `5015e6b`, see `workspace/phase-43/REPORT.md`) |
 | B1-DB-4 | HIGH | phase-44 | `FIXED` (commit `c23a11c`, see `workspace/phase-44/REPORT.md`) |
 | B1-AUTH-06 | MEDIUM | phase-44 (grouped with B1-DB-4, same root cause) | `FIXED` (commit `c23a11c`, see `workspace/phase-44/REPORT.md`) |
@@ -860,8 +956,8 @@ No DB schema, workflow, or dependency changes were made.
 | B1-DB-3 | MEDIUM | phase-54 | FIXED (`workspace/phase-54/REPORT.md`) |
 | B1-DB-5 | MEDIUM | phase-55 | `FIXED` (phase-55 commit …; see `workspace/phase-55/REPORT.md`) |
 | B1-DB-7 | MEDIUM | phase-56 | `FIXED` 2026-08-15 (plain-zip + empty-key restore closed — see `workspace/phase-56/REPORT.md`) |
-| B1-PLAT-1 | MEDIUM | phase-57 | `NOT STARTED` (planned) |
-| B1-PLAT-2 | MEDIUM | phase-58 | `NOT STARTED` (planned) |
+| B1-PLAT-1 | MEDIUM | phase-57 | `FIXED` 2026-08-15 (commit `93f1ab4`: `app/build.gradle.kts` release signing fail-closes without `RELEASE_KEYSTORE_B64`/`KEYSTORE_FILE`, `docs/RELEASE.md` updated, pinned by `B1Plat01ReleaseSigningTest` 196 lines) |
+| B1-PLAT-2 | MEDIUM | phase-58 | `FIXED` 2026-08-15 (commit `ea885d4`: exported singleTask `ACTION_SEND` intake is size/type-bounded via `BoundedStreamCopier` + explicit share-confirmation notice, `MainActivity.kt:164`, pinned by `B1Plat02ShareConfirmationTest` + `BoundedStreamCopierTest` + `ClipShareConfirmNoticeTest`) |
 | B1-PLAT-3 | MEDIUM | phase-59 | `FIXED` 2026-08-15 (exports no longer auto-write to public Downloads: service wrappers keep output in `cacheDir`, every user-facing export routes through the SAF `ACTION_CREATE_DOCUMENT` picker (new `ui/components/SaFExporter.kt`), whole-vault plaintext kinds gate on a bold unencrypted-warning dialog (`services/ExportDestinationPolicy.kt`), HomeScreen + EditorScreen flows rewired — see `workspace/phase-59/REPORT.md`, pinned by `ExportDestinationPolicyTest` + `B1Plat03ExportConsentTest`) |
 | B1-PLAT-4 | MEDIUM | phase-60 | `FIXED` 2026-08-15 (auto-lock ships ENABLED at 5 min via pure-JVM `services/AutoLockPolicy.kt`, the inactivity lock is a continuous 1 s poll instead of next-touch, a runtime `ACTION_SCREEN_OFF` receiver locks on display-off, and FLAG_SECURE is applied unconditionally — see `workspace/phase-60/REPORT.md`, pinned by `B1Plat04AutoLockTest`, 10 tests) |
 | B1-PLAT-7 | MEDIUM | phase-61 | `FIXED` 2026-08-15 (locally-present APKs are never a trusted update source and public Downloads are no longer scanned: new pure-JVM `services/UpdateTrustPolicy.kt` classifies every local APK `UNTRUSTED_LOCAL` (no official channel / no remote-verified signing key), refuses `/sdcard`, `/storage/emulated`, and `getExternalFilesDir` mounts structurally via `isScanSafeDirectory`, and `mayInstall` fail-closed-gates every UNTRUSTED install behind explicit confirmation; `UpdateService.checkForDownloadedUpdates` scans ONLY app-private filesDir/cacheDir through the policy filter, `installApk` refuses before any staging without `userConfirmedUntrusted=true`, release-notes copy is trust-neutral (never "New update detected"); `AppUpdateDialog` scans app storage only and gates "Install Update" behind the strong untrusted-confirmation dialog — see `workspace/phase-61/REPORT.md`, pinned by `B1Plat07UpdateTrustTest`, 11 test methods) |
@@ -876,11 +972,11 @@ No DB schema, workflow, or dependency changes were made.
 | B2-LOG-02 | MEDIUM | phase-70 | `FIXED` 2026-08-16 (`app_startup.log` is capped, rotated and pruned instead of appended forever: new pure-JVM `services/StartupLogPolicy.kt` owns the shared budget + decision table (`MAX_LOG_BYTES = 500_000L`, the same ~500KB cap `PrivacyCrashReporter` uses, `MAX_LOG_FILES = 2`, `wouldExceedCap` before-write rotate decision, `rotateForAppend` keep-last-N with the oldest `.1` dropped, `pruneOnInit` clearing over-cap leftovers) and `AppStartupLogger.appendToFile` (`AppStartupLogger.kt:71-80`) gates every write through it so the active log can never pass the cap, `init` (:44-52) prunes on the background executor, and the dead `getLogs`/`clearLogs` accessors are removed with a sanitize-before-export note in the KDoc — see `workspace/phase-70/REPORT.md`, pinned by `B2Log02StartupLogRotationTest`, 14 tests) |
 | B2-LOG-03 | MEDIUM | phase-71 | `FIXED` 2026-08-16 (every import/export failure `Log.e("ImportExportService", ..., e)` call passed the exception OBJECT, printing full path-carrying throwables (note-title filenames under `filesDir/noteflow/imports/...`, per B1-DB-4) to logcat; now all 11 call sites emit a 2-argument `Log.e` whose message comes from the new pure-JVM `services/FailureLogPolicy.kt` — `safeLogMessage(e, operation)` logs only the fixed operation label + the exception CLASS NAME (`classNameToken`, never `e.message`/stack), so no throwable text can reach the log line, and the source-pin test proves mechanically that no `Log.(e|w)` call in `ImportExportService.kt` has a third argument — see `workspace/phase-71/REPORT.md`, pinned by `FailureLogPolicyTest`, 8 tests) |
 | B2-UI-2 | MEDIUM | phase-72 | `FIXED` 2026-08-16 (in-app locks now scrub the system clipboard: `NoteflowViewModel.lock()` (`NoteflowViewModel.kt:3218-3234`) calls `ClipboardGuard.scrubIfOwnCopy(appContext)` as its first statement — BEFORE `repository.zeroizeKey()` and BEFORE the passwordless-vault gate — so EVERY lock path (manual "Lock Vault Now" `Dialogs.kt:673`, idle auto-lock `MainActivity.kt:255`, ON_STOP `:149`, ACTION_SCREEN_OFF `:122`) clears an app-owned copy inside its window regardless of whether ON_PAUSE ever fired; the decision is the new pure-JVM `services/ClipboardScrubPolicy.kt` (single decision table: `SCRUB_WINDOW_MS = 60_000`, `shouldScrub` refuses zero timestamps and expired copies) and `ClipboardGuard.scrubIfOwnCopy` now returns whether it cleared + resets the copy timestamp after a scrub, so a foreign (other-app) copy on the clipboard is NEVER wiped (only the app's own most recent copy inside the window is ever cleared, and a successful scrub forgets it); `ClipboardGuard.clearPrimaryClipOverride` is an internal test-only seam — production still clears through the real system `ClipboardManager` (`clearPrimaryClip` API 28+ / empty `setPrimaryClip` API 26-27, best-effort so a platform failure never breaks the lock) and the ON_PAUSE scrub (`MainActivity.kt:145`) is retained as defense-in-depth; the two note-content copy sources still stamp the guard before writing (`OcrResultDialog.kt:149-150`, `MediaEmbedComponents.kt:352-354`) — see `workspace/phase-72/REPORT.md`, pinned by `B2Ui2ClipboardScrubTest`, 13 tests) |
-| B2-UI-3 | MEDIUM | phase-73 | `NOT STARTED` (planned) |
+| B2-UI-3 | MEDIUM | phase-73 | `FIXED` 2026-08-16 (per-page save serialization via `synchronizedMap` + per-page `Mutex`; commit `301cac0` + phase-73 lineage; see `workspace/phase-73/REPORT.md`, pinned by `B2Ui3StrokeSaveConcurrencyTest`) |
 | B2-UI-5 | MEDIUM | phase-74 | `FIXED` 2026-08-16 (the editor's non-atomic markdown body save is replaced by a serialized, latest-wins save+read contract so an older write can never land after a newer one and a re-opened page can never be edited as a stale snapshot then re-saved over newer content; new pure-JVM `services/MarkdownBodySaveCoordinator.kt` serializes every body write through a per-page `kotlinx.coroutines.Mutex` and stamps a monotonic `seq` at `issue(...)` time — `commitLatest` refuses (never runs the write, settles so awaiters release) any request that is no longer the latest issued one, the latest-wins comparator is issue-ORDER, never time-based (touching a page before a slow write cannot let a stale snapshot win), deferred-bodies dumped by the unlock flush are `issue`d on the calling thread BEFORE any write so the flush is strictly older than any subsequent edit and loses if the user saves first, and `awaitSettled(pageId)` (bounded by `SETTLE_AWAIT_TIMEOUT_MS = 3000L`, chasing any newer request issued while the reader waits) lets the read side wait out the in-flight save; `NoteflowViewModel.saveMarkdownNoteBody` (`NoteflowViewModel.kt:2214-2278`) issues on the calling (UI) thread then runs `commitLatest { repository.updatePageBody(pageId, body); NoteBodyVaultPolicy.deleteLegacyNoteTextBody(...) }` on `Dispatchers.IO` (superseded requests write nothing and the single encrypted column write is already transactional — no plaintext file is ever involved), the new `readMarkdownNoteBody` (`NoteflowViewModel.kt:2291-2336`) awaits settle then RE-FETCHES `repository.getPageById(pageId)` (never the possibly-stale flow snapshot) and deflates to the composition's in-memory snapshot only when the fresh read cannot decrypt (a transient key-lost race, never surfaced as an empty editor), and `flushPendingEditorSaves` (`:2929-2988`) re-issues each deferred body on the calling thread before `commitLatest`; both markdown `produceState` blocks (`MainActivity.kt:438/536`) now read via `viewModel.readMarkdownNoteBody(page.id, page.extractedText, page.sourceFilePath, page.sourceFileType)` and the old inline `File(path).readText()` editor-body read is deleted (`MainActivity.kt` no longer resolves note bodies at all) — the B2-UI-1 lock-gate (defer, never drop), B1-AUTH-05 imports-root confinement and no-plaintext-write invariants are all retained; no schema change, no migration, no new dependencies, `.github/workflows/` untouched — see `workspace/phase-74/REPORT.md`, pinned by `B2Ui5MarkdownSaveSerializationTest` (13 tests) |
 | B2-DEPS-03 | MEDIUM | phase-75 | `FIXED` 2026-08-16 (repo-local dependency verification is now on: `gradle/verification-metadata.xml` (519 components / 913 sha256-pinned artifacts, incl. AGP/Kotlin/KSP/compose build plugins + the task-execution `aapt2-*-linux.jar`/lint/`uast`/`play-sdk-proto` artifacts discovered by bootstrapping with the REAL task set) is committed, and Gradle 8.13 auto-enables STRICT checksum verification for every resolved artifact the moment that file is present — a compromised/MITM'd/poisoned-cache artifact now fails the build loudly instead of compiling into the signed APK; `settings.gradle.kts` `dependencyResolutionManagement` now mirrors the `pluginManagement` google() content filters (`com.android.*`/`com.google.*`/`androidx.*`, `settings.gradle.kts:17-28`) so a polluted google index can never publish a fake org.jetbrains/io.coil-kt artifact, while `mavenCentral()` stays for other groups. Round-trip proven: `gradle assembleDebug` builds purely from the lockfile (a pre-bootstrap run FAILED with "Dependency verification failed … aapt2 … checksum is missing from verification metadata", the completed lockfile then passes). NOTE the first attempt's `dependencyVerification { verify = "all" }` settings block is a Gradle-8.13 non-entity (empirically: `Unresolved reference: dependencyVerification` in both a minimal repro and the repo, and the 8.13 distribution ships no such settings accessor — verification is file-driven) and was REMOVED as it broke settings compilation. No schema change, no migration, no new deps, `.github/workflows/` untouched (CI `distributionSha256Sum` + pinned `llops.yml` opencode-install remain EXTERNAL notes — workflow edits prohibited per AGENTS.md) — see `workspace/phase-75/REPORT.md`, pinned by `B2Deps03DependencyVerificationTest` (5 tests), `gradle testDebugUnitTest` 1391 total (only the 2 pre-existing `B1Plat01ReleaseSigningTest` asserts) + `gradle assembleDebug` green |
 | B2-DEPS-04 | MEDIUM | phase-76 | `FIXED` 2026-08-16 (the plugin-signing identity is no longer a public default or an ephemeral build-bred keystore — see `workspace/phase-76/REPORT.md`): `plugins/llm/build.gradle.kts` deleted the hardcoded `DEFAULT_KEY_PASSWORD` constant and the `keytool -genkeypair` fallback that minted a fresh self-signed JKS every local build; the signing tasks now FAIL LOUDLY via a `gradle.taskGraph.whenReady` gate + `requirePluginSigningKeystoreB64()`/`requirePluginSigningStorePass()` (throw `GradleException` when `PLUGIN_SIGNING_KEYSTORE_B64`/`PLUGIN_SIGNING_STORE_PASS` are unset; `PLUGIN_SIGNING_KEY_PASS` optional, key password defaults to the store password, never a committed constant). The dangling `:app:generateLlmPluginSeed` claim became a REAL task in `app/build.gradle.kts` (depends on `:plugins:llm:pluginMetadata`, validates the signed artifact's `sha256` + `pinnedCertHash`, rewrites the committed `GeneratedLlmPluginPin.kt` seed — null = fail closed), and `CompileTimePluginPins.RELEASES` folds that seed in, so the app's compiled-in pin can only ever match the ONE real CI key identity, never a build-bred one. A latent bug (`Provider<RegularFile>` used as a task dependency) that made `signPlugin` unrunnable was also fixed. Positive path proven with a throwaway `/tmp` keystore (seed emitted the exact pin of the key that signed the artifact; reverted, never committed). Pinned by `B2Deps04PluginSigningTest` (9 tests), `gradle :app:testDebugUnitTest` 1456 green (0 failures) + `gradle :app:assembleDebug` green |
-| B2-DEPS-05 | MEDIUM | phase-77 | `NOT STARTED` (planned) |
+| B2-DEPS-05 | MEDIUM | phase-77 | `NOT STARTED` — **PHASE-115 SWEEP: the phase-77 `.done` was a FALSE COMPLETION** (commit `c67707b` only added `junit-bom` hashes to `gradle/verification-metadata.xml`; no `AssistantModelDownloader`/`LocalLlmPlugin` change, no test, no REPORT.md; the vulnerable code at `AssistantModelDownloader.kt:72` (`instanceFollowRedirects = true`, no SHA-256 pin, `expectedSizeBytes` never compared) is UNCHANGED). `.done` removed 2026-08-17 (phase-115) so the pipeline re-selects this phase for a REAL fix. |
 | B2-DOS-02 | MEDIUM | phase-78 | `FIXED` 2026-08-16 (vault search no longer re-decrypts the whole vault per keystroke: `NoteRepository.loadSearchCorpus` (`NoteRepository.kt:107-126`) ALWAYS caches the decrypted window — loaded through the new bounded DAO read `getAllActivePagesBounded` (`Daos.kt`, `LIMIT :limit`) instead of the old LIMIT-less `getAllActivePages` — so a vault over 1500 pages keeps a bounded, cached window and a keystroke search only ever filters it; over-cap vaults are DETECTED via `NoteRepository.searchCorpusCapped` and surface an explicit, user-approved refine path — new `NoteRepository.deepSearchPages` (`:412-434`) pages the whole vault in bounded `VaultSearchPolicy.DEEP_SCAN_BATCH_SIZE` batches (`getAllActivePagesPaged`, `LIMIT :limit OFFSET :offset`), retains only matches (never pins the full decrypted corpus) and is cancellable; `NoteflowViewModel.searchVault`/`new deepSearchVault` share ONE cancellable `Job` (`searchVaultJob?.cancel()` before every launch + `if (isActive)` callback guard) so concurrent keystrokes pre-empt in-flight decrypts; `HomeScreen` shows a ONE-TIME non-alarming "Search covers the most recent pages" notice with a "Search all pages" action gated on `searchCorpusCapped` + `refinedSearchDone`; the single decision table is the new pure-JVM `services/VaultSearchPolicy.kt` (`SEARCH_CORPUS_CAP = 1500`, `DEEP_SCAN_BATCH_SIZE = 1500`, `exceedsCorpusCap`/`cachedWindowSize`/`isBlankQuery`/`pageMatches`/`refineNoticeMessage`); the command-palette/quick-switcher indexes the same bounded cached window (consistent + bounded). No schema change, no migration, no new deps, `.github/workflows/` untouched — see `workspace/phase-78/REPORT.md`, pinned by `B2Dos02VaultSearchBoundedTest` (10 tests) |
 | B2-DOS-03 | MEDIUM | phase-79 | `FIXED` 2026-08-16 (recording is bounded and the waveform sampler is off-main: new pure-JVM `services/VoiceRecordingPolicy.kt` owns the decision table (`MAX_RECORDING_DURATION_MS` = 30 min, `MAX_RECORDING_BYTES` = 32 MB, `SAMPLER_TICK_MS` = 100, `MAX_STORED_WAVEFORM_ENTRIES` = 600, non-alarming limit messages) + `services/LiveWaveformBuckets.kt` (preallocated `FloatArray` accumulator; O(1)-amortized `append`; fold-on-full so `snapshot()` never exceeds `WaveformPeakMath.recordingLiveBuckets` = 160, mean-preserving over the whole session). `VoiceNoteManager` sampler now runs on `Dispatchers.Default` (`VoiceNoteManager.kt:150`), appends `waveformBuckets.append(normalizedAmp)` + emits `waveformBuckets.snapshot()` (`:157-158`) — the pre-fix main-thread full-list copy-on-write `_waveformAmplitudes.value = _waveformAmplitudes.value + amp` every 100 ms (~648M element copies after 1 h) is gone — and aborts at the duration/file-size ceilings (`:160-175`) via `finalizeRecording(limitMessage)`, which stops+encrypts (B1-DB-3 `.enc` path preserved), surfaces a non-alarming `recordingError`, and publishes `completedRecordingResult` so `EditorScreen`'s `LaunchedEffect(completedVoiceRecording)` auto-attaches through the shared `attachVoiceRecording` helper (audio up to the cap is SAVED, never discarded, never orphaned); manual `stopRecording()` returns directly and never publishes. `startRecording`/`stopRecording`/`finalizeRecording` serialized under new `recorderLock` (a chip-tap stop racing a sampler ceiling-abort can never double-finalize). `NoteRepository.parseWaveformJson` (`:997-1009`) bounded to 600 entries (minOf + fallback `.take`). No schema change, no migration, no new deps, `.github/workflows/` untouched — see `workspace/phase-79/REPORT.md`, pinned by `LiveWaveformBucketsTest` (9) + `VoiceRecordingPolicyTest` (6) + `B2Dos03VoiceRecordingTest` (12), `gradle :app:testDebugUnitTest` 1429 total (only the 2 pre-existing `B1Plat01ReleaseSigningTest` asserts on untouched `app/build.gradle.kts`/`docs/RELEASE.md`) + `gradle :app:assembleDebug` green (debug APK 174,098,389 B, SHA-256 `5cc83e7920f10b51d8f3bd40fedd07fef56a244e5245427a2a07f4df5e14a216`) |
 | B2-DOS-04 | MEDIUM | phase-80 | `FIXED` 2026-08-16 (`AppFacadeHost.httpGet` enforces the 10 MB cap DURING the read, never after `readBytes()` already slurped the whole body into heap — the new pure-JVM decision table `services/FacadeHttpGetPolicy.kt` (`MAX_FACADE_GET_BYTES` = 10 MB, `READ_BUFFER_BYTES` = 64 KiB) `readCapped` mirrors `WebPageFetcher`: a bounded streaming loop that throws `ResponseTooLargeException` mid-stream on the first chunk that crosses the cap, so a chunked/unknown-length (Content-Length: -1, pre-check skipped) or slow-chunked response can never pin more than the budget + one read buffer; `AppFacadeHost.kt:91-93` routes every body read through it (the `bytes.size > MAX` post-read check on `readBytes()` at old `:88-90` and the private `MAX_FACADE_GET_BYTES` companion are gone); the `contentLengthLong` header pre-check (`:82-85`) stays and the B1-NET-05 manual-redirect posture (`instanceFollowRedirects = false` `:67` + per-hop `StrictRedirectPolicy` re-validation `:71-76`) is retained, so every redirect hop carries its OWN 10 MB budget (a 3xx → over-cap final hop aborts at that hop). API-26+ floor, pure java.io, no new deps, no fallback required — see `workspace/phase-80/REPORT.md`, pinned by `B2Dos04FacadeGetStreamingCapTest` (7 tests), `gradle testDebugUnitTest` 1436 total green + `gradle :app:assembleDebug` green (APK SHA-256 `bc94479c…`) |
@@ -899,25 +995,25 @@ No DB schema, workflow, or dependency changes were made.
 | B2-LOG-04 | LOW | phase-93 | `FIXED` 2026-08-17 (no plugin failure text echoes an attacker-controllable URL and no CR/LF can forge a logcat line: new pure-JVM decision table `plugin-sdk/src/main/kotlin/com/authorss81/noteflow/plugins/PluginLogPolicy.kt` (`hasLineBreak`/`lineBreakError`/`stripLineBreaks`/`safeLine` — `safeLine` strips CR/LF and redacts `https?://\S+` tokens to `<url>`); the one production sink `AndroidPluginLogger` (`app/.../plugins/PluginLogger.kt:34-48`) routes BOTH `lifecycle` and `error` through `safeLine` (defense in depth). Parse-time rejection: `PluginEntry.validationErrors` (`plugin-sdk/.../runtime/PluginEntry.kt`) and `HostedPluginVersion.validationErrors` (`app/.../runtime/HostedPluginManifest.kt`) refuse CR/LF in `id`/`name`/`downloadUrl` via `lineBreakError` — fixed text, the hostile value is never echoed — so a hostile manifest leg, a hand-edited catalog blob (`PluginEntryCodec.decode` → `isValid`) or a return-to-pinned update offer is rejected whole (`PluginManifestParser.parse` → `Invalid`). Call sites log FIXED tokens only: `DownloadablePluginInstaller.failCleanup` (`:103-117`) logs `code=<reasonCode>` (`DOWNLOAD_GUARD`/`MISSING_SHA256`/`MISSING_CERT_PIN`/`VERIFY_FAILED`/`VERIFY_NOT_IMPLEMENTED`/`REGISTRY_REFUSED`/`LOAD_FAILED`/`LOAD_NOT_IMPLEMENTED`) and the download-refused early return logs `code=DOWNLOAD_GUARD` (the pre-fix `message.substringBefore('.')` line is gone); `PluginStoreController` download/delete refusals (`:211`/`:241`) log `code=REGISTRY_REFUSED` (never `result.reason`); `DownloadablePluginUpdater` post-update reload failure logs the fixed `post-update reload failed`; `PluginUpdateEngine.failedUpdateKeepsPrevious` (`:258-279`) logs `update failed; stage=<stageCode>` (`download`/`verification`/`load-smoke-test`/`swap-persist`) — the exploit's URL-prefix leak through `reason.substringBefore('.')` is gone. The downloader's own guard refusals were already log-free, now pinned. `message`/`reason` remain user-facing (store dialog) only. No schema change, no migration, no new deps, `.github/workflows/` untouched, API-26+ pure JVM — see `workspace/phase-93/REPORT.md`, pinned by `B2Log04PluginLogScrubbingTest` (10 tests: policy table, model rejection, codec/manifest refusal, downloader quiet-guard, engine fixed-stage log), `gradle testDebugUnitTest` 1602 total green (0 failures) + `gradle assembleDebug` green (debug APK 173,794,594 B, SHA-256 `4219405b…`) |
 | B2-LOG-05 | LOW | phase-94 | `FIXED` 2026-08-17 (no WebDAV failure text echo a raw exception or URL-derived string into the sync-status UI — a paste like `https://user:pass@…` can no longer export credentials through the dialog. New pure-JVM decision table `app/.../services/WebDavFailurePolicy.kt`: fixed constants `CONNECT_FAILURE_MESSAGE`/`UPLOAD_FAILURE_MESSAGE`/`DOWNLOAD_FAILURE_MESSAGE`/`TOO_LARGE_DOWNLOAD_MESSAGE`/`INVALID_URL_MESSAGE`; `stripUrlUserInfo` regex-drops `scheme://<userinfo>@`; `scrubForDisplay` strips userinfo AND collapses `scheme://host/path` → `host/...`; `configFailureText(e, fallback)` returns only the scrubbed message or the fixed fallback; `refusalReason(e)` maps resolver defusals to FIXED tokens (network-path / outside-configured-server / not-HTTPS / malformed-unusable / other). `WebDavSyncService.kt`: the pre-fix `"Invalid WebDAV server URL: ${e.message}"` malformed-catch is now a FIXED `INVALID_URL_MESSAGE`, `validateServerUrl` returns the userinfo-stripped string, connect/upload/download blanket catches return category FIXED strings (was `"Connection failed: ${e.localizedMessage ?: e.message}"` etc.), the too-large catch returns `TOO_LARGE_DOWNLOAD_MESSAGE`, and resolver-defusal + origin-gate paths report fixed text (was `${e.message}` / `${requestUrl}`). `WebDavSyncDialog.kt` scrubs all three status renders via `WebDavFailurePolicy.scrubForDisplay(...)` as defense in depth. Grep-pinned: zero `localizedMessage`, zero `${e.message}`, zero bare `res.message` assigns in either file. The auth/HTTP-status branches were already fixed strings and are untouched. No schema change, no migration, no new deps, `.github/workflows/` untouched, API-26+ pure JVM — see `workspace/phase-94/REPORT.md`, pinned by `B2Log05WebDavFailureTextTest` (13 tests: userinfo stripping incl. the http-opt-in URL, userinfo-free URLs unchanged, malformed-URL fixed message with no secret echo, fixed strings never interpolate, connect failure with credentials → fixed + scrubbed text free of secrets, scrubForDisplay, stripUrlUserInfo, refusalReason tokens, configFailureText fallback, plus source pins on all three files), `gradle testDebugUnitTest` 1619 total green (0 failures) + `gradle assembleDebug` green |
 | B2-UI-4 | LOW | phase-95 | `FIXED` 2026-08-17 (the post-unlock state re-initialization gap is closed - VERIFY-ONLY, fix landed as a by-product of phase-47 B1-AUTH-02, verified + pinned this phase: `NoteflowViewModel.lock()` (`:3638-3694` within `if (settings.hasMasterPassword)` `:3668-3681`) now resets `dataInitialized = false` (`:3673`) so a lock can no longer leave `initializeData()` (`:1400-1401`) sticky, cancels `sectionsJob`/`pagesJob` (`:3669-3670`), disposes the SQLCipher connection (`:3671`), and nulls the session StateFlows (`:3686-3690`); BOTH unlock paths reinstate the connection + re-boot the data layer BEFORE any dbGate flow re-subscribes - `verifyMasterPassword` `:2780`/`:2785`/`:2789` and `verifyBiometricsAndUnlock` `:2985`/`:2990`/`:2995` (`reinstateDatabaseAfterLock()` then `_authenticated=true` then `initializeData()`); `initializeDataCore()` (`:1526-1549`) restores `settings.activeNotebookId`/`activeSectionId`, resolves them against the repo, falls back to `ensureDefaultNotebookAndSection()` on a stale pair, and re-arms BOTH `observeSections`/`observePages` (`:1541-1542`) - closing the audit's `:1246-1253` concern that pages observers were only armed from tap-driven `selectSection`; `selectNotebook`/`selectSection` persist the ids (`:1661`/`:1682`); every home-list flow (`notebooks`/`allSections`/`allActivePages`/`paletteItems`/`recentPages`/`trashedPages`, `:1272-1376`) is dbGate-gated (`isAuth && !blocked && !keyLost`) so a locked vault emits empty and an unlock re-subscribes+re-emits (the exploit's "re-shown without any re-validation step" half); `MainActivity.kt:221-239` re-selects the saved `activePageId` on unlock. Passwordless vaults skip tear-down by design (device-wrapped DEK is the boot credential - no lock boundary, no empty-list defect). New pure-JVM pin test `B2Ui4UnlockReinitializesStateTest` (10 tests: behavioral lock/unlock state-machine model incl. repeated cycles + stale-prefs stash fallback + re-entrant guard, plus source wiring pins). `gradle testDebugUnitTest` 1646 total green (0 failures) + `gradle assembleDebug` green (transient first-invocation dex-merge flake re-run green; debug APK SHA-256 `d8d53906…`) - see `workspace/phase-95/REPORT.md` |
-| B2-UI-6 | LOW | phase-96 | `NOT STARTED` (planned) |
-| B2-DEPS-01 | LOW | phase-97 | `NOT STARTED` (planned) |
-| B2-DOS-08 | LOW | phase-98 | `NOT STARTED` (planned) |
-| B2-DOS-09 | LOW | phase-99 | `NOT STARTED` (planned) |
-| B2-DOS-10 | LOW | phase-100 | `NOT STARTED` (planned) |
-| B2-DOS-11 | LOW | phase-101 | `NOT STARTED` (planned) |
-| B2-CRYPTO-01 | LOW | phase-102 | `NOT STARTED` (planned) |
-| B2-CRYPTO-02 | LOW | phase-103 | `NOT STARTED` (planned) |
-| B2-CRYPTO-03 | LOW | phase-104 | `NOT STARTED` (planned) |
-| B2-CRYPTO-05 | LOW | phase-105 | `NOT STARTED` (planned) |
-| B2-CRYPTO-06 | LOW | phase-106 | `NOT STARTED` (planned) |
-| B2-CRYPTO-09 | LOW | phase-107 | `NOT STARTED` (planned) |
-| B2-CRYPTO-10 | LOW | phase-108 | `NOT STARTED` (planned) |
-| B1-NET-08 | INFO | phase-109 | `NOT STARTED` (planned) |
-| B1-NET-09 | INFO | phase-110 | `NOT STARTED` (planned) |
-| B2-LOG-07 | INFO | phase-111 | `NOT STARTED` (planned) |
-| B2-DEPS-02 | INFO | phase-112 | `NOT STARTED` (planned) |
-| B2-CRYPTO-07 | INFO | phase-113 | `NOT STARTED` (planned) |
-| B2-CRYPTO-08 | INFO | phase-114 | `NOT STARTED` (planned) |
+| B2-UI-6 | LOW | phase-96 | `FIXED` 2026-08-17 (commit `71c6ddc`: orphan-import/backup cleanup policy + `HomeScreen` exit-cleanup gate) |
+| B2-DEPS-01 | LOW | phase-97 | `FIXED` 2026-08-17 (commit `e461688`: jsoup bumped to the CVE-fixed line; `B2Deps01JsoupCveTest`) |
+| B2-DOS-08 | LOW | phase-98 | `FIXED` 2026-08-17 (commit `f9d5842`: bounded PROPFIND body read; `B2Dos08WebDavListingBoundTest`) |
+| B2-DOS-09 | LOW | phase-99 | `FIXED` 2026-08-17 (commit `1cc9677`+`d895237`: iterative RDP simplify, recursion depth bounded; `B2Dos09RdpRecursionTest`) |
+| B2-DOS-10 | LOW | phase-100 | `FIXED` 2026-08-17 (commit `f538e70`: `LruBoundedMap` bounds `lastSavedStrokeHash`; `LruBoundedMapTest`) |
+| B2-DOS-11 | LOW | phase-101 | `FIXED` 2026-08-17 (commit `ec92539`: epoch-scoped caches + `MAX_SCAN_PAGES=2000`; phased/`REPORT.md`) |
+| B2-CRYPTO-01 | LOW | phase-102 | `FIXED` 2026-08-17 (commit `e5340d2`: constant-time HMAC compare; `ConstantTimeTest`) |
+| B2-CRYPTO-02 | LOW | phase-103 | `FIXED` 2026-08-17 (commit `58395f4`: constant-time artifact digest compare; `ConstantTimeTest`) |
+| B2-CRYPTO-03 | LOW | phase-104 | `FIXED` 2026-08-17 (commit `31a1641`: backup header AAD + domain-separated KEK; `BackupV2CryptoIntegrityTest`) |
+| B2-CRYPTO-05 | LOW | phase-105 | `FIXED` 2026-08-17 (commit `1820f8c`: deterministic format selection, no version-guess refallback; `EncryptionServiceDecryptFormatTest`) |
+| B2-CRYPTO-06 | LOW | phase-106 | `FIXED` 2026-08-17 (commit `f9acea5`: day-granular + random-token filenames; `BackupFileNamePolicyTest`) |
+| B2-CRYPTO-09 | LOW | phase-107 | `FIXED` 2026-08-17 (commit `40a3663`: per-record field AEAD AAD + migration; `FieldRecordAadTest`) |
+| B2-CRYPTO-10 | LOW | phase-108 | `FIXED` 2026-08-17 (commit `0e18c2f`: blank fields stored as real AEAD payloads; `BlankFieldEncryptionTest`) |
+| B1-NET-08 | INFO | phase-109 | `FIXED` 2026-08-17 (commit `6fd3f8c`: WebDAV credential store biometric gate + surface save failures; `WebDavCredentialStoreTest`) |
+| B1-NET-09 | INFO | phase-110 | `FIXED` 2026-08-17 (commit `8bc458d`: generic version-less User-Agent, no `Build.MODEL` in LocalSend; `HttpUserAgentTest`) |
+| B2-LOG-07 | INFO | phase-111 | `FIXED` 2026-08-17 (commit `3724bbe`: jank diagnostics gated on `BuildConfig.DEBUG`, per-frame/per-screen logcat dropped; `JankStatsLoggingGatingTest`) |
+| B2-DEPS-02 | INFO | phase-112 | `FIXED` 2026-08-17 (commit `56ea074`: unused `security-crypto 1.1.0-alpha06` removed; `SecurityCryptoAbsenceTest`) |
+| B2-CRYPTO-07 | INFO | phase-113 | `FIXED` 2026-08-17 (commit `9e4dc42`: NFKC-normalize passwords, grapheme length gate, legacy raw path preserved; `UnicodeNormalizationPasswordTest`) |
+| B2-CRYPTO-08 | INFO | phase-114 | `FIXED` 2026-08-17 (commit `3c86dc5`: fresh `SecureRandom` per IV/salt/DEK audit; `B2Crypto08RngHygieneTest`) |
 
 ### Resolved at triage (no fix phase)
 
@@ -955,6 +1051,7 @@ No DB schema, workflow, or dependency changes were made.
 > **Correction (2026-08-15 review):** the initial run mis-attributed the `language-models/` pack to "ML Kit translation models". Decompilation + gradle-cache comparison proves it is the compile-time **lingua** (language-detection) library's bundled corpus, not ML Kit translate data — ML Kit translate models are NOT shipped in the APK (they download on the user's explicit action, `MlKitTranslatorEngine.kt:22-24`). The size/policy violation is real; only the attribution and the remediation path changed.
 - **Severity:** MEDIUM
 - **Area:** Packaging / base-APK-size policy (AGENTS.md hard constraint)
+- **Status:** `OPEN` — no fix phase (phase-115 sweep confirmed: not in the phase-39..114 fix plan; it is a packaging/size decision, deferred to the round-2 audit phase 116 / a future packaging phase). Remediation options documented in **Fix:** below.
 - **Agent/tool:** python3 `zipfile` size accounting on both APKs (`unzip -l`) + byte-for-byte comparison against the `com.github.pemistahl:lingua:1.2.2` JAR in the gradle cache
 - **Evidence:**
   - `release APK_size = 142.0 MB, 906 entries`; `language-models/ raw=207.6 MB packed=80.2 MB (56% of APK)`; `native .so raw=128.5 MB packed=55.4 MB`; debug APK 173.5 MB (same LM pack + 4-ABI natives + unminified x23 dex).
@@ -968,6 +1065,7 @@ No DB schema, workflow, or dependency changes were made.
 ### [Phase-32-NEW-02] No ABI splits: every device downloads all four native ABIs (~55.4 MB packed) on top of the n-gram/data pack
 - **Severity:** LOW
 - **Area:** Packaging / efficiency
+- **Status:** `OPEN` — no fix phase (phase-115 sweep confirmed: not in the phase-39..114 fix plan; ABI splits / app bundle are a release-engineering decision, deferred to the round-2 audit phase 116).
 - **Agent/tool:** `unzip -l` / `aapt dump badging` / python3 `zipfile`
 - **Evidence:** `native-code: 'arm64-v8a' 'armeabi-v7a' 'x86' 'x86_64'` (aapt badging); `lib/` contains all four ABIs of every `.so` (raw 128.5 MB, packed 55.4 MB). No split-per-ABI / Play bundle output configured.
 - **Exploit scenario:** On a 99% arm64 device the user downloads and stores the same app 3.5x heavier than needed, including x86/x86_64 natives that will never load. Combined with Phase-32-NEW-01 this makes the 142 MB release representative of what every user pays for but never needs.
@@ -976,6 +1074,7 @@ No DB schema, workflow, or dependency changes were made.
 ### [Phase-32-NEW-03] Release APK signed with APK Signature Scheme v2 only (no v3/v4) — no in-place signing-key rotation capability
 - **Severity:** INFO
 - **Area:** Android platform surface / signing
+- **Status:** `OPEN` — no fix phase (phase-115 sweep confirmed: not in the phase-39..114 fix plan; depends on the B1-PLAT-1 real-keystore deployment + a future release-engineering decision to enable v3 signing).
 - **Agent/tool:** `apksigner verify --print-certs -v`
 - **Evidence:** `Verified using v2 scheme: true`; `v1/v3/v3.1/v3.2/v4: false`; `Number of signers: 1`; `V2 Signer: certificate DN: C=US, O=Android, CN=Android Debug`, SHA-256 `81a2980a…`.
 - **Exploit scenario:** No direct exploit (v2 is the validated install scheme for minSdk 26+), but v3 carries the versioned key-rotation structure; with only v2, a future signing-key compromise cannot be rotated in-place — the app must be uninstalled/reinstalled, and combined with B1-PLAT-1 (well-known debug keystore) there is currently no production signing identity to rotate at all.
@@ -984,6 +1083,7 @@ No DB schema, workflow, or dependency changes were made.
 ### [Phase-32-NEW-04] Compiled-in plugin-manifest pin is still the placeholder (`sha256/AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=`) — plugin-update channel dead until the operator substitutes the real pin
 - **Severity:** INFO (availability; security posture = intended fail-closed)
 - **Area:** Downloadable-plugin runtime / supply chain
+- **Status:** `OPEN` — no fix phase (phase-115 sweep confirmed: not in the phase-39..114 fix plan; intentionally fail-closed placeholder, resolved by the operator substituting the real production leaf hash before the hosted channel goes live).
 - **Agent/tool:** `strings` + smali inspection (`HostedPluginManifestKt`), decompiled `PinnedCertHash`/`HttpsManifestTransport` via jadx
 - **Evidence:** `HostedPluginManifestKt.PLUGIN_MANIFEST_CERT_PIN = "sha256/AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="` (base64 of bytes 0x00..0x1F — obvious placeholder) compiled into the release binary; `HttpsManifestTransport$fetch$2` smali shows the full guard chain (scheme-only → host allow-list `plugin-updates.inkflow.app` → `PinnedTlsConnector.open` → explicit 3xx refusal → 256 KiB cap); `PinnedCertHash.matches` = `ConstantTime.hexEqual`, `parse` rejects non-32-byte pins.
 - **Exploit scenario:** Because the placeholder hash can never equal any real certificate's SHA-256, **every plugin-update check on a shipped build fails closed** ("the manifest host's certificate does not match the pinned hash"). This is the phase-39 security fix working as designed — but it means the plugin-update channel is non-functional for all end-users until the operator replaces the constant with the real production leaf hash (fails-safe, availability-only).

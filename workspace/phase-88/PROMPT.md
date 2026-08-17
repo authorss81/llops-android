@@ -1,4 +1,4 @@
-# Phase 88: B1-DB-8 - Decrypt-failure fallbacks return RAW CIPHERTEXT as... [NOT STARTED]
+# Phase 88: B1-DB-8 - Decrypt-failure fallbacks return RAW CIPHERTEXT as... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

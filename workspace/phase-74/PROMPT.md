@@ -1,4 +1,4 @@
-# Phase 74: B2-UI-5 - Markdown note body saves are non-atomic File.writeText... [NOT STARTED]
+# Phase 74: B2-UI-5 - Markdown note body saves are non-atomic File.writeText... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

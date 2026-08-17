@@ -1,4 +1,4 @@
-# Phase 55: B1-DB-5 - HTML/Obsidian ZIP import reads entries with unbounded... [NOT STARTED]
+# Phase 55: B1-DB-5 - HTML/Obsidian ZIP import reads entries with unbounded... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

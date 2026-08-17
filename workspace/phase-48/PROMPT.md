@@ -1,4 +1,4 @@
-# Phase 48: B2-LOG-01 - AppStartupLogger's uncaught-exception handler dumps... [NOT STARTED]
+# Phase 48: B2-LOG-01 - AppStartupLogger's uncaught-exception handler dumps... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

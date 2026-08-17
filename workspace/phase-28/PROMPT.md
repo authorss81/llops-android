@@ -1,4 +1,4 @@
-# Phase 28: Sticker & emoji libraries + Glass (glassmorphism) theme [NOT STARTED]
+# Phase 28: Sticker & emoji libraries + Glass (glassmorphism) theme [DONE]
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app. It already has a small sticker pack (Phase 13: `StickerCatalog`,
 `CanvasStickyNote`, stickers/rotation) and themed surfaces (Phase 19 palette).

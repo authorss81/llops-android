@@ -1,4 +1,4 @@
-# Phase 43: B1-DB-1 - Over-broad 'corruption' classifier quarantines HEALTHY... [NOT STARTED]
+# Phase 43: B1-DB-1 - Over-broad 'corruption' classifier quarantines HEALTHY... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

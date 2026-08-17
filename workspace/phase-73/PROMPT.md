@@ -1,4 +1,4 @@
-# Phase 73: B2-UI-3 - Unsynchronized shared lastSavedStrokeHash HashMap +... [NOT STARTED]
+# Phase 73: B2-UI-3 - Unsynchronized shared lastSavedStrokeHash HashMap +... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

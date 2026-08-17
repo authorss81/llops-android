@@ -1,4 +1,4 @@
-# Phase 110: B1-NET-09 - User-Agent / metadata fingerprinting: app+version+OS... [NOT STARTED]
+# Phase 110: B1-NET-09 - User-Agent / metadata fingerprinting: app+version+OS... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

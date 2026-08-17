@@ -358,7 +358,7 @@ See `docs/phase-status.md` — per-phase `DONE`/`PARTIAL`/`NOT STARTED` with ver
 
 ## Current phase PROMPT
 
-# Phase 46: B1-AUTH-01 - Downloadable plugin bytecode executes with the app... [NOT STARTED]
+# Phase 46: B1-AUTH-01 - Downloadable plugin bytecode executes with the app... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

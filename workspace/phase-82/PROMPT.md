@@ -1,4 +1,4 @@
-# Phase 82: B2-DOS-06 - Multi-layer PSD export materializes N full-page ARGB... [NOT STARTED]
+# Phase 82: B2-DOS-06 - Multi-layer PSD export materializes N full-page ARGB... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

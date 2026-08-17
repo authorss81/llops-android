@@ -1,4 +1,4 @@
-# Phase 68: B1-AUTH-04 - Markdown image references resolve arbitrary absolute... [NOT STARTED]
+# Phase 68: B1-AUTH-04 - Markdown image references resolve arbitrary absolute... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

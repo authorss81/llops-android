@@ -1,4 +1,4 @@
-# Phase 56: B1-DB-7 - Restore accepts a legacy PLAIN zip and validates it... [NOT STARTED]
+# Phase 56: B1-DB-7 - Restore accepts a legacy PLAIN zip and validates it... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

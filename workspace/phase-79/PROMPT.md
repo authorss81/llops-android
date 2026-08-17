@@ -1,4 +1,4 @@
-# Phase 79: B2-DOS-03 - Voice notes: unbounded recording duration/size, and... [NOT STARTED]
+# Phase 79: B2-DOS-03 - Voice notes: unbounded recording duration/size, and... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

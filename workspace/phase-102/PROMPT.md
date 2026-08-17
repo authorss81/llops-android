@@ -1,4 +1,4 @@
-# Phase 102: B2-CRYPTO-01 - Tamper HMAC is compared with non-constant-time... [NOT STARTED]
+# Phase 102: B2-CRYPTO-01 - Tamper HMAC is compared with non-constant-time... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

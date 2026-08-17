@@ -1,4 +1,4 @@
-# Phase 86: B1-NET-07 - WebDAV download: no size cap, 'latest' chosen by XML... [NOT STARTED]
+# Phase 86: B1-NET-07 - WebDAV download: no size cap, 'latest' chosen by XML... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

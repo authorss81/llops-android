@@ -1,4 +1,4 @@
-# Phase 62: B1-CRYPTO-03 - Salt and wrapped-DEK are written in two non-atomic... [NOT STARTED]
+# Phase 62: B1-CRYPTO-03 - Salt and wrapped-DEK are written in two non-atomic... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

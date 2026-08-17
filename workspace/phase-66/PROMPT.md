@@ -1,4 +1,4 @@
-# Phase 66: B1-CRYPTO-08 - Artifact signer pin binds only ONE entry's cert... [NOT STARTED]
+# Phase 66: B1-CRYPTO-08 - Artifact signer pin binds only ONE entry's cert... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

@@ -1,4 +1,4 @@
-# Phase 95: B2-UI-4 - lock() clears the session StateFlows but unlock()... [NOT STARTED]
+# Phase 95: B2-UI-4 - lock() clears the session StateFlows but unlock()... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

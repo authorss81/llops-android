@@ -1,4 +1,4 @@
-# Phase 59: B1-PLAT-3 - Whole-vault exports (Obsidian .zip / HTML site .zip)... [NOT STARTED]
+# Phase 59: B1-PLAT-3 - Whole-vault exports (Obsidian .zip / HTML site .zip)... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

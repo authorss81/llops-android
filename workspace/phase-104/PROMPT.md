@@ -1,4 +1,4 @@
-# Phase 104: B2-CRYPTO-03 - Backup v2 payload is NOT bound to its own header by... [NOT STARTED]
+# Phase 104: B2-CRYPTO-03 - Backup v2 payload is NOT bound to its own header by... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

@@ -1,4 +1,4 @@
-# Phase 52: B1-NET-05 - HTTPS->HTTP redirect downgrades: default... [NOT STARTED]
+# Phase 52: B1-NET-05 - HTTPS->HTTP redirect downgrades: default... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

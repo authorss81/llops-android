@@ -1,4 +1,4 @@
-# Phase 69: B1-AUTH-05 - note.sourceFilePath is stored unencrypted and never... [NOT STARTED]
+# Phase 69: B1-AUTH-05 - note.sourceFilePath is stored unencrypted and never... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

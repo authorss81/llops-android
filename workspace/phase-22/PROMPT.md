@@ -1,4 +1,4 @@
-# Phase 22: Hybrid plugin architecture skeleton — design + wiring [NOT STARTED]
+# Phase 22: Hybrid plugin architecture skeleton — design + wiring [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with a hardened compile-time plugin framework (Phases 10–11, 15, 16), a plugin

@@ -1,4 +1,4 @@
-# Phase 49: B2-UI-1 - Post-lock autosave / dispose-flush saves write... [NOT STARTED]
+# Phase 49: B2-UI-1 - Post-lock autosave / dispose-flush saves write... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

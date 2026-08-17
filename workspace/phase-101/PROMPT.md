@@ -1,4 +1,4 @@
-# Phase 101: B2-DOS-11 - Backlink/tag-hierarchy and knowledge-graph builders... [NOT STARTED]
+# Phase 101: B2-DOS-11 - Backlink/tag-hierarchy and knowledge-graph builders... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

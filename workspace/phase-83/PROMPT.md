@@ -1,4 +1,4 @@
-# Phase 83: B2-DOS-07 - Backup export builds the ENTIRE vault (whole DB +... [NOT STARTED]
+# Phase 83: B2-DOS-07 - Backup export builds the ENTIRE vault (whole DB +... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

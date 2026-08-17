@@ -1,4 +1,4 @@
-# Phase 51: B1-NET-04 - SSRF in Web Capture and Citation title-fetch: no host... [NOT STARTED]
+# Phase 51: B1-NET-04 - SSRF in Web Capture and Citation title-fetch: no host... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

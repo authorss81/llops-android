@@ -1,4 +1,4 @@
-# Phase 98: B2-DOS-08 - WebDAV PROPFIND listing is read into memory via... [NOT STARTED]
+# Phase 98: B2-DOS-08 - WebDAV PROPFIND listing is read into memory via... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

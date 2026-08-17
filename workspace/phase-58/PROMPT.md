@@ -1,4 +1,4 @@
-# Phase 58: B1-PLAT-2 - Exported singleTask MainActivity accepts ACTION_SEND... [NOT STARTED]
+# Phase 58: B1-PLAT-2 - Exported singleTask MainActivity accepts ACTION_SEND... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

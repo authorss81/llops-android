@@ -1,4 +1,4 @@
-# Phase 107: B2-CRYPTO-09 - Field AEAD AAD is a single global constant -... [NOT STARTED]
+# Phase 107: B2-CRYPTO-09 - Field AEAD AAD is a single global constant -... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

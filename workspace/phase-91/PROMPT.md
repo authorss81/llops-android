@@ -1,4 +1,4 @@
-# Phase 91: B1-CRYPTO-06 - DatabaseSecurityHelper tamper check fails OPEN... [NOT STARTED]
+# Phase 91: B1-CRYPTO-06 - DatabaseSecurityHelper tamper check fails OPEN... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

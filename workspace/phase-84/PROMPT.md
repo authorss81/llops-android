@@ -1,4 +1,4 @@
-# Phase 84: B2-CRYPTO-04 - Backup password (6-char minimum, no complexity) KDF... [NOT STARTED]
+# Phase 84: B2-CRYPTO-04 - Backup password (6-char minimum, no complexity) KDF... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

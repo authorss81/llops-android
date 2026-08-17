@@ -1,4 +1,4 @@
-# Phase 65: B1-CRYPTO-07 - Biometric DEK key is only biometric-gated on API 30+;... [NOT STARTED]
+# Phase 65: B1-CRYPTO-07 - Biometric DEK key is only biometric-gated on API 30+;... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first

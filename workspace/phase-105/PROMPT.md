@@ -1,4 +1,4 @@
-# Phase 105: B2-CRYPTO-05 - EncryptionService.decrypt version-byte-guessing... [NOT STARTED]
+# Phase 105: B2-CRYPTO-05 - EncryptionService.decrypt version-byte-guessing... [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report.md`** first
