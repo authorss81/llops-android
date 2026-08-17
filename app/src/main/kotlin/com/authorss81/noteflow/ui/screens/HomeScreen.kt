@@ -26,6 +26,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.viewModelScope
 import com.authorss81.noteflow.data.model.NotePageEntity
 import com.authorss81.noteflow.data.model.NotebookEntity
 import com.authorss81.noteflow.data.model.SectionEntity
@@ -34,6 +35,7 @@ import com.authorss81.noteflow.services.DocumentTextExtractor
 import com.authorss81.noteflow.services.ExportDestinationPolicy
 import com.authorss81.noteflow.services.ImportArchivePolicy
 import com.authorss81.noteflow.services.ImportExportService
+import com.authorss81.noteflow.services.OrphanImportCleanupPolicy
 import com.authorss81.noteflow.services.isPlainPkBackupBytes
 import com.authorss81.noteflow.theme.AppThemeMode
 import com.authorss81.noteflow.ui.components.*
@@ -53,10 +55,19 @@ fun HomeScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    // B2-UI-6 (phase-96): vault-wide imports/exports/restore run on the ViewModel
+    // scope so a lock/teardown disposing this composable can no longer cancel them
+    // mid-operation (the pre-fix composition-scoped `scope` was torn down on every
+    // lock — multi-entry imports stopped partway leaving orphaned files in
+    // imports/, and exports abandoned silently). `scope` remains for pure-UI
+    // chores (drawer state, count previews) that are fine to cancel with the screen.
+    val vaultScope = viewModel.viewModelScope
 
     // B1-PLAT-3 (phase-59): every export/backup goes to a user-picked SAF
-    // destination — never straight into public Downloads.
-    val exporter = rememberSaFExporter(scope)
+    // destination — never straight into public Downloads. The exporter's own
+    // copy+delete also runs on the VM scope (B2-UI-6) so the SAF transfer that
+    // follows a picker is not abandoned when the screen leaves composition.
+    val exporter = rememberSaFExporter(vaultScope)
 
     val notebooks by viewModel.notebooks.collectAsState()
     val selectedNotebook by viewModel.selectedNotebook.collectAsState()
@@ -119,7 +130,12 @@ fun HomeScreen(
     var restartDialogMessage by remember { mutableStateOf("Your vault has been restored. The app will restart to load the restored data.") }
 
     fun performRestore(context: android.content.Context, bytes: ByteArray, password: String? = null) {
-        scope.launch {
+        // B2-UI-6 (phase-96): the restore runs on the ViewModel scope — a lock
+        // disposing this screen mid-swap must not abandon the restore silently.
+        // Completion posts through the snackbarMessages pipeline as well as the
+        // restart dialog, so the outcome is visible even if this screen left
+        // composition.
+        vaultScope.launch {
             try {
                 // H1 (phase-09): reject a wrong backup password BEFORE the live
                 // vault is closed — the common failure case never touches the DB
@@ -132,6 +148,7 @@ fun HomeScreen(
                 restartDialogTitle = "Restore successful"
                 restartDialogMessage = "Your vault has been restored. The app will restart to load the restored data."
                 showRestartConfirmDialog = true
+                viewModel.showSnackbar("Restore completed — the app will restart to load the restored data.", isLong = true)
             } catch (e: Exception) {
                 // H1 (phase-09): the DB was already closed for the swap. A failure
                 // here must never leave a dead Room instance behind — reopen it and
@@ -141,6 +158,7 @@ fun HomeScreen(
                 restartDialogTitle = "Restore failed"
                 restartDialogMessage = "Restore failed: ${e.message}. The app will restart with your current vault unchanged."
                 showRestartConfirmDialog = true
+                viewModel.showSnackbar("Restore failed: ${e.message}", isLong = true)
             }
         }
     }
@@ -150,7 +168,10 @@ fun HomeScreen(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         if (uri != null) {
-            scope.launch {
+            // B2-UI-6 (phase-96): restore feed reads run on the VM scope so a
+            // lock/teardown cannot abandon the read (and the subsequent
+            // performRestore) silently.
+            vaultScope.launch {
                 try {
                     val bytes = ImportExportService.readUriBytes(
                         context,
@@ -214,21 +235,29 @@ fun HomeScreen(
     var selectedImportOrientation by remember { mutableStateOf("AUTO") } // AUTO, PORTRAIT, LANDSCAPE
 
     fun processImportedUris(uris: List<Uri>, importAsSeparatePages: Boolean, orientationChoice: String = selectedImportOrientation) {
-        scope.launch {
+        // B2-UI-6 (phase-96): the import loop runs on the ViewModel scope so a
+        // lock/teardown disposing this composable can no longer cancel it at the
+        // next suspension point mid-iteration (pre-fix: multi-entry imports
+        // stopped partway, leaving already-persisted files whose DB rows were
+        // never created). Persisted artifacts are tracked per run and swept if
+        // the loop is genuinely cancelled, so no orphaned files accumulate.
+        vaultScope.launch {
             var importedCount = 0
             val isSingleImport = uris.size == 1
-            for (uri in uris) {
-                // B1-DB-5 (phase-55): an oversized share/download raises
-                // ImportSizeLimitException — surface it as a non-alarming
-                // snackbar instead of silently skipping the file.
-                val bytes = try {
-                    ImportExportService.readUriBytes(context, uri)
-                } catch (e: ImportArchivePolicy.ImportSizeLimitException) {
-                    viewModel.showSnackbar("Import skipped: ${e.message}", isLong = true)
-                    continue
-                } ?: continue
-                val fileName = ImportExportService.getUriFileName(context, uri)
-                val ext = ImportExportService.extensionOf(fileName)
+            val orphanRun = OrphanImportCleanupPolicy.Run()
+            try {
+                for (uri in uris) {
+                    // B1-DB-5 (phase-55): an oversized share/download raises
+                    // ImportSizeLimitException — surface it as a non-alarming
+                    // snackbar instead of silently skipping the file.
+                    val bytes = try {
+                        ImportExportService.readUriBytes(context, uri)
+                    } catch (e: ImportArchivePolicy.ImportSizeLimitException) {
+                        viewModel.showSnackbar("Import skipped: ${e.message}", isLong = true)
+                        continue
+                    } ?: continue
+                    val fileName = ImportExportService.getUriFileName(context, uri)
+                    val ext = ImportExportService.extensionOf(fileName)
 
                 if (ext == "html" || ext == "htm") {
                     val activeNb = viewModel.selectedNotebook.value?.id ?: "nb_default"
@@ -300,6 +329,11 @@ fun HomeScreen(
                     // PDF/image sources are persisted as binary artifacts.
                     val isTextBodyType = type == "text"
                     val path: String? = if (isTextBodyType) null else ImportExportService.persistFile(context, fileName, bytes)
+                    // B2-UI-6 (phase-96): track this persisted artifact until its
+                    // DB page row commits below — a cancellation between this write
+                    // and the page create would otherwise leave an orphaned file in
+                    // imports/ with no row referencing it.
+                    path?.let { orphanRun.trackPersisted(it) }
 
                     val (extractedText, pageCount, isLandscapeFormat) = withContext(Dispatchers.IO) {
                         val extracted = if (isTextBodyType) {
@@ -363,12 +397,27 @@ fun HomeScreen(
                         )
                         importedCount++
                     }
+                    // B2-UI-6 (phase-96): every page-create for this file has been
+                    // issued — from here on the artifact is referenced by a page row
+                    // and must never be swept.
+                    path?.let { orphanRun.markCommitted(it) }
                 }
             }
 
             if (importedCount > 0) {
                 viewModel.showSnackbar("Imported $importedCount page(s)")
             }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // B2-UI-6 (phase-96): the run was cancelled between a persist and its
+            // page create. Delete every tracked file whose page row was never
+            // created so no orphaned plaintext/binary artifacts stay in imports/;
+            // completion still posts a visible notice. Re-throw to honour
+            // structured-concurrency cancellation.
+            val swept = orphanRun.sweepOrphans()
+            if (swept.isNotEmpty() || importedCount > 0) {
+                viewModel.showSnackbar(OrphanImportCleanupPolicy.CANCELLED_NOTICE, isLong = true)
+            }
+            throw e
         }
     }
 
@@ -524,7 +573,11 @@ fun HomeScreen(
                                     backupPasswordError = null
                                     showBackupPasswordDialog = true
                                 } else {
-                                    scope.launch {
+                                    // B2-UI-6 (phase-96): the backup runs on the VM
+                                    // scope and completion posts through the snackbar
+                                    // pipeline, so a lock/teardown never abandons it
+                                    // silently.
+                                    vaultScope.launch {
                                         try {
                                             viewModel.repository.checkpointWal()
                                             withContext(Dispatchers.IO) {
@@ -535,7 +588,9 @@ fun HomeScreen(
                                                 ExportDestinationPolicy.ExportKind.ENCRYPTED_BACKUP,
                                                 cacheFile
                                             ) { ok ->
-                                                if (!ok) {
+                                                if (ok) {
+                                                    viewModel.showSnackbar("Backup created and saved.")
+                                                } else {
                                                     viewModel.showSnackbar("Backup cancelled")
                                                 }
                                             }
@@ -549,7 +604,9 @@ fun HomeScreen(
                                 restorePickerLauncher.launch(arrayOf("*/*"))
                             },
                             onExportObsidianVault = {
-                                scope.launch {
+                                // B2-UI-6 (phase-96): VM-scoped so a lock/teardown never
+                                // abandons the export silently.
+                                vaultScope.launch {
                                     val pages = viewModel.pages.value
                                     val zipFile = ImportExportService.exportObsidianVaultZip(context, "SmoothNotes_Vault", pages, viewModel.repository)
                                     if (zipFile != null && zipFile.exists()) {
@@ -557,7 +614,9 @@ fun HomeScreen(
                                             ExportDestinationPolicy.ExportKind.OBSIDIAN_VAULT,
                                             zipFile
                                         ) { ok ->
-                                            if (!ok) {
+                                            if (ok) {
+                                                viewModel.showSnackbar("Obsidian vault exported.")
+                                            } else {
                                                 viewModel.showSnackbar("Obsidian vault export cancelled")
                                             }
                                         }
@@ -567,7 +626,9 @@ fun HomeScreen(
                                 }
                             },
                             onExportHtmlVault = {
-                                scope.launch {
+                                // B2-UI-6 (phase-96): VM-scoped so a lock/teardown never
+                                // abandons the export silently.
+                                vaultScope.launch {
                                     val pages = viewModel.pages.value
                                     val zipFile = ImportExportService.exportVaultToHtmlZip(context, "SmoothNotes_Site", pages, viewModel.repository)
                                     if (zipFile != null && zipFile.exists()) {
@@ -575,7 +636,9 @@ fun HomeScreen(
                                             ExportDestinationPolicy.ExportKind.HTML_SITE,
                                             zipFile
                                         ) { ok ->
-                                            if (!ok) {
+                                            if (ok) {
+                                                viewModel.showSnackbar("HTML site exported.")
+                                            } else {
                                                 viewModel.showSnackbar("HTML site export cancelled")
                                             }
                                         }
@@ -1311,7 +1374,9 @@ fun HomeScreen(
                                     backupPasswordError = strength.message
                                 } else if (!isValidating) {
                                     isValidating = true
-                                    scope.launch {
+                                    // B2-UI-6 (phase-96): VM-scoped so the password
+                                    // backup export survives composition teardown.
+                                    vaultScope.launch {
                                         try {
                                             if (!viewModel.isMasterPasswordValid(backupPasswordInput)) {
                                                 // B1-AUTH-07 (phase-92): the check shares the LockScreen's
@@ -1340,7 +1405,9 @@ fun HomeScreen(
                                                 ExportDestinationPolicy.ExportKind.ENCRYPTED_BACKUP,
                                                 cacheFile
                                             ) { ok ->
-                                                if (!ok) {
+                                                if (ok) {
+                                                    viewModel.showSnackbar("Backup created and saved.")
+                                                } else {
                                                     viewModel.showSnackbar("Backup cancelled")
                                                 }
                                             }
