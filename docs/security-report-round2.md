@@ -11,7 +11,8 @@
 ## Audit metadata
 - Phase: 116 (source audit, phase-118 appends dynamic findings)
 - Date: 2026-08-17
-- Commit audited: `c813c99` (`llops: phase-77 (B2-DEPS-05) REAL fix — LLM GGUF download is now a PINNED identity`)
+- Commit audited (round-2 SOURCE audit, phase-116): `c813c99` (`llops: phase-77 (B2-DEPS-05) REAL fix — LLM GGUF download is now a PINNED identity`)
+- APK build source commit (the tree phase-117 built): `dd0c5f5` (`llops: phase-116`) — see "APK target" below
 - Method: 2 batches x 5 parallel subagents, source-code review only, `file:line`
   evidence, hacker mindset. No external services attacked, no dynamic tooling
   (that is phase-118's job).
@@ -26,6 +27,8 @@
   `noteflow-release-apk` artifact — phase-118 reads THIS section to verify the
   target). Exact artifact details:
   - Filename: `app/build/outputs/apk/release/app-release.apk`
+  - Identified applicationId: `com.aistudio.inkflow.app.bkxjrz` (`app/build.gradle.kts:15`; namespace
+    `com.authorss81.noteflow` `:11` — the known intentional mismatch; confirm this package in the artifact).
   - Commit built from: `dd0c5f59` (`llops: phase-116`)
   - versionCode: `2`, versionName: `1.0.0` (VERSION_CODE/VERSION_NAME env unset ⇒
     `app/build.gradle.kts:18-19` defaults)
@@ -42,6 +45,21 @@
     — the build FAILS CLOSED without the keystore env (`docs/RELEASE.md` +
     `B1Plat01ReleaseSigningTest`). Fallback (unused): the last phase-32 local
     artifacts (release 142.0 MB R8-minified, SHA-256 `d7cdbebe…`).
+  - **Evidence / verification — self-attested, reproduce before you attack.** The
+    phase did NOT retain the gradle console, `apksigner`, `apkanalyzer` or
+    `sha256sum` output in git, and the 142 MB binary is only the ephemeral
+    `noteflow-release-apk` CI artifact (binaries stay out of git). phase-118 MUST
+    independently verify BEFORE spending budget: download the artifact, then
+    `sha256sum app-release.apk` == `20849bcfcc72bfc649057464d17bd26f13bd74b76a89f1f0232244816ec85d3d`
+    and `apksigner verify --verbose --print-certs app-release.apk` must show v2-signed,
+    signer `CN=InkFlow Release`, cert SHA-256 `69636edb9ee2487762e98f855f250ea1ec66233de13b61a4c014026b82c50196`.
+    The upload step is BEST-EFFORT (`continue-on-error: true`, `llops.yml:239`), so a
+    failed/empty upload can still coexist with a phase marked DONE — if the artifact
+    is missing or its SHA-256 mismatches, DO NOT attack it (stop and report).
+  - Signing scheme note: **v2-only** (v1/v3/v4 absent) — known INFO
+    (phase-32-NEW-03); no key rotation possible. Acceptable for a sideloaded
+    pentest target at minSdk 26 (a Play submission would require the v2 scheme,
+    which IS present).
 
 ## Severity legend (matches round 1)
 - CRITICAL — remote or local-privilege-free compromise of confidentiality/

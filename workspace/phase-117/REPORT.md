@@ -69,3 +69,39 @@ keystore), R8-minified release APK built from `dd0c5f59`, SHA-256
 `20849bcfcc72bfc649057464d17bd26f13bd74b76a89f1f0232244816ec85d3d`, at
 `app/build/outputs/apk/release/app-release.apk`. No app-code changes were made
 in this phase.
+
+## Addendum — post-review fixes (2026-08-17)
+
+The phase review (see `logs/phase-117.review.log`; applied in the fix run
+`https://github.com/authorss81/llops-android/actions/runs/32043663648`) produced
+7 findings. Disposition:
+
+1. **Self-attested claims (REVIEW finding 1)** — the gradle apksigner / sha256sum
+   outputs were not retained in git and the 142 MB binary is only the ephemeral
+   `noteflow-release-apk` CI artifact (binaries stay out of git). Partial fix
+   (workflow edits are prohibited): the verification commands + expected values
+   are now recorded in `docs/security-report-round2.md` "APK target"; phase-118
+   is instructed to independently re-verify the SHA-256 + signer cert before
+   attacking. This addendum records the fix-run URL; the milestone SHAs
+   (`dd0c5f5` build source, `20849bcf…` artifact, `69636edb…` cert) remain the
+   authoritative identifiers.
+2. **Best-effort artifact upload (finding 2)** — `llops.yml:237-244` uploads with
+   `continue-on-error: true`, so a failed upload can coexist with a DONE marker.
+   Not fixable from this phase (`.github/workflows/` is off-limits); now
+   documented in the APK-target section with an explicit "DO NOT attack a missing
+   or SHA-mismatched artifact" instruction for phase-118.
+3. **v2-only signing (finding 3)** — known INFO (phase-32-NEW-03), disclosed,
+   no fix needed.
+4. **Doc clarification (finding 4)** — `docs/security-report-round2.md` header now
+   distinguishes the round-2 SOURCE-audit commit (`c813c99`) from the APK build
+   source (`dd0c5f5`).
+5. **Stale JDK claim (finding 5)** — `docs/ARCHITECTURE.md` corrected: CI runs
+   Temurin JDK 21 (workflow `:131-132`, `:304-305`), not JDK 17. Also corrected
+   the stale "release falls back to debug keystore" note to the real fail-closed
+   B1-PLAT-1 behavior.
+6. **applicationId (finding 6)** — `com.aistudio.inkflow.app.bkxjrz`
+   (`app/build.gradle.kts:15`) now recorded in the APK-target section (verified
+   against `docs/ARCHITECTURE.md:993` known-gotchas).
+7. **Positives (finding 7)** — no action.
+
+No app source, no build config, no `.github/workflows/` edits made.
