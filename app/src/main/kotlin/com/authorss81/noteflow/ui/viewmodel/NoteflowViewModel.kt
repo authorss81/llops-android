@@ -1296,6 +1296,12 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     private val _tutorialCompleted = MutableStateFlow(settings.tutorialCompleted)
     val tutorialCompleted: StateFlow<Boolean> = _tutorialCompleted.asStateFlow()
 
+    // Phase 125 — enhanced interactive tutorial. The resume index is persisted so a
+    // "Skip" (exit early) yields to the next open at the same slide; completing the
+    // tutorial resets it to 0. Resumed runs never restart from the top.
+    private val _tutorialResumeIndex = MutableStateFlow(settings.tutorialResumeIndex)
+    val tutorialResumeIndex: StateFlow<Int> = _tutorialResumeIndex.asStateFlow()
+
     private val _confettiTrigger = MutableStateFlow(0L)
     val confettiTrigger: StateFlow<Long> = _confettiTrigger.asStateFlow()
 
@@ -1640,11 +1646,21 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         settings.tutorialCompleted = true
         _isFirstRun.value = false
         _tutorialCompleted.value = true
+        settings.tutorialResumeIndex = 0
+        _tutorialResumeIndex.value = 0
     }
 
     fun markTutorialCompleted() {
         settings.tutorialCompleted = true
         _tutorialCompleted.value = true
+        settings.tutorialResumeIndex = 0
+        _tutorialResumeIndex.value = 0
+    }
+
+    /** Persists the current slide so a skipped/closed run resumes there next time. */
+    fun updateTutorialResumeIndex(index: Int) {
+        settings.tutorialResumeIndex = index
+        _tutorialResumeIndex.value = index
     }
 
     fun triggerConfetti() {

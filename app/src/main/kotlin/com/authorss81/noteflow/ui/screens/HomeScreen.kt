@@ -91,7 +91,6 @@ fun HomeScreen(
         isInitializingLoading = false
     }
 
-    var showWelcomeDialog by remember { mutableStateOf(isFirstRun && !tutorialCompleted) }
     var showSecurityDialog by remember { mutableStateOf(false) }
     var showUpdateDialog by remember { mutableStateOf(false) }
     var showPluginsDialog by remember { mutableStateOf(false) }
@@ -102,7 +101,9 @@ fun HomeScreen(
     var backupPasswordInput by remember { mutableStateOf("") }
     var backupPasswordError by remember { mutableStateOf<String?>(null) }
     var isValidating by remember { mutableStateOf(false) }
-    var showTutorial by remember { mutableStateOf(false) }
+    // Phase 125: the interactive tutorial is the first-run experience (armed once,
+    // never auto-reopens once tutorialCompleted); reopen anytime via ⋮ → Tutorial.
+    var showTutorial by remember { mutableStateOf(isFirstRun && !tutorialCompleted) }
     var searchQuery by remember { mutableStateOf("") }
     var selectedTab by remember { mutableIntStateOf(0) } // 0 = Pages, 1 = Recent, 2 = Tag Vault, 3 = Trash
     var pageViewMode by remember { mutableIntStateOf(0) } // 0 = List, 1 = Gallery, 2 = Kanban, 3 = Calendar, 4 = Table
@@ -1239,16 +1240,6 @@ fun HomeScreen(
             )
         }
 
-        if (showWelcomeDialog) {
-            WelcomeDialog(
-                onDismiss = {
-                    showWelcomeDialog = false
-                    viewModel.markFirstRunComplete()
-                    viewModel.markTutorialCompleted()
-                }
-            )
-        }
-
         if (showSecurityDialog) {
             SecuritySettingsDialog(
                 viewModel = viewModel,
@@ -1607,82 +1598,28 @@ fun HomeScreen(
         }
 
         if (showTutorial) {
+            // Phase 125: the enhanced tutorial is one interactive, curriculum-driven
+            // run. `initialResumeIndex` is snapshotted at each OPEN so the persisted
+            // "Skip → resume later" point is honoured without re-initializing the
+            // session on every persisted-index write (which would clear the
+            // progress-check state). Completion / "don't show again" are persisted
+            // so the gate truly never re-opens.
+            val initialResumeIndex = remember(showTutorial) { viewModel.tutorialResumeIndex.value }
             InteractiveTutorial(
-                steps = listOf(
-                    TutorialStep(
-                        title = "Welcome to InkFlow",
-                        description = "InkFlow is a premier, offline-first private canvas. We pair Plus Jakarta Sans headings with Playfair Display body text over warm neutral layouts with generous negative space to minimize mental friction.",
-                        icon = Icons.Outlined.Book,
-                        category = "Welcome"
-                    ),
-                    TutorialStep(
-                        title = "Notebooks & Sections",
-                        description = "Organize notes intuitively. On wide screens, the app adapts into a multi-pane layout with a sidebar navigation rail. On standard phones, it collapses into a compact single-pane layout optimized for accessibility.",
-                        icon = Icons.Outlined.Dashboard,
-                        category = "Layout"
-                    ),
-                    TutorialStep(
-                        title = "Infinite Canvas & Page Layouts",
-                        description = "Switch between Infinite Canvas for dynamic brainstorming, and Page-by-Page layout for printing or linear notes. Gestures scale from 0.5x to 4.0x, utilizing pure GPU transforms to eliminate rendering stutter.",
-                        icon = Icons.Outlined.Gesture,
-                        category = "Canvas"
-                    ),
-                    TutorialStep(
-                        title = "Advanced Brushes & Shaders",
-                        description = "Write with high-performance calligraphy, airbrush, and pens. On compatible devices, experience real-time fluid blending of GPU watercolor and oils. Tap the Sun or droplet icon in the toolbar to dry your digital canvas!",
-                        icon = Icons.Outlined.Brush,
-                        category = "Brushes"
-                    ),
-                    TutorialStep(
-                        title = "Hyper-Realistic Paint Dynamics",
-                        description = "Our engine references leading open-source mobile fluid dynamics modules (Google LiquidFun paint particle physics, Lagrangian fluid simulations, and real-time GPU fragment shaders) to power authentic paint simulation. Experience natural pigment blending, dark watercolor edge fringe buildup, and 3D impasto lighting dynamics!",
-                        icon = Icons.Outlined.Palette,
-                        category = "Paint Dynamics"
-                    ),
-                    TutorialStep(
-                        title = "Multi-Layer Compositing",
-                        description = "Organize annotations on separate planes using our layer manager. Layers are backed by a hardware-accelerated LRU bitmap cache, enabling fast 60fps-120fps panning even on complex, multi-layered documents.",
-                        icon = Icons.Outlined.Layers,
-                        category = "Compositing"
-                    ),
-                    TutorialStep(
-                        title = "Time-Synced Voice Notes",
-                        description = "Record audio lectures or meetings while writing. During playback, strokes fade in or highlight at the exact millisecond they were drawn relative to the audio track. Scrub the timeline to fast-forward both sound and ink.",
-                        icon = Icons.Outlined.Mic,
-                        category = "Voice Sync"
-                    ),
-                    TutorialStep(
-                        title = "Wikilinks & Knowledge Graph",
-                        description = "Type double brackets [[Like This]] in markdown to link notes instantly. A physics-simulated, highly responsive 2D graph visualizes your notebook connections with beautiful, bouncy spring forces.",
-                        icon = Icons.Outlined.Hub,
-                        category = "Knowledge Graph"
-                    ),
-                    TutorialStep(
-                        title = "Document Annotation & PDF",
-                        description = "Import and annotate PDFs, images, text, or Word documents. To prevent Out Of Memory crashes, the engine uses smart sample-sizing and caps PDF textures, keeping document panning ultra-smooth.",
-                        icon = Icons.Outlined.PictureAsPdf,
-                        category = "Imports"
-                    ),
-                    TutorialStep(
-                        title = "Master Vault & Biometrics",
-                        description = "Protect your privacy with AES-256-GCM local encryption. Keys are derived using PBKDF2 with 600,000 iterations. Unlock via face/fingerprint biometric prompts, protected by a resilient 5-fail lockout cooldown system.",
-                        icon = Icons.Outlined.Lock,
-                        category = "Security"
-                    ),
-                    TutorialStep(
-                        title = "Secure Backups & Sharing",
-                        description = "InkFlow is offline-first—your data belongs to you. Export fully encrypted .zip backups containing your SQLite database and recordings directly to your local folders or cloud drives.",
-                        icon = Icons.Outlined.Backup,
-                        category = "Backups"
-                    )
-                ),
+                initialIndex = initialResumeIndex,
+                onProgress = { idx -> viewModel.updateTutorialResumeIndex(idx) },
                 onComplete = {
                     showTutorial = false
-                    viewModel.markTutorialCompleted()
+                    viewModel.markFirstRunComplete()
+                    viewModel.triggerConfetti()
                 },
                 onSkip = {
+                    // Resume later: leave the last reached slide persisted.
                     showTutorial = false
-                    viewModel.markTutorialCompleted()
+                },
+                onDontShowAgain = {
+                    showTutorial = false
+                    viewModel.markFirstRunComplete()
                 }
             )
         }

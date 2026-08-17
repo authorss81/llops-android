@@ -31,6 +31,13 @@ class SettingsManager(context: Context) {
         get() = prefs.getBoolean("tutorial_completed", false)
         set(value) = prefs.edit().putBoolean("tutorial_completed", value).apply()
 
+    // Phase 125 — enhanced interactive tutorial persistence. tutorialResumeIndex
+    // survives "Skip" (exit early) so the next open resumes where the user left
+    // off; it is reset to 0 when the tutorial is completed.
+    var tutorialResumeIndex: Int
+        get() = prefs.getInt("tutorial_resume_index", 0)
+        set(value) = prefs.edit().putInt("tutorial_resume_index", value.coerceAtLeast(0)).apply()
+
     // B2-CRYPTO-09 (phase-107): one-time per-record field AAD migration flag.
     // Set after NoteRepository.migrateFieldRecordAad has bound every pre-phase-107
     // ciphertext to its table|recordId|fieldName context, so the (O-rows) pass is
