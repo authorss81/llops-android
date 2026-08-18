@@ -28,6 +28,7 @@ import java.net.URLClassLoader
 import java.util.jar.JarOutputStream
 import java.util.zip.ZipEntry
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Rule
@@ -113,6 +114,72 @@ class PluginBytecodeIsolationTest {
         val framework =
             Class.forName("com.authorss81.noteflow.plugins.runtime.PluginContextFactory", false, scoped)
         assertTrue(framework.simpleName == "PluginContextFactory")
+    }
+
+    @Test
+    fun `the scoped loader refuses raw egress and process-exec classes - R2-B1N-03`() {
+        // Phase-144: java.net.* / javax.net.* xor aggregate the network the
+        // plugin must NOT own, and Runtime/ProcessBuilder the process exec it
+        // must NOT own. Non-app-namespace delegation used to re-export these to
+        // plugin code, making the static scan the ONLY barrier against
+        // string-built Class.forName("java.net." + ...) — now the loader chain
+        // itself refuses them, no matter how the caller spells the name.
+        val scoped = PluginFrameworkClassLoader(parentLoader)
+        val forbidden = listOf(
+            "java.net.Socket",
+            "java.net.URL",
+            "java.net.HttpURLConnection",
+            "java.net.InetAddress",
+            "javax.net.SocketFactory",
+            "javax.net.ssl.SSLSocket",
+            "javax.net.ssl.HttpsURLConnection",
+            "java.lang.Runtime",
+            "java.lang.ProcessBuilder"
+        )
+        for (name in forbidden) {
+            try {
+                scoped.loadClass(name)
+                fail("loadClass('$name') must be refused by the plugin sandbox (R2-B1N-03)")
+            } catch (expected: ClassNotFoundException) {
+                // refused, as required
+            }
+        }
+        // The sandbox must NOT break the rest of the JDK a benign plugin uses.
+        for (name in listOf(
+            "java.lang.String", "java.lang.Integer", "java.lang.Math",
+            "java.util.List", "java.util.Locale", "java.io.Reader"
+        )) {
+            scoped.loadClass(name) // must not throw
+        }
+    }
+
+    @Test
+    fun `egress refusal is name-based and catches string-built reflection - R2-B1N-03`() {
+        val scoped = PluginFrameworkClassLoader(parentLoader)
+        // The runtime gate keys on the resolved NAME, so a plugin that builds
+        // "java.net." + "Socket" via concatenation and reflects with
+        // Class.forName still lands on java.net.Socket and is refused.
+        for (built in listOf(
+            "java.net.Socket",
+            "java." + "net." + "Socket",
+            "java.net" + ".URL",
+            "java.lang" + ".Runtime"
+        )) {
+            assertTrue(
+                "isEgressForbidden('$built') must be true",
+                PluginFrameworkClassLoader.isEgressForbidden(built)
+            )
+            try {
+                Class.forName(built, false, scoped)
+                fail("Class.forName('$built') must be refused")
+            } catch (expected: ClassNotFoundException) {
+                // refused, as required
+            }
+        }
+        // Benign java.lang/java.util/java.io types are outside the egress set.
+        assertFalse(PluginFrameworkClassLoader.isEgressForbidden("java.lang.String"))
+        assertFalse(PluginFrameworkClassLoader.isEgressForbidden("java.util.List"))
+        assertFalse(PluginFrameworkClassLoader.isEgressForbidden("java.io.Reader"))
     }
 
     @Test
@@ -276,6 +343,85 @@ class PluginBytecodeIsolationTest {
             scanRt is ArtifactStaticScan.Result.Rejected
         )
         assertTrue("reason=${(scanRt as ArtifactStaticScan.Result.Rejected).reason}", (scanRt as ArtifactStaticScan.Result.Rejected).reason.contains("process"))
+    }
+
+    @Test
+    fun `the static scan rejects string-fragmented egress and exec class names - R2-B1N-03`() {
+        // Phase-144: `Class.forName("java.net." + "Sock" + "et")` never matches
+        // an exact token, but the artifact MUST still ship the dot-form
+        // package-prefix fragment ("java.net.") — the scan now refuses any
+        // parsed string/type carrying one at a word boundary.
+        val netJar = File(tmp.root, "frag-net.jar")
+        JarOutputStream(netJar.outputStream()).use { out ->
+            out.putNextEntry(ZipEntry("classes.dex"))
+            out.write(
+                TestDexBuilder.build(
+                    strings = listOf("java.net.", "Socket"),
+                    types = listOf(0, 1)
+                )
+            )
+            out.closeEntry()
+        }
+        val netScan = ArtifactStaticScan().scan(netJar)
+        assertTrue(
+            "fragmented java.net. must be rejected -> ${(netScan as? ArtifactStaticScan.Result.Rejected)?.reason}",
+            netScan is ArtifactStaticScan.Result.Rejected
+        )
+        assertTrue(
+            "reason=${(netScan as ArtifactStaticScan.Result.Rejected).reason}",
+            (netScan as ArtifactStaticScan.Result.Rejected).reason.contains("fragments")
+        )
+
+        val rtJar = File(tmp.root, "frag-rt.jar")
+        JarOutputStream(rtJar.outputStream()).use { out ->
+            out.putNextEntry(ZipEntry("classes.dex"))
+            out.write(
+                TestDexBuilder.build(
+                    strings = listOf("java.lang.", "Runtime", "Lcom/authorss81/noteflow/plugins/NoteflowPlugin;"),
+                    types = listOf(2)
+                )
+            )
+            out.closeEntry()
+        }
+        val rtScan = ArtifactStaticScan().scan(rtJar)
+        assertTrue(
+            "fragmented java.lang. must be rejected -> ${(rtScan as? ArtifactStaticScan.Result.Rejected)?.reason}",
+            rtScan is ArtifactStaticScan.Result.Rejected
+        )
+        assertTrue(
+            "reason=${(rtScan as ArtifactStaticScan.Result.Rejected).reason}",
+            (rtScan as ArtifactStaticScan.Result.Rejected).reason.contains("fragments")
+        )
+    }
+
+    @Test
+    fun `the static scan does not false-positive on benign dot-form fragments - R2-B1N-03`() {
+        // Benign strings that merely CONTAIN a dot between letters around the
+        // fragment shape (e.g. "kotlin.jvm." is fine; a slash-form type
+        // descriptor java/lang/String carries no dot form; a word-embedded
+        // "notjava.net.foo" is not a boundary match) still pass.
+        val jar = File(tmp.root, "frag-benign.jar")
+        JarOutputStream(jar.outputStream()).use { out ->
+            out.putNextEntry(ZipEntry("classes.dex"))
+            out.write(
+                TestDexBuilder.build(
+                    strings = listOf(
+                        "Lcom/authorss81/noteflow/plugins/NoteflowPlugin;",
+                        "Ljava/lang/String;",
+                        "example.com/notjava.lang.other",
+                        "myjava.network.config",
+                        "kotlin.jvm.JvmInline"
+                    ),
+                    types = listOf(0, 1)
+                )
+            )
+            out.closeEntry()
+        }
+        val scan = ArtifactStaticScan().scan(jar)
+        assertTrue(
+            "benign dex artifact must pass -> ${(scan as? ArtifactStaticScan.Result.Rejected)?.reason}",
+            scan is ArtifactStaticScan.Result.Pass
+        )
     }
 
     @Test

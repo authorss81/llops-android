@@ -687,6 +687,16 @@
     `plugins.*` host code (the artifact-resolvable surface) never references a vault-handle type.
     Native (`System.loadLibrary`) / `sun.misc.Unsafe` gating and a separate `:remote` process remain
     out-of-scope (future isolation phases), noted in the phase-46 REPORT. Tests: `PluginBytecodeIsolationTest` (20).
+  - **Implemented in phase-144** (R2-B1N-03, see `workspace/phase-144/REPORT.md`): the egress/exec
+    gate can no longer be bypassed with string-built class names. `PluginFrameworkClassLoader`
+    (`isEgressForbidden`, `PluginFrameworkClassLoader.kt:73,132-134`) additionally refuses
+    `java.net.*` / `javax.net.*` and the exact `java.lang.Runtime` / `java.lang.ProcessBuilder`
+    classes at resolution time — benign `java.lang.String`/`Integer`/`List`… still delegate — so
+    string-built `Class.forName("java.net." + "Sock" + "et")` is refused by the loader chain, not
+    just the scan. `ArtifactStaticScan` gained an advisory dot-form package-prefix-fragment check
+    (`java.net.` / `java.lang.` / `javax.net.ssl.` / `javax.net.` at a word boundary) so a
+    fragment-assembled reflection target fails noisy at verify too, without false-posing on
+    slash-form descriptors or benign compound identifiers. `PluginBytecodeIsolationTest` is now 24.
   - **Implemented in phase-66** (B1-CRYPTO-08, see `workspace/phase-66/REPORT.md`): the artifact-signer
     pin binds the FULL signer set — not a "last signed entry seen" cert — and the pinned cert must be
     currently usable. `ArtifactSignatureVerifier.collectSignerSet` (`ArtifactSignatureVerifier.kt:162`,
@@ -935,6 +945,17 @@
     local-network-only cleartext, the Web Capture opt-in applies to any host (SSRF
     blocklist still enforced).
     Bare/host-only input still defaults to `https://`. See `workspace/phase-143/REPORT.md`.
+  - **Implemented in phase-144** (R2-B1N-02): DNS-rebinding mitigation via resolve-and-pin.
+    New pure-JVM `services/DnsRebindingPolicy.kt` — `resolveAndPin(host, resolver)` resolves
+    the hop once (injectable resolver; production default `InetAddress.getAllByName`) and
+    fails closed if ANY returned A/AAAA is internal/reserved (`SsrfHostPolicy` ranges, incl.
+    IPv4-mapped forms); `applyPinToConnection` layers a `PinnedSslSocketFactory` whose
+    `createSocket(Socket,…)` closes + rebuilds a platform pre-connected socket that reached a
+    non-pinned address, + a `PinnedHostnameVerifier` that re-checks the hop host. Wired per hop
+    into every user-influenced/plugin transport (`HttpsTitleFetcher`, `WebPageFetcher`,
+    `AppFacadeHost`, `DuckDuckGoClient`, `WeatherClient`, `DictionaryClient`), each gaining an
+    injectable `dnsResolver` constructor param. The plugin manifest/download transports remain
+    pinned-identity/allow-listed and are intentionally unwired. See `workspace/phase-144/REPORT.md`.
 - **Implemented in phase-52** (B1-NET-05): HTTPS→HTTP redirect downgrades are
     closed at EVERY base `HttpURLConnection` transport. New pure-JVM
     `services/StrictRedirectPolicy.kt` (`checkTlsHop` `:31`, `resolveNextTlsHop`

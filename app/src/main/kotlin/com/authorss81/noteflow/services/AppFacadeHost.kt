@@ -5,6 +5,7 @@ import com.authorss81.noteflow.plugins.runtime.FacadeResult
 import com.authorss81.noteflow.plugins.runtime.PluginContext
 import com.authorss81.noteflow.utils.HttpUserAgent
 import java.net.HttpURLConnection
+import java.net.InetAddress
 import java.net.URI
 import java.net.URL
 
@@ -23,12 +24,17 @@ import java.net.URL
  * tested, and the host never pretends an operation happened.
  *
  * [httpGet] is REAL: a TLS-only GET with a response-size cap, so a granted
- * plugin can fetch (e.g. web-search results) today.
+ * plugin can fetch (e.g. web-search results) today. R2-B1N-02 (phase-144):
+ * every hop is also DNS-resolved+validated and the connect is PINNED to the
+ * checked addresses via [DnsRebindingPolicy] — a plugin trying to reach an
+ * internal host through a rebinding name is refused before any socket, and the
+ * connect can never land on an address the check did not see.
  */
 class AppFacadeHost(
     private val connectionFactory: (String) -> HttpURLConnection = { url ->
         URL(url).openConnection() as HttpURLConnection
-    }
+    },
+    private val dnsResolver: (String) -> Array<InetAddress> = DnsRebindingPolicy.DEFAULT_RESOLVER
 ) : FacadeHost {
 
     override fun insertText(text: String): FacadeResult<Unit> = FacadeResult.Failed(
@@ -48,7 +54,10 @@ class AppFacadeHost(
      * as an `https` destination off the B1-NET-04 SSRF blocklist
      * ([StrictRedirectPolicy]) and redirects are followed manually with
      * `instanceFollowRedirects = false`, so a downgrading
-     * `307 Location: http://…` is refused — never a cleartext fetch.
+     * `307 Location: http://…` is refused — never a cleartext fetch. R2-B1N-02:
+     * each hop is ALSO resolved and pinned via [DnsRebindingPolicy] (a DNS
+     * answer containing an internal address refuses the hop; the connect is
+     * pinned to the checked addresses).
      */
     override fun httpGet(url: String): FacadeResult<String> {
         var cur = try {
@@ -59,10 +68,18 @@ class AppFacadeHost(
         try {
             repeat(StrictRedirectPolicy.MAX_REDIRECTS + 1) { _ ->
                 StrictRedirectPolicy.checkTlsHop(cur)
+                val host = cur.host
+                    ?: return FacadeResult.Failed("HTTP GET refused: the URL has no host.")
+                val pin = when (val verdict = DnsRebindingPolicy.resolveAndPin(host, dnsResolver)) {
+                    is DnsRebindingPolicy.Verdict.Pinned -> verdict
+                    is DnsRebindingPolicy.Verdict.Refused ->
+                        return FacadeResult.Failed("HTTP GET refused: ${verdict.reason}")
+                }
                 val connection = connectionFactory(cur.toString())
                 try {
                     connection.connectTimeout = 15_000
                     connection.readTimeout = 30_000
+                    DnsRebindingPolicy.applyPinToConnection(connection, host, pin.addresses, 15_000)
                     // B1-NET-05: never auto-follow — 3xx is re-validated per hop.
                     connection.instanceFollowRedirects = false
                     connection.setRequestProperty("User-Agent", HttpUserAgent.GENERIC)

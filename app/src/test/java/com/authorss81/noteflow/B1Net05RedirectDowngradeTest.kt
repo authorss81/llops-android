@@ -19,6 +19,7 @@ import java.io.File
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.HttpURLConnection
+import java.net.InetAddress
 import java.net.URI
 import java.net.URL
 import kotlinx.coroutines.runBlocking
@@ -53,6 +54,14 @@ import org.junit.Test
  *     transport and forbid the `= true` assignment anywhere under `app/src/main`.
  */
 class B1Net05RedirectDowngradeTest {
+
+    // ---- DNS stub (R2-B1N-02) ----------------------------------------------
+    // A pure-JVM resolver that answers every host with a PUBLIC, non-internal
+    // address so the transports' resolve-and-pin layer passes the textual and
+    // resolved checks WITHOUT any real network in unit tests.
+    private val publicResolver: (String) -> Array<InetAddress> = {
+        arrayOf(InetAddress.getByName("8.8.8.8"))
+    }
 
     // ---- StrictRedirectPolicy: hop policy ------------------------------------
 
@@ -220,7 +229,7 @@ class B1Net05RedirectDowngradeTest {
             FakeConnection(302, "http://attacker.invalid/leak")
         }
         try {
-            DuckDuckGoClient(connectionFactory = factory).search("Kotlin")
+            DuckDuckGoClient(connectionFactory = factory, dnsResolver = publicResolver).search("Kotlin")
             fail("https->http 302 must be refused")
         } catch (e: DuckDuckGoSearchException) {
             assertTrue("refusal must mention HTTPS", "HTTPS" in e.message!!)
@@ -236,7 +245,7 @@ class B1Net05RedirectDowngradeTest {
             FakeConnection(307, "https://169.254.169.254/latest/meta-data/iam/security-credentials/")
         }
         try {
-            DuckDuckGoClient(connectionFactory = factory).search("Kotlin")
+            DuckDuckGoClient(connectionFactory = factory, dnsResolver = publicResolver).search("Kotlin")
             fail("blocked-host 307 must be refused")
         } catch (e: DuckDuckGoSearchException) {
             assertTrue(e.message!!.contains("blocked"))
@@ -252,7 +261,7 @@ class B1Net05RedirectDowngradeTest {
             if (calls == 1) FakeConnection(302, "https://api.duckduckgo.com/?q=Kotlin&hop=2")
             else FakeConnection(200, body = ddgJson)
         }
-        val results = DuckDuckGoClient(connectionFactory = factory).search("Kotlin")
+        val results = DuckDuckGoClient(connectionFactory = factory, dnsResolver = publicResolver).search("Kotlin")
         assertEquals(2, calls)
         assertEquals(1, results.size)
         assertTrue(results[0].url.startsWith("https://"))
@@ -266,7 +275,7 @@ class B1Net05RedirectDowngradeTest {
             FakeConnection(302, url) // Location == current URL → loop
         }
         try {
-            DuckDuckGoClient(connectionFactory = factory).search("Kotlin")
+            DuckDuckGoClient(connectionFactory = factory, dnsResolver = publicResolver).search("Kotlin")
             fail("redirect loop must be refused")
         } catch (e: DuckDuckGoSearchException) {
             assertTrue(e.message!!.contains("loop"))
@@ -296,7 +305,7 @@ class B1Net05RedirectDowngradeTest {
             FakeConnection(302, "https://api.duckduckgo.com/r${calls}")
         }
         try {
-            DuckDuckGoClient(connectionFactory = factory).search("Kotlin")
+            DuckDuckGoClient(connectionFactory = factory, dnsResolver = publicResolver).search("Kotlin")
             fail("runaway redirects must be refused")
         } catch (e: DuckDuckGoSearchException) {
             assertTrue(e.message!!.contains("redirected too many times"))
@@ -327,7 +336,7 @@ class B1Net05RedirectDowngradeTest {
             calls++
             FakeConnection(301, "http://evil.example/forecast")
         }
-        val client = OpenMeteoClient(connectionFactory = factory)
+        val client = OpenMeteoClient(connectionFactory = factory, dnsResolver = publicResolver)
         val place = OpenMeteoGeocoderParser.Place("London", 51.50853, -0.12574)
         try {
             client.forecast(place)
@@ -346,7 +355,7 @@ class B1Net05RedirectDowngradeTest {
             if (calls == 1) FakeConnection(302, "https://api.open-meteo.com/v1/forecast/hop")
             else FakeConnection(200, body = forecastJson)
         }
-        val client = OpenMeteoClient(connectionFactory = factory)
+        val client = OpenMeteoClient(connectionFactory = factory, dnsResolver = publicResolver)
         val snapshot = client.forecast(OpenMeteoGeocoderParser.Place("London", 51.50853, -0.12574))
         assertEquals(2, calls)
         assertEquals(22.3, snapshot.tempMaxC, 0.0001)
@@ -368,7 +377,7 @@ class B1Net05RedirectDowngradeTest {
             FakeConnection(302, "http://plaintext.dictionary.example/word")
         }
         try {
-            DictionaryClient(connectionFactory = factory).lookup("serendipity")
+            DictionaryClient(connectionFactory = factory, dnsResolver = publicResolver).lookup("serendipity")
             fail("https->http 302 must be refused")
         } catch (e: DictionaryServiceException) {
             assertTrue("HTTPS" in e.message!!)
@@ -384,7 +393,7 @@ class B1Net05RedirectDowngradeTest {
             if (calls == 1) FakeConnection(302, "https://api.dictionaryapi.dev/api/v2/entries/en/serendipity/hop")
             else FakeConnection(200, body = dictJson)
         }
-        val lookup = DictionaryClient(connectionFactory = factory).lookup("serendipity")
+        val lookup = DictionaryClient(connectionFactory = factory, dnsResolver = publicResolver).lookup("serendipity")
         assertEquals(2, calls)
         assertEquals("serendipity", lookup!!.word)
     }
@@ -394,8 +403,10 @@ class B1Net05RedirectDowngradeTest {
         val plugin = DictionaryPluginImpl(
             client = { word ->
                 // The online backend answers https with a 307 to http: refused.
-                DictionaryClient(connectionFactory = { FakeConnection(307, "http://evil.example/x") })
-                    .lookup(word)
+                DictionaryClient(
+                    connectionFactory = { FakeConnection(307, "http://evil.example/x") },
+                    dnsResolver = publicResolver
+                ).lookup(word)
             }
         )
         val outcome = plugin.lookupWord("insight")
@@ -412,7 +423,7 @@ class B1Net05RedirectDowngradeTest {
         val host = AppFacadeHost(connectionFactory = { url ->
             calls++
             FakeConnection(302, "http://evil.example/data")
-        })
+        }, dnsResolver = publicResolver)
         val result = host.httpGet("https://plugin.example/data.json")
         assertTrue(result is FacadeResult.Failed)
         assertTrue((result as FacadeResult.Failed).message.contains("HTTPS"))
@@ -425,7 +436,7 @@ class B1Net05RedirectDowngradeTest {
         val host = AppFacadeHost(connectionFactory = { url ->
             calls++
             FakeConnection(302, "https://169.254.169.254/latest/meta-data/")
-        })
+        }, dnsResolver = publicResolver)
         val result = host.httpGet("https://plugin.example/data.json")
         assertTrue(result is FacadeResult.Failed)
         assertTrue("blocked" in (result as FacadeResult.Failed).message)
@@ -439,7 +450,7 @@ class B1Net05RedirectDowngradeTest {
             calls++
             if (calls == 1) FakeConnection(302, "https://plugin.example/real-data.json")
             else FakeConnection(200, body = "payload")
-        })
+        }, dnsResolver = publicResolver)
         val result = host.httpGet("https://plugin.example/start")
         assertTrue(result is FacadeResult.Granted)
         assertEquals("payload", (result as FacadeResult.Granted).value)
@@ -448,7 +459,10 @@ class B1Net05RedirectDowngradeTest {
 
     @Test
     fun `facade httpGet refuses a non-https entry url before connecting`() {
-        val host = AppFacadeHost(connectionFactory = { throw AssertionError("must not connect") })
+        val host = AppFacadeHost(
+            connectionFactory = { throw AssertionError("must not connect") },
+            dnsResolver = publicResolver
+        )
         val result = host.httpGet("http://plugin.example/data.json")
         assertTrue(result is FacadeResult.Failed)
         assertTrue("HTTPS" in (result as FacadeResult.Failed).message)
@@ -460,7 +474,7 @@ class B1Net05RedirectDowngradeTest {
         val host = AppFacadeHost(connectionFactory = { url ->
             calls++
             FakeConnection(302, "https://plugin.example/hop${calls}")
-        })
+        }, dnsResolver = publicResolver)
         val result = host.httpGet("https://plugin.example/start")
         assertTrue(result is FacadeResult.Failed)
         assertTrue("redirected too many times" in (result as FacadeResult.Failed).message)

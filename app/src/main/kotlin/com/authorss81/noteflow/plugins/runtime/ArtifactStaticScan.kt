@@ -58,6 +58,20 @@ import java.util.jar.JarFile
  *    must come from the host facade. Native (`System.loadLibrary`) and
  *    `sun.misc.Unsafe` remain a future separate boundary (native blobs cannot
  *    be gated by class-name scans).
+ * 5. **Dynamic egress/exec class-name fabrication (R2-B1N-03, phase-144)** —
+ *    `Class.forName("java.net." + "Sock" + "et")` / fragmented constants never
+ *    equal a forbidden whole token, so the exact checks above were bypassable
+ *    by string splitting. The scan now ALSO rejects any parsed string/type that
+ *    contains a forbidden **dot-form package-prefix fragment** (`java.net.`,
+ *    `java.lang.`, `javax.net.ssl.`) at a word boundary — a plugin that
+ *    assembles a `java.net.Socket` / `java.lang.Runtime` name dynamically
+ *    cannot avoid shipping at least the package-prefix fragment. Advisory (this
+ *    is a static token scan; a determined obfuscator can split further) — the
+ *    decisive phase-144 layer is the RUNTIME one:
+ *    [PluginFrameworkClassLoader.isEgressForbidden] no longer resolves
+ *    `java.net.*`/`javax.net.*`/`Runtime`/`ProcessBuilder` for plugin code, so
+ *    any egress-constructive reflection fails at load time regardless of how
+ *    the name was spelled.
  *
  * Pure JVM; never throws — a file that refuses to be read as a JAR is returned
  * [Result.Pass] so the signature/identity gates (which already fail such a
@@ -158,6 +172,39 @@ class ArtifactStaticScan {
             dotted in PROCESS_EXEC_DOT
         ) {
             return "references process execution ('$canonical'). Plugin work must stay inside the verified plugin sandbox — no subprocesses."
+        }
+        // R2-B1N-03 (phase-144): a string-built egress/exec class name
+        // (`Class.forName("java.net." + "Sock" + "et")`) never equals a
+        // forbidden whole token, but it MUST ship the package-prefix fragment.
+        // Refuse any parsed string/type carrying one at a word boundary — the
+        // runtime refusal ([PluginFrameworkClassLoader.isEgressForbidden]) is
+        // the decisive gate; this one makes the artifact fail noisy at verify.
+        // Dot-form fragments only: type descriptors are slash-form, so a benign
+        // `java/lang/String` reference can never false-positive here.
+        forbiddenEgressFragment(value)?.let { return it }
+        return null
+    }
+
+    /**
+     * R2-B1N-03 (phase-144): rejects [value] when it contains a forbidden
+     * dot-form package prefix at a word boundary — the shape a string-built
+     * `Class.forName("java.net." + …)` / `("java.lang." + "Runtime")`
+     * reflection target has to appear in. Returns a user-facing reason or null.
+     */
+    private fun forbiddenEgressFragment(value: String): String? {
+        val lower = value.lowercase()
+        for (fragment in EGRESS_PACKAGE_FRAGMENTS) {
+            var from = 0
+            while (true) {
+                val idx = lower.indexOf(fragment, from)
+                if (idx == -1) break
+                val prevOk = idx == 0 || !lower[idx - 1].isLetterOrDigit()
+                if (prevOk) {
+                    return "assembles a forbidden class name from string fragments ('$fragment') — " +
+                        "plugin network/process classes cannot be built dynamically; I/O must flow through the facade."
+                }
+                from = idx + 1
+            }
         }
         return null
     }
@@ -271,6 +318,22 @@ class ArtifactStaticScan {
 
         private val PROCESS_EXEC_DOT: Set<String> =
             PROCESS_EXEC_CLASSES.map { it.replace('/', '.') }.toSet()
+
+        /** R2-B1N-03 (phase-144): dot-form package-prefix fragments a dynamic
+         *  `Class.forName` must contain to build any of the forbidden egress/
+         *  exec classes. Matched ONLY as a word-boundary sub-string, and ONLY
+         *  in dot form — slash-form type descriptors (`java/lang/String`,
+         *  `Ljava/net/Socket;`) never share a dot-form prefix, so a benign
+         *  plugin's normal class references cannot false-positive. This is the
+         *  advisory layer; the classloader's runtime refusal
+         *  ([PluginFrameworkClassLoader.isEgressForbidden]) catches the
+         *  resolution regardless. */
+        private val EGRESS_PACKAGE_FRAGMENTS: List<String> = listOf(
+            "java.net.",
+            "java.lang.",
+            "javax.net.ssl.",
+            "javax.net."
+        )
 
         /** Raw (non-parsed) entries are searched for the unambiguous app-private
          *  prefixes only; sensitive names go through [containsSensitiveToken]

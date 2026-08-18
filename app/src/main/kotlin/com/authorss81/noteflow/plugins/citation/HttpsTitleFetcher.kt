@@ -1,9 +1,11 @@
 package com.authorss81.noteflow.plugins.citation
 
+import com.authorss81.noteflow.services.DnsRebindingPolicy
 import com.authorss81.noteflow.services.SsrfHostPolicy
 import com.authorss81.noteflow.utils.HttpUserAgent
 import java.io.IOException
 import java.net.HttpURLConnection
+import java.net.InetAddress
 import java.net.URI
 
 /**
@@ -22,6 +24,12 @@ import java.net.URI
  * crafted `Location` can never reach `localhost`, a LAN/private IP or the
  * cloud-metadata link-local address — and an HTTPS→HTTP downgrade hop is
  * refused for the default [httpsOnly] configuration.
+ *
+ * R2-B1N-02 (phase-144): every hop is ALSO resolved and pinned via
+ * [DnsRebindingPolicy] before a connection is made — a DNS-rebinding answer
+ * (internal A/AAAA) is refused whole, and the connect itself is pinned to the
+ * validated addresses ([DnsRebindingPolicy.applyPinToConnection]), closing the
+ * connect-time re-resolution window the text-only blocklist could not see.
  */
 
 /** Typed, user-facing fetch failure. */
@@ -35,7 +43,8 @@ class HttpsTitleFetcher(
     private val connectTimeoutMs: Int = 10_000,
     private val readTimeoutMs: Int = 10_000,
     private val maxResponseBytes: Int = 512_000,
-    private val httpsOnly: Boolean = true
+    private val httpsOnly: Boolean = true,
+    private val dnsResolver: (String) -> Array<InetAddress> = DnsRebindingPolicy.DEFAULT_RESOLVER
 ) {
 
     /** @return the page title, or null when the page has none. */
@@ -66,6 +75,12 @@ class HttpsTitleFetcher(
             if (blocked != null) {
                 throw TitleFetchException(blocked)
             }
+            // R2-B1N-02: resolve + validate every answer, then pin the connect
+            // to the checked addresses (or refuse the name entirely).
+            val pin = when (val verdict = DnsRebindingPolicy.resolveAndPin(host, dnsResolver)) {
+                is DnsRebindingPolicy.Verdict.Pinned -> verdict
+                is DnsRebindingPolicy.Verdict.Refused -> throw TitleFetchException(verdict.reason)
+            }
 
             val conn = cur.toURL().openConnection() as? HttpURLConnection
                 ?: throw TitleFetchException("Could not fetch the page title — unsupported protocol.")
@@ -76,6 +91,7 @@ class HttpsTitleFetcher(
                 conn.instanceFollowRedirects = false
                 conn.setRequestProperty("Accept", "text/html")
                 conn.setRequestProperty("User-Agent", HttpUserAgent.GENERIC)
+                DnsRebindingPolicy.applyPinToConnection(conn, host, pin.addresses, connectTimeoutMs)
                 val code = conn.responseCode
                 if (code in 300..399) {
                     val loc = conn.getHeaderField("Location")

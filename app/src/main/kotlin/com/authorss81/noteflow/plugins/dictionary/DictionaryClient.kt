@@ -1,10 +1,12 @@
 package com.authorss81.noteflow.plugins.dictionary
 
 import com.authorss81.noteflow.plugins.DictionaryLookup
+import com.authorss81.noteflow.services.DnsRebindingPolicy
 import com.authorss81.noteflow.services.StrictRedirectPolicy
 import com.authorss81.noteflow.utils.HttpUserAgent
 import java.io.IOException
 import java.net.HttpURLConnection
+import java.net.InetAddress
 import java.net.URI
 import java.net.URL
 import java.net.URLEncoder
@@ -35,12 +37,19 @@ object DictionaryQueryUrl {
  * thread (call it from `Dispatchers.IO`). Connectivity failures and non-200
  * responses are converted to a clear, user-facing [DictionaryServiceException] —
  * never silently swallowed. A 404 (unknown word) returns null.
+ *
+ * R2-B1N-02 (phase-144): every hop is additionally RESOLVED and PINNED via
+ * [DnsRebindingPolicy] before a connection is opened — a DNS-rebinding answer
+ * (an internal A/AAAA, regardless of the textual host string) refuses the whole
+ * hop, and the connect is pinned to the validated addresses
+ * ([DnsRebindingPolicy.applyPinToConnection]).
  */
 class DictionaryClient(
     private val urlBuilder: (String) -> String = DictionaryQueryUrl::build,
     private val connectTimeoutMs: Int = 10_000,
     private val readTimeoutMs: Int = 10_000,
     private val maxResponseBytes: Int = 1_000_000,
+    private val dnsResolver: (String) -> Array<InetAddress> = DnsRebindingPolicy.DEFAULT_RESOLVER,
     private val connectionFactory: (String) -> HttpURLConnection = { url ->
         URL(url).openConnection() as HttpURLConnection
     }
@@ -59,6 +68,12 @@ class DictionaryClient(
                 // URL AND every 3xx target) and any hop on the B1-NET-04 SSRF
                 // blocklist, BEFORE a connection is opened.
                 StrictRedirectPolicy.checkTlsHop(cur)
+                // R2-B1N-02: resolve + validate every answer, then pin the connect
+                // to the checked addresses (or refuse the name entirely).
+                val pin = when (val verdict = DnsRebindingPolicy.resolveAndPin(cur.host ?: "", dnsResolver)) {
+                    is DnsRebindingPolicy.Verdict.Pinned -> verdict
+                    is DnsRebindingPolicy.Verdict.Refused -> throw DictionaryServiceException(verdict.reason)
+                }
                 val conn = connectionFactory(cur.toString())
                 try {
                     conn.requestMethod = "GET"
@@ -69,6 +84,7 @@ class DictionaryClient(
                     conn.instanceFollowRedirects = false
                     conn.setRequestProperty("Accept", "application/json")
                     conn.setRequestProperty("User-Agent", HttpUserAgent.GENERIC)
+                    DnsRebindingPolicy.applyPinToConnection(conn, cur.host ?: "", pin.addresses, connectTimeoutMs)
                     val code = conn.responseCode
                     if (code in 300..399) {
                         val next = StrictRedirectPolicy.resolveNextTlsHop(

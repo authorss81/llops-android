@@ -9,6 +9,7 @@ import java.io.File
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.HttpURLConnection
+import java.net.InetAddress
 import java.net.URL
 import java.util.Arrays
 import org.junit.Assert.assertEquals
@@ -45,6 +46,13 @@ import org.junit.Test
  */
 class B2Dos04FacadeGetStreamingCapTest {
 
+    // ---- DNS stub (R2-B1N-02) ----------------------------------------------
+    // A pure-JVM resolver that answers every host with a PUBLIC address so the
+    // AppFacadeHost resolve-and-pin layer passes without any real network.
+    private val publicResolver: (String) -> Array<InetAddress> = {
+        arrayOf(InetAddress.getByName("8.8.8.8"))
+    }
+
     // ---- behavior: the core finding -----------------------------------------
 
     @Test
@@ -57,7 +65,7 @@ class B2Dos04FacadeGetStreamingCapTest {
         )
         val host = AppFacadeHost(connectionFactory = {
             FakeHttpConnection(200, input = drip)
-        })
+        }, dnsResolver = publicResolver)
 
         val result = host.httpGet("https://plugin.example/data.json")
 
@@ -91,7 +99,7 @@ class B2Dos04FacadeGetStreamingCapTest {
         )
         val host = AppFacadeHost(connectionFactory = {
             FakeHttpConnection(200, input = drip)
-        })
+        }, dnsResolver = publicResolver)
 
         val result = host.httpGet("https://plugin.example/data.bin")
 
@@ -107,7 +115,7 @@ class B2Dos04FacadeGetStreamingCapTest {
     fun `a small response still round-trips`() {
         val host = AppFacadeHost(connectionFactory = {
             FakeHttpConnection(200, input = ByteArrayInputStream("hello world".toByteArray(Charsets.UTF_8)))
-        })
+        }, dnsResolver = publicResolver)
 
         val result = host.httpGet("https://plugin.example/hello.txt")
 
@@ -131,7 +139,7 @@ class B2Dos04FacadeGetStreamingCapTest {
                 contentLengthValue = FacadeHttpGetPolicy.MAX_FACADE_GET_BYTES + 1,
                 input = neverRead
             )
-        })
+        }, dnsResolver = publicResolver)
 
         val result = host.httpGet("https://plugin.example/data.json")
 
@@ -155,7 +163,7 @@ class B2Dos04FacadeGetStreamingCapTest {
             } else {
                 FakeHttpConnection(200, input = drip)
             }
-        })
+        }, dnsResolver = publicResolver)
 
         val result = host.httpGet("https://plugin.example/start")
 

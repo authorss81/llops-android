@@ -1,19 +1,30 @@
 package com.authorss81.noteflow.plugins.webcapture
 
+import com.authorss81.noteflow.services.DnsRebindingPolicy
+import com.authorss81.noteflow.utils.HttpUserAgent
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.net.HttpURLConnection
+import java.net.InetAddress
 import java.net.URI
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import com.authorss81.noteflow.utils.HttpUserAgent
 
 /**
  * Platform (network) slice of Web Capture. Fetches an already-validated URL on
  * [Dispatchers.IO], with redirects followed and a hard response-size cap
  * ([WebPageFetchPolicy.MAX_RESPONSE_BYTES]) applied while streaming.
+ *
+ * R2-B1N-02 (phase-144): every hop is additionally RESOLVED and PINNED via
+ * [DnsRebindingPolicy] before a connection is made — the textual
+ * [WebPageFetchPolicy.rejectHop] gate sees only the host string, so a
+ * DNS-rebinding domain is refused when its resolution contains an internal
+ * address, and the connect itself is pinned to the validated addresses
+ * ([DnsRebindingPolicy.applyPinToConnection]).
  */
-class WebPageFetcher {
+class WebPageFetcher(
+    private val dnsResolver: (String) -> Array<InetAddress> = DnsRebindingPolicy.DEFAULT_RESOLVER
+) {
 
     /**
      * @param allowInsecureHttp per-fetch cleartext opt-in (R2-B1N-04). The
@@ -36,10 +47,17 @@ class WebPageFetcher {
             if (hopError != null) {
                 throw IOException(hopError)
             }
+            val host = cur.host
+                ?: throw IOException("That address does not include a host.")
+            val pin = when (val verdict = DnsRebindingPolicy.resolveAndPin(host, dnsResolver)) {
+                is DnsRebindingPolicy.Verdict.Pinned -> verdict
+                is DnsRebindingPolicy.Verdict.Refused -> throw IOException(verdict.reason)
+            }
             val conn = (cur.toURL().openConnection() as? HttpURLConnection)
                 ?: throw IOException("Unsupported protocol.")
+            DnsRebindingPolicy.applyPinToConnection(conn, host, pin.addresses, CONNECT_TIMEOUT_MS)
             try {
-                conn.connectTimeout = 10_000
+                conn.connectTimeout = CONNECT_TIMEOUT_MS
                 conn.readTimeout = 15_000
                 conn.instanceFollowRedirects = false
                 conn.requestMethod = "GET"
@@ -97,5 +115,6 @@ class WebPageFetcher {
 
     private companion object {
         const val MAX_REDIRECTS = 5
+        const val CONNECT_TIMEOUT_MS = 10_000
     }
 }
