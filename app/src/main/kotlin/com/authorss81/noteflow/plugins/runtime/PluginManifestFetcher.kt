@@ -1,5 +1,6 @@
 package com.authorss81.noteflow.plugins.runtime
 
+import com.authorss81.noteflow.services.HostPortAllowList
 import java.net.URL
 import javax.net.ssl.HttpsURLConnection
 import javax.net.ssl.SSLHandshakeException
@@ -122,7 +123,11 @@ class HttpsManifestTransport(
                         "Refusing a non-TLS update-manifest fetch (got '${parsed.protocol}://'). HTTPS only."
                     )
                 }
-                if (!parsed.host.equals(expectedHost, ignoreCase = true)) {
+                // R2-B1N-05: the host gate is now a (scheme, host, effective-
+                // port) allow-list gate — `https://<allowed-host>:8443/...`
+                // cannot slip through a host-only compare. A bare `expectedHost`
+                // defaults to https://host:443 (the TLS-only default port).
+                if (!HostPortAllowList.matches(url, listOf(expectedHost))) {
                     return@withContext ManifestFetchResult.Failed(
                         "Refusing an update-manifest fetch to '${parsed.host}' — only '$expectedHost' is a trusted manifest host."
                     )

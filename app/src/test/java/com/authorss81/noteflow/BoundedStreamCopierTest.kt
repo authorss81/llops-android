@@ -97,4 +97,63 @@ class BoundedStreamCopierTest {
         }
         assertEquals(0, out.size())
     }
+
+    // ---- R2-B1P-04 (phase-142): idle-read bailout ---------------------------
+
+    @Test
+    fun `a stream returning zero forever bails instead of busy-spinning`() {
+        val out = ByteArrayOutputStream()
+        val stream = ZeroProgressInputStream()
+        val ex = assertThrows(java.io.IOException::class.java) {
+            BoundedStreamCopier.copyBounded(
+                stream, out, BoundedStreamCopier.MAX_SINGLE_STREAM_BYTES
+            )
+        }
+        assertTrue("message must name the no-progress abort", "no progress" in ex.message.orEmpty())
+        // The guard must fire after the same consecutive-zero budget as the
+        // phase-81 AttachmentIngestPolicy sibling, never before.
+        assertEquals(BoundedStreamCopier.MAX_CONSECUTIVE_IDLE_READS + 1, stream.reads)
+    }
+
+    @Test
+    fun `interspersed zero reads are tolerated while progress continues`() {
+        // A legitimately-chatty stream whose read() occasionally returns 0 must
+        // still copy fully — the idle counter resets on every progress.
+        val payload = ByteArray(64 * 1024 + 17) { (it % 251).toByte() }
+        val out = ByteArrayOutputStream()
+        val written = BoundedStreamCopier.copyBounded(
+            InterleavedZeroInputStream(payload), out, BoundedStreamCopier.MAX_SINGLE_STREAM_BYTES
+        )
+        assertEquals(payload.size.toLong(), written)
+        assertTrue(out.toByteArray().contentEquals(payload))
+    }
+
+    /** Returns 0 forever — never -1, never data — the contract-legal hostile
+     *  ContentProvider shape from R2-B1P-04. */
+    private class ZeroProgressInputStream : java.io.InputStream() {
+        var reads = 0
+            private set
+
+        override fun read(): Int = 0
+        override fun read(b: ByteArray, off: Int, len: Int): Int {
+            reads++
+            return 0
+        }
+    }
+
+    /** Returns real data but interleaves one returning-zero read every 8 KB. */
+    private class InterleavedZeroInputStream(private val data: ByteArray) : java.io.InputStream() {
+        private var pos = 0
+
+        override fun read(): Int = if (pos >= data.size) -1 else (data[pos++].toInt() and 0xFF)
+
+        override fun read(b: ByteArray, off: Int, len: Int): Int {
+            if (pos >= data.size) return -1
+            if (pos > 0 && pos % (8 * 1024) == 0) return 0
+            val n = minOf(len, data.size - pos)
+            System.arraycopy(data, pos, b, off, n)
+            pos += n
+            return n
+        }
+    }
 }

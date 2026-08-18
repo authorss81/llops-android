@@ -117,7 +117,7 @@ class HttpsManifestTransportTest {
     private fun transportFor(
         cert: X509Certificate,
         pin: String = pinOf(cert),
-        host: String = "127.0.0.1"
+        host: String = "127.0.0.1:443"
     ) = HttpsManifestTransport(
         expectedCertPin = pin,
         expectedHost = host,
@@ -141,7 +141,8 @@ class HttpsManifestTransportTest {
     fun `accepts an HTTPS manifest whose leaf matches the expected pin`() = runBlocking {
         val (server, cert) = startServer(0, 200, body = validManifestJson)
 
-        val result = transportFor(cert).fetch("https://127.0.0.1:${server.port}/manifest.json")
+        val result = transportFor(cert, host = "127.0.0.1:${server.port}")
+            .fetch("https://127.0.0.1:${server.port}/manifest.json")
 
         assertTrue("fetch -> ${(result as? ManifestFetchResult.Failed)?.message}", result is ManifestFetchResult.Loaded)
         val loaded = result as ManifestFetchResult.Loaded
@@ -156,11 +157,26 @@ class HttpsManifestTransportTest {
         val otherPin = "sha256/" + java.util.Base64.getEncoder()
             .encodeToString(ByteArray(32) { 0x11 })
 
-        val result = transportFor(cert, pin = otherPin).fetch("https://127.0.0.1:${server.port}/manifest.json")
+        val result = transportFor(cert, pin = otherPin, host = "127.0.0.1:${server.port}")
+            .fetch("https://127.0.0.1:${server.port}/manifest.json")
 
         assertTrue(result is ManifestFetchResult.Failed)
         val message = (result as ManifestFetchResult.Failed).message
         assertTrue("message=$message", message.contains("pinned hash"))
+    }
+
+    @Test
+    fun `rejects a fetch to the allowed host at a non-default port - R2-B1N-05`() = runBlocking {
+        // The manifest gate is a (scheme, host, effective-port) triple: the host
+        // at a NON-default port is refused before any connection opens, even
+        // though its host is exactly the expected one.
+        val (server, cert) = startServer(0, 200, body = validManifestJson)
+        val result = transportFor(cert, host = "127.0.0.1:443")
+            .fetch("https://127.0.0.1:${server.port}/manifest.json")
+
+        assertTrue(result is ManifestFetchResult.Failed)
+        assertTrue((result as ManifestFetchResult.Failed).message.contains("trusted manifest host"))
+        assertEquals("the non-default-port manifest host must never be contacted", emptyList<Any>(), server.requestTargets)
     }
 
     @Test
@@ -203,7 +219,8 @@ class HttpsManifestTransportTest {
             body = ""
         )
 
-        val result = transportFor(cert).fetch("https://127.0.0.1:${redirector.port}/manifest.json")
+        val result = transportFor(cert, host = "127.0.0.1:${redirector.port}")
+            .fetch("https://127.0.0.1:${redirector.port}/manifest.json")
 
         assertTrue(result is ManifestFetchResult.Failed)
         assertTrue((result as ManifestFetchResult.Failed).message.contains("redirect"))
@@ -220,7 +237,8 @@ class HttpsManifestTransportTest {
             body = ""
         )
 
-        val result = transportFor(cert).fetch("https://127.0.0.1:${redirector.port}/manifest.json")
+        val result = transportFor(cert, host = "127.0.0.1:${redirector.port}")
+            .fetch("https://127.0.0.1:${redirector.port}/manifest.json")
 
         assertTrue(result is ManifestFetchResult.Failed)
         assertTrue((result as ManifestFetchResult.Failed).message.contains("redirect"))
@@ -232,7 +250,7 @@ class HttpsManifestTransportTest {
         val (server, cert) = startServer(0, 200, body = validManifestJson)
         val transport = HttpsManifestTransport(
             expectedCertPin = "sha256/AAAA", // 3 bytes — not a real pin
-            expectedHost = "127.0.0.1",
+            expectedHost = "127.0.0.1:${server.port}",
             trustManagerOverride = trustManagerFor(cert)
         )
 

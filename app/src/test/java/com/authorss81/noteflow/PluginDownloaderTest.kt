@@ -269,6 +269,33 @@ class PluginDownloaderTest {
     }
 
     @Test
+    fun `the allowed host at a non-default port is refused - R2-B1N-05`() = runBlocking {
+        val dir = tmp.newFolder("plugins")
+        var touched = false
+        val downloader = PluginDownloader(
+            transport = DownloadTransport { request ->
+                touched = true
+                request.target.writeBytes("nope".toByteArray())
+                DownloadTransportResult.Completed(4)
+            },
+            allowedDownloadHosts = testHosts
+        )
+
+        // `plugins.example.com` IS allow-listed by name — but the gate is a
+        // (scheme, host, effective-port) triple now, so the same host on a
+        // non-default port can never slip through the host-only compare.
+        val outcome = downloader.download(
+            remoteEntry(url = "https://plugins.example.com:8443/ocr-1.0.0.apk"),
+            dir,
+            userConsented = true
+        )
+
+        assertTrue(outcome is PluginDownloader.DownloadOutcome.Failed)
+        assertTrue((outcome as PluginDownloader.DownloadOutcome.Failed).message.contains("allow-listed"))
+        assertFalse("the non-default-port artifact host must never be contacted", touched)
+    }
+
+    @Test
     fun `the production default download hosts include the manifest host and refuse everything else`() = runBlocking {
         val dir = tmp.newFolder("plugins")
         val downloader = PluginDownloader(

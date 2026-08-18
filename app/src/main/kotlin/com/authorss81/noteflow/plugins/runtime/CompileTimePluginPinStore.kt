@@ -1,7 +1,9 @@
 package com.authorss81.noteflow.plugins.runtime
 
+import com.authorss81.noteflow.services.HostPortAllowList
+import com.authorss81.noteflow.services.WebDavHrefResolver
+import com.authorss81.noteflow.services.WebDavHrefResolver.Origin
 import com.authorss81.noteflow.utils.ConstantTime
-import java.net.URL
 
 /**
  * One released version of a downloadable (remote) plugin, with its
@@ -77,8 +79,9 @@ sealed class PinVerdict {
  *
  * @property releases id → (version → pinned identity) for every released version.
  * @property allowedDownloadHosts the only hosts artifact bytes may be fetched
- *   from (includes the manifest host); hosts are stored normalized (lowercase,
- *   trailing-dot stripped).
+ *   from (includes the manifest host); entries are normalized to
+ *   `(scheme, host, effective-port)` triples — a bare host defaults to
+ *   `https://host:443`, so the store's gate is port-aware (R2-B1N-05).
  */
 class CompileTimePluginPinStore(
     releases: Map<String, Map<PluginVersion, PinnedReleaseVersion>>,
@@ -92,19 +95,24 @@ class CompileTimePluginPinStore(
     ) : this(buildReleaseTable(*releases), allowedDownloadHosts)
 
     private val releaseTable: Map<String, Map<PluginVersion, PinnedReleaseVersion>> = releases
-    private val allowList: Set<String> =
-        allowedDownloadHosts.mapTo(mutableSetOf()) { it.lowercase().trimEnd('.') }
+
+    /** The allow-list normalized to `(scheme, host, effective-port)` triples
+     *  (R2-B1N-05); an unparseable entry is dropped — it can never match. */
+    private val allowList: Set<Origin> =
+        allowedDownloadHosts.mapNotNull { HostPortAllowList.normalizeEntry(it) }.toSet()
 
     /** The compile-time pinned identity for [id] v[version], or null when this
      *  build has never shipped that release (⇒ its updates are refused). */
     fun pinnedFor(id: String, version: PluginVersion): PinnedReleaseVersion? =
         releaseTable[id]?.get(version)
 
-    /** True when [url]'s host is on the allow-list (a host gate — hostnames are
-     *  never secrets, so the comparison need not be constant-time; used by
-     *  [PluginDownloader]). */
-    fun isAllowedDownloadHost(url: String): Boolean =
-        isHostAllowListed(url, allowList)
+    /** True when [url]'s `(scheme, host, effective-port)` is on the allow-list
+     *  (scheme + host + port gate — hostnames are never secrets, so the
+     *  comparison need not be constant-time; used by [PluginDownloader]). */
+    fun isAllowedDownloadHost(url: String): Boolean {
+        val origin = HostPortAllowList.originOf(url) ?: return false
+        return allowList.any { WebDavHrefResolver.sameOrigin(it, origin) }
+    }
 
     /** Verify a manifest offer ([[HostedPluginVersion]) against the compile-time
      *  table + download-host allow-list. */
@@ -199,13 +207,11 @@ object CompileTimePluginPins {
         CompileTimePluginPinStore(RELEASES, DEFAULT_DOWNLOAD_HOSTS)
 }
 
-/** Shared host allow-list gate: lowercase + trailing-dot folded on both sides,
- *  port ignored (the artifact URL is HTTPS-only and the port is not sensitive).
- *  Returns false for anything that does not parse as a URL with a host. */
-internal fun isHostAllowListed(url: String, allowedHosts: Set<String>): Boolean {
-    val host = runCatching { URL(url).host }.getOrNull()
-        ?: return false
-    if (host.isBlank()) return false
-    val normalized = host.lowercase().trimEnd('.')
-    return allowedHosts.any { it == normalized }
-}
+/** Shared host allow-list gate: [url] is allowed only when its scheme, host
+ *  AND effective port match a normalized (scheme, host, port) allow-list
+ *  triple (R2-B1N-05). Entries may be full `http(s)://host[:port]` URLs, bare
+ *  `host`, or `host:port` (bare names default to `https://host:443` — plugin
+ *  fetches are TLS-only). Returns false for anything that does not parse as a
+ *  valid http(s) URL with a host. */
+internal fun isHostAllowListed(url: String, allowedHosts: Set<String>): Boolean =
+    HostPortAllowList.matches(url, allowedHosts)

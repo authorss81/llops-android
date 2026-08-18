@@ -257,7 +257,13 @@ class LocalSendSender(
             conn.outputStream.use { it.write(body) }
             val code = conn.responseCode
             if (code in 200..202) {
-                val response = conn.inputStream.bufferedReader().use { it.readText() }.take(2048)
+                // R2-B1N-01: the peer's response body is read CAPPED mid-stream —
+                // an endless register-probe body can no longer be slurped whole.
+                // An over-cap body fails the probe (null) rather than feeding a
+                // truncated parse.
+                val response = conn.inputStream.bufferedReader().use {
+                    LocalSendBodyReadPolicy.readText(it, LocalSendBodyReadPolicy.REGISTER_BODY_LIMIT)
+                }
                 LocalSendMessages.parseDiscoveryResponse(response, targetIp)
             } else {
                 null
@@ -441,10 +447,21 @@ class LocalSendSender(
             val bytes = body.toByteArray(Charsets.UTF_8)
             conn.outputStream.use { it.write(bytes) }
             val code = conn.responseCode
+            // R2-B1N-01: both bodies come from an untrusted LAN peer and are read
+            // CAPPED mid-stream (never slurped-then-truncated). An over-cap body
+            // yields a null outcome body — the transfer is refused, fail closed.
             val responseBody = if (code in 200..299) {
-                runCatching { conn.inputStream.bufferedReader().use { it.readText() }.take(8192) }.getOrNull()
+                runCatching {
+                    conn.inputStream.bufferedReader().use {
+                        LocalSendBodyReadPolicy.readText(it, LocalSendBodyReadPolicy.SUCCESS_BODY_LIMIT)
+                    }
+                }.getOrNull()
             } else {
-                runCatching { conn.errorStream?.bufferedReader()?.use { it.readText() }?.take(512) }.getOrNull()
+                runCatching {
+                    conn.errorStream?.bufferedReader()?.use {
+                        LocalSendBodyReadPolicy.readText(it, LocalSendBodyReadPolicy.ERROR_BODY_LIMIT)
+                    }
+                }.getOrNull()
             }
             return HttpOutcome(code in 200..299, code, responseBody)
         } finally {

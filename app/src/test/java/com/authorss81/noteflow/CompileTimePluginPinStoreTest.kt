@@ -122,6 +122,17 @@ class CompileTimePluginPinStoreTest {
     }
 
     @Test
+    fun `host allow-list is a scheme-host-port gate - non-default ports refused`() {
+        // R2-B1N-05: the allow-list is normalized to (scheme, host, effective-port)
+        // triples. The old host-only entry form is retained and accepted at the
+        // DEFAULT TLS port; the same host at a non-default port is refused.
+        assertTrue(store.isAllowedDownloadHost("https://$host/v1/ocr.apk"))
+        assertTrue(store.isAllowedDownloadHost("https://$host:443/ocr.apk"))
+        assertFalse("https://<allowed-host>:8443 must NOT pass", store.isAllowedDownloadHost("https://$host:8443/ocr.apk"))
+        assertFalse("a cleartext http target is never admitted for the https entry", store.isAllowedDownloadHost("http://$host/ocr.apk"))
+    }
+
+    @Test
     fun `an entry target is verified against the same compile-time anchor`() {
         val entry = PluginEntry(
             id = id,

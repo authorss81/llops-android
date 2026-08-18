@@ -55,6 +55,19 @@ object WebDavHrefResolver {
         a.scheme == b.scheme && a.host == b.host && a.port == b.port
 
     /**
+     * Non-throwing variant of [originOf]: returns null instead of throwing when
+     * [urlString] does not parse to a usable `(scheme, host, port)` triple
+     * (malformed URL, missing host, or a scheme without an implied default
+     * port). Keep-or-nothing semantics for allow-list gates — an unparseable
+     * URL never matches (fail closed).
+     */
+    fun originOfOrNull(urlString: String): Origin? = try {
+        originOf(urlString)
+    } catch (_: IllegalArgumentException) {
+        null
+    }
+
+    /**
      * Rejects [urlString] unless it lives on the same origin (scheme + host +
      * port) as [configuredServerUrl]. Runs inside `createConnection` so the
      * Basic Authorization header can never be attached to — or a connection
