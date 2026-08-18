@@ -921,6 +921,16 @@
     (`0x7f.0.0.1`, `0177.0.0.1`) whose per-segment value differs by resolver; `normalize` strips a bare
     `host:port`; `WebCaptureEngine.captureWebPage` fetches the normalized `Validation.url`. Name-based
     DNS-rebinding remains a tracked out-of-scope residual (`docs/security-report.md`).
+  - **Implemented in phase-143** (R2-B1N-04): Web Capture is HTTPS-by-default.
+    `WebPageFetchPolicy` `ALLOWED_SCHEMES` is now `{"https"}` only; `validateUrl(input,
+    allowInsecureHttp=false)` and `rejectHop(url, allowInsecureHttp=false)` refuse any
+    `http://` entry or redirect unless the caller passes the explicit per-fetch
+    cleartext opt-in (`WebPageFetcher.fetch(url, allowInsecureHttp)` threads it to every
+    hop). `WebCaptureEngine.captureWebPage`/the `WebCapturePlugin` interface
+    (`NoteflowPlugin.kt`) gained the same `allowInsecureHttp` parameter (default false);
+    the WebCapture dialog mirrors the WebDAV `allowInsecureHttp` UX — a plain `http://`
+    address shows a one-time "allow insecure HTTP" checkbox, never fetches otherwise.
+    Bare/host-only input still defaults to `https://`. See `workspace/phase-143/REPORT.md`.
 - **Implemented in phase-52** (B1-NET-05): HTTPS→HTTP redirect downgrades are
     closed at EVERY base `HttpURLConnection` transport. New pure-JVM
     `services/StrictRedirectPolicy.kt` (`checkTlsHop` `:31`, `resolveNextTlsHop`

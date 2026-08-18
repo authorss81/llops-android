@@ -54,15 +54,21 @@ class WebCaptureEngine(
         }
     }
 
-    override suspend fun captureWebPage(context: Context?, url: String): WebCaptureOutcome {
-        val validatedUrl = when (val v = WebPageFetchPolicy.validateUrl(url)) {
+    /** @param allowInsecureHttp R2-B1N-04 per-fetch cleartext opt-in (defaults
+     *   to https-only; true applies the WebDAV `allowInsecureHttp` model). */
+    override suspend fun captureWebPage(
+        context: Context?,
+        url: String,
+        allowInsecureHttp: Boolean
+    ): WebCaptureOutcome {
+        val validatedUrl = when (val v = WebPageFetchPolicy.validateUrl(url, allowInsecureHttp)) {
             is WebPageFetchPolicy.Either.Error -> return WebCaptureOutcome.Error(v.message)
             is WebPageFetchPolicy.Either.Valid -> v.validation.url
         }
         if (context != null && !hasActiveNetwork(context)) {
             return WebCaptureOutcome.Error("Offline — check your connection.")
         }
-        return fetcher.fetch(validatedUrl).fold(
+        return fetcher.fetch(validatedUrl, allowInsecureHttp).fold(
             onSuccess = { html ->
                 val extracted = WebToMarkdownExtractor.extract(html, validatedUrl)
                 if (extracted.markdown.isBlank()) {

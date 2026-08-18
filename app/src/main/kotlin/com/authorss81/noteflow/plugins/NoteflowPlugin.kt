@@ -251,8 +251,13 @@ interface WebCapturePlugin {
      * Markdown. Network runs on `Dispatchers.IO` and is strictly user-initiated;
      * failures always return a clear, user-facing [WebCaptureOutcome.Error]
      * (e.g. "offline — check connection") — never a silent empty result.
+     *
+     * @param allowInsecureHttp R2-B1N-04: explicit per-fetch cleartext opt-in.
+     *   Defaults to false — `http://` entry URLs and http redirects are refused
+     *   (the WebDAV `allowInsecureHttp` model). Only the UI can pass true, and
+     *   only after the user consciously accepted the one-time cleartext fetch.
      */
-    suspend fun captureWebPage(context: Context?, url: String): WebCaptureOutcome
+    suspend fun captureWebPage(context: Context?, url: String, allowInsecureHttp: Boolean = false): WebCaptureOutcome
 }
 
 // ---------------------------------------------------------------------------

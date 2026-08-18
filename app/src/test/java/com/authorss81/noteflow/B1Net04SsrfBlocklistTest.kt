@@ -137,15 +137,24 @@ class B1Net04SsrfBlocklistTest {
     }
 
     @Test
-    fun `validateUrl still accepts public http and https destinations`() {
+    fun `validateUrl still accepts public https destinations by default`() {
         for (url in listOf(
-            "https://example.com/article", "http://example.com", "https://8.8.8.8/", "example.com/path", "http://1.2.3.4/"
+            "https://example.com/article", "https://8.8.8.8/", "example.com/path", "https://1.2.3.4/"
         )) {
-            assertTrue(
-                "expected $url accepted",
-                WebPageFetchPolicy.validateUrl(url) is WebPageFetchPolicy.Either.Valid
-            )
+            val out = WebPageFetchPolicy.validateUrl(url)
+            assertTrue("expected $url accepted, got $out", out is WebPageFetchPolicy.Either.Valid)
         }
+    }
+
+    @Test
+    fun `validateUrl refuses plain http by default unless opted in`() {
+        val out = WebPageFetchPolicy.validateUrl("http://example.com")
+        assertTrue("expected http refused by default, got $out", out is WebPageFetchPolicy.Either.Error)
+        val opted = WebPageFetchPolicy.validateUrl("http://example.com/article", allowInsecureHttp = true)
+        assertTrue(
+            "expected http accepted with the explicit opt-in, got $opted",
+            opted is WebPageFetchPolicy.Either.Valid
+        )
     }
 
     // ---- redirect hop re-validation -------------------------------------------
@@ -166,13 +175,26 @@ class B1Net04SsrfBlocklistTest {
     }
 
     @Test
-    fun `a redirect hop to a public host is allowed`() {
+    fun `a redirect hop to a public host is allowed over https by default`() {
         val base = "https://example.com/article"
         for (location in listOf(
-            "https://other.example.org/", "http://8.8.8.8/", "/relative-path", "https://example.com/other"
+            "https://other.example.org/", "/relative-path", "https://example.com/other"
         )) {
             assertNull("expected redirect to $location allowed", hop(location, base))
         }
+    }
+
+    @Test
+    fun `an https-to-http redirect hop is refused by default but allowed with the opt-in`() {
+        val base = "https://example.com/article"
+        val refused = hop("http://8.8.8.8/", base)
+        assertNotNull("expected http redirect refused by default", refused)
+        assertTrue((refused as String).contains("Insecure HTTP"))
+        val allowed = WebPageFetchPolicy.rejectHop(
+            URI(base).resolve("http://8.8.8.8/").toString(),
+            allowInsecureHttp = true
+        )
+        assertNull("expected http redirect allowed with the opt-in", allowed)
     }
 
     @Test

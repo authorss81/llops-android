@@ -104,9 +104,22 @@ class WebCaptureExtractorTest {
     }
 
     @Test
-    fun `http and https urls are accepted`() {
+    fun `https urls are accepted`() {
         assertTrue(WebPageFetchPolicy.validateUrl("https://example.com") is WebPageFetchPolicy.Either.Valid)
-        assertTrue(WebPageFetchPolicy.validateUrl("http://example.com") is WebPageFetchPolicy.Either.Valid)
+    }
+
+    @Test
+    fun `plain http url is refused by default`() {
+        val out = WebPageFetchPolicy.validateUrl("http://example.com")
+        assertTrue(out is WebPageFetchPolicy.Either.Error)
+        assertTrue((out as WebPageFetchPolicy.Either.Error).message.contains("Insecure HTTP"))
+    }
+
+    @Test
+    fun `plain http url is accepted with the explicit per-fetch opt-in`() {
+        val valid = WebPageFetchPolicy.validateUrl("http://example.com", allowInsecureHttp = true)
+        assertTrue(valid is WebPageFetchPolicy.Either.Valid)
+        assertEquals("http", (valid as WebPageFetchPolicy.Either.Valid).validation.scheme)
     }
 
     @Test

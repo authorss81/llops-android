@@ -750,12 +750,16 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
      * Phase 15 (Web Capture): fetch [url] and reduce it to Markdown via the
      * Web Capture plugin. Runs the network call on `Dispatchers.IO` and returns
      * typed results — connectivity failures surface as `WebCaptureOutcome.Error`.
+     *
+     * @param allowInsecureHttp R2-B1N-04: explicit per-fetch cleartext opt-in
+     *   (defaults to https-only). Only the dialog passes true, after the user
+     *   consciously accepted the one-time cleartext fetch.
      */
-    suspend fun captureWebPage(url: String): PluginResult<WebCaptureOutcome> =
+    suspend fun captureWebPage(url: String, allowInsecureHttp: Boolean = false): PluginResult<WebCaptureOutcome> =
         pluginManager.withPluginAsync(PluginCapability.WebCapture, appContext) { plugin ->
             val capturer = plugin as? WebCapturePlugin
                 ?: throw IllegalStateException("${plugin.name} does not implement WebCapturePlugin")
-            capturer.captureWebPage(appContext, url)
+            capturer.captureWebPage(appContext, url, allowInsecureHttp)
         }
 
     /**

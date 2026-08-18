@@ -2713,9 +2713,14 @@ private fun MaintenanceMenu(
 }
 
 /**
- * Phase 15 (Web Capture): fetch a user-supplied http(s) URL and store the
+ * Phase 15 (Web Capture): fetch a user-supplied https:// URL and store the
  * readable content as a new encrypted note. Runs the fetch + extraction on a
  * background dispatcher via the ViewModel; errors surface the plugin's reason.
+ *
+ * R2-B1N-04 (phase-143): HTTPS-enabled only by default. An http:// URL shows
+ * the same warning + explicit opt-in model as the WebDAV dialog — cleartext is
+ * never fetched unless the user ticks the per-capture "allow insecure HTTP"
+ * box (one-time, not persisted).
  */
 @Composable
 private fun WebCaptureDialog(
@@ -2725,10 +2730,13 @@ private fun WebCaptureDialog(
 ) {
     val scope = rememberCoroutineScope()
     var urlInput by remember { mutableStateOf("") }
+    var allowInsecureHttp by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var resultTitle by remember { mutableStateOf<String?>(null) }
     var resultMarkdown by remember { mutableStateOf("") }
+
+    val usesInsecureHttp = urlInput.trim().lowercase().startsWith("http://")
 
     fun submit() {
         if (busy) return
@@ -2736,7 +2744,7 @@ private fun WebCaptureDialog(
         error = null
         resultTitle = null
         scope.launch {
-            when (val result = viewModel.captureWebPage(urlInput.trim())) {
+            when (val result = viewModel.captureWebPage(urlInput.trim(), allowInsecureHttp)) {
                 is com.authorss81.noteflow.plugins.PluginResult.Success -> {
                     when (val outcome = result.value) {
                         is com.authorss81.noteflow.plugins.WebCaptureOutcome.Success -> {
@@ -2778,6 +2786,41 @@ private fun WebCaptureDialog(
                     enabled = !busy && resultTitle == null,
                     modifier = Modifier.fillMaxWidth()
                 )
+                // R2-B1N-04 (phase-143): cleartext is opt-in ONLY — a plain
+                // http:// address fetches nothing until the user ticks this
+                // one-time per-capture checkbox (the WebDAV allowInsecureHttp
+                // UX, mirrored here).
+                if (usesInsecureHttp && resultTitle == null) {
+                    Spacer(Modifier.height(8.dp))
+                    Surface(
+                        color = MaterialTheme.colorScheme.errorContainer,
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(8.dp)
+                        ) {
+                            Checkbox(
+                                checked = allowInsecureHttp,
+                                enabled = !busy,
+                                onCheckedChange = { allowInsecureHttp = it }
+                            )
+                            Column {
+                                Text(
+                                    "HTTP is insecure — this page is fetched over cleartext and could be altered in transit.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onErrorContainer
+                                )
+                                Text(
+                                    "Tick to allow this ONE-TIME cleartext fetch. Prefer a secure https:// address.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onErrorContainer
+                                )
+                            }
+                        }
+                    }
+                }
                 if (busy) {
                     Spacer(Modifier.height(8.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {

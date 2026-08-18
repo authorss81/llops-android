@@ -15,17 +15,24 @@ import com.authorss81.noteflow.utils.HttpUserAgent
  */
 class WebPageFetcher {
 
-    suspend fun fetch(url: String): Result<String> = withContext(Dispatchers.IO) {
-        runCatching { doFetch(url) }
-    }
+    /**
+     * @param allowInsecureHttp per-fetch cleartext opt-in (R2-B1N-04). The
+     *   caller (WebCaptureEngine) derives it from its own opt-in and passes it
+     *   to EVERY hop so the redirect policy matches the entry policy.
+     */
+    suspend fun fetch(url: String, allowInsecureHttp: Boolean = false): Result<String> =
+        withContext(Dispatchers.IO) {
+            runCatching { doFetch(url, allowInsecureHttp) }
+        }
 
-    private fun doFetch(url: String): String {
+    private fun doFetch(url: String, allowInsecureHttp: Boolean): String {
         var cur = URI(url)
         repeat(MAX_REDIRECTS + 1) { _ ->
             // Re-apply the entry policy to EVERY hop (B1-NET-04): a redirect
             // target is parsed and validated against the same scheme
             // allow-list + SSRF host blocklist before any connection is made.
-            val hopError = WebPageFetchPolicy.rejectHop(cur.toString())
+            // R2-B1N-04: http stays refused unless the fetch was opted in.
+            val hopError = WebPageFetchPolicy.rejectHop(cur.toString(), allowInsecureHttp)
             if (hopError != null) {
                 throw IOException(hopError)
             }
@@ -46,7 +53,7 @@ class WebPageFetcher {
                     if (resolved.toString() == cur.toString()) {
                         throw IOException("Redirect loop detected.")
                     }
-                    val nextError = WebPageFetchPolicy.rejectHop(resolved.toString())
+                    val nextError = WebPageFetchPolicy.rejectHop(resolved.toString(), allowInsecureHttp)
                     if (nextError != null) {
                         throw IOException(nextError)
                     }
