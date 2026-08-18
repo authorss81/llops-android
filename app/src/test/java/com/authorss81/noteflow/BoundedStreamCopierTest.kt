@@ -141,18 +141,27 @@ class BoundedStreamCopierTest {
         }
     }
 
-    /** Returns real data but interleaves one returning-zero read every 8 KB. */
+    /** Returns real data but interleaves ONE returning-zero read per 8 KB
+     *  boundary — the zero-read fires once, then the stream keeps progressing
+     *  (the pre-fix fixture returned 0 forever once pos hit a boundary, because
+     *  a zero read never advanced pos, which made the idle-read bailout fire
+     *  instead of exercising the interleaving case). */
     private class InterleavedZeroInputStream(private val data: ByteArray) : java.io.InputStream() {
         private var pos = 0
+        private var pendingZeroRead = false
 
         override fun read(): Int = if (pos >= data.size) -1 else (data[pos++].toInt() and 0xFF)
 
         override fun read(b: ByteArray, off: Int, len: Int): Int {
             if (pos >= data.size) return -1
-            if (pos > 0 && pos % (8 * 1024) == 0) return 0
+            if (pendingZeroRead) {
+                pendingZeroRead = false
+                return 0
+            }
             val n = minOf(len, data.size - pos)
             System.arraycopy(data, pos, b, off, n)
             pos += n
+            if (pos > 0 && pos % (8 * 1024) == 0) pendingZeroRead = true
             return n
         }
     }

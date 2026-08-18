@@ -1107,6 +1107,27 @@
     `SaFExportResult` (SAVED/CANCELLED/FAILED) so a copy-failure is no longer shown as a cancel;
     `chooserForExport` moved inside the launch try so a chooser-build failure also deletes the
     staging file.
+  - **Implemented in phase-142** (R2-B1N-01 + R2-B1P-04 + R2-B1N-05, see
+    `workspace/phase-142/REPORT.md`): network/stream I/O hardening. (1) LocalSend peer bodies are
+    read CAPPED mid-stream via the new pure-JVM `services/localsend/LocalSendBodyReadPolicy.kt`
+    (`readText(reader, limit)` aborts with `ResponseTooLargeException` on the first window that
+    crosses the cap — never slurp-then-truncate): register probe `REGISTER_BODY_LIMIT` 2048
+    (`LocalSendSender.kt:264`), `httpPost` success 8192 + errorStream 512 (`:454-463`). (2)
+    `services/BoundedStreamCopier.kt` `copyBounded` gained the 16-consecutive-idle-reads bailout
+    (`MAX_CONSECUTIVE_IDLE_READS`, mirroring the phase-81 `AttachmentIngestPolicy` sibling) so a
+    hostile ContentProvider stream returning 0 forever can no longer hot-spin the IO thread. (3)
+    Plugin allow-lists normalized to `(scheme, host, effective-port)` triples via the new pure-JVM
+    `services/HostPortAllowList.kt` (reuses `WebDavHrefResolver.Origin`; bare `host`/`host:port`
+    entries default to `https://host:443`, full `http(s)://host[:port]` entries keep their own
+    scheme/port; unparseable → null, fail closed, additive-only): wired into
+    `CompileTimePluginPinStore.isAllowedDownloadHost` (`:112`), the shared `isHostAllowListed`
+    gate (`:216`), `HttpsManifestTransport` (`PluginManifestFetcher.kt:130`) and
+    `PluginDownloader` (`:147`) — `https://<allowed-host>:8443/...` can no longer pass. Review
+    fixes: `WebDavHrefResolver.originOf` now rejects empty-host (`URL("https:///no-host")` → host
+    `""`) and non-http(s) schemes (`WebDavHrefResolver.kt:50-58`) so `originOfOrNull` fails
+    closed. Tests: `LocalSendBodyReadPolicyTest` (11), `HostPortAllowListTest` (16),
+    `BoundedStreamCopierTest` (9), `CompileTimePluginPinStoreTest`/`PluginDownloaderTest`/
+    `HttpsManifestTransportTest` (+1 each) — 1954 total green.
   - **Implemented in phase-81** (B2-DOS-05, see `workspace/phase-81/REPORT.md`): attachment/import
     ingestion is bounded DURING the read. New pure-JVM `services/AttachmentIngestPolicy.kt` is the
     single decision table (`MAX_ATTACHMENT_BYTES` = 25 MB, `READ_BUFFER_BYTES` = 64 KiB):

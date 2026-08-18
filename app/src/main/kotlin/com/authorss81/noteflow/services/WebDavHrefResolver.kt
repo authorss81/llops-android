@@ -47,8 +47,18 @@ object WebDavHrefResolver {
         } catch (e: MalformedURLException) {
             throw IllegalArgumentException("Malformed URL: $urlString")
         }
+        val protocol = url.protocol.lowercase()
+        if (protocol != "https" && protocol != "http") {
+            throw IllegalArgumentException("Unsupported URL scheme: ${url.protocol}")
+        }
         val host = url.host ?: throw IllegalArgumentException("URL has no host: $urlString")
-        return Origin(url.protocol.lowercase(), host.lowercase().trimEnd('.'), effectivePort(url))
+        if (host.isBlank()) {
+            // `URL("https:///no-host")` parses with an EMPTY host (not null) —
+            // an empty-host origin must never be treated as a valid triple
+            // (R2-B1N-05 review fix: fail closed on the empty-host form too).
+            throw IllegalArgumentException("URL has no host: $urlString")
+        }
+        return Origin(protocol, host.lowercase().trimEnd('.'), effectivePort(url))
     }
 
     fun sameOrigin(a: Origin, b: Origin): Boolean =

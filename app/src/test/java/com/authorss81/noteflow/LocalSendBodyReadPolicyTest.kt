@@ -92,7 +92,13 @@ class LocalSendBodyReadPolicyTest {
         // The pre-fix shape `...readText().take(...)` (empty arg list = unbounded)
         // must be gone entirely. The new bounded loop is `Policy.readText(it, limit)`.
         assertFalse("no .readText() slurp may remain in LocalSendSender", Regex("\\.readText\\s*\\(\\)").containsMatchIn(source))
-        assertFalse("no .take() truncation-after-slurp may remain", Regex("\\.take\\s*\\(\\d+\\)").containsMatchIn(source))
+        // Only the slurp-then-truncate shape `readText(...).take(n)` is banned —
+        // NOT every `.take(n)` call (LocalSendSender legitimately chunks lists
+        // with `.take(3)`/`.take(40)` for discovery batching).
+        assertFalse(
+            "no .readText() slurp then .take() truncation may remain",
+            Regex("\\.readText\\s*\\(\\s*\\)\\s*\\.take\\s*\\(\\s*\\d+\\s*\\)").containsMatchIn(source)
+        )
     }
 
     @Test

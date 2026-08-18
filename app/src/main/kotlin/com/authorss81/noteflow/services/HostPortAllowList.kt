@@ -45,7 +45,9 @@ object HostPortAllowList {
         }
         // Bare `host` or `host:port` form → HTTPS + default port (plugin
         // fetches are TLS-only; the default-port target is the only one held).
-        val hostPort = trimmed.removePrefix("https://").removePrefix("http://")
+        // (This branch is reached only when the entry has no "://", so the
+        // scheme prefixes can never appear and are not stripped.)
+        val hostPort = trimmed
         val host = hostPort.substringBefore(':').trim()
         val portText = hostPort.substringAfter(':', "").trim()
         if (host.isBlank()) return null
