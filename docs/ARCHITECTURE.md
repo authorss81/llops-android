@@ -1330,18 +1330,29 @@
 - `app/build.gradle.kts`: `namespace = "com.authorss81.noteflow"` (:11),
   `applicationId = "com.aistudio.inkflow.app.bkxjrz"` (:15), compileSdk 36, minSdk 26, JVM 17,
   Room schema → `app/schemas`, R8 minify on for release, `jniLibs.useLegacyPackaging = true`.
-- **No Gradle wrapper** — use system `gradle`. Tests: `gradle testDebugUnitTest`; build: `gradle assembleDebug`
+- **Gradle provisioning** — a committed wrapper exists for INTEGRITY-PINNING only: `gradle/wrapper/gradle-wrapper.properties:7`
+  pins `distributionSha256Sum` for 8.13, but CI and grading builds run system `gradle` (8.13) directly, so the
+  wrapper's checksum is NOT enforced on CI (wiring `distribution-sha256-sum` / switching CI to `./gradlew` is
+  DEFERRED to phase-147, workflow edits require user approval). Tests: `gradle testDebugUnitTest`; build: `gradle assembleDebug`
   / `assembleRelease`. Runs in GitHub Actions (gradle 8.13, Temurin JDK 21).
+  - **Implemented in phase-146** (R2-b2b2-DEP-02/03/04, `workspace/phase-146/REPORT.md`): the wrapper
+    (`gradlew`/`gradlew.bat`/`gradle/wrapper/gradle-wrapper.jar` + pinned `.properties`) is committed; the
+    lockfile now runs `<verify-signatures>true</verify-signatures>` against a committed 57-key `<trusted-keys>`
+    block + local keyring (`gradle/verification-keyring.gpg` + `.keys`), and `mavenCentral()` is one-way
+    allow-listed in `dependencyResolutionManagement` AND `pluginManagement`
+    (full-match `includeGroupByRegex` — adding a library MUST add its group to the settings allow-lists AND
+    `CentralAllowlist` in `app/src/test/.../CentralAllowlist.kt` in the same commit).
   - **Implemented in phase-75** (B2-DEPS-03, `workspace/phase-75/REPORT.md`): `gradle/verification-metadata.xml`
     is committed — Gradle 8.13 auto-enables STRICT checksum verification (deps + metadata + build plugins)
     whenever that file exists. To add/upgrade a dependency, regenerate with
-    `gradle --write-verification-metadata sha256 testDebugUnitTest assembleDebug`, review the diff, then
-    commit. There is NO `dependencyVerification {}` settings DSL in Gradle 8.13 — do NOT add one (it breaks
-    settings compilation). The `google()` content filters (`com.android.*`/`com.google.*`/`androidx.*`) are
+    `gradle --write-verification-metadata sha256,pgp --export-keys testDebugUnitTest assembleDebug`, review
+    the diff (trusted-keys, pgp entries, ignored-keys, keyring), then commit. There is NO
+    `dependencyVerification {}` settings DSL in Gradle 8.13 — do NOT add one (it breaks settings
+    compilation). The `google()` content filters (`com.android.*`/`com.google.*`/`androidx.*`) are
     mirrored in `dependencyResolutionManagement` and must stay in sync with `pluginManagement`.
 - **`metadata.json` (repo root) is the committed project metadata source of truth** — name, namespace,
   applicationId, version (VERSION_CODE/VERSION_NAME env overridable, default 2/"1.0.0"), SDK levels,
-  build toolchain (Gradle 8.13 no wrapper, AGP 8.7.3, Kotlin 2.0.21, KSP, JVM 17), module list, the
+  build toolchain (Gradle 8.13, wrapper committed for integrity-pinning while CI runs system gradle, AGP 8.7.3, Kotlin 2.0.21, KSP, JVM 17), module list, the
   capability-bucket partition (compile-time / downloadable / unserved) and the downloadable-plugin
   records. Parsed/validated by pure-JVM `app/src/test/java/com/authorss81/noteflow/services/ProjectMetadata.kt`
   (Gson; fail-closed fields; requires `usesGradleWrapper=false`, `inBaseApk=false`, unknown-key/gap/dup/sdk-floor
@@ -1377,7 +1388,8 @@ androidx.biometric 1.1.0 · coroutines 1.9.0.
 
 1. `applicationId = "com.aistudio.inkflow.app.bkxjrz"` vs `namespace = "com.authorss81.noteflow"`
    (intentional mismatch; AGENTS.md's applicationId value is stale — trust the build file).
-2. No Gradle wrapper; CI pins gradle 8.13. Local machine can't build.
+2. Wrapper committed (phase-146) but CI still runs system gradle 8.13 (checksum pin not enforced on CI
+   until phase-147 wires it). Local machine can't build.
 3. ROADMAP.md `[x]` claims are not all true — trust `AGENTS.md` + `docs/phase-status.md` truth tables.
 4. **Base-APK size is a hard constraint**: heavy native libs (tasks-genai LLM, heavy OCR) MUST stay
    downloadable plugins. Never add them to the base app.

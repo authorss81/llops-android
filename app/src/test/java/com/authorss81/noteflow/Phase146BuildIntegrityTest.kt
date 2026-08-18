@@ -12,11 +12,14 @@ import org.junit.Test
  *  1. R2-b2b2-DEP-02 — the committed Gradle wrapper pins the 8.13 distribution
  *     with `distributionSha256Sum` (the exact SHA-256 services.gradle.org
  *     publishes for `gradle-8.13-bin.zip`), so wrapper-based provisioning
- *     refuses a tampered distribution. CI currently provisions `gradle` (system)
- *     directly, so the wrapper is the integrity source of truth; wiring
- *     `distribution-sha256-sum` through `gradle/actions/setup-gradle` and
- *     checksum-pinning the opencode installer are DEFERRED to phase-147 (workflow
- *     edits require user approval).
+ *     refuses a tampered distribution. HONEST SCOPE: CI still provisions `gradle`
+ *     (system) directly via `gradle/actions/setup-gradle` `gradle-version`
+ *     WITHOUT a checksum on ALL CI paths (android/release/llops workflows), so the
+ *     wrapper is the integrity source of truth for local/developer provisioning
+ *     only. Wiring `distribution-sha256-sum` through setup-gradle / switching CI
+ *     to `./gradlew` and checksum-pinning the opencode installer are DEFERRED to
+ *     phase-147 (workflow edits require user approval) — this test guards that CI
+ *     at least does not drift off the 8.13 version until then.
  *  2. R2-b2b2-DEP-04 — the lockfile now runs `<verify-signatures>true</verify-signatures>`
  *     against a committed `<trusted-keys>` block + an exported local keyring
  *     (GRADLE ~offline signature verification), and `mavenCentral()` in
@@ -63,7 +66,7 @@ class Phase146BuildIntegrityTest {
     }
 
     @Test
-    fun `wrapper executes a pinned distribution and CI version matches the wrapper`() {
+    fun `wrapper components are committed and CI version has not drifted off the wrapper pin`() {
         val root = repoRoot()
         assertTrue(
             "gradlew must be committed so a wrapper invocation really verifies the sum (R2-b2b2-DEP-02)",
@@ -76,8 +79,9 @@ class Phase146BuildIntegrityTest {
         val androidYml = File(root, ".github/workflows/android.yml").readText()
         assertTrue(
             "CI setup-gradle must still provision 8.13 — it must not drift from the wrapper pin " +
-                "(R2-b2b2-DEP-02). NOTE: passing distribution-sha256-sum / switching CI to the " +
-                "wrapper is DEFERRED to phase-147",
+                "(R2-b2b2-DEP-02). NOTE: wiring distribution-sha256-sum / switching CI to the " +
+                "wrapper is DEFERRED to phase-147, so until then CI provisioning stays " +
+                "version-pinned but NOT checksum-pinned (documented residual gap)",
             androidYml.contains("gradle-version: \"8.13\"")
         )
     }
@@ -85,11 +89,12 @@ class Phase146BuildIntegrityTest {
     // --- R2-b2b2-DEP-04: one-way Central filter + signature lockfile ---------
 
     @Test
-    fun `mavenCentral is one-way allow-listed in dependencyResolutionManagement`() {
+    fun `mavenCentral is one-way allow-listed in dependency AND plugin resolution`() {
         val text = read("settings.gradle.kts")
+
+        // dependency resolution
         val resolutionBlock = block("dependencyResolutionManagement", text)
         val central = centralBlock(resolutionBlock)
-
         assertTrue(
             "mavenCentral must be configured with a content block (R2-b2b2-DEP-04)",
             central.contains("content {")
@@ -101,6 +106,25 @@ class Phase146BuildIntegrityTest {
                 central.contains("includeGroupByRegex(\"$raw\")")
             )
         }
+
+        // plugin resolution (review-fix): pluginManagement is pre-evaluated and
+        // cannot reference script-level declarations, so the allow-list is written
+        // out literally there too — pin that block as well so the two lists (and
+        // CentralAllowlist) can never drift silently.
+        val pluginBlock = block("pluginManagement", text)
+        val pluginCentral = centralBlock(pluginBlock)
+        assertTrue(
+            "pluginManagement mavenCentral must also carry the allow-list (R2-b2b2-DEP-04)",
+            pluginCentral.contains("content {")
+        )
+        allowlistedCentralGroups().forEach { regex ->
+            val raw = regex.replace("\\", "\\\\")
+            assertTrue(
+                "pluginManagement mavenCentral allow-list must include '$regex' (R2-b2b2-DEP-04)",
+                pluginCentral.contains("includeGroupByRegex(\"$raw\")")
+            )
+        }
+
         // The google-namespace wildcard must stay one-way: androidx.*/com.android.*
         // (and the bare com.google.* wildcard) never resolve from Central, so a
         // version google() does not host fails instead of silently falling back.
@@ -111,6 +135,10 @@ class Phase146BuildIntegrityTest {
         assertFalse(
             "no com.android wildcard may be allowed from Central (R2-b2b2-DEP-04)",
             central.contains("includeGroupByRegex(\"com\\.android")
+        )
+        assertFalse(
+            "no androidx wildcard may be allowed from Central in pluginManagement (R2-b2b2-DEP-04)",
+            pluginCentral.contains("includeGroupByRegex(\"androidx")
         )
         // And the google() repo keeps the B2-DEPS-03 filters (regression guard).
         assertTrue(
@@ -211,21 +239,8 @@ class Phase146BuildIntegrityTest {
 
     // --- helpers --------------------------------------------------------------
 
-    /** The group allow-list the settings mavenCentral() filter must carry. */
-    private fun allowlistedCentralGroups(): List<String> = listOf(
-        "org\\.jetbrains.*",   // Kotlin stdlib, coroutines, annotations
-        "io\\.coil.*",         // Coil
-        "com\\.squareup.*",    // OkHttp / Okio
-        "org\\.commonmark.*",  // Markdown
-        "org\\.jsoup.*",       // HTML extraction
-        "net\\.zetetic.*",     // SQLCipher
-        "com\\.github.*",      // Lingua
-        "junit",
-        "org\\.hamcrest.*",
-        "com\\.google\\.guava.*",   // guava — not on maven.google.com
-        "org\\.tensorflow.*",       // LiteRT transitives
-        "com\\.google\\.protobuf.*"
-    )
+    /** The group allow-list the settings mavenCentral() filter must carry (full set, shared). */
+    private fun allowlistedCentralGroups(): List<String> = CentralAllowlist.groups
 
     private fun read(relative: String): String {
         val file = File(repoRoot(), relative)

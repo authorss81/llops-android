@@ -1,4 +1,20 @@
+// R2-b2b2-DEP-04 (phase-146 + review): the one-way mavenCentral() allow-list applies
+// to plugin resolution AND dependency resolution so a poisoned Central index can
+// inject neither an unknown plugin nor an unknown dependency group. pluginManagement
+// is pre-evaluated and cannot reference script-level declarations, so the 51 literal
+// `includeGroupByRegex("...")` lines are written out TWICE in this file (pluginManagement
+// and dependencyResolutionManagement) — the source-pinning tests
+// (`Phase146BuildIntegrityTest` + `B2Deps03DependencyVerificationTest`, both reading
+// `CentralAllowlist` in `app/src/test/.../CentralAllowlist.kt`) scan BOTH blocks for
+// every group, so an edit to either list fails the build unless the other list +
+// the test data change in the same commit.
+
 pluginManagement {
+    // The pluginManagement block is pre-evaluated and CANNOT reference script-level
+    // declarations, so the allow-list is written out literally here — keep it in sync
+    // with the `dependencyResolutionManagement` mavenCentral block below and with
+    // `CentralAllowlist` in app/src/test (the source-pinning tests scan both for
+    // every group).
     repositories {
         google {
             content {
@@ -7,7 +23,61 @@ pluginManagement {
                 includeGroupByRegex("androidx.*")
             }
         }
-        mavenCentral()
+        mavenCentral {
+            content {
+                includeGroupByRegex("org\\.jetbrains.*")
+                includeGroupByRegex("io\\.coil.*")
+                includeGroupByRegex("com\\.squareup.*")
+                includeGroupByRegex("org\\.commonmark.*")
+                includeGroupByRegex("org\\.jsoup.*")
+                includeGroupByRegex("net\\.zetetic.*")
+                includeGroupByRegex("com\\.github\\.pemistahl")
+                includeGroupByRegex("junit")
+                includeGroupByRegex("org\\.hamcrest.*")
+                includeGroupByRegex("org\\.junit.*")
+                includeGroupByRegex("org\\.jspecify.*")
+                includeGroupByRegex("org\\.checkerframework.*")
+                includeGroupByRegex("com\\.google\\.errorprone.*")
+                includeGroupByRegex("com\\.google\\.j2objc.*")
+                includeGroupByRegex("com\\.google\\.code.*")
+                includeGroupByRegex("org\\.tensorflow.*")
+                includeGroupByRegex("com\\.google\\.protobuf.*")
+                includeGroupByRegex("com\\.google\\.flatbuffers.*")
+                includeGroupByRegex("io\\.grpc.*")
+                includeGroupByRegex("io\\.netty.*")
+                includeGroupByRegex("io\\.perfmark.*")
+                includeGroupByRegex("org\\.xerial.*")
+                includeGroupByRegex("com\\.google\\.guava.*")
+                includeGroupByRegex("com\\.google\\.crypto.*")
+                includeGroupByRegex("com\\.google\\.dagger.*")
+                includeGroupByRegex("com\\.google\\.jimfs.*")
+                includeGroupByRegex("com\\.google\\.auto.*")
+                includeGroupByRegex("com\\.google\\.api.*")
+                includeGroupByRegex("com\\.google\\.accompanist.*")
+                includeGroupByRegex("com\\.google\\.devtools.*")
+                includeGroupByRegex("com\\.google\\.android")
+                includeGroupByRegex("com\\.googlecode.*")
+                includeGroupByRegex("com\\.intellij.*")
+                includeGroupByRegex("com\\.sun.*")
+                includeGroupByRegex("jakarta.*")
+                includeGroupByRegex("javax.*")
+                includeGroupByRegex("commons-.*")
+                includeGroupByRegex("org\\.apache.*")
+                includeGroupByRegex("org\\.bouncycastle.*")
+                includeGroupByRegex("org\\.codehaus.*")
+                includeGroupByRegex("org\\.ow2.*")
+                includeGroupByRegex("org\\.jdom.*")
+                includeGroupByRegex("org\\.eclipse.*")
+                includeGroupByRegex("org\\.glassfish.*")
+                includeGroupByRegex("org\\.jvnet.*")
+                includeGroupByRegex("org\\.sonatype.*")
+                includeGroupByRegex("org\\.bitbucket.*")
+                includeGroupByRegex("org\\.slf4j.*")
+                includeGroupByRegex("it\\.unimi\\.dsi.*")
+                includeGroupByRegex("net\\.java.*")
+                includeGroupByRegex("net\\.sf.*")
+            }
+        }
         gradlePluginPortal()
     }
 }
@@ -25,18 +95,21 @@ dependencyResolutionManagement {
                 includeGroupByRegex("androidx.*")
             }
         }
-        // R2-b2b2-DEP-04 (phase-146): mavenCentral() is now ONE-WAY filtered, closing
-        // the reverse gap of the google() filter above. Central may only serve the
-        // explicit allow-list below — the union of every group this build's committed
-        // lockfile legitimately resolves from Central (non-google groups plus the
-        // com.google.* groups that maven.google.com does NOT host: guava, gson,
-        // protobuf, tink, flatbuffers, jimfs, dagger, errorprone, auto.*, api.grpc,
-        // accompanist, devtools.ksp marker, ...). A poisoned Central index can no
-        // longer inject an unknown group (nor an androidx.*/com.google.* version that
-        // google() doesn't host — those now fail fast instead of silently falling
-        // back to Central). Adding a new library MUST add its group to this
-        // allow-list in the same commit. Derived empirically (see
-        // workspace/phase-146/REPORT.md) from the resolved group set on 2026-08-18.
+        // R2-b2b2-DEP-04 (phase-146 + review): mavenCentral() is ONE-WAY filtered,
+        // closing the reverse gap of the google() filter above. Central may only
+        // serve the explicit allow-list below — the union of every group this
+        // build's committed lockfile legitimately resolves from Central (non-google
+        // groups plus the com.google.* groups that maven.google.com does NOT host:
+        // guava, gson, protobuf, tink, flatbuffers, jimfs, dagger, errorprone,
+        // auto.*, api.grpc, accompanist, devtools.ksp marker, ...). A poisoned
+        // Central index can no longer inject an unknown group (nor an
+        // androidx.*/com.google.* version that google() doesn't host — those now
+        // fail fast instead of silently falling back to Central). Adding a new
+        // library MUST add its group to this allow-list in the same commit — and to
+        // the pluginManagement mavenCentral allow-list above (plugin resolution) +
+        // `CentralAllowlist` in app/src/test (the source-pinning tests scan all
+        // three). Derived empirically (see workspace/phase-146/REPORT.md) from
+        // the resolved group set on 2026-08-18.
         mavenCentral {
             content {
                 // Kotlin stdlib + coroutines + annotations.
@@ -50,8 +123,9 @@ dependencyResolutionManagement {
                 includeGroupByRegex("org\\.jsoup.*")
                 // SQLCipher.
                 includeGroupByRegex("net\\.zetetic.*")
-                // Lingua (com.github.pemistahl).
-                includeGroupByRegex("com\\.github.*")
+                // Lingua (com.github.pemistahl) — exact group only, not the whole
+                // com.github.* namespace (review: no other com.github group resolves).
+                includeGroupByRegex("com\\.github\\.pemistahl")
                 // Test runners + annotations.
                 includeGroupByRegex("junit")
                 includeGroupByRegex("org\\.hamcrest.*")
