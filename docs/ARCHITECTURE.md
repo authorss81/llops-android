@@ -472,23 +472,31 @@
     armed only at fresh-vault/migration/re-encrypt/backup/restore sites, so ordinary note edits
     (committed-but-uncheckpointed WAL frames) verified against a baseline that predated them and
     raised a FALSE "Database integrity check failed" banner at the next process start.
-    `NoteflowDatabase.dispose()` (`NoteflowDatabase.kt:454-482`) — the single session-end funnel
+    `NoteflowDatabase.dispose()` (`NoteflowDatabase.kt:482-520`) — the single session-end funnel
     (master-password `lock()` `NoteflowViewModel.kt:4056-4060`, app exit `onCleared` `:4089`,
     restore `NoteRepository.closeDatabase` `:501`, reopen `reopenDatabase` `:511`) — now
     FULL-checkpoints the WAL on the still-live keyed connection
-    (`db.query("PRAGMA wal_checkpoint(FULL)", null)` fully stepped, `:462-469`), closes the vault
-    (`db.close()` `:470`), and re-arms the stored baseline against the now-quiescent file via
-    `DatabaseSecurityHelper.updateStoredChecksum` (`:477`, best-effort `runCatching` so a
-    keystore/prefs failure never breaks lock/restore). The app context needed for the checksum
-    prefs is cached when the DB is built (`cachedAppContext`, `getDatabase` `:419`). The session's
+    (`db.query("PRAGMA wal_checkpoint(FULL)", null)` fully stepped, `:489-497`), closes the vault
+    (`db.close()` `:500`, best-effort), and re-arms the stored baseline against the now-quiescent
+    file via `DatabaseSecurityHelper.updateStoredChecksum` (best-effort `runCatching` so a
+    keystore/prefs failure never breaks lock/restore). **Review fix:** the expensive full-file
+    HMAC + checksum-prefs commit runs on a single-thread daemon executor (`REARM_EXECUTOR`,
+    `NoteflowDatabase.kt:69-74`) so `lock()`/`onCleared()` never block on it; ordering is
+    preserved because `getDatabase` joins the pending re-arm (`:444-447`) before rebuilding the
+    vault and `onCleared` awaits it at app exit (`NoteflowDatabase.awaitPendingRearm()`, `:529-531`,
+    called from `NoteflowViewModel.kt:4102`). The baseline helpers persist with `commit()` (not
+    `.apply()`) so a hard kill cannot drop the re-arm. The app context needed for the checksum
+    prefs is cached when the DB is built (`cachedAppContext`, `getDatabase` `:437`). The session's
     own writes therefore land IN the baseline — the next start verifies clean — while post-exit
-    tampering of `main`/`-wal` still trips the tripwire (B1-DB-6 coverage unchanged). Lock is only
-    disposed for master-password vaults (the passwordless boot DEK is the credential; no session
-    boundary), and `verifyDatabaseIntegrity` still NEVER re-baselines (B1-CRYPTO-06 invariant
-    preserved). Tests: `Phase136TamperBaselineCadenceTest` (8 — pure-JVM cadence decision
-    arm→edit→re-arm→Verified vs arm→edit→Mismatch control, WAL-fold + empty-WAL invariance, and
-    source pins for the checkpoint→close→re-arm ordering, the master-password-gated lock funnel,
-    the restore/reopen funnel and the verify-never-rebaselines pin).
+    tampering of `main`/`-wal` still trips the tripwire (B1-DB-6 coverage unchanged). The lock
+    boundary is only disposed for master-password vaults (the passwordless boot DEK is the
+    credential; no session boundary), though a clean app exit re-arms for passwordless vaults too
+    (intended: they already hold a baseline from first-run/migration/backup). `verifyDatabaseIntegrity`
+    still NEVER re-baselines (B1-CRYPTO-06 invariant preserved). Tests: `Phase136TamperBaselineCadenceTest`
+    (8 — pure-JVM cadence decision arm→edit→re-arm→Verified vs arm→edit→Mismatch control, WAL-fold +
+    empty-WAL invariance, and source pins for the checkpoint→close→schedule ordering, the
+    getDatabase-join, the master-password-gated lock funnel, the onCleared-await, the
+    restore/reopen funnel, the commit-not-apply helpers and the verify-never-rebaselines pin).
   - **Implemented in phase-88** (B1-DB-8, see `workspace/phase-88/REPORT.md`): decrypt-failure
     fallbacks never render RAW CIPHERTEXT as note content. Single pure-JVM decision table
     `services/DecryptFailurePolicy.kt` owns `render(storedValue, decrypted, isCiphertext)` — the

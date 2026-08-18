@@ -84,10 +84,13 @@ now checkpoint + re-arm:
 - **Master-password `lock()`** — `NoteflowViewModel.kt:4056-4060`:
   `if (settings.hasMasterPassword)` → cancel section/page observers →
   `NoteflowDatabase.dispose()` → `databaseDisposedByLock = true`. The re-arm is
-  therefore master-password-gated by construction: a passwordless vault is never
-  disposed on lock (its device-wrapped DEK is the boot credential — there is no
-  lock boundary), so no session-end re-arm runs there. Comment added at the call
-  site documenting the cadence.
+  therefore master-password-gated at the LOCK boundary by construction: a
+  passwordless vault is never disposed on lock (its device-wrapped DEK is the boot
+  credential — there is no lock boundary). Note: at APP EXIT (`onCleared`) the
+  re-arm does run for passwordless vaults too — that is intended and beneficial:
+  passwordless vaults already carry a baseline (armed at first-run/migration/
+  backup), so re-arming it at a clean exit closes the SAME false-`Mismatch` for
+  them. Comment added at the call site documenting the cadence.
 - **App exit** — `NoteflowViewModel.onCleared` `:4089` (still funnels through
   `dispose()`).
 - **Restore / recovery swap** — `NoteRepository.closeDatabase` `:501` and
@@ -158,3 +161,66 @@ now checkpoint + re-arm:
 - Docs: `docs/ARCHITECTURE.md` (phase-136 note), `docs/phase-status.md` (phase-136 → DONE).
 
 No schema change, no migration, no new dependencies, `.github/workflows/` untouched.
+
+---
+
+## Review fixes (phase-136 follow-up, commit after 8c6b566)
+
+Applied in response to the phase-136 review findings:
+
+1. **The full-file re-arm now runs OFF the caller's thread.** The checkpoint +
+   `db.close()` stay synchronous on the live connection (B1-AUTH-02 posture), but
+   `DatabaseSecurityHelper.updateStoredChecksum` (full-file HMAC + checksum-prefs
+   commit) runs on a dedicated single-thread daemon executor
+   (`REARM_EXECUTOR`, `NoteflowDatabase.kt:69-74`) so `lock()`/`onCleared()` (main
+   thread) never block on it. Ordering is preserved two ways:
+   `getDatabase` joins the pending re-arm (`pendingRearm?.join()`,
+   `NoteflowDatabase.kt:436-447`) before rebuilding the vault, and `onCleared`
+   awaits it at app exit (`NoteflowDatabase.awaitPendingRearm()`,
+   `NoteflowViewModel.kt:4089-4103`) so the last session's baseline is durable
+   before process teardown kills the daemon thread.
+2. **`db.close()` is now best-effort too** (`runCatching { db.close() }`,
+   `NoteflowDatabase.kt:500`), and `INSTANCE = null` always runs — a close failure
+   can no longer leak a keyed handle NOR skip the re-arm schedule.
+3. **The stored baseline is durable:** `updateStoredChecksum` and
+   `rearmBaselineFromFile` now use `SharedPreferences.commit()` instead of
+   `.apply()` (`DatabaseSecurityHelper.kt:74-86, 87-99`), so a hard kill right
+   after lock/app-exit cannot drop the re-arm.
+4. **Passwordless-exit re-arm clarified (behavior kept):** the re-arm at app exit
+   for passwordless vaults is a deliberate, beneficial by-product (they already
+   hold a baseline from first-run/migration/backup); only the lock boundary is
+   master-password-gated. Docs corrected to say so.
+5. **Source-pin tests hardened** (`Phase136TamperBaselineCadenceTest`): pins are
+   scoped to the `dispose()` body / `getDatabase` body instead of whole-file
+   `indexOf`, and a new pin asserts the re-arm helpers commit synchronously
+   (no `.apply()`).
+
+**Residual limitation (finding 1, accepted — NOT changed):** a hard process kill
+(no `lock()`, no `onCleared`) still leaves the killed session's WAL frames
+un-checkpointed, so the next start's verification Mismatches a baseline that
+predates them — the false banner reappears for that one interrupted session.
+Closing this would require either verifying only at a quiescent state or
+downgrading `Mismatch` for interrupted sessions, both of which weaken the
+post-exit tamper tripwire (a genuine post-kill tamper is indistinguishable from
+the app's own killed-session writes with a file checksum alone). That is a
+product/security decision; per AGENTS.md it was NOT made silently. The explicit
+finding repro (edit → lock → reopen) is fixed, and the tripwire remains strict for
+every cleanly-ended session.
+
+### Verification
+
+- `gradle testDebugUnitTest` — green (see run in this workspace).
+- `Phase136TamperBaselineCadenceTest` — 8/8 green after the review fixes.
+
+### Files touched (review fixes)
+
+- `app/src/main/kotlin/com/authorss81/noteflow/data/db/NoteflowDatabase.kt`
+  (`REARM_EXECUTOR`, `pendingRearm`, `getDatabase` join, rewritten `dispose()`,
+  `awaitPendingRearm()`).
+- `app/src/main/kotlin/com/authorss81/noteflow/ui/viewmodel/NoteflowViewModel.kt`
+  (`onCleared` awaits the pending re-arm).
+- `app/src/main/kotlin/com/authorss81/noteflow/services/DatabaseSecurityHelper.kt`
+  (`.apply()` → `.commit()`).
+- `app/src/test/java/com/authorss81/noteflow/Phase136TamperBaselineCadenceTest.kt`
+  (hardened pins + commit() pin).
+- Docs: this REPORT, `docs/ARCHITECTURE.md`, `docs/phase-status.md`.

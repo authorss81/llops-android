@@ -4092,6 +4092,12 @@ fun updatePageTags(id: String, tags: String) {
         // SQLCipher connection too so no SQLCipher handle outlives the token that
         // opened it (a subsequently constructed ViewModel rebuilds via getDatabase).
         NoteflowDatabase.dispose()
+        // R2-B1D-01 review (phase-136): app exit is the last chance to persist the
+        // session-end tamper baseline. dispose() schedules the re-arm on a daemon
+        // executor; await it here so the process teardown does not kill the thread
+        // before the checksum-prefs commit lands (a lost re-arm re-introduces the
+        // false "Database integrity check failed" banner at the next start).
+        NoteflowDatabase.awaitPendingRearm()
         repository.zeroizeKey()
     }
 }

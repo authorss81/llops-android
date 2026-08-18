@@ -73,10 +73,16 @@ object DatabaseSecurityHelper {
 
     fun updateStoredChecksum(context: Context) {
         val checksum = computeDatabaseHmac(context, getOrCreateHmacKey()) ?: return
+        // R2-B1D-01 review (phase-136): commit() (not apply()) so the baseline is
+        // on disk BEFORE the caller considers the re-arm done — apply() is async
+        // and a hard kill right after lock/app-exit could drop the re-arm and
+        // re-introduce the false Mismatch at the next start. Callers are off the
+        // hot UI path (vault creation/migration/backup/restore, or the re-arm
+        // executor in dispose()).
         context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
             .edit()
             .putString(PREF_DB_CHECKSUM, checksum)
-            .apply()
+            .commit()
     }
 
     /**
@@ -86,10 +92,13 @@ object DatabaseSecurityHelper {
      */
     fun rearmBaselineFromFile(context: Context, dbFile: File): Boolean {
         val checksum = computeDatabaseHmac(context, getOrCreateHmacKey(), dbFile) ?: return false
+        // R2-B1D-01 review (phase-136): commit() not apply() — a restored vault's
+        // baseline must be durable before the app is restarted (see
+        // [updateStoredChecksum]).
         context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
             .edit()
             .putString(PREF_DB_CHECKSUM, checksum)
-            .apply()
+            .commit()
         return true
     }
 

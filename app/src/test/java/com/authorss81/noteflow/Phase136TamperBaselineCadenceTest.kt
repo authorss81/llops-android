@@ -159,41 +159,54 @@ class Phase136TamperBaselineCadenceTest {
     // ---------- source-level wiring pins ----------
 
     @Test
-    fun `dispose checkpoints the WAL closes then re-arms against the cached context`() {
+    fun `dispose checkpoints closes then schedules the re-arm and getDatabase joins it`() {
         val db = readSource("data/db/NoteflowDatabase.kt")
-        val checkpointIdx = db.indexOf("PRAGMA wal_checkpoint(FULL)")
-        val closeIdx = db.indexOf("db.close()")
-        val rearmIdx = db.indexOf("DatabaseSecurityHelper.updateStoredChecksum(ctx)")
-        val nullIdx = db.indexOf("INSTANCE = null")
+        val disposeBody = db.substringAfter("fun dispose()")
+        val checkpointIdx = disposeBody.indexOf("PRAGMA wal_checkpoint(FULL)")
+        val closeIdx = disposeBody.indexOf("db.close()")
+        val nullIdx = disposeBody.indexOf("INSTANCE = null")
         assertTrue("dispose must FULL-checkpoint the WAL", checkpointIdx >= 0)
-        assertTrue("dispose must fully step the checkpoint cursor", db.contains("while (cursor.moveToNext())"))
+        assertTrue("dispose must fully step the checkpoint cursor", disposeBody.contains("while (cursor.moveToNext())"))
         assertTrue("dispose must close the live connection", closeIdx >= 0)
-        assertTrue("dispose must re-arm via the trusted helper", rearmIdx >= 0)
         assertTrue(
-            "the re-arm must read the QUIESCENT post-close file: checkpoint < close < re-arm",
-            checkpointIdx < closeIdx && closeIdx < rearmIdx
+            "checkpoint and close must run BEFORE the instance is forgotten",
+            checkpointIdx in 0 until nullIdx && closeIdx in 0 until nullIdx && checkpointIdx < closeIdx
         )
         assertTrue(
-            "the re-arm must land before the instance is forgotten",
-            rearmIdx < nullIdx
+            "the close must be best-effort so a close failure never leaks the teardown",
+            disposeBody.contains("runCatching { db.close() }")
+        )
+        val scheduleIdx = disposeBody.indexOf("CompletableFuture.runAsync")
+        assertTrue(
+            "the full-file re-arm must run on the re-arm executor AFTER the instance is forgotten",
+            scheduleIdx in 0 until disposeBody.length && scheduleIdx > nullIdx
         )
         assertTrue(
             "the disposal re-arm must be best-effort and never break teardown",
-            db.contains("runCatching { DatabaseSecurityHelper.updateStoredChecksum(ctx) }")
+            disposeBody.contains("runCatching { DatabaseSecurityHelper.updateStoredChecksum(ctx) }")
         )
         assertTrue(
             "the re-arm needs the cached app context for the checksum prefs",
-            db.contains("cachedAppContext")
+            disposeBody.contains("cachedAppContext") && disposeBody.contains("pendingRearm")
         )
-        val getDbIdx = db.indexOf("fun getDatabase(context: Context)")
+
+        val getDbBody = db.substringAfter("fun getDatabase(context: Context): NoteflowDatabase {")
+            .substringBefore("fun dispose()")
         assertTrue(
             "the app context must be cached when the database is built",
-            getDbIdx >= 0 && db.indexOf("cachedAppContext = context.applicationContext") > getDbIdx
+            getDbBody.indexOf("cachedAppContext = context.applicationContext") >= 0
         )
+        val pendingIdx = getDbBody.indexOf("pendingRearm")
+        val builderIdx = getDbBody.indexOf("Room.databaseBuilder")
+        assertTrue(
+            "getDatabase must join the pending session-end re-arm before reopening",
+            pendingIdx >= 0 && getDbBody.indexOf(".join()", pendingIdx) in (pendingIdx + 1)..builderIdx
+        )
+        assertTrue("the join must precede the vault rebuild", pendingIdx < builderIdx)
     }
 
     @Test
-    fun `lock disposes only inside the master-password branch and onCleared funnels through dispose`() {
+    fun `lock disposes only inside the master-password branch and onCleared awaits the re-arm`() {
         val vm = readSource("ui/viewmodel/NoteflowViewModel.kt")
         val lockBody = vm.substringAfter("fun lock()")
             .substringBefore("override fun onCleared()", "END")
@@ -213,6 +226,24 @@ class Phase136TamperBaselineCadenceTest {
 
         val onCleared = vm.substringAfter("override fun onCleared()", "END")
         assertTrue("app exit must funnel through the same disposal re-arm", onCleared.contains("NoteflowDatabase.dispose()"))
+        assertTrue(
+            "app exit must await the pending re-arm so the daemon-executor re-arm is durable",
+            onCleared.contains("NoteflowDatabase.awaitPendingRearm()")
+        )
+        assertTrue("app exit must still zeroize the DEK", onCleared.contains("repository.zeroizeKey()"))
+    }
+
+    @Test
+    fun `the re-arm helpers persist synchronously with commit not apply`() {
+        val helper = readSource("services/DatabaseSecurityHelper.kt")
+        val update = helper.substringAfter("fun updateStoredChecksum(context: Context)")
+            .substringBefore("fun rearmBaselineFromFile", "END")
+        val rearm = helper.substringAfter("fun rearmBaselineFromFile(context: Context, dbFile: File): Boolean")
+            .substringBefore("fun hasRestoreBlock", "END")
+        assertTrue("updateStoredChecksum must commit synchronously (durable baseline)", update.contains(".commit()"))
+        assertFalse("updateStoredChecksum must not use async apply()", update.contains(".apply()"))
+        assertTrue("rearmBaselineFromFile must commit synchronously (durable baseline)", rearm.contains(".commit()"))
+        assertFalse("rearmBaselineFromFile must not use async apply()", rearm.contains(".apply()"))
     }
 
     @Test

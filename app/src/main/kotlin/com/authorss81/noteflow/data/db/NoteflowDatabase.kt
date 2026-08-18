@@ -18,6 +18,9 @@ import com.authorss81.noteflow.data.model.NoteVersionEntity
 import com.authorss81.noteflow.services.DatabaseSecurityHelper
 import com.authorss81.noteflow.services.VaultKeyHolder
 import java.io.File
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 
 /**
  * Single source of truth for the Room schema version. Referenced by the
@@ -65,6 +68,21 @@ abstract class NoteflowDatabase : RoomDatabase() {
         // restore swap — has it without threading a Context through each caller.
         @Volatile
         private var cachedAppContext: Context? = null
+
+        // R2-B1D-01 review (phase-136): the full-file HMAC + checksum-prefs commit
+        // is the expensive part of the session-end re-arm, so [dispose] runs it on
+        // a dedicated single-thread executor instead of the caller's thread
+        // (lock()/onCleared() run on the main thread). Ordering is preserved:
+        // [getDatabase] joins any pending re-arm before rebuilding the vault, and
+        // [awaitPendingRearm] is invoked at app exit so the last session's baseline
+        // is durable before the process is torn down. The thread is a daemon so an
+        // orphaned task never hangs process teardown.
+        private val REARM_EXECUTOR: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "noteflow-hmac-rearm").apply { isDaemon = true }
+        }
+
+        @Volatile
+        private var pendingRearm: CompletableFuture<Void>? = null
 
         val MIGRATION_1_2 = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {
@@ -417,8 +435,18 @@ abstract class NoteflowDatabase : RoomDatabase() {
 
         fun getDatabase(context: Context): NoteflowDatabase {
             cachedAppContext = context.applicationContext
+            INSTANCE?.let { return it }
+            // R2-B1D-01 review (phase-136): a pending session-end re-arm (scheduled
+            // by [dispose] on the re-arm executor) must finish hashing the
+            // quiescent file BEFORE the vault is reopened — otherwise the first
+            // write after reopen could be folded into a baseline that was hashed
+            // mid-mutation, re-introducing the false Mismatch the phase fixes.
+            pendingRearm?.let { pending ->
+                pending.join()
+                pendingRearm = null
+            }
             return INSTANCE ?: synchronized(this) {
-                val instance = Room.databaseBuilder(
+                INSTANCE ?: Room.databaseBuilder(
                     context.applicationContext,
                     NoteflowDatabase::class.java,
                     "noteflow.sqlite"
@@ -428,8 +456,7 @@ abstract class NoteflowDatabase : RoomDatabase() {
                 .fallbackToDestructiveMigration()
                 .openHelperFactory(NoteflowSqlcipherFactory(context))
                 .build()
-                INSTANCE = instance
-                instance
+                .also { INSTANCE = it }
             }
         }
 
@@ -443,13 +470,14 @@ abstract class NoteflowDatabase : RoomDatabase() {
          * password lock, app exit, restore swap, reopen-after-lock), so it is the
          * right place to implement the quiescent-checkpoint + re-arm cadence that
          * the tamper baseline needs. Every path closes the keyed connection here,
-         * so the WAL is FULL-checkpointed while the connection is still live, the
-         * vault is closed, and the stored baseline is re-armed against the file's
-         * true resting state (main file + an empty, fully-checkpointed `-wal`).
-         * Ordinary in-session edits therefore land IN the baseline — the next
-         * start's verification matches instead of raising a false Mismatch — while
-         * post-exit tampering of either file is still detected. Best-effort on
-         * purpose: a keystore/prefs failure must never break the lock or restore.
+         * so the WAL is FULL-checkpointed while the connection is still live and
+         * the vault is closed; the stored baseline is then re-armed against the
+         * file's true resting state (main file + an empty, fully-checkpointed
+         * `-wal`) on the re-arm executor. Ordinary in-session edits therefore land
+         * IN the baseline — the next start's verification matches instead of
+         * raising a false Mismatch — while post-exit tampering of either file is
+         * still detected. Best-effort on purpose: a keystore/prefs failure must
+         * never break the lock or restore.
          */
         fun dispose() {
             synchronized(this) {
@@ -467,18 +495,39 @@ abstract class NoteflowDatabase : RoomDatabase() {
                             }
                         }
                     }
-                    db.close()
-                    // R2-B1D-01: re-arm the baseline against the now-quiescent,
-                    // closed file via the same trusted arm helper the fresh-vault /
-                    // migration / backup / restore sites use. No-op (never a
-                    // baseline) when the keystore key or the checksum prefs are
-                    // unreachable.
-                    cachedAppContext?.let { ctx ->
-                        runCatching { DatabaseSecurityHelper.updateStoredChecksum(ctx) }
-                    }
+                    // B1-AUTH-02 posture: never let a close failure leak a keyed
+                    // handle past the session boundary — swallow and forget it.
+                    runCatching { db.close() }
                 }
                 INSTANCE = null
+                // R2-B1D-01 review (phase-136): the checkpoint + close stay
+                // synchronous on the live connection, but the full-file HMAC +
+                // checksum-prefs commit is the expensive part — run it on the
+                // re-arm executor so lock()/onCleared() (main thread) never block
+                // on it. Ordering is preserved: [getDatabase] joins any pending
+                // re-arm before rebuilding the vault and onCleared awaits it at
+                // app exit, so the last session's baseline is durable. No-op
+                // (never a baseline) when the keystore key or the checksum prefs
+                // are unreachable.
+                val ctx = cachedAppContext
+                if (ctx != null) {
+                    pendingRearm = CompletableFuture.runAsync(
+                        { runCatching { DatabaseSecurityHelper.updateStoredChecksum(ctx) } },
+                        REARM_EXECUTOR
+                    )
+                }
             }
+        }
+
+        /**
+         * R2-B1D-01 review (phase-136): blocks until the pending session-end
+         * re-arm (if any) has hashed the quiescent file and committed the stored
+         * baseline. Called at app exit (onCleared) so the last session's re-arm is
+         * durable before the process dies; a daemon executor thread would otherwise
+         * be killed with the process and the re-arm silently lost.
+         */
+        fun awaitPendingRearm() {
+            pendingRearm?.join()
         }
     }
 }
