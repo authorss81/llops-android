@@ -36,6 +36,7 @@ import androidx.compose.material.icons.outlined.Info
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -898,14 +899,53 @@ private suspend fun androidx.compose.ui.input.pointer.PointerInputScope.detectTw
 }
 
 /**
+ * R2-B1D-02 + R2-b2b1-UI-06 (phase-135): shown when a restore hits the pre-swap
+ * gate's zero-row-but-real-schema case ([EmptyVaultRestoreDecisionException]).
+ * The prompt lives off the ViewModel channel ([NoteflowViewModel.pendingEmptyVaultConfirm])
+ * — a deferred that survives rotation — and the dialog itself is rendered fresh
+ * every time it appears, so no screen-local state can be lost mid-prompt.
+ */
+@Composable
+private fun EmptyVaultRestoreConfirmDialog(viewModel: NoteflowViewModel) {
+    val pending by viewModel.pendingEmptyVaultConfirm.collectAsState()
+    if (pending != null) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { viewModel.answerEmptyVaultRestore(false) },
+            title = { Text("Backup contains no notes") },
+            text = {
+                Text(
+                    "This backup contains an EMPTY vault (no notes). Restoring it will " +
+                        "replace everything on this device with an empty vault. Only continue " +
+                        "if you truly want to start fresh."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { viewModel.answerEmptyVaultRestore(true) }) {
+                    Text("Restore Empty Vault")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.answerEmptyVaultRestore(false) }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+}
+
+/**
  * 34.8: hard block after a restore whose HMAC baseline could not be verified.
  * The vault is unreachable until a fresh backup restores successfully.
  */
 @Composable
 private fun RestoreBlockedScreen(viewModel: NoteflowViewModel) {
     val context = androidx.compose.ui.platform.LocalContext.current
-    var backupPassword by remember { mutableStateOf("") }
-    var errorMessage by remember { mutableStateOf<String?>(null) }
+    // R2-b2b1-UI-06 (phase-135): recovery-screen state must survive rotation /
+    // process death so a mid-restore lifecycle event cannot silently clear the
+    // password and re-arm a SECOND restore (which raced UI-03's missing gate).
+    var backupPassword by rememberSaveable { mutableStateOf("") }
+    var errorMessage by rememberSaveable { mutableStateOf<String?>(null) }
+    val isRestoring by viewModel.isRestoring.collectAsState()
 
     val pickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -917,6 +957,8 @@ private fun RestoreBlockedScreen(viewModel: NoteflowViewModel) {
             }
         }
     }
+
+    EmptyVaultRestoreConfirmDialog(viewModel)
 
     Column(
         modifier = Modifier
@@ -942,10 +984,15 @@ private fun RestoreBlockedScreen(viewModel: NoteflowViewModel) {
             modifier = Modifier.fillMaxWidth()
         )
         Spacer(Modifier.height(16.dp))
-        Button(onClick = { pickerLauncher.launch(arrayOf("application/octet-stream", "*/*")) }) {
+        Button(
+            onClick = { pickerLauncher.launch(arrayOf("application/octet-stream", "*/*")) },
+            // R2-b2b1-UI-03/-06 (phase-135): disable the restore trigger while one
+            // is in flight — the VM gate would refuse anyway; make it visible.
+            enabled = !isRestoring
+        ) {
             Icon(Icons.Outlined.Restore, contentDescription = null)
             Spacer(Modifier.width(8.dp))
-            Text("Choose Backup & Restore")
+            Text(if (isRestoring) "Restoring…" else "Choose Backup & Restore")
         }
         errorMessage?.let {
             Spacer(Modifier.height(12.dp))
@@ -963,8 +1010,11 @@ private fun RestoreBlockedScreen(viewModel: NoteflowViewModel) {
 @Composable
 private fun CorruptionRecoveryScreen(viewModel: NoteflowViewModel) {
     val context = androidx.compose.ui.platform.LocalContext.current
-    var backupPassword by remember { mutableStateOf("") }
-    var errorMessage by remember { mutableStateOf<String?>(null) }
+    // R2-b2b1-UI-06 (phase-135): rememberSaveable so rotation / process death on
+    // the recovery path cannot silently clear the password and re-arm a restore.
+    var backupPassword by rememberSaveable { mutableStateOf("") }
+    var errorMessage by rememberSaveable { mutableStateOf<String?>(null) }
+    val isRestoring by viewModel.isRestoring.collectAsState()
 
     val pickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -980,6 +1030,8 @@ private fun CorruptionRecoveryScreen(viewModel: NoteflowViewModel) {
     val quarantineStamp = viewModel.corruptionTimestamp.takeIf { it > 0L }?.let {
         java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US).format(java.util.Date(it))
     } ?: "unknown time"
+
+    EmptyVaultRestoreConfirmDialog(viewModel)
 
     Column(
         modifier = Modifier
@@ -1013,14 +1065,18 @@ private fun CorruptionRecoveryScreen(viewModel: NoteflowViewModel) {
             modifier = Modifier.fillMaxWidth()
         )
         Spacer(Modifier.height(16.dp))
-        Button(onClick = { pickerLauncher.launch(arrayOf("application/octet-stream", "*/*")) }) {
+        Button(
+            onClick = { pickerLauncher.launch(arrayOf("application/octet-stream", "*/*")) },
+            enabled = !isRestoring
+        ) {
             Icon(Icons.Outlined.Restore, contentDescription = null)
             Spacer(Modifier.width(8.dp))
-            Text("Choose Backup & Restore")
+            Text(if (isRestoring) "Restoring…" else "Choose Backup & Restore")
         }
         Spacer(Modifier.height(12.dp))
         OutlinedButton(
-            onClick = { viewModel.startFreshAfterCorruption() }
+            onClick = { viewModel.startFreshAfterCorruption() },
+            enabled = !isRestoring
         ) {
             Text("Start fresh with an empty vault")
         }
@@ -1044,9 +1100,13 @@ private fun CorruptionRecoveryScreen(viewModel: NoteflowViewModel) {
  */
 @Composable
 private fun KeystoreKeyLostScreen(viewModel: NoteflowViewModel) {
-    var backupPassword by remember { mutableStateOf("") }
-    var errorMessage by remember { mutableStateOf<String?>(null) }
-    var confirmStartFresh by remember { mutableStateOf(false) }
+    // R2-b2b1-UI-06 (phase-135): rememberSaveable so rotation / process death on
+    // the recovery path cannot lose the typed password, the error, or the
+    // start-fresh confirm while the (seconds-long) restore is in flight.
+    var backupPassword by rememberSaveable { mutableStateOf("") }
+    var errorMessage by rememberSaveable { mutableStateOf<String?>(null) }
+    var confirmStartFresh by rememberSaveable { mutableStateOf(false) }
+    val isRestoring by viewModel.isRestoring.collectAsState()
 
     val pickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -1058,6 +1118,8 @@ private fun KeystoreKeyLostScreen(viewModel: NoteflowViewModel) {
             }
         }
     }
+
+    EmptyVaultRestoreConfirmDialog(viewModel)
 
     Column(
         modifier = Modifier
@@ -1093,14 +1155,20 @@ private fun KeystoreKeyLostScreen(viewModel: NoteflowViewModel) {
             modifier = Modifier.fillMaxWidth()
         )
         Spacer(Modifier.height(16.dp))
-        Button(onClick = { pickerLauncher.launch(arrayOf("application/octet-stream", "*/*")) }) {
+        Button(
+            onClick = { pickerLauncher.launch(arrayOf("application/octet-stream", "*/*")) },
+            enabled = !isRestoring
+        ) {
             Icon(Icons.Outlined.Restore, contentDescription = null)
             Spacer(Modifier.width(8.dp))
-            Text("Choose Backup & Restore")
+            Text(if (isRestoring) "Restoring…" else "Choose Backup & Restore")
         }
         Spacer(Modifier.height(12.dp))
         if (!confirmStartFresh) {
-            OutlinedButton(onClick = { confirmStartFresh = true }) {
+            OutlinedButton(
+                onClick = { confirmStartFresh = true },
+                enabled = !isRestoring
+            ) {
                 Text("Start fresh with an empty vault")
             }
         } else {

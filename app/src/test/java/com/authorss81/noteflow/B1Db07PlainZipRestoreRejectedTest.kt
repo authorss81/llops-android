@@ -184,7 +184,7 @@ class B1Db07PlainZipRestoreRejectedTest {
         // and BEFORE the legacy zip extraction can happen.
         val rejectIndex = region.indexOf("Restore rejected: this is an unencrypted")
         val decryptIndex = region.indexOf("EncryptionService.decrypt(encryptedStr, key)")
-        val extractIndex = region.indexOf("restoreFromZip(context, rawBytes, null, currentDekHex)")
+        val extractIndex = region.indexOf("restoreFromZip(context, rawBytes, null, currentDekHex, allowEmptyVault)")
         assertTrue("the plain-zip reject must precede the decrypt path", rejectIndex >= 0 && rejectIndex < decryptIndex)
         assertTrue("the plain-zip reject must precede any extraction", rejectIndex >= 0 && rejectIndex < extractIndex)
     }

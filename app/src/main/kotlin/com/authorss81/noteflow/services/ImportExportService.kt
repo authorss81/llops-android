@@ -1727,7 +1727,11 @@ object ImportExportService {
         context: Context,
         backupBytes: ByteArray,
         key: ByteArray?,
-        backupPassword: String? = null
+        backupPassword: String? = null,
+        // R2-B1D-02 (phase-135): ONLY set after the user explicitly confirmed the
+        // "start fresh" prompt for a zero-row (empty) vault. Never bypasses the
+        // structural gate.
+        allowEmptyVault: Boolean = false
     ) = withContext(Dispatchers.IO) {
         var rawBytes = backupBytes
 
@@ -1749,7 +1753,7 @@ object ImportExportService {
                 }
 
                 rawBytes = v2.zipBytes
-                restoreFromZip(context, rawBytes, v2.dekHex, currentDekHex)
+                restoreFromZip(context, rawBytes, v2.dekHex, currentDekHex, allowEmptyVault)
             } finally {
                 // The derived KEK is zeroized on every restore outcome (success,
                 // corrupt-DEK early throw, no-data-key early throw, restore failure).
@@ -1780,7 +1784,7 @@ object ImportExportService {
         rawBytes = EncryptionService.decrypt(encryptedStr, key)
 
         val currentDekHex = key?.toHexString()
-        restoreFromZip(context, rawBytes, null, currentDekHex)
+        restoreFromZip(context, rawBytes, null, currentDekHex, allowEmptyVault)
     }
 
     /**
@@ -1788,8 +1792,13 @@ object ImportExportService {
      * temp dir, the SQLCipher database copy is integrity-checked, re-keyed and
      * field-re-encrypted BEFORE the live vault is touched. Only then are files
      * swapped into place and the HMAC baseline re-armed to the restored DB.
+     *
+     * R2-B1D-02 (phase-135): [allowEmptyVault] is the escape hatch for the
+     * zero-row-but-real-schema case — the caller has already shown the user the
+     * empty-vault "start fresh" confirmation. It NEVER bypasses the structural
+     * gate (missing tables / blank user_version are rejected regardless).
      */
-    private fun restoreFromZip(context: Context, rawBytes: ByteArray, backupDekHex: String?, currentDekHex: String?) {
+    private fun restoreFromZip(context: Context, rawBytes: ByteArray, backupDekHex: String?, currentDekHex: String?, allowEmptyVault: Boolean = false) {
         val tempRoot = File(context.cacheDir, "restore_tmp_${System.currentTimeMillis()}")
         tempRoot.mkdirs()
         val tempDb = File(tempRoot, "noteflow.sqlite")
@@ -1797,7 +1806,7 @@ object ImportExportService {
         val tempVoiceNotes = File(tempRoot, "voice_notes")
         try {
             extractBackupEntriesTo(rawBytes, tempDb, tempImports, tempVoiceNotes)
-            validateAndPrepareRestoredDb(context, tempDb, backupDekHex, currentDekHex, tempVoiceNotes)
+            validateAndPrepareRestoredDb(context, tempDb, backupDekHex, currentDekHex, tempVoiceNotes, allowEmptyVault)
             // B2/34.1 + 34.8: re-arm the tamper baseline to the restored DB copy
             // BEFORE it swaps into place. A DB we cannot checksum must never
             // become the live vault — escalate to the hard restore-block.
@@ -1857,14 +1866,31 @@ object ImportExportService {
         if (!sawDatabase) {
             throw IllegalStateException("Backup contains no noteflow.sqlite database entry.")
         }
+        // R2-B1D-02 (phase-135): a 0-byte database entry is a freshly-initialized
+        // EMPTY database (or a hostile stub). The candidate-open below would
+        // silently initialize it to a blank vault with integrity_check = ok and
+        // user_version = 0, so reject it BEFORE any open/rekey/rearm/swap can run.
+        if (tempDb.length() == 0L) {
+            throw IllegalStateException("Restore rejected: the backup's database is empty.")
+        }
     }
 
     /**
      * Opens a copy of the restored DB, runs PRAGMA integrity_check, re-keys the
      * SQLCipher layer to the current DEK and migrates field-level ciphertexts
      * (34.2) so cross-device restores never double-encrypt.
+     *
+     * R2-B1D-02 (phase-135): BEFORE the re-key/migrate/swap steps, the copy is
+     * classified by [RestoredDbPolicy] — required Room schema tables present,
+     * `user_version` >= [RestoredDbPolicy.MIN_USER_VERSION], and a non-zero page
+     * row count. A structurally-invalid copy (missing tables / blank DB) aborts
+     * the restore and is QUARANTINED (`*.restore-rejected-<ts>`); a valid-schema
+     * zero-page copy aborts with [EmptyVaultRestoreDecisionException] so the
+     * caller can surface the "start fresh" confirmation and re-run with
+     * [allowEmptyVault] only after the user confirmed. The live vault is NEVER
+     * swapped or HMAC-re-armed on any of these paths.
      */
-    private fun validateAndPrepareRestoredDb(context: Context, tempDb: File, backupDekHex: String?, currentDekHex: String?, tempVoiceNotes: File) {
+    private fun validateAndPrepareRestoredDb(context: Context, tempDb: File, backupDekHex: String?, currentDekHex: String?, tempVoiceNotes: File, allowEmptyVault: Boolean = false) {
         // B1-DB-7 (phase-56): the empty-passphrase SQLCipher candidate is GONE.
         // A plaintext/keyless SQLite is only openable with `""` — with just the
         // backup's own wrapped DEK (v2) or this device's DEK (device-keyed)
@@ -1874,6 +1900,8 @@ object ImportExportService {
         val candidates = backupRestoreOpenCandidates(backupDekHex, currentDekHex)
         var openedWith: String? = null
         var userVersion: Long = -1L
+        var presentTableCount = 0
+        var pageCount = 0L
         for (candidate in candidates) {
             try {
                 System.loadLibrary("sqlcipher")
@@ -1900,6 +1928,11 @@ object ImportExportService {
                         val versionCursor = db.rawQuery("PRAGMA user_version", null)
                         if (versionCursor.moveToFirst()) userVersion = versionCursor.getLong(0)
                         versionCursor.close()
+                        // R2-B1D-02: capture the Room schema identity + note count
+                        // under the SAME open, so the decision can never be gamed
+                        // between the gate and the swap.
+                        presentTableCount = countPresentRestoredTables(db)
+                        pageCount = countRestoredRows(db, "pages")
                     }
                     cursor.close()
                     if (ok) { openedWith = candidate; break }
@@ -1918,6 +1951,21 @@ object ImportExportService {
         // loop so the rejection is not swallowed as a wrong-key retry.
         checkRestoredSchemaNotNewer(userVersion, com.authorss81.noteflow.data.db.NoteflowDatabase.SCHEMA_VERSION)
 
+        // R2-B1D-02 (phase-135): structural/content gate — a freshly-initialized
+        // EMPTY SQLCipher DB passes candidate-open + integrity_check + user_version
+        // <= 9 but is NOT a vault. Refuse it here, never re-arm + swap.
+        when (val decision = RestoredDbPolicy.decide(userVersion, presentTableCount, pageCount, allowEmptyVault)) {
+            is RestoredDbPolicy.Decision.Reject -> {
+                quarantineRejectedRestoredDb(context, tempDb)
+                throw IllegalStateException(decision.reason)
+            }
+            RestoredDbPolicy.Decision.EmptyVault -> {
+                quarantineRejectedRestoredDb(context, tempDb)
+                throw EmptyVaultRestoreDecisionException()
+            }
+            RestoredDbPolicy.Decision.Pass -> Unit
+        }
+
         if (currentDekHex != null && openedWith != currentDekHex) {
             rekeySqlcipherDb(context, tempDb, openedWith, currentDekHex)
             if (!openedWith.isNullOrEmpty() && openedWith != currentDekHex) {
@@ -1928,6 +1976,70 @@ object ImportExportService {
                 // playing after a cross-device restore.
                 rekeyVoiceNoteBlobs(tempVoiceNotes, openedWith.fromHex(), currentDekHex.fromHex())
             }
+        }
+    }
+
+    /**
+     * R2-B1D-02 (phase-135): how many of [RestoredDbPolicy.REQUIRED_TABLES]
+     * actually exist as `sqlite_master` tables in the restored copy. A real Room
+     * vault (schema >= 1) carries all of them; a freshly-initialized EMPTY
+     * SQLCipher DB carries none. Queried under the candidate open so the result
+     * can never describe a different database than the one being swapped in.
+     */
+    private fun countPresentRestoredTables(db: net.zetetic.database.sqlcipher.SQLiteDatabase): Int {
+        var present = 0
+        for (table in RestoredDbPolicy.REQUIRED_TABLES) {
+            try {
+                val cursor = db.rawQuery(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?",
+                    arrayOf<Any>(table)
+                )
+                try {
+                    if (cursor.moveToFirst() && cursor.getLong(0) > 0) present++
+                } finally {
+                    cursor.close()
+                }
+            } catch (e: Exception) {
+                // sqlite_master always resolves; any failure means the copy is not
+                // a usable vault DB — count the table as missing (fail closed).
+            }
+        }
+        return present
+    }
+
+    /**
+     * R2-B1D-02 (phase-135): row count of [table] in the restored copy. A vault
+     * with zero `pages` rows is an EMPTY vault — the only case allowed through by
+     * explicit user confirmation. A missing table (schema not applied) reads as
+     * zero rows; the schema-identity gate above already fails those copies.
+     */
+    private fun countRestoredRows(db: net.zetetic.database.sqlcipher.SQLiteDatabase, table: String): Long {
+        return try {
+            val cursor = db.rawQuery("SELECT COUNT(*) FROM $table", null)
+            try {
+                if (cursor.moveToFirst()) cursor.getLong(0) else 0L
+            } finally {
+                cursor.close()
+            }
+        } catch (e: Exception) {
+            // "no such table" — schema not applied; zero rows (empty vault).
+            0L
+        }
+    }
+
+    /**
+     * R2-B1D-02 (phase-135): preserves the byte-exact rejected incoming database
+     * next to the live vault as `noteflow.sqlite.restore-rejected-<ts>` so a
+     * hostile/empty archive leaves forensic evidence and is NEVER the only copy.
+     * Best-effort by design — aborting the restore is the guarantee, not the
+     * forensic copy.
+     */
+    private fun quarantineRejectedRestoredDb(context: Context, tempDb: File) {
+        runCatching {
+            val dbFile = context.getDatabasePath("noteflow.sqlite")
+            val parent = dbFile.parentFile ?: return
+            val target = File(parent, "noteflow.sqlite.restore-rejected-${System.currentTimeMillis()}")
+            tempDb.copyTo(target, overwrite = true)
         }
     }
 
@@ -2699,6 +2811,19 @@ object ImportExportService {
     }
 
 }
+
+/**
+ * R2-B1D-02 (phase-135): thrown by the pre-swap gate when a restored backup holds
+ * a REAL Room schema but zero `pages` rows. Silently restoring it would replace
+ * a populated vault with an empty one. The caller surfaces an explicit "start
+ * fresh" confirmation and only then re-runs the import with
+ * `allowEmptyVault = true`; any other outcome leaves the live vault untouched.
+ */
+internal class EmptyVaultRestoreDecisionException :
+    IllegalStateException(
+        "This backup contains an EMPTY vault (no notes). Restoring it would replace " +
+            "everything with an empty vault. Confirm you really want to start fresh."
+    )
 
 /**
  * B1-DB-7 (phase-56): true when [bytes] look like a raw PK zip — the signature

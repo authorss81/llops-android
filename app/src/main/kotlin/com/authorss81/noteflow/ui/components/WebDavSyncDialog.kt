@@ -55,6 +55,10 @@ fun WebDavSyncDialog(
     // plugin can no longer decrypt the stored WebDAV password in that mode.
     val biometricEnabled by viewModel.biometricEnabled.collectAsState()
 
+    // R2-b2b1-UI-03 (phase-135): disable the restore trigger while a restore is
+    // in flight on ANY path — the local/WebDAV/recovery paths share one gate.
+    val isRestoring by viewModel.isRestoring.collectAsState()
+
     val syncService = remember { WebDavSyncService(context) }
 
     // Pre-fill from the encrypted credential store (AndroidKeyStore-backed),
@@ -270,7 +274,7 @@ fun WebDavSyncDialog(
                             }
                         }
                     },
-                    enabled = !isLoading && username.isNotBlank() && passwordOrToken.isNotBlank()
+                    enabled = !isLoading && !isRestoring && username.isNotBlank() && passwordOrToken.isNotBlank()
                 ) {
                     Icon(Icons.Outlined.CloudDownload, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(6.dp))

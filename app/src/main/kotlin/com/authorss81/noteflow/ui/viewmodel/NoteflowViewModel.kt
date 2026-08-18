@@ -75,6 +75,8 @@ import com.authorss81.noteflow.services.DekReadResult
 import com.authorss81.noteflow.services.EditorFlushPolicy
 import com.authorss81.noteflow.services.EncryptionService
 import com.authorss81.noteflow.services.ImportExportService
+import com.authorss81.noteflow.services.EmptyVaultRestoreDecisionException
+import com.authorss81.noteflow.services.RestoreInflightGate
 import com.authorss81.noteflow.services.IntegrityWarningDismissalGate
 import com.authorss81.noteflow.services.KeystoreKeyLostException
 import com.authorss81.noteflow.services.MarkdownBodySaveCoordinator
@@ -1315,6 +1317,47 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         _snackbarMessages.tryEmit(SnackbarMessage(text, isLong))
     }
 
+    // -----------------------------------------------------------------------
+    // R2-b2b1-UI-03 (phase-135): ONE shared one-in-flight gate across ALL restore
+    // entry points — the recovery screens, the keystore-lost recovery, the
+    // HomeScreen local restore and the WebDAV download+restore. A restore is
+    // `closeDatabase → importBackup → reopen/exitProcess`; two concurrent runs
+    // would race two file swaps of the SAME SQLCipher file and both schedule a
+    // process kill, so the double trigger is refused outright.
+    // -----------------------------------------------------------------------
+    private val restoreGate = RestoreInflightGate()
+
+    val isRestoring: StateFlow<Boolean> = restoreGate.isRestoring
+
+    /** [true] if this caller won the gate (no restore currently in flight). */
+    fun tryBeginRestore(): Boolean = restoreGate.tryBegin()
+
+    /** Releases the gate — MUST be called in a `finally` after [tryBeginRestore]. */
+    fun endRestore() = restoreGate.end()
+
+    // R2-B1D-02 (phase-135): when the pre-swap gate finds a valid-schema but
+    // zero-row backup, the restore is refused and this channel asks the user to
+    // confirm "start fresh" before the import is re-run with allowEmptyVault.
+    // The deferred lives in view-model state (survives rotation / recomposition);
+    // the dialogs live in the screens' rememberSaveable state.
+    private val _pendingEmptyVaultConfirm = MutableStateFlow<CompletableDeferred<Boolean>?>(null)
+    val pendingEmptyVaultConfirm: StateFlow<CompletableDeferred<Boolean>?> = _pendingEmptyVaultConfirm.asStateFlow()
+
+    fun answerEmptyVaultRestore(confirmed: Boolean) {
+        _pendingEmptyVaultConfirm.value?.complete(confirmed)
+        _pendingEmptyVaultConfirm.value = null
+    }
+
+    private suspend fun awaitEmptyVaultConfirm(): Boolean {
+        val deferred = CompletableDeferred<Boolean>()
+        _pendingEmptyVaultConfirm.value = deferred
+        return try {
+            deferred.await()
+        } finally {
+            _pendingEmptyVaultConfirm.value = null
+        }
+    }
+
     private val _p2pNotification = MutableStateFlow<String?>(null)
     val p2pNotification: StateFlow<String?> = _p2pNotification.asStateFlow()
 
@@ -2127,99 +2170,6 @@ fun updatePageTags(id: String, tags: String) {
             }
         }
     }
-        }
-    }
-
-    fun renameTag(oldTag: String, newTag: String) {
-        val cleanNewTag = newTag.trim().lowercase().removePrefix("#")
-        if (cleanNewTag.isEmpty()) return
-        viewModelScope.launch {
-            val allNotebooks = repository.getAllNotebooks()
-            allNotebooks.forEach { nb ->
-                val tagList = nb.tags.split(",").map { it.trim() }.filter { it.isNotEmpty() }
-                if (tagList.contains(oldTag)) {
-                    val updatedTags = tagList.map { if (it == oldTag) cleanNewTag else it }.distinct().joinToString(",")
-                    repository.updateNotebookTags(nb.id, updatedTags)
-                }
-            }
-            val allPages = repository.getAllActivePages()
-            allPages.forEach { pg ->
-                val tagList = pg.tags.split(",").map { it.trim() }.filter { it.isNotEmpty() }
-                if (tagList.contains(oldTag)) {
-                    val updatedTags = tagList.map { if (it == oldTag) cleanNewTag else it }.distinct().joinToString(",")
-                    repository.updatePageTags(pg.id, updatedTags)
-                }
-            }
-            // If the selected page was modified, refresh it
-            selectedPage.value?.id?.let { id ->
-                _selectedPage.value = repository.getPageById(id)
-            }
-        }
-    }
-
-    fun deleteTag(tag: String) {
-        viewModelScope.launch {
-            val allNotebooks = repository.getAllNotebooks()
-            allNotebooks.forEach { nb ->
-                val tagList = nb.tags.split(",").map { it.trim() }.filter { it.isNotEmpty() }
-                if (tagList.contains(tag)) {
-                    val updatedTags = tagList.filter { it != tag }.joinToString(",")
-                    repository.updateNotebookTags(nb.id, updatedTags)
-                }
-            }
-            val allPages = repository.getAllActivePages()
-            allPages.forEach { pg ->
-                val tagList = pg.tags.split(",").map { it.trim() }.filter { it.isNotEmpty() }
-                if (tagList.contains(tag)) {
-                    val updatedTags = tagList.filter { it != tag }.joinToString(",")
-                    repository.updatePageTags(pg.id, updatedTags)
-                }
-            }
-            // If the selected page was modified, refresh it
-            selectedPage.value?.id?.let { id ->
-                _selectedPage.value = repository.getPageById(id)
-            }
-        }
-    }
-
-    fun togglePinPage(id: String, currentPinned: Boolean) {
-        viewModelScope.launch {
-            repository.togglePin(id, !currentPinned)
-        }
-    }
-
-    fun trashPage(id: String) {
-        viewModelScope.launch {
-            repository.trashPage(id)
-            if (selectedPage.value?.id == id) {
-                _selectedPage.value = null
-            }
-        }
-    }
-
-    fun updatePageTemplate(id: String, template: String) {
-        viewModelScope.launch {
-            repository.updatePageTemplate(id, template)
-            if (selectedPage.value?.id == id) {
-                _selectedPage.value = _selectedPage.value?.copy(template = template)
-            }
-        }
-    }
-
-    fun updatePageSource(id: String, sourceFilePath: String?, sourceFileType: String?) {
-        viewModelScope.launch {
-            // B1-AUTH-05 (phase-69): only a value confined under the app-private
-            // imports root is stored (the repository re-confines it too); the
-            // in-memory selection mirrors the confined value.
-            val confined = com.authorss81.noteflow.services.SourceFilePathPolicy.confine(
-                sourceFilePath, com.authorss81.noteflow.services.ImportExportService.getImportsDir(appContext)
-            )
-            repository.updatePageSource(id, confined, sourceFileType)
-            if (selectedPage.value?.id == id) {
-                _selectedPage.value = _selectedPage.value?.copy(sourceFilePath = confined, sourceFileType = sourceFileType)
-            }
-        }
-    }
 
     fun exportNotebookVaultZip(context: Context, notebookId: String, onComplete: (File?) -> Unit) {
         viewModelScope.launch {
@@ -2331,6 +2281,13 @@ fun updatePageTags(id: String, tags: String) {
      */
     fun attemptRecoveryFromBackup(uri: android.net.Uri, backupPassword: String?, onError: (String) -> Unit) {
         viewModelScope.launch {
+            // R2-b2b1-UI-03 (phase-135): a second restore while one is in flight
+            // would race two closeDatabase+importBackup+exitProcess sequences
+            // against the same files — refuse it outright.
+            if (!restoreGate.tryBegin()) {
+                onError("A restore is already in progress. Wait for it to finish.")
+                return@launch
+            }
             try {
                 val bytes = ImportExportService.readUriBytes(
                     getApplication(),
@@ -2344,7 +2301,20 @@ fun updatePageTags(id: String, tags: String) {
                     ImportExportService.validateBackupPassword(bytes, backupPassword)
                 }
                 repository.closeDatabase()
-                ImportExportService.importBackup(getApplication(), bytes, repository.encryptionKey, backupPassword)
+                try {
+                    ImportExportService.importBackup(getApplication(), bytes, repository.encryptionKey, backupPassword, allowEmptyVault = false)
+                } catch (e: EmptyVaultRestoreDecisionException) {
+                    // R2-B1D-02 (phase-135): never silently swap a valid-schema but
+                    // EMPTY vault. Reopen the untouched live DB, ask the user, and
+                    // only re-run the import if they explicitly confirm.
+                    runCatching { repository.reopenDatabase(getApplication()) }
+                    if (!awaitEmptyVaultConfirm()) {
+                        onError("Restore cancelled — the selected backup contains no notes. Your vault is unchanged.")
+                        return@launch
+                    }
+                    repository.closeDatabase()
+                    ImportExportService.importBackup(getApplication(), bytes, repository.encryptionKey, backupPassword, allowEmptyVault = true)
+                }
                 DatabaseSecurityHelper.clearRestoreBlock(getApplication())
                 // B1-DB-1 (phase-43): the corruption flag was set when the vault open
                 // was quarantined; a successful restore must clear it too, otherwise the
@@ -2367,6 +2337,8 @@ fun updatePageTags(id: String, tags: String) {
                 // subsequent operation hits a live connection, then surface the error.
                 runCatching { repository.reopenDatabase(getApplication()) }
                 onError(e.message ?: "Recovery failed.")
+            } finally {
+                restoreGate.end()
             }
         }
     }
@@ -2381,6 +2353,12 @@ fun updatePageTags(id: String, tags: String) {
      */
     fun attemptKeystoreKeyLostRecoveryFromBackup(uri: android.net.Uri, backupPassword: String?, onError: (String) -> Unit) {
         viewModelScope.launch {
+            // R2-b2b1-UI-03 (phase-135): refuse a second restore while one is in
+            // flight — a double run would race two file swaps on the same vault.
+            if (!restoreGate.tryBegin()) {
+                onError("A restore is already in progress. Wait for it to finish.")
+                return@launch
+            }
             try {
                 val bytes = ImportExportService.readUriBytes(
                     getApplication(),
@@ -2399,7 +2377,21 @@ fun updatePageTags(id: String, tags: String) {
                 val newDek = EncryptionService.generateDek()
                 repository.encryptionKey = newDek
                 repository.closeDatabase()
-                ImportExportService.importBackup(getApplication(), bytes, newDek, backupPassword)
+                try {
+                    ImportExportService.importBackup(getApplication(), bytes, newDek, backupPassword, allowEmptyVault = false)
+                } catch (e: EmptyVaultRestoreDecisionException) {
+                    // R2-B1D-02 (phase-135): never silently swap an EMPTY vault. The
+                    // live DB untouched is reopenable only on the key-lost path's
+                    // failure handling — surface the confirm and re-run if accepted.
+                    runCatching { repository.reopenDatabase(getApplication()) }
+                    if (!awaitEmptyVaultConfirm()) {
+                        onError("Restore cancelled — the selected backup contains no notes. Your vault is unchanged.")
+                        return@launch
+                    }
+                    repository.encryptionKey = newDek
+                    repository.closeDatabase()
+                    ImportExportService.importBackup(getApplication(), bytes, newDek, backupPassword, allowEmptyVault = true)
+                }
                 if (!security.storeDek(newDek, authRequired = false)) {
                     throw IllegalStateException("Could not persist the new device key — recovery aborted.")
                 }
@@ -2417,6 +2409,8 @@ fun updatePageTags(id: String, tags: String) {
             } catch (e: Exception) {
                 runCatching { repository.reopenDatabase(getApplication()) }
                 onError(e.message ?: "Recovery failed.")
+            } finally {
+                restoreGate.end()
             }
         }
     }
@@ -3714,6 +3708,12 @@ fun updatePageTags(id: String, tags: String) {
      */
     fun restoreEncryptedBackupFromZip(sourceZip: java.io.File, onComplete: (Boolean, String?) -> Unit) {
         viewModelScope.launch {
+            // R2-b2b1-UI-03 (phase-135): the WebDAV restore shares the SAME
+            // one-in-flight gate as the local/recovery paths — serialize them all.
+            if (!restoreGate.tryBegin()) {
+                onComplete(false, "A restore is already in progress. Wait for it to finish.")
+                return@launch
+            }
             try {
                 // B2-DOS-05 (phase-81): never slurp the whole downloaded archive
                 // into heap unbounded. Bound the read during the read with the
@@ -3727,8 +3727,25 @@ fun updatePageTags(id: String, tags: String) {
                         )
                     }
                 }
+                // R2-b2b1-UI-03 (phase-135): NEVER import into a vault that locked
+                // while the download ran — check auth + DEK presence right before
+                // closeDatabase and abort + reopen the untouched vault.
+                if (!_authenticated.value || repository.encryptionKey == null) {
+                    runCatching { repository.reopenDatabase(getApplication()) }
+                    onComplete(false, "The vault locked during the download — restore cancelled. Unlock the vault and try again.")
+                    return@launch
+                }
                 repository.closeDatabase()
-                ImportExportService.importBackup(getApplication(), bytes, repository.encryptionKey)
+                // R2-B1D-02 (phase-135): a valid-schema-but-empty backup is refused
+                // pre-swap on this path (no "start fresh" confirm in WebDAV) —
+                // surface the refusal truthfully, never swap silently.
+                try {
+                    ImportExportService.importBackup(getApplication(), bytes, repository.encryptionKey, allowEmptyVault = false)
+                } catch (e: EmptyVaultRestoreDecisionException) {
+                    runCatching { repository.reopenDatabase(getApplication()) }
+                    onComplete(false, e.message)
+                    return@launch
+                }
                 // B2-CRYPTO-09 (phase-107): re-migrate restored rows to per-record
                 // AAD on next launch (see attemptRecoveryFromBackup comment).
                 settings.fieldAadMigrated = false
@@ -3750,6 +3767,8 @@ fun updatePageTags(id: String, tags: String) {
                 // (WebDavSyncDialog) tells the user to restart to fully re-initialize.
                 runCatching { repository.reopenDatabase(getApplication()) }
                 onComplete(false, null)
+            } finally {
+                restoreGate.end()
             }
         }
     }
@@ -4009,8 +4028,8 @@ fun updatePageTags(id: String, tags: String) {
         // R2-B1A-02 (phase-134): the lock boundary must stop the shared vault
         // search job here — it was only ever cancelled on a new keystroke, so an
         // in-flight `searchPages`/`deepSearchPages` full-corpus decrypt kept
-        // paging the pool that dispose() closes below. Cancelling before
-        // `NoteflowDatabase.dispose()` (cooperative — the batch either already
+        // paging the pool that the teardown below closes. Cancelling before
+        // the DB teardown (cooperative — the batch either already
         // finished, re-checking the auth gate, or dies at its next suspension)
         // plus the entry/auth re-checks in searchVault/deepSearchVault make the
         // search path fail closed on every lock regardless of timing.

@@ -1,4 +1,4 @@
-# Phase 135: Restore hardening — reject structurally-invalid/empty backups + one-in-flight re-entrancy gate + saveable recovery state [NOT STARTED]
+# Phase 135: Restore hardening — reject structurally-invalid/empty backups + one-in-flight re-entrancy gate + saveable recovery state [DONE]
 
 You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
 app with an encrypted SQLCipher vault. **Read `docs/security-report-round2.md`**

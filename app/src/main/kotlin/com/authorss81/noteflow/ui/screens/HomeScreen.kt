@@ -18,6 +18,7 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.boundsInWindow
@@ -95,12 +96,16 @@ fun HomeScreen(
     var showUpdateDialog by remember { mutableStateOf(false) }
     var showPluginsDialog by remember { mutableStateOf(false) }
     var showPluginStoreDialog by remember { mutableStateOf(false) }
-    var showBackupPasswordDialog by remember { mutableStateOf(false) }
-    var showLegacyRestoreConfirmDialog by remember { mutableStateOf(false) }
+    var showBackupPasswordDialog by rememberSaveable { mutableStateOf(false) }
+    var showLegacyRestoreConfirmDialog by rememberSaveable { mutableStateOf(false) }
     var pendingRestoreBytes by remember { mutableStateOf<ByteArray?>(null) }
-    var backupPasswordInput by remember { mutableStateOf("") }
-    var backupPasswordError by remember { mutableStateOf<String?>(null) }
-    var isValidating by remember { mutableStateOf(false) }
+    var backupPasswordInput by rememberSaveable { mutableStateOf("") }
+    var backupPasswordError by rememberSaveable { mutableStateOf<String?>(null) }
+    var isValidating by rememberSaveable { mutableStateOf(false) }
+    // R2-b2b1-UI-03/-06 (phase-135): the restore buttons disable while a restore
+    // is in flight — the one-in-flight gate lives in the ViewModel (survives
+    // rotation), so this is the UI half of the shared gate.
+    val isRestoring by viewModel.isRestoring.collectAsState()
     // Phase 125: the interactive tutorial is the first-run experience (armed once,
     // never auto-reopens once tutorialCompleted); reopen anytime via ⋮ → Tutorial.
     var showTutorial by remember { mutableStateOf(isFirstRun && !tutorialCompleted) }
@@ -131,6 +136,15 @@ fun HomeScreen(
     var restartDialogMessage by remember { mutableStateOf("Your vault has been restored. The app will restart to load the restored data.") }
 
     fun performRestore(context: android.content.Context, bytes: ByteArray, password: String? = null) {
+        // R2-b2b1-UI-03 (phase-135): the local restore shares the SAME one-in-flight
+        // gate as the recovery/WebDAV paths — refuse a second restore instead of
+        // racing two file swaps of the same SQLCipher file.
+        if (!viewModel.tryBeginRestore()) {
+            restartDialogTitle = "Restore already in progress"
+            restartDialogMessage = "A restore is already running. Wait for it to finish before starting another."
+            showRestartConfirmDialog = true
+            return
+        }
         // B2-UI-6 (phase-96): the restore runs on the ViewModel scope — a lock
         // disposing this screen mid-swap must not abandon the restore silently.
         // Completion posts through the snackbarMessages pipeline as well as the
@@ -144,8 +158,17 @@ fun HomeScreen(
                 if (password != null) {
                     ImportExportService.validateBackupPassword(bytes, password)
                 }
+                // R2-b2b1-UI-03 (phase-135): never import into a vault that locked
+                // while the file was being picked/read — fail closed and reopen.
+                if (viewModel.repository.encryptionKey == null) {
+                    runCatching { viewModel.repository.reopenDatabase(context) }
+                    throw IllegalStateException("The vault locked before the restore — please unlock and try again.")
+                }
                 viewModel.repository.closeDatabase()
-                ImportExportService.importBackup(context, bytes, viewModel.repository.encryptionKey, password)
+                // R2-B1D-02 (phase-135): a valid-schema-but-empty backup fails here
+                // with a truthful message (no "start fresh" confirm on this screen) —
+                // it is never swapped in silently.
+                ImportExportService.importBackup(context, bytes, viewModel.repository.encryptionKey, password, allowEmptyVault = false)
                 restartDialogTitle = "Restore successful"
                 restartDialogMessage = "Your vault has been restored. The app will restart to load the restored data."
                 showRestartConfirmDialog = true
@@ -160,6 +183,8 @@ fun HomeScreen(
                 restartDialogMessage = "Restore failed: ${e.message}. The app will restart with your current vault unchanged."
                 showRestartConfirmDialog = true
                 viewModel.showSnackbar("Restore failed: ${e.message}", isLong = true)
+            } finally {
+                viewModel.endRestore()
             }
         }
     }
@@ -1284,7 +1309,8 @@ fun HomeScreen(
                             val pending = pendingRestoreBytes
                             pendingRestoreBytes = null
                             if (pending != null) performRestore(context, pending)
-                        }
+                        },
+                        enabled = !isRestoring
                     ) { Text("Restore & Replace All") }
                 },
                 dismissButton = {
@@ -1412,7 +1438,8 @@ fun HomeScreen(
                                     }
                                 }
                             }
-                        }
+                        },
+                        enabled = !isRestoring
                     ) {
                         Text(if (pendingRestoreBytes != null) "Restore" else "Backup")
                     }
