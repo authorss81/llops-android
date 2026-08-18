@@ -30,6 +30,9 @@ painting engine, free features).
 | phase-120..133 | Pre-seeded user-requested UI/UX feature phases (added 2026-08-17 commit `7a4b6e6`, renumbered by `c3a1789`; run before 134+ per numeric order) | user requests |
 | phase-134..153 | Round-2 fix phases (all 43 findings bundled 2-3 per phase by area/root cause; generated 2026-08-17 by phase-119) | Round-2 audit |
 | phase-154..158 | Round-2 feature phases (2-3 related features each, incl. UI/UX + plugin ideas; generated 2026-08-17 by phase-119) | Round-2 audit |
+| phase-159 | **Build Release APK + verify it assembles without error** (feeds phase-160) | Kali redo |
+| phase-160 | Kali full-environment dynamic pentest (6-hr budget) on the phase-159 APK → `docs/kali-report-round2.md` | Kali redo |
+| phase-161 | Triage the Kali round-2 report → generate new phases | Kali redo |
 
 ## How phases run
 

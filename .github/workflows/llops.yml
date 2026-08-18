@@ -150,11 +150,12 @@ jobs:
       - name: Pull latest main
         run: git pull --ff-only origin main || true
 
-      # Phase-117 (Build Release APK) needs the release keystore to run
-      # `gradle assembleRelease`. Restore it BEFORE the phase step. The keystore
-      # lives OUTSIDE the repo tree ($RUNNER_TEMP) — B1Plat01ReleaseSigningTest
-      # fails if any *.keystore file is inside the checkout.
-      - name: Restore Release Keystore (for phase-117 release build)
+      # Phase-117 / phase-159 (Build Release APK) need the release keystore to
+      # run `gradle assembleRelease`. Restore it BEFORE the phase step. The
+      # keystore lives OUTSIDE the repo tree ($RUNNER_TEMP) —
+      # B1Plat01ReleaseSigningTest fails if any *.keystore file is inside the
+      # checkout.
+      - name: Restore Release Keystore (for phase-117/159 release build)
         env:
           RELEASE_KEYSTORE_B64: ${{ secrets.RELEASE_KEYSTORE_B64 }}
         run: |
@@ -162,13 +163,14 @@ jobs:
             echo "$RELEASE_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.keystore"
             echo "release.keystore restored to $RUNNER_TEMP ($(wc -c < "$RUNNER_TEMP/release.keystore") bytes)"
           else
-            echo "::warning::RELEASE_KEYSTORE_B64 unset - phase-117 release build will fail closed (expected)."
+            echo "::warning::RELEASE_KEYSTORE_B64 unset - release build phases will fail closed (expected)."
           fi
 
-      # Phase-118 (Kali dynamic pentest) must NOT spend its budget building the
-      # APK — pre-download the artifact phase-117 uploaded so Kali has it on disk.
-      - name: Download release APK artifact for Kali (phase-118)
-        if: needs.select-phase.outputs.phase == 'phase-118'
+      # Phase-118 / phase-160 (Kali dynamic pentest) must NOT spend its budget
+      # building the APK — pre-download the artifact the build phase uploaded so
+      # Kali has it on disk.
+      - name: Download release APK artifact for Kali (phase-118/160)
+        if: needs.select-phase.outputs.phase == 'phase-118' || needs.select-phase.outputs.phase == 'phase-160'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -234,8 +236,8 @@ jobs:
             echo "done=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Upload release APK artifact (phase-117 build phase)
-        if: needs.select-phase.outputs.phase == 'phase-117'
+      - name: Upload release APK artifact (phase-117/159 build phase)
+        if: needs.select-phase.outputs.phase == 'phase-117' || needs.select-phase.outputs.phase == 'phase-159'
         continue-on-error: true   # artifact quota failures must never fail the run
         uses: actions/upload-artifact@v4
         with:
