@@ -138,8 +138,9 @@ class SettingsManager(context: Context) {
         set(value) = prefs.edit().putBoolean("haptics_enabled", value).apply()
 
     // 26.6: automatic shape snapping/straightening of freehand strokes.
+    // Phase-126 made ALL plugins/assistive features strictly opt-in (off by default).
     var shapeAutoSnapEnabled: Boolean
-        get() = prefs.getBoolean("shape_auto_snap_enabled", true)
+        get() = prefs.getBoolean("shape_auto_snap_enabled", false)
         set(value) = prefs.edit().putBoolean("shape_auto_snap_enabled", value).apply()
 
     // Phase 07 painting features (see PressureCurveHelper / SymmetryMode / StrokeStabilizer):

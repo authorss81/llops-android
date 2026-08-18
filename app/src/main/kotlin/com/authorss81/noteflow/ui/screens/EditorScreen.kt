@@ -3966,7 +3966,7 @@ private fun CanvasSettingsBottomSheet(
     isPdf: Boolean,
     gpuWetBrushesEnabled: Boolean = true,
     onGpuWetBrushesToggle: (Boolean) -> Unit = {},
-    shapeAutoSnapEnabled: Boolean = true,
+    shapeAutoSnapEnabled: Boolean = false,
     onShapeAutoSnapToggle: (Boolean) -> Unit = {},
     hapticsEnabled: Boolean = true,
     onHapticsToggle: (Boolean) -> Unit = {},

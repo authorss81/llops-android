@@ -143,7 +143,7 @@ fun AnnotationCanvas(
     onCanvasTap: () -> Unit = {},
     onExtractOcr: ((String) -> Unit)? = null,
     gpuWetBrushesEnabled: Boolean = true,
-    shapeAutoSnapEnabled: Boolean = true,
+    shapeAutoSnapEnabled: Boolean = false,
     hapticsEnabled: Boolean = true,
     stabilizerEnabled: Boolean = false,
     pressureCurve: PressureCurve = PressureCurve.LINEAR,
