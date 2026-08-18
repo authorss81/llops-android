@@ -224,21 +224,71 @@ class MainActivity : FragmentActivity() {
             }
 
             val pages by viewModel.pages.collectAsState()
+            // Phase 133: the global all-active-pages flow is a SECOND fallback for
+            // resolving the active page — a page created in a section that is not
+            // the currently observed one still resolves through it.
+            val allActivePages by viewModel.allActivePages.collectAsState()
             var activePageId by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf<String?>(null) }
+            // Phase 133: synchronous in-memory tracking of the page being opened.
+            // Room-backed lists emit ASYNC, so on the immediate creation frame
+            // (Add Page FAB / Daily Journal / wiki-link create / shared note) the
+            // page is not yet in `pages` — the old `pages.find { id }` returned
+            // null and the screen transition was lost. The tracker carries the
+            // freshly created/opened entity so the editor opens on the exact frame
+            // of creation; see ActivePageTracker.
+            var activeTracker by remember { mutableStateOf(com.authorss81.noteflow.services.ActivePageTrackerState()) }
             var showGraphView by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
             var showCommandPalette by remember { mutableStateOf(false) }
 
-            val activePage = pages.find { it.id == activePageId }
+            // Phase 133: resolve with fallback matching — synchronous in-memory
+            // copy first, then allActivePages, then the section-filtered pages
+            // (order of precedence pinned by ActivePageResolutionTest).
+            val activePage = com.authorss81.noteflow.services.ActivePageResolution.resolve(
+                activePageId = activePageId,
+                synchronous = activeTracker.synchronous,
+                allActivePages = allActivePages,
+                sectionPages = pages
+            )
             val setActivePage: (NotePageEntity?) -> Unit = { page ->
                 activePageId = page?.id
                 viewModel.settings.activePageId = page?.id
+                activeTracker = com.authorss81.noteflow.services.ActivePageTracker.open(
+                    activeTracker, page, allActivePages, pages
+                )
             }
 
-            LaunchedEffect(authenticated, pages) {
+            // Phase 133: restore the persisted active page (launch / unlock /
+            // config change). The synchronous copy is re-armed from the
+            // authoritative lists so the editor reopens without waiting on Room.
+            LaunchedEffect(authenticated, pages, allActivePages) {
                 if (authenticated && activePageId == null) {
-                    val savedPageId = viewModel.settings.activePageId
-                    if (!savedPageId.isNullOrEmpty() && pages.any { it.id == savedPageId }) {
-                        activePageId = savedPageId
+                    val restored = com.authorss81.noteflow.services.ActivePageTracker.restore(
+                        savedId = viewModel.settings.activePageId,
+                        allActivePages = allActivePages,
+                        sectionPages = pages
+                    )
+                    if (restored.id != null) {
+                        activePageId = restored.id
+                        activeTracker = restored
+                    }
+                }
+            }
+
+            // Phase 133: keep the synchronous copy in lock-step with the
+            // authoritative Room lists. Once Room emits, refresh the copy to the
+            // authoritative instance (fresh title/tags/updatedAt); if the page was
+            // DB-confirmed and is now absent from every source (deleted/trashed),
+            // drop id + copy so the editor never renders a stale entity.
+            LaunchedEffect(allActivePages, pages) {
+                val before = activeTracker
+                val after = com.authorss81.noteflow.services.ActivePageTracker.onAuthoritative(
+                    before, allActivePages, pages
+                )
+                if (after != before) {
+                    activeTracker = after
+                    if (after.id == null && before.id != null) {
+                        activePageId = null
+                        viewModel.settings.activePageId = null
                     }
                 }
             }

@@ -972,6 +972,21 @@
     scrub the guard forgets its timestamp so a foreign (other-app) copy is never wiped. ON_PAUSE scrub
     retained as defense-in-depth; both note-content copy sources stamp the guard before writing
     (`OcrResultDialog.kt:149-150`, `MediaEmbedComponents.kt:352-354`). Tests: `B2Ui2ClipboardScrubTest` (13).
+  - **Implemented in phase-133** (user-requested UI/UX, see `workspace/phase-133/REPORT.md`): new
+    pages (Add Page FAB) and Daily Journal entries now open IMMEDIATELY on click. Root cause: the
+    active page was resolved only via `pages.find { it.id == activePageId }` against the
+    section-filtered async Room flow → null on the creation frame → transition dropped. New pure-JVM
+    `services/ActivePageResolution.kt` = `ActivePageResolution.resolve(activePageId, synchronous,
+    allActivePages, sectionPages)` (precedence: synchronous in-memory copy → `allActivePages` →
+    section `pages`) + `ActivePageTracker`/`ActivePageTrackerState` (open captures the page
+    synchronously, `onAuthoritative` refreshes from Room emits and drops confirmed-but-deleted pages,
+    `restore` re-arms the saved page id). `MainActivity.kt:226-289` collects `allActivePages`, holds
+    the synchronous copy in a `remember`-ed tracker, resolves through the fallback helper, and re-arms
+    via `LaunchedEffect(allActivePages, pages)`; a second effect drops the id/editor when a confirmed
+    page disappears (delete/trash). `NoteflowViewModel.openOrCreateDailyNote`/`openPageByTitle` (and
+    the same latent fix in `createNoteFromSharedContent`) return the page, re-synchronize
+    `observePages(sec.id)`, and dispatch `onOpen` via `withContext(Dispatchers.Main)`. Tests:
+    `Phase133ActivePageResolutionTest` (19). 1825 app tests green + `assembleDebug` green.
 - **Import/export**: `services/ImportExportService.kt:30` (encrypted backup/restore, `validateBackupPassword`,
   PDF/HTML/image export).
   - **Implemented in phase-55** (B1-DB-5, see `workspace/phase-55/REPORT.md`): the HTML/Obsidian

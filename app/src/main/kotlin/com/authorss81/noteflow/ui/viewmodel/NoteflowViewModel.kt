@@ -1878,6 +1878,9 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
             // B2-UI-1 review-fix: a lock racing the create is a notice, not a crash.
             val newPage = writeGuardedAgainstLock("Vault is locked — shared note not created") {
                 val sec = selectedSection.value ?: repository.ensureDefaultNotebookAndSection().second
+                if (_selectedSection.value == null) {
+                    _selectedSection.value = sec
+                }
                 val firstLine = sharedText?.lineSequence()?.firstOrNull()?.trim()?.take(40)
                     ?.takeIf { it.isNotBlank() }
                 val title = firstLine
@@ -1908,6 +1911,9 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
                         }
                     )
                 }
+                // Phase 133: synchronize the section observation so the new page is
+                // present in the section-filtered `pages` flow (mirrors addPage).
+                observePages(sec.id)
                 created
             } ?: return@launch
             selectPage(newPage)
@@ -2322,7 +2328,9 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
             // B2-UI-1 review-fix: a lock racing the read/write is a notice, not a
             // crash; the existing-page read and new-page create stay together so
             // neither can run against a disposed pool.
-            writeGuardedAgainstLock("Vault is locked — daily note not created") {
+            // Phase 133: the created page is returned from the guard and the onOpen
+            // callback is dispatched below via withContext(Dispatchers.Main).
+            val page = writeGuardedAgainstLock("Vault is locked — daily note not created") {
                 val todayStr = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
                 val targetTitle = "$todayStr.md"
 
@@ -2333,9 +2341,12 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
                 }
 
                 if (existing != null) {
-                    onOpen(existing)
+                    existing
                 } else {
                     val sec = selectedSection.value ?: repository.ensureDefaultNotebookAndSection().second
+                    if (_selectedSection.value == null) {
+                        _selectedSection.value = sec
+                    }
                     val journalTemplate = """
                         # 📅 Journal - $todayStr
 
@@ -2363,9 +2374,18 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
                         extractedText = journalTemplate
                     )
                     selectPage(newPage)
-                    onOpen(newPage)
+                    // Phase 133 (a): synchronize the section observation so the
+                    // new page is present in the section-filtered `pages` flow (the
+                    // create branch may run against a section that was not being
+                    // observed — the missing re-arm left `pages` without the page).
+                    observePages(sec.id)
+                    newPage
                 }
-            }
+            } ?: return@launch
+            // Phase 133 (b): guarantee the open callback is dispatched on the main
+            // thread (no-op under the Main.immediate launch context, explicit so a
+            // future context change can never fire it off the UI thread).
+            withContext(Dispatchers.Main) { onOpen(page) }
         }
     }
 
@@ -2375,7 +2395,9 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
             // reject the whole open/create while locked.
             // B2-UI-1 review-fix: a lock racing the read/write is a notice, not a
             // crash; the existing-page read and new-page create stay together.
-            writeGuardedAgainstLock("Vault is locked — page not created") {
+            // Phase 133: the created page is returned from the guard and the onOpen
+            // callback is dispatched below via withContext(Dispatchers.Main).
+            val page = writeGuardedAgainstLock("Vault is locked — page not created") {
                 val activePages = repository.getAllActivePages()
                 val cleanTarget = title.replace(".md", "").replace(".txt", "").trim()
                 val existing = activePages.find {
@@ -2384,9 +2406,12 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
                 }
 
                 if (existing != null) {
-                    onOpen(existing)
+                    existing
                 } else {
                     val sec = selectedSection.value ?: repository.ensureDefaultNotebookAndSection().second
+                    if (_selectedSection.value == null) {
+                        _selectedSection.value = sec
+                    }
                     val targetFileName = "$cleanTarget.md"
                     val initialContent = "# $cleanTarget\n\nCreated via WikiLink `[[$cleanTarget]]`."
                     // phase-44 (B1-DB-4): body stored ONLY in the field-encrypted
@@ -2400,9 +2425,16 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
                         extractedText = initialContent
                     )
                     selectPage(newPage)
-                    onOpen(newPage)
+                    // Phase 133 (a): synchronize the section observation so the new
+                    // page is present in the section-filtered `pages` flow.
+                    observePages(sec.id)
+                    newPage
                 }
-            }
+            } ?: return@launch
+            // Phase 133 (b): guarantee the open callback is dispatched on the main
+            // thread (no-op under the Main.immediate launch context, explicit so a
+            // future context change can never fire it off the UI thread).
+            withContext(Dispatchers.Main) { onOpen(page) }
         }
     }
 
