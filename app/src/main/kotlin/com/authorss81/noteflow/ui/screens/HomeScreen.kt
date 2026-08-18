@@ -31,6 +31,7 @@ import androidx.lifecycle.viewModelScope
 import com.authorss81.noteflow.data.model.NotePageEntity
 import com.authorss81.noteflow.data.model.NotebookEntity
 import com.authorss81.noteflow.data.model.SectionEntity
+import com.authorss81.noteflow.plugins.webcapture.WebPageFetchPolicy
 import com.authorss81.noteflow.services.BackupPasswordPolicy
 import com.authorss81.noteflow.services.DocumentTextExtractor
 import com.authorss81.noteflow.services.ExportDestinationPolicy
@@ -2736,7 +2737,9 @@ private fun WebCaptureDialog(
     var resultTitle by remember { mutableStateOf<String?>(null) }
     var resultMarkdown by remember { mutableStateOf("") }
 
-    val usesInsecureHttp = urlInput.trim().lowercase().startsWith("http://")
+    // R2-B1N-04 (phase-143): decide the checkbox exactly as the policy does, so
+    // the UI can never disagree with WebPageFetchPolicy.validateUrl.
+    val usesInsecureHttp = WebPageFetchPolicy.namesHttpScheme(urlInput)
 
     fun submit() {
         if (busy) return
@@ -2780,7 +2783,15 @@ private fun WebCaptureDialog(
                 }
                 OutlinedTextField(
                     value = urlInput,
-                    onValueChange = { urlInput = it },
+                    onValueChange = {
+                        urlInput = it
+                        // R2-B1N-04 (phase-143): the cleartext opt-in is
+                        // strictly per-fetch — never carry it across a URL that
+                        // no longer needs it (e.g. editing http:// → https://).
+                        if (!WebPageFetchPolicy.namesHttpScheme(it)) {
+                            allowInsecureHttp = false
+                        }
+                    },
                     label = { Text("https://…") },
                     singleLine = true,
                     enabled = !busy && resultTitle == null,

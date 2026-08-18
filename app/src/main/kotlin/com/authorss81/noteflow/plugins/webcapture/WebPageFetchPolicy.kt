@@ -20,7 +20,10 @@ object WebPageFetchPolicy {
 
     // R2-B1N-04 (phase-143): HTTPS-by-default. Clear-text http is NOT in the
     // allow-list; it is tolerated only with an explicit per-fetch opt-in
-    // ([allowInsecureHttp]), mirroring WebDAV's `allowInsecureHttp` model.
+    // ([allowInsecureHttp]). Modeled on WebDAV's `allowInsecureHttp` UX, with
+    // one intentional difference: WebDAV confines cleartext to local-network
+    // hosts, whereas Web Capture's opt-in applies to any host (the [SsrfHostPolicy]
+    // blocklist still applies either way).
     private val ALLOWED_SCHEMES = setOf(HTTPS_SCHEME)
 
     /** User-facing explanation for an http:// URL that was not opted into. */
@@ -31,6 +34,21 @@ object WebPageFetchPolicy {
     /** R2-B1N-04: http is allowed only with the explicit per-fetch opt-in. */
     private fun schemeAllowed(scheme: String, allowInsecureHttp: Boolean): Boolean =
         scheme in ALLOWED_SCHEMES || (scheme == HTTP_SCHEME && allowInsecureHttp)
+
+    /** Matches a URL that already names a scheme, exactly as [validateUrl] uses it. */
+    private val SCHEME_PREFIX = Regex("^([a-zA-Z][a-zA-Z0-9+.-]*):")
+
+    /**
+     * R2-B1N-04 (phase-143): true exactly when [validateUrl] would treat
+     * [input] as naming the `http` scheme (and therefore need the per-fetch
+     * cleartext opt-in). The Web Capture dialog uses this to decide whether to
+     * show its "allow insecure HTTP" checkbox, so the checkbox can never
+     * disagree with [validateUrl]. Pure-JVM.
+     */
+    fun namesHttpScheme(input: String): Boolean {
+        val trimmed = input.trim()
+        return SCHEME_PREFIX.find(trimmed)?.groupValues?.get(1)?.lowercase() == HTTP_SCHEME
+    }
 
     data class Validation(
         val url: String,
@@ -59,7 +77,7 @@ object WebPageFetchPolicy {
                 val trimmed = input.trim()
                 // A URL that already names a scheme must be https (or http with
                 // the explicit opt-in); a bare host/domain gets the https:// prefix.
-                val protocolMatch = Regex("^([a-zA-Z][a-zA-Z0-9+.-]*):").find(trimmed)
+                val protocolMatch = SCHEME_PREFIX.find(trimmed)
                 val candidate = when {
                     protocolMatch == null -> "https://$trimmed"
                     protocolMatch.groupValues[1].lowercase() in ALLOWED_SCHEMES -> trimmed

@@ -928,8 +928,12 @@
     cleartext opt-in (`WebPageFetcher.fetch(url, allowInsecureHttp)` threads it to every
     hop). `WebCaptureEngine.captureWebPage`/the `WebCapturePlugin` interface
     (`NoteflowPlugin.kt`) gained the same `allowInsecureHttp` parameter (default false);
-    the WebCapture dialog mirrors the WebDAV `allowInsecureHttp` UX — a plain `http://`
-    address shows a one-time "allow insecure HTTP" checkbox, never fetches otherwise.
+    the WebCapture dialog mirrors the WebDAV `allowInsecureHttp` UX — an address that
+    names the `http` scheme (detected by the policy's own `WebPageFetchPolicy.namesHttpScheme`)
+    shows a one-time "allow insecure HTTP" checkbox, never fetches otherwise, and the
+    flag is cleared if the address is edited away from http. Unlike WebDAV's
+    local-network-only cleartext, the Web Capture opt-in applies to any host (SSRF
+    blocklist still enforced).
     Bare/host-only input still defaults to `https://`. See `workspace/phase-143/REPORT.md`.
 - **Implemented in phase-52** (B1-NET-05): HTTPS→HTTP redirect downgrades are
     closed at EVERY base `HttpURLConnection` transport. New pure-JVM

@@ -254,8 +254,10 @@ interface WebCapturePlugin {
      *
      * @param allowInsecureHttp R2-B1N-04: explicit per-fetch cleartext opt-in.
      *   Defaults to false — `http://` entry URLs and http redirects are refused
-     *   (the WebDAV `allowInsecureHttp` model). Only the UI can pass true, and
-     *   only after the user consciously accepted the one-time cleartext fetch.
+     *   (WebDAV's `allowInsecureHttp` UX; unlike WebDAV's local-network-only
+     *   restriction, the opt-in applies to any host — SSRF blocklist still
+     *   enforced). Only the UI can pass true, and only after the user
+     *   consciously accepted the one-time cleartext fetch.
      */
     suspend fun captureWebPage(context: Context?, url: String, allowInsecureHttp: Boolean = false): WebCaptureOutcome
 }

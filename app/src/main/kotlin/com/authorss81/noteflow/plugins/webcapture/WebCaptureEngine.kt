@@ -18,7 +18,8 @@ import com.authorss81.noteflow.plugins.websearch.WebSearchAvailability
 /**
  * Web Page -> Markdown capture plugin (Phase 15, capability `WebCapture`).
  *
- * Fetches an http(s) page, extracts the readable content with
+ * Fetches an https page (http only with the explicit per-fetch
+ * [captureWebPage] opt-in, R2-B1N-04), extracts the readable content with
  * [WebToMarkdownExtractor], and returns the result as Markdown for a new-note
  * capture. Fetching only ever runs on a user-initiated action and hops off the
  * main thread via [WebPageFetcher].
@@ -55,7 +56,9 @@ class WebCaptureEngine(
     }
 
     /** @param allowInsecureHttp R2-B1N-04 per-fetch cleartext opt-in (defaults
-     *   to https-only; true applies the WebDAV `allowInsecureHttp` model). */
+     *   to https-only; the WebDAV `allowInsecureHttp` UX is reused — unlike
+     *   WebDAV, cleartext is allowed for any host, with the SSRF blocklist
+     *   still enforced by [WebPageFetchPolicy]). */
     override suspend fun captureWebPage(
         context: Context?,
         url: String,

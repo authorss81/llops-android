@@ -3,6 +3,7 @@ package com.authorss81.noteflow
 import com.authorss81.noteflow.plugins.webcapture.WebPageFetchPolicy
 import com.authorss81.noteflow.plugins.webcapture.WebToMarkdownExtractor
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -120,6 +121,17 @@ class WebCaptureExtractorTest {
         val valid = WebPageFetchPolicy.validateUrl("http://example.com", allowInsecureHttp = true)
         assertTrue(valid is WebPageFetchPolicy.Either.Valid)
         assertEquals("http", (valid as WebPageFetchPolicy.Either.Valid).validation.scheme)
+    }
+
+    @Test
+    fun `namesHttpScheme mirrors the policy scheme extraction`() {
+        assertTrue(WebPageFetchPolicy.namesHttpScheme("http://example.com"))
+        assertTrue(WebPageFetchPolicy.namesHttpScheme("HTTP://example.com"))
+        assertTrue(WebPageFetchPolicy.namesHttpScheme("  http:example.com  "))
+        assertFalse(WebPageFetchPolicy.namesHttpScheme("https://example.com"))
+        assertFalse(WebPageFetchPolicy.namesHttpScheme("example.com/path"))
+        assertFalse(WebPageFetchPolicy.namesHttpScheme("ftp://example.com"))
+        assertFalse(WebPageFetchPolicy.namesHttpScheme(""))
     }
 
     @Test
