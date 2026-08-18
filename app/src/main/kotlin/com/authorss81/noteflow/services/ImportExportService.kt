@@ -1296,8 +1296,21 @@ object ImportExportService {
      * SQLCipher database can be re-keyed to the restoring device's key.
      * Legacy backups (plain zip, or zip AES-GCM-encrypted with the device DEK)
      * remain importable through importBackup's fallback paths.
+     *
+     * R2-B1D-05/03 (phase-137): this is the SINGLE disciplined DB-file producer —
+     * it runs a full WAL checkpoint + HMAC re-stamp BEFORE copying the main file
+     * (so no committed-but-uncheckpointed frame silently misses the archive), then
+     * copies through [VaultSnapshotCopyPolicy.checkpointThenCopy]'s verified
+     * snapshot (a concurrent WAL auto-checkpoint can never tear the staged copy).
+     * Every exporter — HomeScreen backup / password backup, WebDAV, LocalSend —
+     * routes through this one checkpoint-then-copy, so [repository] is REQUIRED.
      */
-    suspend fun exportBackup(context: Context, key: ByteArray?, backupPassword: String? = null): File = withContext(Dispatchers.IO) {
+    suspend fun exportBackup(
+        context: Context,
+        key: ByteArray?,
+        backupPassword: String? = null,
+        repository: com.authorss81.noteflow.data.repository.NoteRepository
+    ): File = withContext(Dispatchers.IO) {
         val dbFile = context.getDatabasePath("noteflow.sqlite")
         val importsDir = getImportsDir(context)
 
@@ -1309,11 +1322,28 @@ object ImportExportService {
         // B2-DOS-07 (phase-83): the zip is staged to a transient app-private
         // file (never a full in-heap archive), then encrypted file-to-file.
         val stagingZip = File(context.cacheDir, BackupExportPolicy.stagingFileName(backupName))
+        // R2-B1D-05 (phase-137): the DB snapshot is staged + verified before it is
+        // packed — a torn copy must never reach the archive.
+        val stagedDb = File(context.cacheDir, VaultSnapshotCopyPolicy.snapshotStagingFile(backupName))
         try {
+            // R2-B1D-05/03 (phase-137): checkpoint FIRST so the snapshot holds every
+            // committed frame (a -wal resident write must never silently miss the
+            // archive), then re-stamp the tamper baseline (the checkpoint just
+            // rewrote the main file). The verified copy then guarantees the staged
+            // bytes are a main-file state the source held for the whole copy.
+            if (dbFile.exists()) {
+                repository.checkpointWal()
+                repository.stampDatabaseChecksum(context)
+                if (!VaultSnapshotCopyPolicy.checkpointThenCopy(dbFile, stagedDb)) {
+                    throw IllegalStateException(
+                        "Backup failed: the vault database kept changing during the snapshot copy. Please try again."
+                    )
+                }
+            }
             BackupExportPolicy.zipVaultEntriesToStream(FileOutputStream(stagingZip)) { zos ->
                 if (dbFile.exists()) {
                     zos.putNextEntry(ZipEntry("noteflow.sqlite"))
-                    FileInputStream(dbFile).use { fis -> fis.copyTo(zos) }
+                    FileInputStream(stagedDb).use { fis -> fis.copyTo(zos) }
                     zos.closeEntry()
                 }
 
@@ -1413,6 +1443,7 @@ object ImportExportService {
             }
         } finally {
             stagingZip.delete()
+            stagedDb.delete()
         }
         tempBackupFile
     }

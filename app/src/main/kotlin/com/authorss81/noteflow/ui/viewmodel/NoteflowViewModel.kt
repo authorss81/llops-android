@@ -3681,15 +3681,18 @@ fun updatePageTags(id: String, tags: String) {
      * in the -wal file would silently miss the backup) and re-stamps the HMAC
      * tamper baseline before packaging via ImportExportService.exportBackup
      * (the same device-keyed encrypted-archive format the local backup uses).
+     *
+     * R2-B1D-05/03 (phase-137): the checkpoint + re-stamp + verified DB snapshot
+     * now live INSIDE exportBackup — this producer just routes through it.
      */
     fun exportEncryptedBackupToZip(targetZip: java.io.File, onComplete: (Boolean) -> Unit) {
         viewModelScope.launch {
             try {
-                repository.checkpointWal()
-                withContext(Dispatchers.IO) {
-                    repository.stampDatabaseChecksum(getApplication())
-                }
-                val backupFile = ImportExportService.exportBackup(getApplication(), repository.encryptionKey)
+                val backupFile = ImportExportService.exportBackup(
+                    getApplication(),
+                    repository.encryptionKey,
+                    repository = repository
+                )
                 backupFile.copyTo(targetZip, overwrite = true)
                 onComplete(true)
             } catch (e: Exception) {

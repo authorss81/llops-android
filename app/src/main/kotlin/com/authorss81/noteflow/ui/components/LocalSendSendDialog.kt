@@ -139,7 +139,17 @@ fun LocalSendSendDialog(
                 ImportExportService.exportNoteToHtml(context, it, viewModel.repository)
             }
             LocalSendPayload.VAULT_BACKUP ->
-                ImportExportService.exportBackup(context, viewModel.repository.encryptionKey, backupPassword = null)
+                // R2-B1D-03 (phase-137): exportBackup is the single disciplined
+                // DB-file producer — passing the repository makes it checkpoint
+                // the WAL + re-stamp the HMAC + verified-copy the DB snapshot
+                // BEFORE building the archive, exactly like the HomeScreen/WebDAV
+                // producers (previously this path shipped a WAL-stale archive).
+                ImportExportService.exportBackup(
+                    context,
+                    viewModel.repository.encryptionKey,
+                    backupPassword = null,
+                    repository = viewModel.repository
+                )
             LocalSendPayload.OBSIDIAN_ZIP ->
                 ImportExportService.exportObsidianVaultZip(context, "SmoothNotes_Vault", pages, viewModel.repository)
             LocalSendPayload.HTML_ZIP ->

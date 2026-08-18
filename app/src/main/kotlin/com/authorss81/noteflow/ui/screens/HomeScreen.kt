@@ -607,11 +607,14 @@ fun HomeScreen(
                                     // silently.
                                     vaultScope.launch {
                                         try {
-                                            viewModel.repository.checkpointWal()
-                                            withContext(Dispatchers.IO) {
-                                                viewModel.repository.stampDatabaseChecksum(context)
-                                            }
-                                            val cacheFile = ImportExportService.exportBackup(context, viewModel.repository.encryptionKey)
+                                            // R2-B1D-05/03 (phase-137): the checkpoint
+                                            // + HMAC re-stamp + verified DB snapshot now
+                                            // live INSIDE exportBackup (single producer).
+                                            val cacheFile = ImportExportService.exportBackup(
+                                                context,
+                                                viewModel.repository.encryptionKey,
+                                                repository = viewModel.repository
+                                            )
                                             exporter.export(
                                                 ExportDestinationPolicy.ExportKind.ENCRYPTED_BACKUP,
                                                 cacheFile
@@ -1410,14 +1413,14 @@ fun HomeScreen(
                                                 }
                                                 return@launch
                                             }
-                                            viewModel.repository.checkpointWal()
-                                            withContext(Dispatchers.IO) {
-                                                viewModel.repository.stampDatabaseChecksum(context)
-                                            }
+                                            // R2-B1D-05/03 (phase-137): the checkpoint
+                                            // + HMAC re-stamp + verified DB snapshot now
+                                            // live INSIDE exportBackup (single producer).
                                             val cacheFile = ImportExportService.exportBackup(
                                                 context,
                                                 viewModel.repository.encryptionKey,
-                                                backupPasswordInput
+                                                backupPasswordInput,
+                                                repository = viewModel.repository
                                             )
                                             showBackupPasswordDialog = false
                                             exporter.export(

@@ -1126,6 +1126,23 @@
     Peak heap is one 64 KiB chunk + one `Cipher.update` output + the tag, never the archive.
     `EncryptionService` GCM constants flipped `private`→`internal` for the policy.
     Tests: `B2Dos07BackupExportStreamingTest` (8) — full suite green + `assembleDebug` green.
+  - **Implemented in phase-137** (R2-B1D-05 + R2-B1D-03, see `workspace/phase-137/REPORT.md`):
+    every DB-file copy producer now runs checkpoint-then-copy. `exportBackup` is the SINGLE
+    disciplined producer — it runs `repository.checkpointWal()` (FULL) + the HMAC re-stamp
+    BEFORE copying (`ImportExportService.kt:1335-1336`), then copies the main file through the
+    new pure-JVM `services/VaultSnapshotCopyPolicy.kt` verified snapshot
+    (`checkpointThenCopy` `:1337`, `VaultSnapshotCopyPolicy.kt:99-125`): SHA-256 of the source
+    before + after the copy AND of the staging — accepted only when all three match, retried
+    up to `MAX_VERIFY_ATTEMPTS=3` if a concurrent WAL auto-checkpoint mutates the source
+    mid-copy, FAILS CLOSED (loud `IllegalStateException`, torn staging deleted) if the source
+    never stabilizes. The DB zip entry reads the verified `stagedDb` (`:1346`), never the raw
+    live file. `exportBackup` REQUIRES the `NoteRepository`; all four producers pass it:
+    HomeScreen plain + password backups (`HomeScreen.kt:613-617`, `:1419-1424`), WebDAV
+    (`NoteflowViewModel.exportEncryptedBackupToZip`), and LocalSend `VAULT_BACKUP`
+    (`LocalSendSendDialog.kt:147-152`) — which previously called `exportBackup` with NO
+    checkpoint and shipped WAL-stale archives (R2-B1D-03). The now-redundant explicit
+    checkpoint/re-stamp were removed from HomeScreen/WebDAV (single owner, no double HMAC).
+    Tests: `Phase137BackupCopyConsistencyTest` (7).
 - **Update / self-install**: `services/UpdateService.kt:128` (`checkForDownloadedUpdates` — scans ONLY app-private
   `filesDir`/`cacheDir` through `UpdateTrustPolicy.isScanSafeDirectory`; public Downloads/external dirs are NEVER
   scanned, B1-PLAT-7), `:60` (`inspectApkFile` — classifies via the policy, trust-neutral copy), `:175`
