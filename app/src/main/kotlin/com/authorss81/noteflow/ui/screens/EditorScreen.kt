@@ -40,6 +40,7 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -84,6 +85,7 @@ import com.authorss81.noteflow.services.SymmetryMode
 import com.authorss81.noteflow.services.VoiceNoteManager
 import com.authorss81.noteflow.ui.components.AnnotationCanvas
 import com.authorss81.noteflow.ui.components.rememberSaFExporter
+import com.authorss81.noteflow.ui.components.SaFExportResult
 import com.authorss81.noteflow.ui.components.BacklinksInspectorBottomSheet
 import com.authorss81.noteflow.ui.components.OcrResultDialog
 import com.authorss81.noteflow.ui.components.PromptNameDialog
@@ -200,12 +202,16 @@ fun EditorScreen(
     // R2-B1P-03 (phase-141): the Export Engine share launches through an explicit
     // chooser and the plaintext staging file is deleted once the chooser dismisses
     // (share delivered OR dismissed) — transfer-then-delete, as in SaFExporter.
-    var pendingExportFile by remember { mutableStateOf<File?>(null) }
+    // rememberSaveable so a rotation/recreation while the chooser is open keeps the
+    // pending file reference alive and the launcher callback still deletes it
+    // (phase-141 review fix): the FILE isn't directly Bundle-saveable, so we keep
+    // the absolute path string and rebuild the File on the callback side.
+    var pendingExportFilePath by rememberSaveable { mutableStateOf<String?>(null) }
     val exportShareLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) {
-        pendingExportFile?.let { exportFile -> runCatching { exportFile.delete() } }
-        pendingExportFile = null
+        pendingExportFilePath?.let { path -> runCatching { File(path).delete() } }
+        pendingExportFilePath = null
     }
     // Phase 12: OCR is offered on attached photos only while an OCR plugin is
     // actually enabled and device-available (never a dead button).
@@ -1326,9 +1332,11 @@ fun EditorScreen(
                                         exporter.export(
                                             ExportDestinationPolicy.ExportKind.PAGE_PNG,
                                             file
-                                        ) { ok ->
-                                            if (!ok) {
-                                                viewModel.showSnackbar("Export cancelled")
+                                        ) { result ->
+                                            when (result) {
+                                                SaFExportResult.SAVED -> Unit
+                                                SaFExportResult.CANCELLED -> viewModel.showSnackbar("Export cancelled")
+                                                SaFExportResult.FAILED -> viewModel.showSnackbar("Export to the chosen destination failed")
                                             }
                                         }
                                     } else {
@@ -1361,9 +1369,11 @@ fun EditorScreen(
                                         exporter.export(
                                             ExportDestinationPolicy.ExportKind.PAGE_WEBP,
                                             file
-                                        ) { ok ->
-                                            if (!ok) {
-                                                viewModel.showSnackbar("Export cancelled")
+                                        ) { result ->
+                                            when (result) {
+                                                SaFExportResult.SAVED -> Unit
+                                                SaFExportResult.CANCELLED -> viewModel.showSnackbar("Export cancelled")
+                                                SaFExportResult.FAILED -> viewModel.showSnackbar("Export to the chosen destination failed")
                                             }
                                         }
                                     } else {
@@ -1395,9 +1405,11 @@ fun EditorScreen(
                                         exporter.export(
                                             ExportDestinationPolicy.ExportKind.PAGE_PDF,
                                             file
-                                        ) { ok ->
-                                            if (!ok) {
-                                                viewModel.showSnackbar("Export cancelled")
+                                        ) { result ->
+                                            when (result) {
+                                                SaFExportResult.SAVED -> Unit
+                                                SaFExportResult.CANCELLED -> viewModel.showSnackbar("Export cancelled")
+                                                SaFExportResult.FAILED -> viewModel.showSnackbar("Export to the chosen destination failed")
                                             }
                                         }
                                     } else {
@@ -1429,9 +1441,11 @@ fun EditorScreen(
                                         exporter.export(
                                             ExportDestinationPolicy.ExportKind.DOCUMENT_PDF,
                                             file
-                                        ) { ok ->
-                                            if (!ok) {
-                                                viewModel.showSnackbar("Export cancelled")
+                                        ) { result ->
+                                            when (result) {
+                                                SaFExportResult.SAVED -> Unit
+                                                SaFExportResult.CANCELLED -> viewModel.showSnackbar("Export cancelled")
+                                                SaFExportResult.FAILED -> viewModel.showSnackbar("Export to the chosen destination failed")
                                             }
                                         }
                                     } else {
@@ -1451,9 +1465,11 @@ fun EditorScreen(
                                         exporter.export(
                                             ExportDestinationPolicy.ExportKind.NOTE_HTML,
                                             file
-                                        ) { ok ->
-                                            if (!ok) {
-                                                viewModel.showSnackbar("Export cancelled")
+                                        ) { result ->
+                                            when (result) {
+                                                SaFExportResult.SAVED -> Unit
+                                                SaFExportResult.CANCELLED -> viewModel.showSnackbar("Export cancelled")
+                                                SaFExportResult.FAILED -> viewModel.showSnackbar("Export to the chosen destination failed")
                                             }
                                         }
                                     } else {
@@ -1484,18 +1500,18 @@ fun EditorScreen(
                                                     // R2-B1P-03 (phase-141): launch the
                                                     // chooser (target always user-chosen) and
                                                     // delete the staging file when it dismisses.
-                                                    pendingExportFile = outcome.file
-                                                    val chooser = com.authorss81.noteflow.plugins.export.ExportShareHelper.chooserForExport(
-                                                        context, outcome.file, outcome.format.mimeType
-                                                    )
+                                                    pendingExportFilePath = outcome.file.absolutePath
                                                     try {
+                                                        val chooser = com.authorss81.noteflow.plugins.export.ExportShareHelper.chooserForExport(
+                                                            context, outcome.file, outcome.format.mimeType
+                                                        )
                                                         exportShareLauncher.launch(chooser)
                                                     } catch (e: Exception) {
-                                                        // No activity can handle the share — never
-                                                        // leave the plaintext export in the
-                                                        // grantable cache root.
+                                                        // No activity can handle the share (or the
+                                                        // chooser build failed) — never leave the
+                                                        // plaintext export in the grantable cache root.
                                                         runCatching { outcome.file.delete() }
-                                                        pendingExportFile = null
+                                                        pendingExportFilePath = null
                                                         viewModel.showSnackbar(
                                                             "No app on this device can receive the export",
                                                             isLong = true
@@ -1525,22 +1541,24 @@ fun EditorScreen(
                                             exporter.export(
                                                 ExportDestinationPolicy.ExportKind.LAYERED_PSD,
                                                 outcome.file
-                                            ) { ok ->
-                                                if (!ok) {
-                                                    viewModel.showSnackbar("Export cancelled")
-                                                } else if (outcome.wasLayerCapped) {
-                                                    // B2-DOS-06 (phase-82): when the layer budget
-                                                    // dropped layers, tell the user once — but only
-                                                    // AFTER the export completed, so a cancelled
-                                                    // picker can never hide the omission info behind
-                                                    // "Export cancelled". Non-alarming, never silent.
-                                                    viewModel.showSnackbar(
-                                                        PsdExportPolicy.noticeMessage(
-                                                            outcome.exportedLayerCount,
-                                                            outcome.omittedLayerCount
-                                                        ),
-                                                        isLong = true
-                                                    )
+                                            ) { result ->
+                                                when (result) {
+                                                    SaFExportResult.SAVED -> if (outcome.wasLayerCapped) {
+                                                        // B2-DOS-06 (phase-82): when the layer budget
+                                                        // dropped layers, tell the user once — but only
+                                                        // AFTER the export completed, so a cancelled
+                                                        // picker can never hide the omission info behind
+                                                        // "Export cancelled". Non-alarming, never silent.
+                                                        viewModel.showSnackbar(
+                                                            PsdExportPolicy.noticeMessage(
+                                                                outcome.exportedLayerCount,
+                                                                outcome.omittedLayerCount
+                                                            ),
+                                                            isLong = true
+                                                        )
+                                                    }
+                                                    SaFExportResult.CANCELLED -> viewModel.showSnackbar("Export cancelled")
+                                                    SaFExportResult.FAILED -> viewModel.showSnackbar("Export to the chosen destination failed")
                                                 }
                                             }
                                         } else {
@@ -1560,9 +1578,11 @@ fun EditorScreen(
                                         exporter.export(
                                             ExportDestinationPolicy.ExportKind.VAULT_ZIP,
                                             zipFile
-                                        ) { ok ->
-                                            if (!ok) {
-                                                viewModel.showSnackbar("Export cancelled")
+                                        ) { result ->
+                                            when (result) {
+                                                SaFExportResult.SAVED -> Unit
+                                                SaFExportResult.CANCELLED -> viewModel.showSnackbar("Export cancelled")
+                                                SaFExportResult.FAILED -> viewModel.showSnackbar("Export to the chosen destination failed")
                                             }
                                         }
                                     } else {

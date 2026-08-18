@@ -661,11 +661,11 @@ fun HomeScreen(
                                             exporter.export(
                                                 ExportDestinationPolicy.ExportKind.ENCRYPTED_BACKUP,
                                                 cacheFile
-                                            ) { ok ->
-                                                if (ok) {
-                                                    viewModel.showSnackbar("Backup created and saved.")
-                                                } else {
-                                                    viewModel.showSnackbar("Backup cancelled")
+                                            ) { result ->
+                                                when (result) {
+                                                    SaFExportResult.SAVED -> viewModel.showSnackbar("Backup created and saved.")
+                                                    SaFExportResult.CANCELLED -> viewModel.showSnackbar("Backup cancelled")
+                                                    SaFExportResult.FAILED -> viewModel.showSnackbar("Backup could not be written to the chosen destination")
                                                 }
                                             }
                                         } catch (e: Exception) {
@@ -687,11 +687,11 @@ fun HomeScreen(
                                         exporter.export(
                                             ExportDestinationPolicy.ExportKind.OBSIDIAN_VAULT,
                                             zipFile
-                                        ) { ok ->
-                                            if (ok) {
-                                                viewModel.showSnackbar("Obsidian vault exported.")
-                                            } else {
-                                                viewModel.showSnackbar("Obsidian vault export cancelled")
+                                        ) { result ->
+                                            when (result) {
+                                                SaFExportResult.SAVED -> viewModel.showSnackbar("Obsidian vault exported.")
+                                                SaFExportResult.CANCELLED -> viewModel.showSnackbar("Obsidian vault export cancelled")
+                                                SaFExportResult.FAILED -> viewModel.showSnackbar("Obsidian vault export failed to write")
                                             }
                                         }
                                     } else {
@@ -709,11 +709,11 @@ fun HomeScreen(
                                         exporter.export(
                                             ExportDestinationPolicy.ExportKind.HTML_SITE,
                                             zipFile
-                                        ) { ok ->
-                                            if (ok) {
-                                                viewModel.showSnackbar("HTML site exported.")
-                                            } else {
-                                                viewModel.showSnackbar("HTML site export cancelled")
+                                        ) { result ->
+                                            when (result) {
+                                                SaFExportResult.SAVED -> viewModel.showSnackbar("HTML site exported.")
+                                                SaFExportResult.CANCELLED -> viewModel.showSnackbar("HTML site export cancelled")
+                                                SaFExportResult.FAILED -> viewModel.showSnackbar("HTML site export failed to write")
                                             }
                                         }
                                     } else {
@@ -845,9 +845,11 @@ fun HomeScreen(
                                         exporter.export(
                                             ExportDestinationPolicy.ExportKind.VAULT_ZIP,
                                             zipFile
-                                        ) { ok ->
-                                            if (!ok) {
-                                                viewModel.showSnackbar("Vault export cancelled")
+                                        ) { result ->
+                                            when (result) {
+                                                SaFExportResult.SAVED -> Unit
+                                                SaFExportResult.CANCELLED -> viewModel.showSnackbar("Vault export cancelled")
+                                                SaFExportResult.FAILED -> viewModel.showSnackbar("Vault export failed to write")
                                             }
                                         }
                                     } else {
@@ -890,9 +892,11 @@ fun HomeScreen(
                                         exporter.export(
                                             ExportDestinationPolicy.ExportKind.VAULT_ZIP,
                                             zipFile
-                                        ) { ok ->
-                                            if (!ok) {
-                                                viewModel.showSnackbar("Vault export cancelled")
+                                        ) { result ->
+                                            when (result) {
+                                                SaFExportResult.SAVED -> Unit
+                                                SaFExportResult.CANCELLED -> viewModel.showSnackbar("Vault export cancelled")
+                                                SaFExportResult.FAILED -> viewModel.showSnackbar("Vault export failed to write")
                                             }
                                         }
                                     } else {
@@ -1480,11 +1484,11 @@ fun HomeScreen(
                                             exporter.export(
                                                 ExportDestinationPolicy.ExportKind.ENCRYPTED_BACKUP,
                                                 cacheFile
-                                            ) { ok ->
-                                                if (ok) {
-                                                    viewModel.showSnackbar("Backup created and saved.")
-                                                } else {
-                                                    viewModel.showSnackbar("Backup cancelled")
+                                            ) { result ->
+                                                when (result) {
+                                                    SaFExportResult.SAVED -> viewModel.showSnackbar("Backup created and saved.")
+                                                    SaFExportResult.CANCELLED -> viewModel.showSnackbar("Backup cancelled")
+                                                    SaFExportResult.FAILED -> viewModel.showSnackbar("Backup could not be written to the chosen destination")
                                                 }
                                             }
                                         } catch (e: Exception) {

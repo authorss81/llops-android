@@ -107,7 +107,7 @@ class Phase141ExportHygieneTest {
         )
         assertTrue(
             "dismissal must delete the staging file (transfer-then-delete)",
-            editor.contains("pendingExportFile?.let { exportFile -> runCatching { exportFile.delete() } }")
+            editor.contains("pendingExportFilePath?.let { path -> runCatching { File(path).delete() } }")
         )
         assertFalse(
             "the raw intent must never be started directly (chooser required)",

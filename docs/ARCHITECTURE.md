@@ -1099,7 +1099,14 @@
     `EditorScreen.kt` launches it via an ActivityResult launcher that deletes the plaintext
     staging file on dismiss / deliver / no-receiver. Share subject is the generic
     `SHARE_SUBJECT = "Exported note"` (never the note title / filename-derived subject).
-    Tests: `ExportStagingPolicyTest` (7) + `Phase141ExportHygieneTest` (8) — 1978 total green.
+    Tests: `ExportStagingPolicyTest` (8) + `Phase141ExportHygieneTest` (7) — 1978 total green. **Review
+    fixes (2026-08-18):** the two new in-flight states survive rotation/recreation
+    (`SaFExporter.pendingRequest`/`pendingWarningKind` and `EditorScreen.pendingExportFilePath`
+    are `rememberSaveable`, path-backed for the share file), so a recreation mid-picker/chooser
+    still resolves staging cleanup; the `(Boolean) -> Unit` export callback became the 3-way
+    `SaFExportResult` (SAVED/CANCELLED/FAILED) so a copy-failure is no longer shown as a cancel;
+    `chooserForExport` moved inside the launch try so a chooser-build failure also deletes the
+    staging file.
   - **Implemented in phase-81** (B2-DOS-05, see `workspace/phase-81/REPORT.md`): attachment/import
     ingestion is bounded DURING the read. New pure-JVM `services/AttachmentIngestPolicy.kt` is the
     single decision table (`MAX_ATTACHMENT_BYTES` = 25 MB, `READ_BUFFER_BYTES` = 64 KiB):

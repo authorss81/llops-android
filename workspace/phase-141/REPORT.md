@@ -135,11 +135,11 @@ title was echoed into every share target and Android's share-history/notificatio
 
 New tests (all pure-JVM / comment-stripped source pins against real files):
 
-- `ExportStagingPolicyTest` (7) — the decision table through the exact fake-ActivityResult
+- `ExportStagingPolicyTest` (8) — the decision table through the exact fake-ActivityResult
   seam `SaFExporter` wires: delivered-ok → DELETE, delivered-copy-failed → KEEP,
   RESULT_OK+uri+no-copy → KEEP, cancel → DELETE (incl. stray-uri cancel), no-data →
   DELETE, plus a full cartesian sweep matching the documented every-outcome contract.
-- `Phase141ExportHygieneTest` (8) — source pins: SaFExporter routes every outcome through
+- `Phase141ExportHygieneTest` (7) — source pins: SaFExporter routes every outcome through
   `ExportStagingPolicy.cleanupAfterSaF(` and deletes only on a DELETE verdict
   (`runCatching { file.delete() }` under `== ExportStagingPolicy.Cleanup.DELETE`); the
   consent-dialog dismiss AND Cancel delete the staged plaintext file;
@@ -149,6 +149,20 @@ New tests (all pure-JVM / comment-stripped source pins against real files):
   `EXTRA_SUBJECT, file.name` is banned repo-wide (the constant is the ONLY EXTRA_SUBJECT
   writer). Existing `B1Plat03ExportConsentTest` (SaFExporter `file.delete()` pin) and
   `ExportPayloadAssemblerTest` still green.
+
+**Review fixes (2026-08-18, see git log "phase-141 review fixes"):**
+- Rotation/process-death retention closed on BOTH new flows: `SaFExporter`'s
+  `pendingRequest`/`pendingWarningKind` and `EditorScreen`'s `pendingExportFilePath` are
+  `rememberSaveable` (path-backed) so a recreation mid-picker/mid-chooser still resolves the
+  pending staging cleanup; the launcher callback deletes the share file after the recreated
+  composition restores it, and the SAF picker keeps its every-outcome cleanup contract.
+- The `(Boolean) -> Unit` export callback is replaced by the 3-way `SaFExportResult`
+  (SAVED / CANCELLED / FAILED) so a copy-failure on a confirmed destination is no longer
+  reported to the user as a cancel ("Export to the chosen destination failed" etc.);
+  PSD layer-capped notice fires only on SAVED.
+- `chooserForExport(...)` moved inside the try so a chooser-build failure also deletes the
+  staging file (it previously could leak a fresh export on a FileProvider throw).
+- REPORT/docs test-count typo fixed: `ExportStagingPolicyTest` (8) + `Phase141ExportHygieneTest` (7).
 
 Commands (Linux/CI, system `gradle`, no wrapper):
 
@@ -183,12 +197,18 @@ the release build fails closed when unset (B1-PLAT-1, `docs/RELEASE.md`).
 
 ## Residual notes (documented, NOT fixed here)
 
-- **Delete-on-dismiss race with lazy readers:** the launcher callback deletes the export
-  right when the chooser dismisses. Receiving apps normally read the content URI during
-  their own creation (fine), but a target that reads the URI lazily well after launch could
-  miss the file. This is the transfer-then-delete trade-off the finding explicitly requests
-  ("delete the export file once the share is delivered/dismissed"); the note export is a
-  single small file, and the same pattern is already accepted in `SaFExporter`.
+- **Delete-on-dismiss race with the target's read (unavoidable with transfer-then-delete on
+  a URI grant):** the launcher callback deletes the export as soon as the chooser dismisses
+  (for `createChooser` + `StartActivityForResult` this is typically right after the user
+  picks a target, usually before the target app cold-starts and reads the content URI).
+  `SaFExporter`'s delete is NOT equivalent: there the bytes are confirmed written to the
+  user-picked destination *before* `file.delete()`. On this share path there is NO delivery
+  confirmation — we delete on chooser-return and hope the target already read. Slow-cold-start
+  or lazy-reading targets can lose the file mid-read. This is the transfer-then-delete
+  trade-off the finding explicitly requests ("delete the export file once the share is
+  delivered/dismissed"), the note export is a single small file, and any alternative
+  (time-of-return vs actual-read coordination) is not achievable with a one-shot grant.
+  Kept and documented accurately.
 - **File name still derives from the title** (`ExportPayloadAssembler.kt:95`) — that is the
   export's content filename by design, shown to the user in the chooser; the finding's
   subject/metadata echo was the *share subject*, which is now generic. The file NAME in a
