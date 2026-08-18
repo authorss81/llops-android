@@ -19,7 +19,7 @@ Row(
 ) {
     Icon(Icons.Outlined.Search, ...)                     // 24dp
     Text("Command Palette", titleMedium, weight(1f))     // weighted → squeezed
-    Text("⌘ ↑/↓ · Enter · two-finger swipe down to open") // UNCONSTRAINED, 49 chars
+    Text("⌘ ↑/↓ · Enter · two-finger swipe down to open") // UNCONSTRAINED, 45 chars
     IconButton(onClick = onClose) { Icon(Close) }        // 48dp
 }
 ```
@@ -27,7 +27,7 @@ Row(
 **Mechanics:** the Row is only as wide as the palette surface (viewport − 24dp
 horizontal padding on the dialog + 32dp inner padding). The shortcut hint Text
 had **no `weight`, no `maxLines`, no `overflow`** — Compose gives it its full
-natural width (~49 chars of `labelSmall`). Only after the hint + search icon +
+natural width (~45 chars of `labelSmall`). Only after the hint + search icon +
 close button (48dp, M3 minimum touch target) are laid out does the remaining
 space go to the title's `Modifier.weight(1f)`. On a ~360dp phone that leaves a
 few dozen dp for "Command Palette" at `titleMedium` — the title wraps/condenses
@@ -66,28 +66,28 @@ Row(verticalAlignment = CenterVertically, spacedBy(8.dp)) {
 - Layout fix: `CommandPaletteOverlay.kt:188-204` (nested `Column`, both `Text`s
   `maxLines = 1` + `TextOverflow.Ellipsis`).
 - Header strings moved to single source of truth:
-  `services/CommandPaletteHeaderPolicy.kt:25-41` (`TITLE`, `SHORTCUT_HINT`,
-  `ELLIPSIS`, `DEFAULT_HINT_MAX_CHARS`, `shortcutHint`, `truncate`), consumed at
-  `CommandPaletteOverlay.kt:192,198`.
+  `services/CommandPaletteHeaderPolicy.kt` (`TITLE`, `SHORTCUT_HINT`), consumed
+  at `CommandPaletteOverlay.kt:192,198`.
 
-## Extracted pure-JVM helper + test
+## Extracted pure-JVM copy holder + test
 
-Layout itself is not JVM-testable, so the decision-table part was extracted to
+Layout itself is not JVM-testable, so the header copy was extracted to
 `app/src/main/kotlin/com/authorss81/noteflow/services/CommandPaletteHeaderPolicy.kt`
-(pure JVM, API-26+ floor, no new deps):
+(pure JVM, API-26+ floor, no new deps) so the layout can never drift from the
+text it renders:
 
-- `TITLE` / `SHORTCUT_HINT` / `ELLIPSIS` constants — the copy the composable
-  renders, so it can never drift.
-- `shortcutHint(maxChars)` — the hint as it SHOULD render under a character
-  budget (full hint if it fits, otherwise tail-for-ellipsis truncation).
-- `truncate(text, maxChars)` — the truncation decision table (fail-closed:
-  a budget below the ellipsis length yields the bare `…`, never a raw
-  sub-ellipsis fragment).
+- `TITLE` / `SHORTCUT_HINT` constants — the copy the composable renders.
+- Truncation is deliberately left to the composable: both strings render on
+  their own single line with `maxLines = 1` + `TextOverflow.Ellipsis`, so
+  Compose ellipsizes by PIXEL width (font-scale aware). **Phase 132 review
+  fix:** an initial `shortcutHint`/`truncate` character-budget decision table
+  was REMOVED — it was dead production code (the composable never called it;
+  only its test did), and a char budget can never match the pixel-based
+  rendered output anyway.
 
 Test: `app/src/test/java/com/authorss81/noteflow/Phase132CommandPaletteHeaderTest.kt`
-(10 tests): constants pin, hint-longer-than-default-budget (proving the pre-fix
-squeeze premise), `shortcutHint` fit/truncate/never-over-budget, strict-prefix +
-ellipsis, `truncate` verbatim/overflow/boundary/unicode-budget/degenerate.
+(3 tests): header-copy pin, hint-longer-than-a-narrow-line premise, and title
+vs hint distinctness.
 
 ## Visual verification (layout description — no device on CI runner)
 
@@ -106,13 +106,14 @@ ellipsis, `truncate` verbatim/overflow/boundary/unicode-budget/degenerate.
 
 ## Verification
 
-- `gradle testDebugUnitTest` → **BUILD SUCCESSFUL**: app 1813 tests +
-  plugins:llm 50 tests = **1863 total, 0 failures / 0 errors / 0 skipped**
-  (plugin-sdk NO-SOURCE).
+- `gradle testDebugUnitTest` → **BUILD SUCCESSFUL**: app 1806 tests +
+  plugins:llm 50 tests = **1856 total, 0 failures / 0 errors / 0 skipped**
+  (down from the pre-review 1863 — the 7 dead-decision-table tests removed;
+  plugin-sdk NO-SOURCE).
 - `gradle :app:assembleDebug` → green (57/57 tasks). A first plain invocation
   hit the documented transient packaging flake; the forced `--rerun-tasks` run
   executed 57/57 and passed. Debug APK
-  `app/build/outputs/apk/debug/app-debug.apk` SHA-256 `6c493eaa…`.
+  `app/build/outputs/apk/debug/app-debug.apk` SHA-256 `da287f67…`.
 
 ## Constraints honored
 
