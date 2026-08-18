@@ -1087,6 +1087,19 @@
     copies in `ImportExportService.kt` + the PSD copy are removed; HomeScreen (5 flows) +
     EditorScreen (7 flows) route through the exporter; LocalSend's cacheDir payload path unchanged.
     Tests: `ExportDestinationPolicyTest` (11) + `B1Plat03ExportConsentTest` (5) — 1196 total.
+  - **Implemented in phase-141** (R2-B1P-02/03 + R2-b2b3-LOG-04, see
+    `workspace/phase-141/REPORT.md`): export/share hygiene. `SaFExporter.kt` now routes EVERY
+    picker outcome (ok / ok-but-copy-failed / cancel / no-data) through the pure-JVM
+    `services/ExportStagingPolicy.kt` decision table (`cleanupAfterSaF`): delivered → DELETE,
+    copy-FAILED → KEEP (a dropped write never destroys the fresh export), cancel/no-data →
+    DELETE (no decrypted archive lingers in the cache dirs); the plaintext-warning consent
+    dialog's dismiss + Cancel also delete the staged file. `plugins/export/ExportShareHelper`
+    (`ExportEnginePlugin.kt`) is now `chooserForExport` — the Export Engine `ACTION_SEND` is
+    ALWAYS wrapped in `Intent.createChooser(...)` (target always user-chosen) and
+    `EditorScreen.kt` launches it via an ActivityResult launcher that deletes the plaintext
+    staging file on dismiss / deliver / no-receiver. Share subject is the generic
+    `SHARE_SUBJECT = "Exported note"` (never the note title / filename-derived subject).
+    Tests: `ExportStagingPolicyTest` (7) + `Phase141ExportHygieneTest` (8) — 1978 total green.
   - **Implemented in phase-81** (B2-DOS-05, see `workspace/phase-81/REPORT.md`): attachment/import
     ingestion is bounded DURING the read. New pure-JVM `services/AttachmentIngestPolicy.kt` is the
     single decision table (`MAX_ATTACHMENT_BYTES` = 25 MB, `READ_BUFFER_BYTES` = 64 KiB):

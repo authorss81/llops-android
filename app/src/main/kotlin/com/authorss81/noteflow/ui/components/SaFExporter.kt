@@ -17,6 +17,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import com.authorss81.noteflow.services.ExportDestinationPolicy
+import com.authorss81.noteflow.services.ExportStagingPolicy
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -35,9 +36,12 @@ import java.io.File
  * the consent).
  *
  * On a successful write the generated cacheDir copy is deleted (transfer-then-delete
- * guidance from the finding). On cancel/failure [onDone] is called with `false` so
- * the caller can show a clean snackbar. API floor: `ACTION_CREATE_DOCUMENT` exists
- * since API 19, well below the app's minSdk 26 — no fallback needed.
+ * guidance from the finding); a cancelled/dismissed picker deletes it too (R2-B1P-02,
+ * phase-141) so a decrypted export never lingers in cacheDir — but a failed write to a
+ * confirmed destination KEEPS the file so the user can retry. [onDone] is called with
+ * `true` iff the destination write succeeded, so the caller can show a snackbar. API
+ * floor: `ACTION_CREATE_DOCUMENT` exists since API 19, well below the app's minSdk 26 —
+ * no fallback needed.
  */
 class SaFExporter internal constructor(
     private val doExport: (ExportDestinationPolicy.ExportKind, File, (Boolean) -> Unit) -> Unit
@@ -71,29 +75,36 @@ fun rememberSaFExporter(scope: CoroutineScope = rememberCoroutineScope()): SaFEx
             done?.invoke(false)
             return@rememberLauncherForActivityResult
         }
-        val (kind, file) = request
-        if (result.resultCode == Activity.RESULT_OK) {
-            val uri = result.data?.data
-            if (uri != null) {
-                scope.launch {
-                    val ok = withContext(Dispatchers.IO) {
+        val file = request.second
+        scope.launch {
+            // The picker may be RESULT_OK (user confirmed a destination) or
+            // cancelled/dismissed — the staging copy is cleaned up on EVERY
+            // outcome via ExportStagingPolicy (R2-B1P-02, phase-141).
+            var ok = false
+            if (result.resultCode == Activity.RESULT_OK) {
+                val uri = result.data?.data
+                if (uri != null) {
+                    ok = withContext(Dispatchers.IO) {
                         runCatching {
                             context.contentResolver.openOutputStream(uri)?.use { out ->
                                 file.inputStream().use { it.copyTo(out) }
                             } != null
                         }.getOrDefault(false)
                     }
-                    // Transfer-then-delete: the bytes now live at the user-picked
-                    // destination; drop the app-private staging copy.
-                    runCatching { file.delete() }
-                    done?.invoke(ok)
                 }
-            } else {
-                done?.invoke(false)
             }
-        } else {
-            // User cancelled the picker — nothing was written.
-            done?.invoke(false)
+            if (ExportStagingPolicy.cleanupAfterSaF(
+                    resultCode = result.resultCode,
+                    destinationUriPresent = result.data?.data != null,
+                    copySucceeded = if (result.resultCode == Activity.RESULT_OK && result.data?.data != null) ok else null
+                ) == ExportStagingPolicy.Cleanup.DELETE
+            ) {
+                // Transfer-then-delete: drop the app-private staging copy once the
+                // bytes are at the user-picked destination — and on cancel/no-data
+                // so a decrypted export can never linger in the cache dirs.
+                runCatching { file.delete() }
+            }
+            done?.invoke(ok)
         }
     }
 
@@ -102,6 +113,10 @@ fun rememberSaFExporter(scope: CoroutineScope = rememberCoroutineScope()): SaFEx
         AlertDialog(
             onDismissRequest = {
                 pendingWarningKind = null
+                // R2-B1P-02 (phase-141): dismissing the plaintext-warning dialog is a
+                // cancel outcome — drop the staged (decrypted) export too.
+                pendingRequest?.second?.let { runCatching { it.delete() } }
+                pendingRequest = null
                 pendingDone?.invoke(false)
                 pendingDone = null
             },
@@ -132,6 +147,10 @@ fun rememberSaFExporter(scope: CoroutineScope = rememberCoroutineScope()): SaFEx
             dismissButton = {
                 TextButton(onClick = {
                     pendingWarningKind = null
+                    // R2-B1P-02 (phase-141): explicit Cancel of the consent dialog is a
+                    // cancel outcome — drop the staged (decrypted) export too.
+                    pendingRequest?.second?.let { runCatching { it.delete() } }
+                    pendingRequest = null
                     pendingDone?.invoke(false)
                     pendingDone = null
                 }) {

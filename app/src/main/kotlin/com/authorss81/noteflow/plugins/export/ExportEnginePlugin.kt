@@ -50,23 +50,41 @@ internal object ExportFileWriter {
 }
 
 /**
- * Platform-only helper that builds an ACTION_SEND intent for an exported file,
- * exposing it through the app's FileProvider so any app can receive it. The
- * caller keeps hold of the read permission grant for as long as the intent
- * lives.
+ * Platform-only helper that builds the ACTION_SEND share flow for an exported
+ * file, exposing it through the app's FileProvider so any app can receive it.
+ *
+ * R2-B1P-03 (phase-141): the intent is ALWAYS wrapped in an explicit chooser, so
+ * the receiving app is always user-chosen (a device default handler can never
+ * auto-receive decrypted note bytes with no per-send confirmation), and
+ * R2-b2b3-LOG-04 (phase-141): the subject is a generic label — the note title /
+ * filename-derived metadata is never echoed into share targets or Android's
+ * share history. Callers MUST delete `file` once the chooser dismisses
+ * (transfer-then-delete, as in SaFExporter).
  */
 object ExportShareHelper {
 
-    fun shareFile(context: Context, file: File, mime: String): Intent {
+    /** R2-b2b3-LOG-04: the generic share subject — never the note title. */
+    const val SHARE_SUBJECT = "Exported note"
+
+    /** The chooser label shown above the target list. */
+    const val CHOOSER_TITLE = "Share exported note"
+
+    fun chooserForExport(context: Context, file: File, mime: String): Intent {
         val uri = FileProvider.getUriForFile(
             context,
             "${context.packageName}.fileprovider",
             file
         )
-        return Intent(Intent.ACTION_SEND).apply {
+        val send = Intent(Intent.ACTION_SEND).apply {
             type = mime
             putExtra(Intent.EXTRA_STREAM, uri)
-            putExtra(Intent.EXTRA_SUBJECT, file.name)
+            putExtra(Intent.EXTRA_SUBJECT, SHARE_SUBJECT)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        // The chooser propagates the inner intent's grant flags to the chosen
+        // target; the flag is mirrored on the chooser itself as a defensive
+        // measure for pickers that resolve the ACTION_CHOOSER wrapper.
+        return Intent.createChooser(send, CHOOSER_TITLE).apply {
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
     }

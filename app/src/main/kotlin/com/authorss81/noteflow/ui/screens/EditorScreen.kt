@@ -197,6 +197,16 @@ fun EditorScreen(
     // B1-PLAT-3 (phase-59): every export goes to a user-picked SAF destination —
     // never straight into public Downloads.
     val exporter = rememberSaFExporter(scope)
+    // R2-B1P-03 (phase-141): the Export Engine share launches through an explicit
+    // chooser and the plaintext staging file is deleted once the chooser dismisses
+    // (share delivered OR dismissed) — transfer-then-delete, as in SaFExporter.
+    var pendingExportFile by remember { mutableStateOf<File?>(null) }
+    val exportShareLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) {
+        pendingExportFile?.let { exportFile -> runCatching { exportFile.delete() } }
+        pendingExportFile = null
+    }
     // Phase 12: OCR is offered on attached photos only while an OCR plugin is
     // actually enabled and device-available (never a dead button).
     val ocrAvailable = viewModel.pluginRegistry
@@ -1471,11 +1481,26 @@ fun EditorScreen(
                                         is com.authorss81.noteflow.plugins.PluginResult.Success -> {
                                             when (val outcome = result.value) {
                                                 is com.authorss81.noteflow.plugins.ExportOutcome.Success -> {
-                                                    val shareIntent =
-                                                        com.authorss81.noteflow.plugins.export.ExportShareHelper.shareFile(
-                                                            context, outcome.file, outcome.format.mimeType
+                                                    // R2-B1P-03 (phase-141): launch the
+                                                    // chooser (target always user-chosen) and
+                                                    // delete the staging file when it dismisses.
+                                                    pendingExportFile = outcome.file
+                                                    val chooser = com.authorss81.noteflow.plugins.export.ExportShareHelper.chooserForExport(
+                                                        context, outcome.file, outcome.format.mimeType
+                                                    )
+                                                    try {
+                                                        exportShareLauncher.launch(chooser)
+                                                    } catch (e: Exception) {
+                                                        // No activity can handle the share — never
+                                                        // leave the plaintext export in the
+                                                        // grantable cache root.
+                                                        runCatching { outcome.file.delete() }
+                                                        pendingExportFile = null
+                                                        viewModel.showSnackbar(
+                                                            "No app on this device can receive the export",
+                                                            isLong = true
                                                         )
-                                                    context.startActivity(shareIntent)
+                                                    }
                                                 }
                                                 is com.authorss81.noteflow.plugins.ExportOutcome.Error ->
                                                     viewModel.showSnackbar(outcome.message, isLong = true)
