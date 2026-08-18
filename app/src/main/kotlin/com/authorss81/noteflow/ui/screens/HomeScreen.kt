@@ -41,6 +41,7 @@ import com.authorss81.noteflow.services.OrphanImportCleanupPolicy
 import com.authorss81.noteflow.services.isPlainPkBackupFile
 import com.authorss81.noteflow.services.isNflbBackupFile
 import com.authorss81.noteflow.services.RestoreFailSafe
+import com.authorss81.noteflow.services.UiFailureTextPolicy
 import com.authorss81.noteflow.theme.AppThemeMode
 import com.authorss81.noteflow.ui.components.*
 import com.authorss81.noteflow.ui.viewmodel.NoteflowViewModel
@@ -197,9 +198,9 @@ fun HomeScreen(
                 // the success path uses).
                 runCatching { viewModel.repository.reopenDatabase(context) }
                 restartDialogTitle = "Restore failed"
-                restartDialogMessage = "Restore failed: ${e.message}. The app will restart with your current vault unchanged."
+                restartDialogMessage = "${UiFailureTextPolicy.restoreFailureMessage(e)} The app will restart with your current vault unchanged."
                 showRestartConfirmDialog = true
-                viewModel.showSnackbar("Restore failed: ${e.message}", isLong = true)
+                viewModel.showSnackbar(UiFailureTextPolicy.restoreFailureMessage(e), isLong = true)
             } finally {
                 // R2-B1D-04 review (phase-138): the staged cache copy is consumed
                 // by validateBackupPasswordFile/importBackup above and must never
@@ -269,7 +270,7 @@ fun HomeScreen(
                         }
                     }
                 } catch (e: Exception) {
-                    viewModel.showSnackbar("Restore failed: ${e.message}", isLong = true)
+                    viewModel.showSnackbar(UiFailureTextPolicy.restoreFailureMessage(e), isLong = true)
                 }
             }
         }
@@ -323,7 +324,7 @@ fun HomeScreen(
                     val bytes = try {
                         ImportExportService.readUriBytes(context, uri)
                     } catch (e: ImportArchivePolicy.ImportSizeLimitException) {
-                        viewModel.showSnackbar("Import skipped: ${e.message}", isLong = true)
+                        viewModel.showSnackbar(UiFailureTextPolicy.importSkippedMessage(e), isLong = true)
                         continue
                     } ?: continue
                     val fileName = ImportExportService.getUriFileName(context, uri)
@@ -336,7 +337,7 @@ fun HomeScreen(
                         ImportExportService.importHtmlFile(context, uri, viewModel.repository, activeNb, activeSec)
                     }.getOrElse { e ->
                         if (e is ImportArchivePolicy.ImportSizeLimitException) {
-                            viewModel.showSnackbar("Import skipped: ${e.message}", isLong = true)
+                            viewModel.showSnackbar(UiFailureTextPolicy.importSkippedMessage(e), isLong = true)
                         }
                         null
                     }
@@ -357,7 +358,7 @@ fun HomeScreen(
                         // B1-DB-5: a zip bomb (entry/total/ratio/count breach)
                         // must fail the import with a clean, visible error.
                         if (e is ImportArchivePolicy.ImportSizeLimitException) {
-                            viewModel.showSnackbar("Import skipped: ${e.message}", isLong = true)
+                            viewModel.showSnackbar(UiFailureTextPolicy.importSkippedMessage(e), isLong = true)
                         }
                         0
                     }
@@ -670,7 +671,7 @@ fun HomeScreen(
                                                 }
                                             }
                                         } catch (e: Exception) {
-                                            viewModel.showSnackbar("Backup failed: ${e.message}")
+                                            viewModel.showSnackbar(UiFailureTextPolicy.backupFailureMessage(e))
                                         }
                                     }
                                 }
@@ -1493,7 +1494,7 @@ fun HomeScreen(
                                                 }
                                             }
                                         } catch (e: Exception) {
-                                            backupPasswordError = "Backup failed: ${e.message}"
+                                            backupPasswordError = UiFailureTextPolicy.backupFailureMessage(e)
                                         } finally {
                                             isValidating = false
                                         }

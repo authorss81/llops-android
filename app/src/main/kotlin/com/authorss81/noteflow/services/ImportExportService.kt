@@ -2145,7 +2145,7 @@ object ImportExportService {
                             }
                         } else if (entryName.startsWith("imports/")) {
                             val relPath = safeImportRelativePath(entryName.substring("imports/".length))
-                                ?: throw IllegalStateException("Backup contains unsafe relative path: $entryName")
+                                ?: throw IllegalStateException("Backup contains an unsafe relative path in the archive.")
                             val targetFile = File(tempImports, relPath)
                             targetFile.parentFile?.mkdirs()
                             FileOutputStream(targetFile).use { fos ->
@@ -2156,7 +2156,7 @@ object ImportExportService {
                             // backup by name; same traversal/zip-bomb protection as
                             // imports.
                             val relPath = safeImportRelativePath(entryName.substring("voice_notes/".length))
-                                ?: throw IllegalStateException("Backup contains unsafe relative path: $entryName")
+                                ?: throw IllegalStateException("Backup contains an unsafe relative path in the archive.")
                             val targetFile = File(tempVoiceNotes, relPath)
                             targetFile.parentFile?.mkdirs()
                             FileOutputStream(targetFile).use { fos ->

@@ -171,6 +171,22 @@
     policy) — 1359 green in the final run (only the 2 pre-existing
     B1Plat01ReleaseSigningTest asserts + 1 documented WikiLinkParserCacheUnitTest
     flake that passes in isolation); `gradle :app:assembleDebug` green.
+  - **Implemented in phase-148** (R2-b2b3-LOG-01/02/03, see
+    `workspace/phase-148/REPORT.md`): the phase-71/94 scrub extends to every
+    remaining UI + logcat surface — no raw `${e.message}` (or attacker-carried
+    `entryName`) reaches a snackbar, dialog, recovery screen, or logcat in the
+    named files. New pure-JVM `services/UiFailureTextPolicy.kt` fixed-text
+    decision table (`restoreFailureMessage`/`recoveryMessage`/
+    `backupFailureMessage`/`importSkippedMessage` + defensive `scrubForUi`
+    URL-userinfo/path redactor) is wired into `HomeScreen.kt:200-360,673,1496`,
+    `NoteflowViewModel.kt:2407,2498,3843,3863` (which also sanitizes the three
+    `MainActivity.kt` recovery screens that render VM text), `Dialogs.kt:86`,
+    `EditorScreen.kt:968`, `LocalSendSender.kt:384,606-611`. `ImportExportService.kt`
+    throws FIXED "unsafe relative path" text (no `$entryName`). Logcat sites
+    `VoiceNoteManager.kt:182,224,347,360,390,401,413,428` + `ProtobufBrushLoader.kt:67,80,93`
+    log only `FailureLogPolicy.classNameToken(e)`. Tests: `Phase148UiFailureTextScrubTest`
+    (18, incl. source pins) + `B1Db05ImportZipBombTest.kt:326` pin updated —
+    2012 green (0 failures).
   - **Implemented in phase-93** (B2-LOG-04, see `workspace/phase-93/REPORT.md`):
     the plugin logcat sink is contract-enforced end to end. New pure-JVM decision
     table `plugin-sdk/src/main/kotlin/com/authorss81/noteflow/plugins/PluginLogPolicy.kt`

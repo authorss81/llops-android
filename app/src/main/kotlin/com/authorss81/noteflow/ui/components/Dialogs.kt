@@ -83,7 +83,7 @@ fun AppUpdateDialog(
                         statusMessage = "Failed to read APK file."
                     }
                 } catch (e: Exception) {
-                    statusMessage = "Error reading APK: ${e.message}"
+                    statusMessage = "Could not read the selected APK file."
                 }
             }
         }

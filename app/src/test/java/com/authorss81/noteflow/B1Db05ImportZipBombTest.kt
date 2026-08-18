@@ -325,7 +325,9 @@ class B1Db05ImportZipBombTest {
         )
         assertTrue(
             "the zip/HTML import dispatch must surface the zip-bomb rejection",
-            homeScreenSource.contains("viewModel.showSnackbar(\"Import skipped: \${e.message}\", isLong = true)")
+            // R2-b2b3-LOG-01 (phase-148): the snackbar text is now FIXED policy
+            // output — never `Import skipped: ${e.message}`.
+            homeScreenSource.contains("viewModel.showSnackbar(UiFailureTextPolicy.importSkippedMessage(e), isLong = true)")
         )
         assertTrue(
             "HomeScreen must import the new policy type",

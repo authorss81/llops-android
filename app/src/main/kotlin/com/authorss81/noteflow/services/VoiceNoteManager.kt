@@ -179,7 +179,7 @@ class VoiceNoteManager(private val context: Context) {
             }
             blobFile
         } catch (e: Exception) {
-            Log.e("VoiceNoteManager", "Error starting audio recording: ${e.message}")
+            Log.e("VoiceNoteManager", "Error starting audio recording (${FailureLogPolicy.classNameToken(e)})")
             _isRecording.value = false
             _recordingError.value = "Could not start recording: microphone unavailable or in use."
             try {
@@ -221,7 +221,7 @@ class VoiceNoteManager(private val context: Context) {
                 release()
             }
         } catch (e: Exception) {
-            Log.e("VoiceNoteManager", "Error stopping MediaRecorder: ${e.message}")
+            Log.e("VoiceNoteManager", "Error stopping MediaRecorder (${FailureLogPolicy.classNameToken(e)})")
             _recordingError.value = "Recording stopped unexpectedly — the audio file may be empty."
         }
         mediaRecorder = null
@@ -344,7 +344,7 @@ class VoiceNoteManager(private val context: Context) {
                     }
                 }
             } catch (e: Exception) {
-                Log.w("VoiceNoteManager", "Playback failed: ${e.message}")
+                Log.w("VoiceNoteManager", "Playback failed (${FailureLogPolicy.classNameToken(e)})")
                 _isPlaying.value = false
                 _activePlayingFilePath.value = null
                 deletePlaybackTemp()
@@ -357,7 +357,7 @@ class VoiceNoteManager(private val context: Context) {
         try {
             mediaPlayer?.pause()
         } catch (e: Exception) {
-            Log.e("VoiceNoteManager", "Error pausing player: ${e.message}")
+            Log.e("VoiceNoteManager", "Error pausing player (${FailureLogPolicy.classNameToken(e)})")
         }
         _isPlaying.value = false
     }
@@ -387,7 +387,7 @@ class VoiceNoteManager(private val context: Context) {
             try {
                 mediaPlayer?.playbackParams = PlaybackParams().apply { this.speed = speed }
             } catch (e: Exception) {
-                Log.e("VoiceNoteManager", "Failed to update playback speed: ${e.message}")
+                Log.e("VoiceNoteManager", "Failed to update playback speed (${FailureLogPolicy.classNameToken(e)})")
             }
         }
     }
@@ -398,7 +398,7 @@ class VoiceNoteManager(private val context: Context) {
         try {
             mediaPlayer?.seekTo(bounded.toInt())
         } catch (e: Exception) {
-            Log.e("VoiceNoteManager", "Seek error: ${e.message}")
+            Log.e("VoiceNoteManager", "Seek error (${FailureLogPolicy.classNameToken(e)})")
         }
     }
 
@@ -410,7 +410,7 @@ class VoiceNoteManager(private val context: Context) {
                 release()
             }
         } catch (e: Exception) {
-            Log.e("VoiceNoteManager", "Error releasing player: ${e.message}")
+            Log.e("VoiceNoteManager", "Error releasing player (${FailureLogPolicy.classNameToken(e)})")
         }
         mediaPlayer = null
         _isPlaying.value = false
@@ -425,7 +425,7 @@ class VoiceNoteManager(private val context: Context) {
         try {
             if (temp.exists()) temp.delete()
         } catch (e: Exception) {
-            Log.e("VoiceNoteManager", "Error removing playback temp: ${e.message}")
+            Log.e("VoiceNoteManager", "Error removing playback temp (${FailureLogPolicy.classNameToken(e)})")
         }
     }
 

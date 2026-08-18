@@ -24,6 +24,7 @@ import javax.net.ssl.HttpsURLConnection
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLSession
 import javax.net.ssl.X509TrustManager
+import com.authorss81.noteflow.services.FailureLogPolicy
 import com.authorss81.noteflow.utils.HttpUserAgent
 
 /**
@@ -381,7 +382,7 @@ class LocalSendSender(
         val prepared = try {
             LocalSendMessages.parsePrepareUploadResponse(prepareResp.body.orEmpty())
         } catch (e: Exception) {
-            return@withContext SendResult(false, e.message ?: "Unexpected response from the receiving device.")
+            return@withContext SendResult(false, "The receiving device returned an unexpected response.")
         }
         val token = prepared.tokenFor(fileId)
         if (token.isNullOrBlank()) {
@@ -605,10 +606,10 @@ class LocalSendSender(
     private fun mapTransportError(e: Exception): String = when (e) {
         is java.net.ConnectException -> "Could not connect to the device. Check that it is online and on the same Wi-Fi."
         is SocketTimeoutException -> "Connection to the device timed out."
-        else -> {
-            val message = e.message
-            if (message.isNullOrBlank()) "Transfer failed: ${e::class.java.simpleName}" else message
-        }
+        // R2-b2b3-LOG-01 (phase-148): never surface `e.message` — exception text
+        // can carry app-private payload paths and peer-derived text. Only the
+        // exception class-name token reaches the user.
+        else -> "Transfer failed (${FailureLogPolicy.classNameToken(e)})."
     }
 
     private class IOExceptionCompat(message: String) : java.io.IOException(message)

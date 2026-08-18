@@ -64,7 +64,7 @@ object ProtobufBrushLoader {
                 null
             }
         } catch (e: Throwable) {
-            Log.e(TAG, "Failed to parse .inkbrush protobuf for $name: ${e.message}")
+            Log.e(TAG, "Failed to parse .inkbrush protobuf (${FailureLogPolicy.classNameToken(e)})")
             null
         }
     }
@@ -77,7 +77,7 @@ object ProtobufBrushLoader {
             val bytes = inputStream.use { it.readBytes() }
             loadFromByteArray(bytes, name)
         } catch (e: Throwable) {
-            Log.e(TAG, "Failed to read brush stream $name: ${e.message}")
+            Log.e(TAG, "Failed to read brush stream (${FailureLogPolicy.classNameToken(e)})")
             null
         }
     }
@@ -91,7 +91,7 @@ object ProtobufBrushLoader {
             val bytes = file.readBytes()
             loadFromByteArray(bytes, file.name)
         } catch (e: Throwable) {
-            Log.e(TAG, "Failed to load brush file: ${e::class.java.simpleName}")
+            Log.e(TAG, "Failed to load brush file (${FailureLogPolicy.classNameToken(e)})")
             null
         }
     }

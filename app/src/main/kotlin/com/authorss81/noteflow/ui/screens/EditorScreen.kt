@@ -965,7 +965,7 @@ fun EditorScreen(
                 } catch (e: com.authorss81.noteflow.services.ImportArchivePolicy.ImportSizeLimitException) {
                     viewModel.showSnackbar("Photo is too large to attach (max 25 MB)")
                 } catch (e: Exception) {
-                    viewModel.showSnackbar("Failed to attach photo: ${e.message}")
+                    viewModel.showSnackbar("Could not attach the photo. It may be unreadable or unavailable.")
                 }
             }
         }

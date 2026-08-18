@@ -79,6 +79,7 @@ import com.authorss81.noteflow.services.ImportExportService
 import com.authorss81.noteflow.services.EmptyVaultRestoreDecisionException
 import com.authorss81.noteflow.services.RestoreInflightGate
 import com.authorss81.noteflow.services.RestoreFailSafe
+import com.authorss81.noteflow.services.UiFailureTextPolicy
 import com.authorss81.noteflow.services.IntegrityWarningDismissalGate
 import com.authorss81.noteflow.services.KeystoreKeyLostException
 import com.authorss81.noteflow.services.MarkdownBodySaveCoordinator
@@ -2404,7 +2405,7 @@ fun updatePageTags(id: String, tags: String) {
                 // then surface the error. (Runs again here to cover failures
                 // BEFORE the failsafe, e.g. the staged-read or password check.)
                 runCatching { repository.reopenDatabase(getApplication()) }
-                onError(e.message ?: "Recovery failed.")
+                onError(UiFailureTextPolicy.recoveryMessage(e))
             } finally {
                 stagedFile?.delete()
                 restoreGate.end()
@@ -2495,7 +2496,7 @@ fun updatePageTags(id: String, tags: String) {
             } catch (e: Throwable) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 runCatching { repository.reopenDatabase(getApplication()) }
-                onError(e.message ?: "Recovery failed.")
+                onError(UiFailureTextPolicy.recoveryMessage(e))
             } finally {
                 stagedFile?.delete()
                 restoreGate.end()
@@ -3840,7 +3841,7 @@ fun updatePageTags(id: String, tags: String) {
                     // pre-swap on this path (no "start fresh" confirm in WebDAV) —
                     // surface the refusal truthfully, never swap silently. The
                     // failsafe already reopened the untouched vault.
-                    onComplete(false, e.message)
+                    onComplete(false, UiFailureTextPolicy.restoreFailureMessage(e))
                     return@launch
                 }
                 // B2-CRYPTO-09 (phase-107): re-migrate restored rows to per-record
@@ -3860,7 +3861,7 @@ fun updatePageTags(id: String, tags: String) {
                 // mid-download vault). The caller (WebDavSyncDialog) tells the
                 // user to restart to fully re-initialize.
                 runCatching { repository.reopenDatabase(getApplication()) }
-                onComplete(false, e.message)
+                onComplete(false, UiFailureTextPolicy.restoreFailureMessage(e))
             } finally {
                 restoreGate.end()
             }
