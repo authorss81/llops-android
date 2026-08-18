@@ -47,7 +47,7 @@ dependencies {
     implementation(libs.mediapipe.tasks.genai)
     implementation(libs.kotlinx.coroutines.android)
 
-    testImplementation("junit:junit:4.13.2")
+    testImplementation(libs.junit)
 }
 
 // --- Downloadable artifact packaging -----------------------------------------

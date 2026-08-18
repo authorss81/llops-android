@@ -222,7 +222,7 @@ dependencies {
     // Phase 31: JVM unit tests. kotlinx-coroutines-test lets the construction test
     // install a Main dispatcher so NoteflowViewModel's eager stateIn(viewModelScope,..)
     // flows can be built outside Android. junit is the existing test runner.
-    testImplementation("junit:junit:4.13.2")
+    testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
 }
 

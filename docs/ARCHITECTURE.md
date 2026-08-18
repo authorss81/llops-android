@@ -1089,8 +1089,25 @@
     whenever that file exists. To add/upgrade a dependency, regenerate with
     `gradle --write-verification-metadata sha256 testDebugUnitTest assembleDebug`, review the diff, then
     commit. There is NO `dependencyVerification {}` settings DSL in Gradle 8.13 — do NOT add one (it breaks
-    settings compilation). The `google()` content filters (`com.android.*`/`com.google.*`/`androidx.*`) are
-    mirrored in `dependencyResolutionManagement` and must stay in sync with `pluginManagement`.
+settings compilation). The `google()` content filters (`com.android.*`/`com.google.*`/`androidx.*`) are
+     mirrored in `dependencyResolutionManagement` and must stay in sync with `pluginManagement`.
+- **`metadata.json` (repo root) is the committed project metadata source of truth** — name, namespace,
+  applicationId, version (VERSION_CODE/VERSION_NAME env overridable, default 2/"1.0.0"), SDK levels,
+  build toolchain (Gradle 8.13 no wrapper, AGP 8.7.3, Kotlin 2.0.21, KSP, JVM 17), module list, the
+  capability-bucket partition (compile-time / downloadable / unserved) and the downloadable-plugin
+  records. Parsed/validated by pure-JVM `app/src/main/kotlin/com/authorss81/noteflow/services/ProjectMetadata.kt`
+  (Gson; fail-closed fields; rejects `inBaseApk=true`, unknown capability keys, gaps/dups vs
+  `PluginCapability.ALL`). The alignment suite `Phase131MetadataAlignmentTest` (10 tests) cross-checks it
+  against the build files + framework, so drift fails `testDebugUnitTest`.
+  - **Implemented in phase-131** (see `workspace/phase-131/REPORT.md`): `plugins/llm` build script is fully
+    catalog-aligned — its last raw coordinate `junit:junit:4.13.2` → `libs.junit`
+    (`gradle/libs.versions.toml:32-34,88`); the module builds STANDALONE under system Gradle
+    (`gradle :plugins:llm:packagePlugin` green) and its B2-DEPS-04 fail-closed signing gate
+    (`PLUGIN_SIGNING_KEYSTORE_B64`+`PLUGIN_SIGNING_STORE_PASS`) was re-verified loud-refusal without env
+    AND positive (`signPlugin`→`verifyPluginSignature`→`pluginMetadata` emits `sha256`+`pinnedCertHash`
+    on `llm-plugin-signed.jar`) with a throwaway keystore that was deleted afterwards (no keystore/signed
+    pin committed; `GeneratedLlmPluginPin.kt` stays `null` fail-closed). Base debug APK binary-verified 0
+    mediapipe classes / 0 native libs. `gradle testDebugUnitTest` 1853 total green (0/0/0) + `assembleDebug` green.
 - Tests: `app/src/test/java/com/authorss81/noteflow/` (~110 unit tests, pure JVM, no androidTest).
 - **Do NOT run Gradle on the Windows dev machine** (no SDK; CI-only builds).
 - Version: `VERSION_CODE`/`VERSION_NAME` env (default 2 / "1.0.0"). Release signing is FAIL-CLOSED

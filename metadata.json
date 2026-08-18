@@ -1,0 +1,78 @@
+{
+  "name": "InkFlow",
+  "namespace": "com.authorss81.noteflow",
+  "applicationId": "com.aistudio.inkflow.app.bkxjrz",
+  "version": {
+    "versionCode": 2,
+    "versionName": "1.0.0",
+    "envOverrides": {
+      "versionCode": "VERSION_CODE",
+      "versionName": "VERSION_NAME"
+    }
+  },
+  "android": {
+    "compileSdk": 36,
+    "minSdk": 26,
+    "targetSdk": 36
+  },
+  "build": {
+    "gradleVersion": "8.13",
+    "usesGradleWrapper": false,
+    "agpVersion": "8.7.3",
+    "kotlinVersion": "2.0.21",
+    "kspVersion": "2.0.21-1.0.25",
+    "jvmTarget": "17",
+    "modules": [
+      "app",
+      "plugin-sdk",
+      "plugins:llm"
+    ]
+  },
+  "capabilities": {
+    "servedByCompileTimePlugins": [
+      "text_transform",
+      "ocr",
+      "web_search",
+      "export",
+      "clip_share",
+      "text_tools",
+      "language_detection",
+      "web_capture",
+      "dictation",
+      "read_aloud",
+      "translation",
+      "screenshot_note",
+      "shape_from_ink",
+      "dictionary",
+      "weather",
+      "unit_conversion",
+      "outline_generator",
+      "citation_formatter"
+    ],
+    "servedByDownloadablePlugins": [
+      "assistant"
+    ],
+    "unserved": [
+      "file_transfer"
+    ]
+  },
+  "downloadablePlugins": {
+    "llm": {
+      "id": "com.authorss81.noteflow.plugins.llm",
+      "className": "com.authorss81.noteflow.llm.LocalLlmPlugin",
+      "module": ":plugins:llm",
+      "capability": "assistant",
+      "inBaseApk": false,
+      "engine": {
+        "name": "MediaPipe tasks-genai",
+        "version": "0.10.25"
+      },
+      "pinnedReleaseVersion": null,
+      "signingEnvVars": [
+        "PLUGIN_SIGNING_KEYSTORE_B64",
+        "PLUGIN_SIGNING_STORE_PASS",
+        "PLUGIN_SIGNING_KEY_PASS"
+      ]
+    }
+  }
+}

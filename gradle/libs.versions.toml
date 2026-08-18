@@ -29,6 +29,9 @@ lingua = "1.2.2"
 # org.jsoup:jsoup >= 1.14.3, < 1.23.1 — pinned to 1.23.1, the security-fixed line.
 jsoup = "1.23.1"
 coroutines = "1.9.0"
+# Phase 131: junit 4 test runner — single catalog entry so app + downloadable
+# plugin modules (plugins/llm) reference the SAME version through libs.junit.
+junit = "4.13.2"
 
 [libraries]
 androidx-ink-authoring = { group = "androidx.ink", name = "ink-authoring", version.ref = "ink" }
@@ -82,6 +85,7 @@ kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-
 # dispatcher so the ViewModel (which eagerly builds stateIn(viewModelScope,..)
 # flows) can be constructed in a plain JVM test.
 kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "coroutines" }
+junit = { group = "junit", name = "junit", version.ref = "junit" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
