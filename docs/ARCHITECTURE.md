@@ -1160,7 +1160,16 @@
     OOM) wired into all four entry points (`NoteflowViewModel.kt:2313/:2403/:3772`, `HomeScreen.kt:172`).
     The HomeScreen picker now classifies by FILE (`isNflbBackupFile`/`isPlainPkBackupFile`
     `ImportExportService.kt:3116/:3129`) — NFLB3 backups finally get the password dialog, not the legacy
-    UNTRUSTED dialog. Tests: `Phase138RestoreStreamingTest` (10).
+    UNTRUSTED dialog. Tests: `Phase138RestoreStreamingTest` (12).
+    **Review fixes (2026-08-18):** staged restore files are now deleted on EVERY
+    HomeScreen outcome (`clearPendingRestore` + `performRestore` finally); the
+    400MB wire cap is enforced on the ENCRYPTED export output (closes the
+    incompressible-at-ceiling "exportable-unrestorable" band,
+    `ImportExportService.kt:1455-1467`); the restore entry-count belt charges
+    LEAF entries only (symmetric with the packer); the keystore-lost recovery
+    defers `repository.encryptionKey = newDek` until AFTER the swap so a failed
+    restore never reopens the old vault under the new key
+    (`NoteflowViewModel.kt:2398-2442`); a dead "corrupted" rethrow was removed.
 - **Update / self-install**: `services/UpdateService.kt:128` (`checkForDownloadedUpdates` — scans ONLY app-private
   `filesDir`/`cacheDir` through `UpdateTrustPolicy.isScanSafeDirectory`; public Downloads/external dirs are NEVER
   scanned, B1-PLAT-7), `:60` (`inspectApkFile` — classifies via the policy, trust-neutral copy), `:175`

@@ -178,3 +178,48 @@ gradle assembleDebug         # BUILD SUCCESSFUL
 - `ImportExportService.readUriBytes` remains for the non-restore import paths
   (DOCX/HTML/Obsidian), where the artifact is bounded by
   `ImportArchivePolicy`'s own caps.
+
+## Review fixes (2026-08-18)
+
+Findings from the phase-138 review, all applied:
+
+1. **HomeScreen staged-file leak (LOW)** — the picker's `stageBackupUriToFile`
+   cache files were never deleted: the plain-PK branch deleted, but every
+   cancel/dismiss only nulled `pendingRestoreFile` and `performRestore` never
+   cleaned the input (only the decrypt staging). Fixed: `HomeScreen` gained
+   `clearPendingRestore()` (delete + null) used by all cancel/dismiss paths, and
+   `performRestore` deletes the staged file in its `finally` (incl. the
+   in-flight-gate early return) — the file now lives only for the duration of
+   the pick→confirm→restore cycle. `HomeScreen.kt:140-221,1337-1510`.
+2. **Residual wire-cap asymmetry (LOW)** — the packer sized by uncompressed sum
+   only, so a vault at the 400MB ceiling with incompressible media produced an
+   encrypted file slightly over the 400MB wire cap that restore then refused.
+   Fixed: `exportBackup` now enforces the SAME 400MB input cap on the finished
+   encrypted file (`tempBackupFile.length()`, loud fail-closed delete+throw,
+   `ImportExportService.kt:1455-1467`) — the last "exportable-unrestorable"
+   band is closed.
+3. **Entry-count belt asymmetry (LOW)** — restore counted directory records
+   against the 40k belt while export counted only packed files. Fixed: the
+   extractor now charges `claimEntry()` to LEAF entries only, exactly mirroring
+   `claimPackFile` (`ImportExportService.kt:2107-2117`).
+4. **Un-backupable >100MB artifacts (INFO, design)** — deliberately fail-closed:
+   a vault with a single artifact over the per-entry cap (or total over 400MB)
+   is refused at export with the file named; the trade-off is now documented at
+   the pack site (`ImportExportService.kt:1344-1351`). No exclusion-with-warning
+   path by design (out of scope; a shrunk artifact is the only remedy).
+5. **Failsafe wrong-key reopen on keystore-lost (LOW)** — `repository.encryptionKey`
+   was swapped to the fresh DEK BEFORE the restore, so any post-close failure
+   (now auto-recovered by `RestoreFailSafe`) opened the untouched OLD vault with
+   the NEW key. Fixed: the swap is deferred until AFTER the restore succeeds
+   (`NoteflowViewModel.kt:2398-2442`); `importBackup` takes the DEK as an
+   explicit param, so a failure still reopens the old vault under its old key.
+6. **Doc count (INFO)** — `Phase138RestoreStreamingTest` has 12 tests, not 10;
+   corrected in `docs/ARCHITECTURE.md` + `docs/phase-status.md`.
+7. **Dead "corrupted" rethrow (INFO/style)** — the wire decrypt never raises a
+   human "corrupted…" message, so the `contains("corrupted")` early rethrow in
+   `tryParseBackupV2File` was dead code; removed and replaced with a comment
+   making the per-candidate corruption decision explicit
+   (`ImportExportService.kt:1684-1706`).
+
+Retest after fixes: `gradle :app:testDebugUnitTest` (1889, 0 fail) +
+`gradle assembleDebug` (green) — unchanged totals, all green.

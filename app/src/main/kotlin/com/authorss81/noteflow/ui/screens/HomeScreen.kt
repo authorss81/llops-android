@@ -142,6 +142,9 @@ fun HomeScreen(
         // gate as the recovery/WebDAV paths — refuse a second restore instead of
         // racing two file swaps of the same SQLCipher file.
         if (!viewModel.tryBeginRestore()) {
+            // R2-B1D-04 review (phase-138): the staged copy is transient — drop it
+            // even when the in-flight gate blocks this restore.
+            file.delete()
             restartDialogTitle = "Restore already in progress"
             restartDialogMessage = "A restore is already running. Wait for it to finish before starting another."
             showRestartConfirmDialog = true
@@ -197,9 +200,24 @@ fun HomeScreen(
                 showRestartConfirmDialog = true
                 viewModel.showSnackbar("Restore failed: ${e.message}", isLong = true)
             } finally {
+                // R2-B1D-04 review (phase-138): the staged cache copy is consumed
+                // by validateBackupPasswordFile/importBackup above and must never
+                // accumulate in cacheDir — delete it on EVERY outcome (success,
+                // wrong password, corrupt archive, over-budget, OOM-including).
+                file.delete()
                 viewModel.endRestore()
             }
         }
+    }
+
+    // R2-B1D-04 review (phase-138): the picker stages the chosen backup into a
+    // cache file; a callback that abandons it (dialog dismiss/cancel) MUST delete
+    // it, or every cancelled pick leaks a full backup copy in cacheDir. The
+    // confirm paths do NOT call this — they hand the file to performRestore,
+    // which owns the delete on every outcome.
+    fun clearPendingRestore() {
+        pendingRestoreFile?.delete()
+        pendingRestoreFile = null
     }
 
     // File picker for import
@@ -1318,7 +1336,7 @@ fun HomeScreen(
             AlertDialog(
                 onDismissRequest = {
                     showLegacyRestoreConfirmDialog = false
-                    pendingRestoreFile = null
+                    clearPendingRestore()
                 },
                 title = { Text("Restore legacy backup?") },
                 text = {
@@ -1334,6 +1352,9 @@ fun HomeScreen(
                     TextButton(
                         onClick = {
                             showLegacyRestoreConfirmDialog = false
+                            // R2-B1D-04 review: performRestore owns the staged-file
+                            // delete — do NOT clearPendingRestore() here or the file
+                            // vanishes before importBackup reads it.
                             val pending = pendingRestoreFile
                             pendingRestoreFile = null
                             if (pending != null) performRestore(context, pending)
@@ -1345,7 +1366,7 @@ fun HomeScreen(
                     TextButton(
                         onClick = {
                             showLegacyRestoreConfirmDialog = false
-                            pendingRestoreFile = null
+                            clearPendingRestore()
                         }
                     ) { Text("Cancel") }
                 }
@@ -1356,7 +1377,7 @@ fun HomeScreen(
             AlertDialog(
                 onDismissRequest = {
                     showBackupPasswordDialog = false
-                    pendingRestoreFile = null
+                    clearPendingRestore()
                 },
                 title = { Text(if (pendingRestoreFile != null) "Restore Backup" else "Backup Password") },
                 text = {
@@ -1413,6 +1434,9 @@ fun HomeScreen(
                                     // re-enters heap, and the user simply corrects the
                                     // password.
                                     showBackupPasswordDialog = false
+                                    // R2-B1D-04 review: performRestore owns the
+                                    // staged-file delete — do NOT clearPendingRestore()
+                                    // here or the file vanishes before the import.
                                     pendingRestoreFile = null
                                     performRestore(context, pending, backupPasswordInput)
                                 }
@@ -1480,7 +1504,7 @@ fun HomeScreen(
                 dismissButton = {
                     TextButton(onClick = {
                         showBackupPasswordDialog = false
-                        pendingRestoreFile = null
+                        clearPendingRestore()
                     }) {
                         Text("Cancel")
                     }

@@ -1351,6 +1351,12 @@ object ImportExportService {
             // unrestorable" archives (a DB/import/blob over the per-entry cap, or
             // a vault whose decompressed total exceeds the wire-level 400MB, is
             // rejected loudly at export time, never silently shipped).
+            // R2-B1D-04 review (phase-138): this is a DELIBERATE fail-closed trade
+            // — a vault holding a single artifact over the 100MB per-entry cap (or
+            // whose total exceeds 400MB) becomes un-exportable as-is; the only
+            // remedy is shrinking that artifact (e.g. trimming imports/voice
+            // blobs). Shipping the archive was previously the "exportable but
+            // unrestorable" trap; refusing loudly is preferred.
             val packAccounting = BackupBudgetPolicy.Accounting()
             BackupExportPolicy.zipVaultEntriesToStream(FileOutputStream(stagingZip)) { zos ->
                 fun packFile(entryName: String, source: File) {
@@ -1451,6 +1457,20 @@ object ImportExportService {
                     FileInputStream(stagingZip),
                     FileOutputStream(tempBackupFile),
                     key
+                )
+            }
+            // R2-B1D-04 review (phase-138): the pack budget is the SUM OF THE
+            // SOURCE lengths, but the RESTORE wire gate rejects any archive whose
+            // ENCRYPTED output grew past the 400 MB input cap (Base64 ~1.37x for
+            // legacy, or incompressible media near the ceiling plus zip header +
+            // AAD + GCM-tag overhead). Enforce the SAME cap on the finished
+            // encrypted file so export never ships an archive restore would
+            // refuse — closes the last "exportable but unrestorable" band.
+            if (tempBackupFile.length() > MAX_BACKUP_INPUT_BYTES) {
+                tempBackupFile.delete()
+                throw IllegalStateException(
+                    "Backup rejected: the encrypted backup is larger than the restoreable size " +
+                        "(max ${MAX_BACKUP_INPUT_BYTES / (1024L * 1024L)}MB)."
                 )
             }
         } finally {
@@ -1683,10 +1703,11 @@ object ImportExportService {
                     )
                 } catch (e: Exception) {
                     staging.delete()
-                    // A corruption diagnosis means THIS candidate's password was
-                    // proven correct and the header/payload no longer match — it
-                    // is final, never retried against the other byte form.
-                    if (e.message?.contains("corrupted", ignoreCase = true) == true) throw e
+                    // R2-B1D-04 review (phase-138): the wire decrypt never raises a
+                    // human "corrupted…" message (it surfaces AEADBadTagException /
+                    // IOException), so corruption is decided HERE, per candidate:
+                    // v3 re-tries the other byte form (no cheap DEK probe to prove
+                    // which candidate was right), v2 uses the wrapped-DEK probe.
                     if (h.version == 3) {
                         // v3 has no cheap DEK probe, so a payload tag failure is
                         // re-tried against the other candidate form and only
@@ -2090,9 +2111,14 @@ object ImportExportService {
             ZipInputStream(raw).use { zis ->
                 var entry: ZipEntry? = zis.nextEntry
                 while (entry != null) {
-                    accounting.claimEntry()
                     val entryName = entry.name
+                    // R2-B1D-04 review (phase-138): the entry-count belt charges
+                    // LEAF entries only, exactly mirroring the export packer's
+                    // claimPackFile (which packs files, never directory records) —
+                    // a directory record that writes no bytes cannot push an
+                    // app-exported archive over the count budget on restore.
                     if (!entry.isDirectory) {
+                        accounting.claimEntry()
                         if (entryName == "noteflow.sqlite") {
                             sawDatabase = true
                             tempDb.parentFile?.mkdirs()

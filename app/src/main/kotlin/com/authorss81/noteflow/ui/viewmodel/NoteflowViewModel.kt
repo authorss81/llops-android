@@ -2395,8 +2395,13 @@ fun updatePageTags(id: String, tags: String) {
                 // persisted ONLY after the restore succeeds, so a failed restore never
                 // overwrites the (still-stored, still-unreadable) old wrapper — the
                 // recovery screen stays shown and the user can simply retry.
+                // R2-B1D-04 review (phase-138): `repository.encryptionKey` is NOT
+                // swapped here — it must only ever hold the key that matches the
+                // LIVE vault. importBackup takes the fresh DEK as an explicit param,
+                // so leaving the repository key untouched until AFTER the swap means
+                // any post-close failure (the failsafe auto-reopen) still opens the
+                // untouched OLD vault with the OLD key, never a wrong-key open.
                 val newDek = EncryptionService.generateDek()
-                repository.encryptionKey = newDek
                 // R2-B1D-04 (phase-138): the failsafe seam reopens the vault after
                 // ANY post-close failure; the EmptyVault path relies on it.
                 try {
@@ -2415,10 +2420,12 @@ fun updatePageTags(id: String, tags: String) {
                         onError("Restore cancelled — the selected backup contains no notes. Your vault is unchanged.")
                         return@launch
                     }
-                    repository.encryptionKey = newDek
                     repository.closeDatabase()
                     ImportExportService.importBackup(getApplication(), staged, newDek, backupPassword, allowEmptyVault = true)
                 }
+                // The swap succeeded — the live vault is now keyed to newDek, so it
+                // is safe (and correct) to publish it as the repository's key.
+                repository.encryptionKey = newDek
                 if (!security.storeDek(newDek, authRequired = false)) {
                     throw IllegalStateException("Could not persist the new device key — recovery aborted.")
                 }
