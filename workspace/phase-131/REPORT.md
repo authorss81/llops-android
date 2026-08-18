@@ -12,7 +12,8 @@ Two deliverables, both proven against the system-Gradle build environment
 1. **`metadata.json` created at the repo root** — the single committed source of
    truth for project identity, version, SDK/build configuration and the plugin
    capability surface. A new pure-JVM parse+validate helper
-   (`services/ProjectMetadata.kt`) plus a 10-test alignment suite keep it in
+   (`services/ProjectMetadata.kt`, test source set) plus an 11-test alignment
+   suite keep it in
    sync with `app/build.gradle.kts`, `settings.gradle.kts`,
    `gradle/libs.versions.toml`, `PluginCapability.ALL` and
    `PluginRegistry.defaultPlugins()` — any drift fails the build.
@@ -52,8 +53,8 @@ Two deliverables, both proven against the system-Gradle build environment
 | File:line | Change |
 |---|---|
 | `metadata.json` (new, repo root) | Project metadata: `name=InkFlow`, `namespace=com.authorss81.noteflow`, `applicationId=com.aistudio.inkflow.app.bkxjrz`, `version{versionCode:2, versionName:"1.0.0", envOverrides VERSION_CODE/VERSION_NAME}`, `android{compileSdk:36, minSdk:26, targetSdk:36}`, `build{gradleVersion 8.13, usesGradleWrapper:false, agp 8.7.3, kotlin 2.0.21, ksp 2.0.21-1.0.25, jvmTarget 17, modules app/plugin-sdk/plugins:llm}`, capability buckets (18 compile-time-served / assistant downloadable / file_transfer unserved — the exact `PluginCapability.ALL` partition) and the LLM downloadable-plugin record (id, class, module, `inBaseApk:false`, engine, `pinnedReleaseVersion:null`, B2-DEPS-04 signing env vars). |
-| `app/src/main/kotlin/com/authorss81/noteflow/services/ProjectMetadata.kt` (new) | Pure-JVM Gson parser + `validate()` (structural fail-closed checks + cross-check of every capability key against `PluginCapability.ALL`, no-gap/dup/unknown detection, and the base-APK rule `inBaseApk` must be false). |
-| `app/src/test/java/com/authorss81/noteflow/Phase131MetadataAlignmentTest.kt` (new) | 10 tests: metadata validates clean; name/namespace/applicationId vs build files; version + env overrides; SDK levels; toolchain + module wiring; capability surface vs `PluginCapability.ALL` + `PluginRegistry.defaultPlugins()`; LLM record vs `plugins/llm/build.gradle.kts` + seed pin; parser/validator negative cases. |
+| `app/src/test/java/com/authorss81/noteflow/services/ProjectMetadata.kt` (new) | Pure-JVM Gson parser + `validate()` (structural fail-closed checks + cross-check of every capability key against `PluginCapability.ALL`, no-gap/dup/unknown detection, the base-APK rule `inBaseApk` must be false, `usesGradleWrapper` must be false and the API-26+ SDK floor — review-fix: lives in the TEST source set so it never ships in the base APK). |
+| `app/src/test/java/com/authorss81/noteflow/Phase131MetadataAlignmentTest.kt` (new) | 11 tests: metadata validates clean; name/namespace/applicationId vs build files; version + env overrides; SDK levels; toolchain + module wiring; capability surface vs `PluginCapability.ALL` + `PluginRegistry.defaultPlugins()`; LLM record vs `plugins/llm/build.gradle.kts` + seed pin; parser/validator negative cases. Review-fix: adds a Gradle-8.13/JVM-17 cross-check and word-boundary SDK pins. |
 | `gradle/libs.versions.toml:32-34` | `junit = "4.13.2"` version entry (comment + Phase 131 rationale). |
 | `gradle/libs.versions.toml:88` | `junit = { group = "junit", name = "junit", version.ref = "junit" }` library entry. |
 | `app/build.gradle.kts:225` | `testImplementation("junit:junit:4.13.2")` → `testImplementation(libs.junit)`. |

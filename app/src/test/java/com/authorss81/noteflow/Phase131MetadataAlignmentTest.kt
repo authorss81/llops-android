@@ -73,13 +73,12 @@ class Phase131MetadataAlignmentTest {
     @Test
     fun `metadata sdk levels match the build files`() {
         val metadata = metadata()
-        val appBuild = fileText("app/build.gradle.kts")
         val sdk = metadata.android
         assertTrue("android must be present", sdk != null)
 
-        assertTrue("compileSdk must be 36", appBuild.contains("compileSdk = 36"))
-        assertTrue("minSdk must be 26", appBuild.contains("minSdk = 26"))
-        assertTrue("targetSdk must be 36", appBuild.contains("targetSdk = 36"))
+        assertTrue("compileSdk must be 36", fileMatches("app/build.gradle.kts", Regex("""compileSdk\s*=\s*36\b""")))
+        assertTrue("minSdk must be 26", fileMatches("app/build.gradle.kts", Regex("""minSdk\s*=\s*26\b""")))
+        assertTrue("targetSdk must be 36", fileMatches("app/build.gradle.kts", Regex("""targetSdk\s*=\s*36\b""")))
         assertEquals(36, sdk!!.compileSdk)
         assertEquals(26, sdk.minSdk)
         assertEquals(36, sdk.targetSdk)
@@ -99,7 +98,15 @@ class Phase131MetadataAlignmentTest {
         assertEquals("metadata agpVersion must match the catalog", "8.7.3", build!!.agpVersion)
         assertEquals("metadata kotlinVersion must match the catalog", "2.0.21", build.kotlinVersion)
         assertEquals("metadata kspVersion must match the catalog", "2.0.21-1.0.25", build.kspVersion)
-        assertEquals("metadata jvmTarget must match the modules' jvmTarget", "17", build.jvmTarget)
+
+        // JVM target + Gradle version (previously documented-only fields) now have
+        // real build pins: app/build.gradle.kts forces JVM 17 and the CI workflows
+        // pin system Gradle 8.13 (no wrapper).
+        assertTrue("app/build.gradle.kts must force JVM 17", fileText("app/build.gradle.kts").contains("JvmTarget.JVM_17"))
+        assertEquals("metadata jvmTarget must match app/build.gradle.kts", "17", build.jvmTarget)
+        assertTrue("CI workflow must pin Gradle 8.13", Regex("gradle-version:\\s*\"8\\.13\"").containsMatchIn(fileText(".github/workflows/android.yml")))
+        assertEquals("metadata gradleVersion must match the pinned CI Gradle", "8.13", build.gradleVersion)
+
         assertFalse(
             "metadata must document that the repo uses system Gradle (no wrapper)",
             build.usesGradleWrapper ?: true
@@ -232,34 +239,9 @@ class Phase131MetadataAlignmentTest {
 
     @Test
     fun `validator rejects a base-apk-embedded llm engine`() {
-        val json = """
-            {
-              "name": "InkFlow",
-              "namespace": "com.authorss81.noteflow",
-              "applicationId": "com.aistudio.inkflow.app.bkxjrz",
-              "version": {"versionCode": 2, "versionName": "1.0.0", "envOverrides": {"versionCode": "VERSION_CODE", "versionName": "VERSION_NAME"}},
-              "android": {"compileSdk": 36, "minSdk": 26, "targetSdk": 36},
-              "build": {"gradleVersion": "8.13", "usesGradleWrapper": false, "agpVersion": "8.7.3", "kotlinVersion": "2.0.21", "kspVersion": "2.0.21-1.0.25", "jvmTarget": "17", "modules": ["app", "plugin-sdk", "plugins:llm"]},
-              "capabilities": {
-                "servedByCompileTimePlugins": [],
-                "servedByDownloadablePlugins": ["assistant"],
-                "unserved": ["file_transfer"]
-              },
-              "downloadablePlugins": {
-                "llm": {
-                  "id": "com.authorss81.noteflow.plugins.llm",
-                  "className": "com.authorss81.noteflow.llm.LocalLlmPlugin",
-                  "module": ":plugins:llm",
-                  "capability": "assistant",
-                  "inBaseApk": true,
-                  "engine": {"name": "MediaPipe tasks-genai", "version": "0.10.25"},
-                  "pinnedReleaseVersion": null,
-                  "signingEnvVars": ["PLUGIN_SIGNING_KEYSTORE_B64", "PLUGIN_SIGNING_STORE_PASS"]
-                }
-              }
-            }
-        """.trimIndent()
-        val problems = ProjectMetadata.parse(json).validate()
+        val problems = ProjectMetadata.parse(
+            metadataJson(inBaseApk = true)
+        ).validate()
         assertTrue(
             "inBaseApk=true must be rejected (base-APK-size hard rule)",
             problems.any { it.contains("inBaseApk") }
@@ -268,34 +250,14 @@ class Phase131MetadataAlignmentTest {
 
     @Test
     fun `validator rejects unknown capability keys and framework gaps`() {
-        val json = """
-            {
-              "name": "InkFlow",
-              "namespace": "com.authorss81.noteflow",
-              "applicationId": "com.aistudio.inkflow.app.bkxjrz",
-              "version": {"versionCode": 2, "versionName": "1.0.0", "envOverrides": {"versionCode": "VERSION_CODE", "versionName": "VERSION_NAME"}},
-              "android": {"compileSdk": 36, "minSdk": 26, "targetSdk": 36},
-              "build": {"gradleVersion": "8.13", "usesGradleWrapper": false, "agpVersion": "8.7.3", "kotlinVersion": "2.0.21", "kspVersion": "2.0.21-1.0.25", "jvmTarget": "17", "modules": ["app", "plugin-sdk", "plugins:llm"]},
-              "capabilities": {
-                "servedByCompileTimePlugins": ["ocr"],
-                "servedByDownloadablePlugins": ["assistant"],
-                "unserved": ["file_transfer", "made_up_capability"]
-              },
-              "downloadablePlugins": {
-                "llm": {
-                  "id": "com.authorss81.noteflow.plugins.llm",
-                  "className": "com.authorss81.noteflow.llm.LocalLlmPlugin",
-                  "module": ":plugins:llm",
-                  "capability": "assistant",
-                  "inBaseApk": false,
-                  "engine": {"name": "MediaPipe tasks-genai", "version": "0.10.25"},
-                  "pinnedReleaseVersion": null,
-                  "signingEnvVars": ["PLUGIN_SIGNING_KEYSTORE_B64", "PLUGIN_SIGNING_STORE_PASS"]
-                }
-              }
-            }
-        """.trimIndent()
-        val problems = ProjectMetadata.parse(json).validate()
+        val problems = ProjectMetadata.parse(
+            metadataJson(
+                inBaseApk = false,
+                servedByCompileTimePlugins = listOf("ocr"),
+                servedByDownloadablePlugins = listOf("assistant"),
+                unserved = listOf("file_transfer", "made_up_capability")
+            )
+        ).validate()
         assertTrue(
             "an unknown capability key must be rejected",
             problems.any { it.contains("made_up_capability") }
@@ -317,6 +279,50 @@ class Phase131MetadataAlignmentTest {
         val file = File(repoRoot(), relative)
         assertTrue("repo root must contain $relative", file.isFile)
         return file.readText()
+    }
+
+    private fun fileMatches(relative: String, pattern: Regex): Boolean =
+        pattern.containsMatchIn(fileText(relative))
+
+    /**
+     * A structurally complete metadata JSON used by the validator negative tests,
+     * parameterized so the same fixture isn't copy/pasted three times.
+     */
+    private fun metadataJson(
+        inBaseApk: Boolean,
+        servedByCompileTimePlugins: List<String> = emptyList(),
+        servedByDownloadablePlugins: List<String> = listOf("assistant"),
+        unserved: List<String> = listOf("file_transfer")
+    ): String {
+        fun jsonArr(keys: List<String>): String =
+            keys.joinToString(", ", "[", "]") { "\"$it\"" }
+        return """
+            {
+              "name": "InkFlow",
+              "namespace": "com.authorss81.noteflow",
+              "applicationId": "com.aistudio.inkflow.app.bkxjrz",
+              "version": {"versionCode": 2, "versionName": "1.0.0", "envOverrides": {"versionCode": "VERSION_CODE", "versionName": "VERSION_NAME"}},
+              "android": {"compileSdk": 36, "minSdk": 26, "targetSdk": 36},
+              "build": {"gradleVersion": "8.13", "usesGradleWrapper": false, "agpVersion": "8.7.3", "kotlinVersion": "2.0.21", "kspVersion": "2.0.21-1.0.25", "jvmTarget": "17", "modules": ["app", "plugin-sdk", "plugins:llm"]},
+              "capabilities": {
+                "servedByCompileTimePlugins": ${jsonArr(servedByCompileTimePlugins)},
+                "servedByDownloadablePlugins": ${jsonArr(servedByDownloadablePlugins)},
+                "unserved": ${jsonArr(unserved)}
+              },
+              "downloadablePlugins": {
+                "llm": {
+                  "id": "com.authorss81.noteflow.plugins.llm",
+                  "className": "com.authorss81.noteflow.llm.LocalLlmPlugin",
+                  "module": ":plugins:llm",
+                  "capability": "assistant",
+                  "inBaseApk": $inBaseApk,
+                  "engine": {"name": "MediaPipe tasks-genai", "version": "0.10.25"},
+                  "pinnedReleaseVersion": null,
+                  "signingEnvVars": ["PLUGIN_SIGNING_KEYSTORE_B64", "PLUGIN_SIGNING_STORE_PASS"]
+                }
+              }
+            }
+        """.trimIndent()
     }
 
     companion object {

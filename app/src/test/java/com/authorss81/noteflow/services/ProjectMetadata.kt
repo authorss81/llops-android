@@ -12,15 +12,17 @@ import java.io.File
  * `metadata.json` is the single committed source of truth for the project's
  * identity, version, SDK/build configuration and plugin-capability surface. It
  * is deliberately parsed with Gson (already a base-app dependency) on the plain
- * JVM so the `ProjectMetadataTest` can cross-check every field against the real
- * Gradle configuration (`app/build.gradle.kts`, `settings.gradle.kts`,
+ * JVM so `Phase131MetadataAlignmentTest` can cross-check every field against the
+ * real Gradle configuration (`app/build.gradle.kts`, `settings.gradle.kts`,
  * `gradle/libs.versions.toml`) and the plugin framework (`PluginCapability.ALL`)
  * — any drift between the metadata file and the build files fails the test.
  *
  * All model fields are nullable so a missing/typo'd field is reported by
  * [validate] (fail-closed) instead of silently deserializing to a default.
  *
- * Pure JVM (`java.io` + Gson), API 26+ floor, no Android imports.
+ * Pure JVM (`java.io` + Gson), API 26+ floor, no Android imports. Lives in the
+ * TEST source set (phase-131 review fix): it is never invoked by the app at
+ * runtime, so it must not ship in the base APK (base-APK-size hard rule).
  */
 data class ProjectMetadata(
     val name: String? = null,
@@ -128,9 +130,18 @@ data class ProjectMetadata(
         val sdk = android
         field("android", sdk != null, "missing")
         if (sdk != null) {
-            field("android.compileSdk", sdk.compileSdk != null && sdk.compileSdk!! >= 26, "must be >= 26")
-            field("android.minSdk", sdk.minSdk != null && sdk.minSdk!! >= 21, "must be >= 21")
-            field("android.targetSdk", sdk.targetSdk != null && sdk.targetSdk!! >= 26, "must be >= 26")
+            field("android.compileSdk", sdk.compileSdk != null, "missing")
+            if (sdk.compileSdk != null && sdk.compileSdk < 26) {
+                errors += "android.compileSdk: must be >= 26, got ${sdk.compileSdk}"
+            }
+            field("android.minSdk", sdk.minSdk != null, "missing")
+            if (sdk.minSdk != null && sdk.minSdk < 26) {
+                errors += "android.minSdk: must be >= 26 (API 26+ floor), got ${sdk.minSdk}"
+            }
+            field("android.targetSdk", sdk.targetSdk != null, "missing")
+            if (sdk.targetSdk != null && sdk.targetSdk < 26) {
+                errors += "android.targetSdk: must be >= 26, got ${sdk.targetSdk}"
+            }
             if (sdk.minSdk != null && sdk.targetSdk != null && sdk.minSdk > sdk.targetSdk) {
                 errors += "android: minSdk (${sdk.minSdk}) must be <= targetSdk (${sdk.targetSdk})"
             }
@@ -143,7 +154,7 @@ data class ProjectMetadata(
         field("build", b != null, "missing")
         if (b != null) {
             field("build.gradleVersion", !b.gradleVersion.isNullOrBlank(), "missing/blank")
-            field("build.usesGradleWrapper", b.usesGradleWrapper != null, "missing (must be false: no wrapper in this repo)")
+            field("build.usesGradleWrapper", b.usesGradleWrapper == false, "must be false (no Gradle wrapper in this repo — system Gradle only)")
             field("build.agpVersion", !b.agpVersion.isNullOrBlank(), "missing/blank")
             if (!b.agpVersion.isNullOrBlank() && !b.agpVersion.matches(Regex("[0-9]+\\.[0-9]+\\.[0-9]+"))) {
                 errors += "build.agpVersion: not 'major.minor.patch': '${b.agpVersion}'"

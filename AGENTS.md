@@ -5,7 +5,7 @@ Guidance for AI agents (opencode, Antigravity, etc.) working on this repo. Read 
 ## Project
 - Android note-taking app: markdown + ink canvas + knowledge graph (wikilinks/tags/daily notes) + time-synced voice notes + layers + AGSL brushes.
 - Kotlin 2.0.21, Jetpack Compose (BOM 2024.12.01), Room 2.6.1, Material 3, androidx.ink 1.0.0.
-- `applicationId` = `com.aistudio.inkflow.app`; namespace = `com.authorss81.noteflow` (known mismatch, Phase 21.10).
+- `applicationId` = `com.aistudio.inkflow.app.bkxjrz` (matches `app/build.gradle.kts:15` + repo-root `metadata.json`); namespace = `com.authorss81.noteflow` (known mismatch, Phase 21.10).
 - Source: `app/src/main/kotlin/com/authorss81/noteflow/` (`data/`, `services/`, `theme/`, `ui/`, `utils/`).
 - Single `NoteflowViewModel` + `MainActivity` with `mutableStateOf` navigation (not Navigation Compose yet).
 
