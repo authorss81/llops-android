@@ -784,6 +784,21 @@
     `refinedSearchDone`). The command palette / quick-switcher now indexes the
     same bounded cached window (consistent, bounded). Tests:
     `B2Dos02VaultSearchBoundedTest` (10).
+  - **Implemented in phase-132** (UI/UX, see `workspace/phase-132/REPORT.md`): the
+    header no longer squishes "Command Palette" on portrait/mobile viewports. The
+    pre-fix header Row put the unconstrained 49-char shortcut hint
+    `"⌘ ↑/↓ · Enter · two-finger swipe down to open"` directly beside the
+    `Modifier.weight(1f)` title, so on narrow viewports the hint consumed the
+    width and the title collapsed to a vertical strip. The header is now a
+    **nested Column** (`CommandPaletteOverlay.kt:188-204`): the title on its own
+    full-width line (`maxLines = 1` + `TextOverflow.Ellipsis`) with the shortcut
+    hint rendered BENEATH it (also single-line/ellipsized); the search icon +
+    close `IconButton` frame it and the weighted Column gets the remaining width,
+    so the title keeps proper horizontal width at every viewport. Header strings
+    moved to the pure-JVM single-source-of-truth
+    `services/CommandPaletteHeaderPolicy.kt` (`TITLE`/`SHORTCUT_HINT`/`ELLIPSIS` +
+    `shortcutHint(maxChars)`/`truncate` decision table). Tests:
+    `Phase132CommandPaletteHeaderTest` (10).
 - **WebDAV sync**: `services/WebDavSyncService.kt:28` (encrypted vault archives, HTTPS enforced).
   - **Implemented in phase-40**: server-supplied PROPFIND hrefs are re-resolved against the
     configured server origin by the new pure-JVM `services/WebDavHrefResolver.kt`

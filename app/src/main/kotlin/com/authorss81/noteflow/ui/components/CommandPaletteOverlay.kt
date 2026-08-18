@@ -28,6 +28,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.authorss81.noteflow.services.CommandPaletteHeaderPolicy
 import com.authorss81.noteflow.services.graph.CommandPaletteMath
 import com.authorss81.noteflow.theme.LocalReduceMotion
 import com.authorss81.noteflow.ui.viewmodel.NoteflowViewModel
@@ -184,16 +185,23 @@ fun CommandPaletteOverlay(
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.primary
                     )
-                    Text(
-                        "Command Palette",
-                        style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier.weight(1f)
-                    )
-                    Text(
-                        "⌘ ↑/↓ · Enter · two-finger swipe down to open",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Column(
+                        Modifier.weight(1f)
+                    ) {
+                        Text(
+                            CommandPaletteHeaderPolicy.TITLE,
+                            style = MaterialTheme.typography.titleMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            CommandPaletteHeaderPolicy.SHORTCUT_HINT,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                     IconButton(onClick = onClose) {
                         Icon(Icons.Outlined.Close, contentDescription = "Close")
                     }
