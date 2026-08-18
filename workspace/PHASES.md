@@ -34,6 +34,13 @@ painting engine, free features).
 | phase-160 | Kali full-environment dynamic pentest (6-hr budget) on the phase-159 APK → `docs/kali-report-round2.md` | Kali redo |
 | phase-161 | Triage the Kali round-2 report → generate new phases | Kali redo |
 | phase-162 | Build & code failure fixes (dup methods, deprecated project.exec, trusted-artifacts) + verify decryption-safety edge cases | build/code hardening |
+| phase-163 | "Don't show again" must persist for data-recovery screens (per-event, not per-launch) | user-reported |
+| phase-164 | Tag vault scoped to current notebook only (not all notebooks) | user-reported |
+| phase-165 | Beautify Gallery page thumbnails (Material 3 card design) | user-reported |
+| phase-166 | Buttons/text fit screens & cards — wrap or shorten (paging arrows) | user-reported |
+| phase-167 | Bottom nav bar no longer overlays messages & calendar (dynamic padding/insets) | user-reported |
+| phase-168 | App opens the last-used notebook on cold start | user-reported |
+| phase-169 | Fix post-export "Unreadable (decryption failed)" + keep fail-closed UX | user-reported |
 
 ## How phases run
 
