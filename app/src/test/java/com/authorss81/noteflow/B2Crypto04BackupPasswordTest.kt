@@ -62,6 +62,10 @@ class B2Crypto04BackupPasswordTest {
 
     private fun dekHex(dek: ByteArray): String = dek.joinToString("") { "%02x".format(it) }
 
+    /** R2-B1C-03 (phase-145): hex view of the zeroizable byte[] DEK the restore
+     * now carries instead of the old immutable hex String. */
+    private fun ByteArray?.asHex(): String = this?.joinToString("") { "%02x".format(it) }.orEmpty()
+
     /** R2-B1D-04 (phase-138): the restore parse/verify API is file-backed. */
     private fun tempFileOf(bytes: ByteArray): File {
         val dir = Files.createTempDirectory("b2crypto04").toFile()
@@ -213,9 +217,12 @@ class B2Crypto04BackupPasswordTest {
             ZIP_BYTES,
             recoveredZip.copyOfRange(parsed.offsetBytes, recoveredZip.size)
         )
-        assertEquals("the wrapped DEK unwraps to the vault DEK", dekHex(DEK), parsed.dekHex)
+        assertEquals("the wrapped DEK unwraps to the vault DEK", dekHex(DEK), parsed!!.dek.asHex())
         assertNotNull("the derived KEK is handed to importBackup for zeroization", parsed.kek)
         parsed.kek?.fill(0.toByte())
+        // R2-B1C-03 (phase-145): the backup DEK is zeroizable BYTES, not an
+        // immutable hex String — zeroize it like the restore path does.
+        parsed.dek?.fill(0.toByte())
     }
 
     @Test
@@ -272,13 +279,15 @@ class B2Crypto04BackupPasswordTest {
             parsed
         )
         assertArrayEquals(ZIP_BYTES, parsed!!.zipFile.readBytes())
-        assertEquals(dekHex(DEK), parsed.dekHex)
+        // R2-B1C-03 (phase-145): the unwrapped DEK is bytes, not the old hex String.
+        assertEquals(dekHex(DEK), parsed.dek.asHex())
 
         val wrong = assertThrows(IllegalArgumentException::class.java) {
             ImportExportService.tryParseBackupV2File(tempFileOf(v2), "wrong-Password-2026!")
         }
         assertTrue(wrong.message.orEmpty().contains("Incorrect backup password"))
         parsed.kek?.fill(0.toByte())
+        parsed.dek?.fill(0.toByte())
     }
 
     // ---------------------------------------------------------------------

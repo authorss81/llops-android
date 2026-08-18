@@ -4,11 +4,47 @@ import android.content.Context
 import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
+import android.security.keystore.UserNotAuthenticatedException
 import java.security.KeyStore
+import java.security.KeyStoreException
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
+
+/**
+ * R2-B1C-02 (phase-145): the classified outcome of [WebDavCredentialStore.loadDetailed].
+ *
+ * The pre-fix [WebDavCredentialStore.load] collapsed every load-time exception into
+ * `clear(); null`, so an auth-bound key whose biometric window had expired
+ * ([UserNotAuthenticatedException], thrown by `Cipher.init` on an auth-required
+ * AndroidKeyStore key outside its `AUTH_VALIDITY_WINDOW_MS`) DELETED the user's
+ * remembered credentials as if they were corrupted data. The three non-success
+ * states are now distinct so the UI can offer a `BiometricPrompt.CryptoObject`
+ * re-auth instead of asking the user to retype what was never lost.
+ */
+sealed class WebDavCredentialLoadResult {
+    /** Nothing is remembered (or the stored blob is absent/undersized). Never cleared. */
+    object None : WebDavCredentialLoadResult()
+
+    /** The remembered credentials decrypted successfully. */
+    data class Credentials(val value: WebDavCredentialStore.StoredCredentials) : WebDavCredentialLoadResult()
+
+    /**
+     * Credentials ARE remembered but the auth-bound AndroidKeyStore key is locked
+     * — the biometric/validity window has expired. The blob is intact; a recent
+     * biometric authentication would decrypt it again. NEVER cleared, NEVER
+     * treated as corruption (the pre-fix catch-all's silent-delete bug).
+     */
+    object AuthRequired : WebDavCredentialLoadResult()
+
+    /**
+     * The stored blob is genuinely undecryptable (a real AEAD/tag failure, e.g.
+     * tampered ciphertext or a key invalidated by biometric re-enrollment). It
+     * can never decrypt again, so it is cleared for the user to re-enter.
+     */
+    object Corrupt : WebDavCredentialLoadResult()
+}
 
 private const val KEY_ALIAS = "noteflow_webdav_credentials_key"
 private const val KEY_ALIAS_AUTH = "noteflow_webdav_credentials_key_auth"
@@ -78,6 +114,18 @@ internal class AndroidCredentialPrefs(private val context: Context) : Credential
  *    decrypt the stored password without a recent biometric authentication.
  *    The auth-bound key lives under a SEPARATE alias so the stored blob's
  *    binding is physical (the key), never an advisory prefs flag.
+ *
+ * R2-B1C-02 (phase-145) fix:
+ * [loadDetailed] distinguishes *why* the remembered credentials could not be
+ * decrypted. [UserNotAuthenticatedException] (the auth-bound key's biometric
+ * window expiring — "user not authenticated" from the keystore) is NOT an error
+ * in the stored data: the blob is intact and a recent biometric authentication
+ * would decrypt it again, so it is reported as [WebDavCredentialLoadResult.AuthRequired]
+ * and NEVER cleared. Only a true AEAD/tag/decrypt failure (tampered ciphertext,
+ * a key invalidated by biometric re-enrollment) clears. [prepareReauthCipher] /
+ * [decryptWithReauthCipher] let the UI run a `BiometricPrompt.CryptoObject`
+ * re-auth against the stored blob, mirroring [SecurityService.getDecryptionCipher] /
+ * [SecurityService.decryptWithCipher].
  */
 class WebDavCredentialStore internal constructor(
     private val prefs: CredentialPrefs,
@@ -194,20 +242,36 @@ class WebDavCredentialStore internal constructor(
     }
 
     /**
-     * Returns the remembered credentials, or null if none are stored (or the
-     * stored blob can no longer be decrypted — treated as absent).
+     * Returns the remembered credentials, or null when there is nothing to show
+     * ([WebDavCredentialLoadResult.None]), the auth window has expired
+     * ([WebDavCredentialLoadResult.AuthRequired]) or a genuine AEAD/tag failure has
+     * cleared them ([WebDavCredentialLoadResult.Corrupt]). The distinction matters
+     * to the UI — use [loadDetailed] where a biometric re-auth must be offered.
      *
      * Uses the auth-bound key (requiring a recent biometric unlock) only for
      * blobs that were originally saved with `authBound = true`.
      */
-    fun load(): StoredCredentials? {
-        if (!prefs.getBoolean(PREF_REMEMBER_ME, false)) return null
-        val encrypted = prefs.getString(PREF_ENCRYPTED_BLOB, null) ?: return null
+    fun load(): StoredCredentials? = when (val r = loadDetailed()) {
+        is WebDavCredentialLoadResult.Credentials -> r.value
+        else -> null
+    }
+
+    /**
+     * R2-B1C-02 (phase-145): the classified load. Unlike the pre-fix [load],
+     * [UserNotAuthenticatedException] (the auth window expiring) NEVER clears the
+     * remembered credentials — nothing is wrong with them, only with the current
+     * authentication state. Only a genuine AEAD/tag/decrypt failure (or a stored
+     * blob that structurally cannot be a credential) clears.
+     */
+    fun loadDetailed(): WebDavCredentialLoadResult {
+        if (!prefs.getBoolean(PREF_REMEMBER_ME, false)) return WebDavCredentialLoadResult.None
+        val encrypted = prefs.getString(PREF_ENCRYPTED_BLOB, null) ?: return WebDavCredentialLoadResult.None
         val authBound = prefs.getBoolean(PREF_AUTH_BOUND, false)
-        val key = keySource(authBound) ?: return null
         return try {
+            val key = keySource(authBound)
+                ?: return WebDavCredentialLoadResult.None
             val combined = java.util.Base64.getDecoder().decode(encrypted)
-            if (combined.size < GCM_IV_LENGTH) return null
+            if (combined.size < GCM_IV_LENGTH) return WebDavCredentialLoadResult.None
             val iv = combined.copyOfRange(0, GCM_IV_LENGTH)
             val cipherText = combined.copyOfRange(GCM_IV_LENGTH, combined.size)
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
@@ -216,6 +280,82 @@ class WebDavCredentialStore internal constructor(
             val parts = plain.splitCredentialBlob()
             if (parts.size < 3) {
                 clear()
+                WebDavCredentialLoadResult.Corrupt
+            } else {
+                WebDavCredentialLoadResult.Credentials(
+                    StoredCredentials(
+                        serverUrl = parts[0].orEmpty(),
+                        username = parts[1].orEmpty(),
+                        passwordOrToken = parts[2].orEmpty()
+                    )
+                )
+            }
+        } catch (e: UserNotAuthenticatedException) {
+            // R2-B1C-02: the auth-bound key's 10-minute biometric window expired —
+            // a `KeyStoreException: user not authenticated`. The credentials are
+            // INTACT and a recent biometric authentication would decrypt them
+            // again. This MUST NOT clear (the pre-fix catch-all deleted them and
+            // the gate became unexercisable).
+            WebDavCredentialLoadResult.AuthRequired
+        } catch (e: KeyStoreException) {
+            // Defensive for the message-form variant of the same keystore state.
+            if (e.message?.contains("user not authenticated", ignoreCase = true) == true) {
+                WebDavCredentialLoadResult.AuthRequired
+            } else {
+                clear()
+                WebDavCredentialLoadResult.Corrupt
+            }
+        } catch (e: Exception) {
+            // Any other decrypt failure means the stored blob is unrecoverable —
+            // tampered ciphertext (AEADBadTagException), a key invalidated by
+            // biometric re-enrollment, etc. Only THIS state may clear.
+            clear()
+            WebDavCredentialLoadResult.Corrupt
+        }
+    }
+
+    /**
+     * R2-B1C-02 (phase-145): prepares a DECRYPT cipher over the stored auth-bound
+     * blob so the UI can wrap it in a `BiometricPrompt.CryptoObject` re-auth. When
+     * the biometric window is still open, `Cipher.init` succeeds and the re-auth
+     * binds the whole decrypt to the biometric result; when the window has closed
+     * ([UserNotAuthenticatedException]) it returns null and the caller runs a PLAIN
+     * biometric prompt whose success refreshes the keystore window, then re-runs
+     * [loadDetailed]. Never clears anything.
+     */
+    fun prepareReauthCipher(): Cipher? {
+        if (!prefs.getBoolean(PREF_REMEMBER_ME, false)) return null
+        val encrypted = prefs.getString(PREF_ENCRYPTED_BLOB, null) ?: return null
+        if (!prefs.getBoolean(PREF_AUTH_BOUND, false)) return null
+        val key = keySource(true) ?: return null
+        return try {
+            val combined = java.util.Base64.getDecoder().decode(encrypted)
+            if (combined.size < GCM_IV_LENGTH) return null
+            val iv = combined.copyOfRange(0, GCM_IV_LENGTH)
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, iv))
+            cipher
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /**
+     * R2-B1C-02 (phase-145): completes the decrypt of the stored blob with the
+     * cipher returned by [prepareReauthCipher] after a successful biometric
+     * authentication. Returns null on failure WITHOUT clearing (a failed re-auth
+     * must never delete what is still recoverable by retrying).
+     */
+    fun decryptWithReauthCipher(cipher: Cipher): StoredCredentials? {
+        if (!prefs.getBoolean(PREF_REMEMBER_ME, false)) return null
+        val encrypted = prefs.getString(PREF_ENCRYPTED_BLOB, null) ?: return null
+        return try {
+            val combined = java.util.Base64.getDecoder().decode(encrypted)
+            if (combined.size < GCM_IV_LENGTH) return null
+            val cipherText = combined.copyOfRange(GCM_IV_LENGTH, combined.size)
+            val plain = String(cipher.doFinal(cipherText), Charsets.UTF_8)
+            val parts = plain.splitCredentialBlob()
+            if (parts.size < 3) {
                 null
             } else {
                 StoredCredentials(
@@ -225,7 +365,6 @@ class WebDavCredentialStore internal constructor(
                 )
             }
         } catch (e: Exception) {
-            clear()
             null
         }
     }

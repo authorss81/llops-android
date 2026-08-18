@@ -197,7 +197,23 @@ abstract class NoteflowDatabase : RoomDatabase() {
         }
 
 
-        private fun ByteArray.toHexString(): String = joinToString("") { "%02x".format(it) }
+        /**
+         * R2-B1C-03 (phase-145): the SQLCipher passphrase is the DEK's lowercase
+         * hex — but built DIRECTLY as ASCII bytes, with NO intermediate immutable
+         * hex [String] (the pre-fix `toHexString().toByteArray(Charsets.UTF_8)`
+         * produced an unzeroizable heap residue on every vault open). The caller
+         * zeroizes the returned array after use.
+         */
+        private fun ByteArray.toSqlcipherPassphraseBytes(): ByteArray {
+            val hex = "0123456789abcdef".toByteArray(Charsets.US_ASCII)
+            val out = ByteArray(size * 2)
+            for (i in indices) {
+                val b = this[i].toInt() and 0xFF
+                out[i * 2] = hex[b ushr 4]
+                out[i * 2 + 1] = hex[b and 0x0F]
+            }
+            return out
+        }
 
         private fun isPlaintextSqlite(file: File): Boolean {
             return try {
@@ -230,7 +246,7 @@ abstract class NoteflowDatabase : RoomDatabase() {
          * flag — phase-43 wires that flag to the corruption-recovery screen instead
          * of silent data loss.
          */
-        private fun migratePlaintextIfNeeded(context: Context, passphrase: String) {
+         private fun migratePlaintextIfNeeded(context: Context, passphrase: ByteArray) {
             val dbFile = context.getDatabasePath("noteflow.sqlite")
             if (dbFile.exists() && dbFile.length() == 0L) {
                 // An empty 0-byte stub carries no user data — dropping it lets the
@@ -245,6 +261,8 @@ abstract class NoteflowDatabase : RoomDatabase() {
 
             try {
                 System.loadLibrary("sqlcipher")
+                // R2-B1C-03 (phase-145): the passphrase is already ASCII hex bytes;
+                // feed the byte[] overload so no String-typed clone is made.
                 val encryptedDb = net.zetetic.database.sqlcipher.SQLiteDatabase.openOrCreateDatabase(
                     tempFile, passphrase, null, null, null
                 )
@@ -425,11 +443,22 @@ abstract class NoteflowDatabase : RoomDatabase() {
                         VaultKeyHolder.dek = dek
                     }
                 }
-                val passphrase = dek?.toHexString() ?: throw IllegalStateException("Vault is locked: database key not available")
-                migratePlaintextIfNeeded(context, passphrase)
-                val factory = net.zetetic.database.sqlcipher.SupportOpenHelperFactory(passphrase.toByteArray(Charsets.UTF_8))
-                val delegate = factory.create(configuration)
-                return SafeSupportSQLiteOpenHelper(context, delegate, configuration)
+                val dekValue = dek
+                    ?: throw IllegalStateException("Vault is locked: database key not available")
+                // R2-B1C-03 (phase-145): the SQLCipher passphrase is built as ASCII
+                // hex BYTES (no immutable hex String, no `.toByteArray()` clone) and
+                // zeroized after every use. Byte-identical to the old
+                // `toHexString().toByteArray(Charsets.UTF_8)` — lowercase hex of the
+                // DEK — so the on-disk vault is unchanged.
+                val passphraseBytes = dekValue.toSqlcipherPassphraseBytes()
+                try {
+                    migratePlaintextIfNeeded(context, passphraseBytes)
+                    val factory = net.zetetic.database.sqlcipher.SupportOpenHelperFactory(passphraseBytes)
+                    val delegate = factory.create(configuration)
+                    return SafeSupportSQLiteOpenHelper(context, delegate, configuration)
+                } finally {
+                    passphraseBytes.fill(0.toByte())
+                }
             }
         }
 

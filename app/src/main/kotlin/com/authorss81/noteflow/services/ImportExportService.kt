@@ -1507,13 +1507,15 @@ object ImportExportService {
      * R2-B1D-04 (phase-138): the decrypted v2/v3 payload now lives as a FILE (a
      * staging zip under cacheDir) instead of a ByteArray — [zipFile] is at
      * [offsetBytes] into that file ([BACKUP_WRAP_KEY_HALF_SIZE] for v3, 0 for
-     * v2), the unwrapped vault DEK hex, and the KEK handed to importBackup for
+     * v2), [dek] is the unwrapped backup vault DEK as zeroizable BYTES (phase-145
+     * R2-B1C-03: never an immutable hex String, so the backup DEK does not linger
+     * as hex across the restore), and [kek] is the KEK handed to importBackup for
      * zeroization (never held past that call).
      */
     internal data class BackupV2Payload(
         val zipFile: File,
         val offsetBytes: Int,
-        val dekHex: String?,
+        val dek: ByteArray?,
         val kek: ByteArray?
     )
 
@@ -1753,14 +1755,13 @@ object ImportExportService {
                 } else {
                     offsetBytes = 0
                 }
-                val dekHex = try {
+                val dek = try {
                     val unwrapKey = wrapKey ?: derivedKek
-                    val unwrappedDek = EncryptionService.decryptAad(h.wrappedDek, unwrapKey, BACKUP_DEK_WRAP_AAD)
-                    try {
-                        unwrappedDek.toHexString()
-                    } finally {
-                        unwrappedDek.fill(0.toByte())
-                    }
+                    // R2-B1C-03 (phase-145): the unwrapped backup DEK travels the
+                    // restore as zeroizable BYTES (the pre-fix code hex-encoded it
+                    // into an immutable String that survived the whole pipeline).
+                    // Ownership hands to importBackup, which zeroizes it.
+                    EncryptionService.decryptAad(h.wrappedDek, unwrapKey, BACKUP_DEK_WRAP_AAD)
                 } catch (e: Exception) {
                     staging.delete()
                     // v3: correct password + untangled payload, but the DEK did
@@ -1777,7 +1778,7 @@ object ImportExportService {
                 }
                 // KEK ownership hands off to importBackup, which zeroizes it
                 // on every outcome; the failure paths below zeroize it too.
-                return BackupV2Payload(staging, offsetBytes, dekHex, derivedKek)
+                return BackupV2Payload(staging, offsetBytes, dek, derivedKek)
             }
             throw IllegalArgumentException("Incorrect backup password.")
         } catch (e: Exception) {
@@ -1873,17 +1874,29 @@ object ImportExportService {
     private fun rekeySqlcipherDb(context: Context, dbFile: File, oldDekHex: String, newDekHex: String) {
         if (oldDekHex == newDekHex) return
         System.loadLibrary("sqlcipher")
-        val raw = net.zetetic.database.sqlcipher.SQLiteDatabase.openOrCreateDatabase(
-            dbFile, oldDekHex, null, null, null
-        )
+        // R2-B1C-03 (phase-145): open with the old passphrase as ASCII bytes —
+        // the String-typed overload would clone it internally. Zeroized after use.
+        val oldKeyBytes = oldDekHex.toAsciiBytes()
         try {
-            raw.rawExecSQL("PRAGMA rekey = '$newDekHex'")
+            val raw = net.zetetic.database.sqlcipher.SQLiteDatabase.openOrCreateDatabase(
+                dbFile, oldKeyBytes, null, null, null
+            )
+            try {
+                raw.rawExecSQL("PRAGMA rekey = '$newDekHex'")
+            } finally {
+                raw.close()
+            }
         } finally {
-            raw.close()
+            oldKeyBytes.fill(0.toByte())
         }
     }
 
     private fun ByteArray.toHexString(): String = joinToString("") { "%02x".format(it) }
+
+    /** R2-B1C-03 (phase-145): ASCII bytes of a hex passphrase string, so the
+     * SQLCipher open gets a zeroizable ByteArray instead of a String the JVM
+     * keeps around immutably. The CALLER zeroizes the returned array. */
+    private fun String.toAsciiBytes(): ByteArray = toByteArray(Charsets.US_ASCII)
 
     /** A unique transient staging file under the app-private cache dir. */
     private fun newRestoreStagingFile(context: Context, tag: String): File =
@@ -1952,18 +1965,24 @@ object ImportExportService {
             try {
                 val currentDek = key
                     ?: throw IllegalStateException("Cannot restore: no data key available on this device.")
-                val currentDekHex = currentDek.toHexString()
 
-                if (v2.dekHex == null) {
+                if (v2.dek == null) {
                     // Zip decrypted but the backup's DEK did not — backup is corrupt.
                     throw IllegalStateException("Backup appears corrupted: could not unlock the backup key.")
                 }
 
-                restoreFromZip(context, v2.zipFile, v2.offsetBytes, v2.dekHex, currentDekHex, allowEmptyVault)
+                // R2-B1C-03 (phase-145): both DEKs travel the restore as zeroizable
+                // ByteArrays. No hex String is created here — hex is scoped to the
+                // smallest SQLCipher-touching function (validateAndPrepareRestoredDb).
+                restoreFromZip(context, v2.zipFile, v2.offsetBytes, v2.dek, currentDek, allowEmptyVault)
             } finally {
                 // The derived KEK is zeroized on every restore outcome (success,
                 // corrupt-DEK early throw, no-data-key early throw, restore failure).
                 v2.kek?.fill(0.toByte())
+                // R2-B1C-03 (phase-145): the backup DEK is owned by the restore
+                // (never the live vault key) — zeroize it here too. Double-zeroize
+                // with validateAndPrepareRestoredDb is harmless.
+                v2.dek?.fill(0.toByte())
                 // The decrypted zip staging file is transient — never persists.
                 v2.zipFile.delete()
             }
@@ -1996,8 +2015,7 @@ object ImportExportService {
         val stagingZip = newRestoreStagingFile(context, "decrypted")
         try {
             decryptDeviceKeyedToFile(backupFile, stagingZip, key)
-            val currentDekHex = key.toHexString()
-            restoreFromZip(context, stagingZip, 0, null, currentDekHex, allowEmptyVault)
+            restoreFromZip(context, stagingZip, 0, null, key, allowEmptyVault)
         } finally {
             stagingZip.delete()
         }
@@ -2071,7 +2089,7 @@ object ImportExportService {
      * payload prefixes the split key half) plus a streamed extraction; no caller
      * ever hands a whole-archive ByteArray here anymore.
      */
-    private fun restoreFromZip(context: Context, zipFile: File, offsetBytes: Int, backupDekHex: String?, currentDekHex: String?, allowEmptyVault: Boolean = false) {
+     private fun restoreFromZip(context: Context, zipFile: File, offsetBytes: Int, backupDek: ByteArray?, currentDek: ByteArray?, allowEmptyVault: Boolean = false) {
         val tempRoot = File(context.cacheDir, "restore_tmp_${System.currentTimeMillis()}")
         tempRoot.mkdirs()
         val tempDb = File(tempRoot, "noteflow.sqlite")
@@ -2079,7 +2097,7 @@ object ImportExportService {
         val tempVoiceNotes = File(tempRoot, "voice_notes")
         try {
             extractBackupEntriesTo(zipFile, offsetBytes, tempDb, tempImports, tempVoiceNotes)
-            validateAndPrepareRestoredDb(context, tempDb, backupDekHex, currentDekHex, tempVoiceNotes, allowEmptyVault)
+            validateAndPrepareRestoredDb(context, tempDb, backupDek, currentDek, tempVoiceNotes, allowEmptyVault)
             // B2/34.1 + 34.8: re-arm the tamper baseline to the restored DB copy
             // BEFORE it swaps into place. A DB we cannot checksum must never
             // become the live vault — escalate to the hard restore-block.
@@ -2177,92 +2195,116 @@ object ImportExportService {
      * [allowEmptyVault] only after the user confirmed. The live vault is NEVER
      * swapped or HMAC-re-armed on any of these paths.
      */
-    private fun validateAndPrepareRestoredDb(context: Context, tempDb: File, backupDekHex: String?, currentDekHex: String?, tempVoiceNotes: File, allowEmptyVault: Boolean = false) {
-        // B1-DB-7 (phase-56): the empty-passphrase SQLCipher candidate is GONE.
-        // A plaintext/keyless SQLite is only openable with `""` — with just the
-        // backup's own wrapped DEK (v2) or this device's DEK (device-keyed)
-        // permitted, an attacker-chosen DB can never pass integrity_check and be
-        // re-keyed + HMAC-rearmed into the live vault. The helper also strips any
-        // empty string a future caller might pass in, fail-closed.
-        val candidates = backupRestoreOpenCandidates(backupDekHex, currentDekHex)
-        var openedWith: String? = null
-        var userVersion: Long = -1L
-        var presentTableCount = 0
-        var pageCount = 0L
-        for (candidate in candidates) {
-            try {
-                System.loadLibrary("sqlcipher")
-                val db = net.zetetic.database.sqlcipher.SQLiteDatabase.openOrCreateDatabase(
-                    tempDb, candidate, null, null, null
-                )
+    private fun validateAndPrepareRestoredDb(context: Context, tempDb: File, backupDek: ByteArray?, currentDek: ByteArray?, tempVoiceNotes: File, allowEmptyVault: Boolean = false) {
+        // R2-B1C-03 (phase-145): the DEKs arrive as zeroizable ByteArrays — hex
+        // Strings are created ONLY inside this function, the last point that must
+        // hand the SQLCipher String-typed API (PRAGMA rekey, the candidate opens)
+        // its passphrases. They are never held across the rest of the restore.
+        // `currentDek` is the LIVE vault key held by the repository, so it is
+        // COPIED before hex — the caller's array is never zeroized — and both
+        // local byte copies are zeroized before this function returns.
+        val backupDekOwned = backupDek?.copyOf()
+        val currentDekOwned = currentDek?.copyOf()
+        val backupDekHex = backupDekOwned?.toHexString()
+        val currentDekHex = currentDekOwned?.toHexString()
+        try {
+            // B1-DB-7 (phase-56): the empty-passphrase SQLCipher candidate is GONE.
+            // A plaintext/keyless SQLite is only openable with `""` — with just the
+            // backup's own wrapped DEK (v2) or this device's DEK (device-keyed)
+            // permitted, an attacker-chosen DB can never pass integrity_check and be
+            // re-keyed + HMAC-rearmed into the live vault. The helper also strips any
+            // empty string a future caller might pass in, fail-closed.
+            val candidates = backupRestoreOpenCandidates(backupDekHex, currentDekHex)
+            var openedWith: String? = null
+            var userVersion: Long = -1L
+            var presentTableCount = 0
+            var pageCount = 0L
+            for (candidate in candidates) {
+                // R2-B1C-03 (phase-145): feed SQLCipher the candidate passphrase as
+                // ASCII bytes — converted once here and zeroized after the open, so
+                // the String-typed overload never clones it.
+                val candidateBytes = candidate.toAsciiBytes()
                 try {
-                    val cursor = db.rawQuery("PRAGMA integrity_check", null)
-                    val ok = cursor.moveToFirst() && cursor.getString(0) == "ok"
-                    if (ok) {
-                        // B2-DOS-01 (phase-50): strip oversized stroke geometry
-                        // NOW, while this candidate key can open the backup — an
-                        // attacker-planted stroke row whose encrypted pointsJson
-                        // (base64 ciphertext ≈ plaintext length, AES-GCM does not
-                        // compress) exceeds the budget must never migrate or swap
-                        // into the live vault.
-                        sanitizeRestoredStrokeGeometry(db)
-                        // B1-AUTH-05 (phase-69): strip sourceFilePath rows that
-                        // escape the imports root BEFORE they can migrate or swap
-                        // into the live vault — the zip entry-names validation
-                        // never re-checked this column.
-                        sanitizeRestoredSourceFilePaths(db, getImportsDir(context))
-                        // H3: read the schema version now, while the DB is open.
-                        val versionCursor = db.rawQuery("PRAGMA user_version", null)
-                        if (versionCursor.moveToFirst()) userVersion = versionCursor.getLong(0)
-                        versionCursor.close()
-                        // R2-B1D-02: capture the Room schema identity + note count
-                        // under the SAME open, so the decision can never be gamed
-                        // between the gate and the swap.
-                        presentTableCount = countPresentRestoredTables(db)
-                        pageCount = countRestoredRows(db, "pages")
+                    System.loadLibrary("sqlcipher")
+                    val db = net.zetetic.database.sqlcipher.SQLiteDatabase.openOrCreateDatabase(
+                        tempDb, candidateBytes, null, null, null
+                    )
+                    try {
+                        val cursor = db.rawQuery("PRAGMA integrity_check", null)
+                        val ok = cursor.moveToFirst() && cursor.getString(0) == "ok"
+                        if (ok) {
+                            // B2-DOS-01 (phase-50): strip oversized stroke geometry
+                            // NOW, while this candidate key can open the backup — an
+                            // attacker-planted stroke row whose encrypted pointsJson
+                            // (base64 ciphertext ≈ plaintext length, AES-GCM does not
+                            // compress) exceeds the budget must never migrate or swap
+                            // into the live vault.
+                            sanitizeRestoredStrokeGeometry(db)
+                            // B1-AUTH-05 (phase-69): strip sourceFilePath rows that
+                            // escape the imports root BEFORE they can migrate or swap
+                            // into the live vault — the zip entry-names validation
+                            // never re-checked this column.
+                            sanitizeRestoredSourceFilePaths(db, getImportsDir(context))
+                            // H3: read the schema version now, while the DB is open.
+                            val versionCursor = db.rawQuery("PRAGMA user_version", null)
+                            if (versionCursor.moveToFirst()) userVersion = versionCursor.getLong(0)
+                            versionCursor.close()
+                            // R2-B1D-02: capture the Room schema identity + note count
+                            // under the SAME open, so the decision can never be gamed
+                            // between the gate and the swap.
+                            presentTableCount = countPresentRestoredTables(db)
+                            pageCount = countRestoredRows(db, "pages")
+                        }
+                        cursor.close()
+                        if (ok) { openedWith = candidate; break }
+                    } finally {
+                        db.close()
                     }
-                    cursor.close()
-                    if (ok) { openedWith = candidate; break }
+                } catch (e: Exception) {
+                    // wrong key or corrupt file — try next candidate
                 } finally {
-                    db.close()
+                    candidateBytes.fill(0.toByte())
                 }
-            } catch (e: Exception) {
-                // wrong key or corrupt file — try next candidate
             }
-        }
-        if (openedWith == null) {
-            throw IllegalStateException("Restore rejected: the backup database is corrupt or was created on a different device.")
-        }
-        // H3: a newer-schema backup must never swap into the live path — a later
-        // fallbackToDestructiveMigration would wipe it. Kept OUTSIDE the candidate
-        // loop so the rejection is not swallowed as a wrong-key retry.
-        checkRestoredSchemaNotNewer(userVersion, com.authorss81.noteflow.data.db.NoteflowDatabase.SCHEMA_VERSION)
+            if (openedWith == null) {
+                throw IllegalStateException("Restore rejected: the backup database is corrupt or was created on a different device.")
+            }
+            // H3: a newer-schema backup must never swap into the live path — a later
+            // fallbackToDestructiveMigration would wipe it. Kept OUTSIDE the candidate
+            // loop so the rejection is not swallowed as a wrong-key retry.
+            checkRestoredSchemaNotNewer(userVersion, com.authorss81.noteflow.data.db.NoteflowDatabase.SCHEMA_VERSION)
 
-        // R2-B1D-02 (phase-135): structural/content gate — a freshly-initialized
-        // EMPTY SQLCipher DB passes candidate-open + integrity_check + user_version
-        // <= 9 but is NOT a vault. Refuse it here, never re-arm + swap.
-        when (val decision = RestoredDbPolicy.decide(userVersion, presentTableCount, pageCount, allowEmptyVault)) {
-            is RestoredDbPolicy.Decision.Reject -> {
-                quarantineRejectedRestoredDb(context, tempDb)
-                throw IllegalStateException(decision.reason)
+            // R2-B1D-02 (phase-135): structural/content gate — a freshly-initialized
+            // EMPTY SQLCipher DB passes candidate-open + integrity_check + user_version
+            // <= 9 but is NOT a vault. Refuse it here, never re-arm + swap.
+            when (val decision = RestoredDbPolicy.decide(userVersion, presentTableCount, pageCount, allowEmptyVault)) {
+                is RestoredDbPolicy.Decision.Reject -> {
+                    quarantineRejectedRestoredDb(context, tempDb)
+                    throw IllegalStateException(decision.reason)
+                }
+                RestoredDbPolicy.Decision.EmptyVault -> {
+                    quarantineRejectedRestoredDb(context, tempDb)
+                    throw EmptyVaultRestoreDecisionException()
+                }
+                RestoredDbPolicy.Decision.Pass -> Unit
             }
-            RestoredDbPolicy.Decision.EmptyVault -> {
-                quarantineRejectedRestoredDb(context, tempDb)
-                throw EmptyVaultRestoreDecisionException()
-            }
-            RestoredDbPolicy.Decision.Pass -> Unit
-        }
 
-        if (currentDekHex != null && openedWith != currentDekHex) {
-            rekeySqlcipherDb(context, tempDb, openedWith, currentDekHex)
-            if (!openedWith.isNullOrEmpty() && openedWith != currentDekHex) {
-                migrateFieldCiphertexts(context, tempDb, currentDekHex, openedWith)
-                // B1-DB-3 (phase-54): the voice `.enc` blobs were encrypted with
-                // the BACKUP device's DEK — re-encrypt them in place to the
-                // restoring device's DEK so the retargeted media_embeds rows keep
-                // playing after a cross-device restore.
-                rekeyVoiceNoteBlobs(tempVoiceNotes, openedWith.fromHex(), currentDekHex.fromHex())
+            if (currentDekHex != null && openedWith != currentDekHex) {
+                rekeySqlcipherDb(context, tempDb, openedWith, currentDekHex)
+                if (!openedWith.isNullOrEmpty() && openedWith != currentDekHex) {
+                    migrateFieldCiphertexts(context, tempDb, currentDekHex, openedWith)
+                    // B1-DB-3 (phase-54): the voice `.enc` blobs were encrypted with
+                    // the BACKUP device's DEK — re-encrypt them in place to the
+                    // restoring device's DEK so the retargeted media_embeds rows keep
+                    // playing after a cross-device restore.
+                    rekeyVoiceNoteBlobs(tempVoiceNotes, openedWith.fromHex(), currentDekHex.fromHex())
+                }
             }
+        } finally {
+            // R2-B1C-03 (phase-145): every local byte copy of a DEK is zeroized.
+            // (The live currentDek the caller passed in is untouched — only the copy.)
+            backupDekOwned?.fill(0.toByte())
+            currentDekOwned?.fill(0.toByte())
         }
     }
 
@@ -2432,19 +2474,26 @@ object ImportExportService {
         val newDek = newDekHex.fromHex()
         try {
             System.loadLibrary("sqlcipher")
-            val db = net.zetetic.database.sqlcipher.SQLiteDatabase.openOrCreateDatabase(
-                tempDb, newDekHex, null, null, null
-            )
+            // R2-B1C-03 (phase-145): open with the new passphrase as ASCII bytes —
+            // zeroized after the open; the hex String is scoped to the caller.
+            val newDekBytes = newDekHex.toAsciiBytes()
             try {
-                // C1: iterate over ALL field-encrypted columns — including
-                // strokes.pointsJson and note_versions.{title,extractedText} —
-                // so cross-device restores never strand ciphertext under the
-                // old DEK (which the read path then returns raw, losing data).
-                for ((table, columns) in fieldEncryptedColumns) {
-                    migrateTable(db, table, columns, oldDek, newDek)
+                val db = net.zetetic.database.sqlcipher.SQLiteDatabase.openOrCreateDatabase(
+                    tempDb, newDekBytes, null, null, null
+                )
+                try {
+                    // C1: iterate over ALL field-encrypted columns — including
+                    // strokes.pointsJson and note_versions.{title,extractedText} —
+                    // so cross-device restores never strand ciphertext under the
+                    // old DEK (which the read path then returns raw, losing data).
+                    for ((table, columns) in fieldEncryptedColumns) {
+                        migrateTable(db, table, columns, oldDek, newDek)
+                    }
+                } finally {
+                    db.close()
                 }
             } finally {
-                db.close()
+                newDekBytes.fill(0.toByte())
             }
         } finally {
             oldDek.fill(0.toByte())

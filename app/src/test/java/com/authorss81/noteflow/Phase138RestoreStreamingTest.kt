@@ -145,9 +145,11 @@ class Phase138RestoreStreamingTest {
         val parsed = ImportExportService.tryParseBackupV2File(backupFile, PASSWORD)
         assertNotNull("the v2 file must parse via the file factory", parsed)
         assertArrayEquals("the recovered zip must live in the staging file", zipBytes, parsed!!.zipFile.readBytes())
-        assertEquals("the wrapped DEK must unwrap to the vault DEK", dek.joinToString("") { "%02x".format(it) }, parsed.dekHex)
+        assertEquals("the wrapped DEK must unwrap to the vault DEK", dek.joinToString("") { "%02x".format(it) }, parsed.dek?.joinToString("") { "%02x".format(it) })
         assertNotNull("the derived KEK is handed to importBackup for zeroization", parsed.kek)
         parsed.kek?.fill(0.toByte())
+        // R2-B1C-03 (phase-145): the backup DEK is zeroizable bytes — zeroize it.
+        parsed.dek?.fill(0.toByte())
 
         // The verify path agrees (cheap v2 wrapped-DEK probe) — and rejects the
         // wrong password BEFORE any DB is closed.

@@ -17,7 +17,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.biometric.BiometricPrompt
+import androidx.fragment.app.FragmentActivity
 import com.authorss81.noteflow.services.BiometricAuthHelper
+import com.authorss81.noteflow.services.WebDavCredentialLoadResult
 import com.authorss81.noteflow.services.WebDavCredentialStore
 import com.authorss81.noteflow.services.WebDavFailurePolicy
 import com.authorss81.noteflow.services.WebDavSyncService
@@ -48,6 +51,11 @@ fun WebDavSyncDialog(
     var syncStatus by remember { mutableStateOf<String?>(null) }
     var statusIsError by remember { mutableStateOf(false) }
     var isLoading by remember { mutableStateOf(false) }
+    // R2-B1C-02 (phase-145): a non-alarming notice when the remembered
+    // credentials exist but the auth-bound keystore key's biometric window has
+    // expired. They are PRESERVED (never silently deleted) and a biometric
+    // re-auth decrypts them again.
+    var authRequiredNotice by remember { mutableStateOf<String?>(null) }
 
     // B1-NET-08: "remembered credentials" opt in to a biometric auth gate when
     // the user has enabled global biometric unlock (and a strong biometric is
@@ -61,14 +69,72 @@ fun WebDavSyncDialog(
 
     val syncService = remember { WebDavSyncService(context) }
 
+    // R2-B1C-02 (phase-145): apply decrypted remembered credentials to the form.
+    fun applyRememberedCredentials(creds: WebDavCredentialStore.StoredCredentials?) {
+        if (creds == null) return
+        serverUrl = creds.serverUrl
+        username = creds.username
+        passwordOrToken = creds.passwordOrToken
+        rememberMe = true
+        authRequiredNotice = null
+    }
+
+    // R2-B1C-02 (phase-145): BiometricPrompt.CryptoObject re-auth for a stored
+    // auth-bound blob whose window expired — the SecurityService/DEK pattern
+    // (getDecryptionCipher → CryptoObject → decryptWithCipher) applied to the
+    // WebDAV credential key. When the window was already open the prompt binds
+    // the decrypt to the biometric result; when closed, the plain prompt's
+    // success refreshes the keystore window and the load is re-run.
+    fun unlockRememberedWithBiometrics(activity: FragmentActivity?) {
+        if (activity == null) return
+        val cryptoObject = credentialStore.prepareReauthCipher()
+            ?.let { BiometricPrompt.CryptoObject(it) }
+        BiometricAuthHelper.promptBiometricAuth(
+            activity = activity,
+            title = "Unlock remembered WebDAV credentials",
+            subtitle = "Use your fingerprint or face to decrypt the saved password",
+            cryptoObject = cryptoObject,
+            onSuccess = { result ->
+                val creds = if (cryptoObject != null) {
+                    val cipher = result.cryptoObject?.cipher
+                    if (cipher != null) credentialStore.decryptWithReauthCipher(cipher) else null
+                } else {
+                    // The window had closed; the plain prompt refreshed it.
+                    (credentialStore.loadDetailed() as? WebDavCredentialLoadResult.Credentials)?.value
+                }
+                if (creds != null) {
+                    applyRememberedCredentials(creds)
+                } else {
+                    authRequiredNotice =
+                        "Biometric unlock did not recover your saved credentials. " +
+                            "Re-enter the password below (your stored copy is still there)."
+                }
+            },
+            onError = {
+                authRequiredNotice =
+                    "Biometric unlock cancelled — your remembered credentials are still " +
+                        "saved and can be unlocked again later."
+            }
+        )
+    }
+
     // Pre-fill from the encrypted credential store (AndroidKeyStore-backed),
     // never from plaintext disk.
     LaunchedEffect(Unit) {
-        credentialStore.load()?.let { creds ->
-            serverUrl = creds.serverUrl
-            username = creds.username
-            passwordOrToken = creds.passwordOrToken
-            rememberMe = true
+        when (val result = credentialStore.loadDetailed()) {
+            is WebDavCredentialLoadResult.Credentials ->
+                applyRememberedCredentials(result.value)
+            WebDavCredentialLoadResult.AuthRequired -> {
+                // R2-B1C-02: the auth window expired — the stored credentials were
+                // NOT deleted. Keep remember-me checked and offer the biometric
+                // re-auth (or let the user re-enter; the stored copy survives).
+                rememberMe = true
+                authRequiredNotice =
+                    "Your remembered credentials are locked — the biometric unlock " +
+                        "window expired. Unlock them below, or re-enter the password " +
+                        "(the saved copy is preserved)."
+            }
+            WebDavCredentialLoadResult.None, WebDavCredentialLoadResult.Corrupt -> Unit
         }
     }
 
@@ -179,6 +245,42 @@ fun WebDavSyncDialog(
                     Text(
                         "Remember credentials (stored encrypted)", style = MaterialTheme.typography.bodySmall
                     )
+                }
+
+                // R2-B1C-02 (phase-145): auth-bound remembered credentials whose
+                // biometric window expired are PRESERVED and re-unlockable. Show a
+                // non-alarming notice + a BiometricPrompt.CryptoObject re-auth.
+                authRequiredNotice?.let { notice ->
+                    Surface(
+                        color = scheme.primaryContainer,
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(10.dp)) {
+                            Text(
+                                text = notice,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = scheme.onPrimaryContainer
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            OutlinedButton(
+                                onClick = {
+                                    val activity = context as? FragmentActivity
+                                    if (activity != null &&
+                                        BiometricAuthHelper.isBiometricAvailable(context)
+                                    ) {
+                                        unlockRememberedWithBiometrics(activity)
+                                    } else {
+                                        authRequiredNotice =
+                                            "Biometrics are unavailable right now — re-enter the " +
+                                                "password below (your saved copy is preserved)."
+                                    }
+                                }
+                            ) {
+                                Text("Unlock with biometrics")
+                            }
+                        }
+                    }
                 }
 
                 syncStatus?.let { msg ->

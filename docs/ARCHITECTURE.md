@@ -96,6 +96,18 @@
     dbGate flows flip on, and an open failure there is zeroized — never counted as a wrong
     password. `onCleared()` also disposes. `databaseDisposedByLock` + `dataInitialized=false` let
     the next unlock re-establish observers against the fresh connection.
+  - **Implemented in phase-145** (R2-B1C-03, see `workspace/phase-145/REPORT.md`): the SQLCipher
+    passphrase is never an immutable hex `String` — `NoteflowSqlcipherFactory.create`
+    (`data/db/NoteflowDatabase.kt:453-461`) builds it directly as ASCII-hex BYTES via
+    `ByteArray.toSqlcipherPassphraseBytes()` (`:207-216`, byte-identical to the old lowercase-hex
+    String so existing vault files still open) and zeroizes `passphraseBytes.fill(0)` in the same
+    try/finally after `SupportOpenHelperFactory(passphraseBytes)` and the plaintext-migration
+    `openOrCreateDatabase(tempFile, passphrase, ...)` byte[] overload. The restore pipeline carries
+    backup+current DEKs as zeroizable ByteArrays end-to-end (`BackupV2Payload.dek`,
+    `ImportExportService.kt:1518`, `importBackup` `finally` zeroizes, `:1985`); hex Strings exist
+    ONLY inside `validateAndPrepareRestoredDb` — owned byte copies, both zeroized on exit — and the
+    SQLCipher String-API touches (`rekeySqlcipherDb`, `migrateFieldCiphertexts`, candidate opens)
+    all feed the passphrase as zeroized ASCII bytes via `String.toAsciiBytes()`.
   - **Implemented in phase-95** (B2-UI-4, VERIFY-ONLY, see `workspace/phase-95/REPORT.md`): the
     post-unlock state re-initialization gap is closed and pinned. `lock()` (`NoteflowViewModel.kt:3638-3694`,
     inside `if (settings.hasMasterPassword)` `:3668-3681`) resets `dataInitialized = false`
@@ -882,6 +894,24 @@
     status renders via `scrubForDisplay` (defense in depth). Grep-pinned: no
     `localizedMessage`, no `${e.message}`, no bare `res.message` assign in either file.
     Tests: `B2Log05WebDavFailureTextTest` (13) — 1619 green (0 failures).
+  - **Implemented in phase-145** (R2-B1C-02, see `workspace/phase-145/REPORT.md`):
+    auth-bound remembered WebDAV credentials are never silently deleted when the
+    AndroidKeyStore biometric window expires. `WebDavCredentialStore.load()` is now a
+    convenience over the classified `loadDetailed()` sealed result
+    (`WebDavCredentialLoadResult` = `None`/`Credentials`/`AuthRequired`/`Corrupt`,
+    `WebDavCredentialStore.kt:26-47`); `UserNotAuthenticatedException` and the keystore's
+    `KeyStoreException("user not authenticated")` map to `AuthRequired` (blob INTACT, never
+    cleared — `clear()` runs only on a genuine AEAD/tag/decrypt failure). The biometric
+    re-auth path the phase-119 finding said was missing is real:
+    `prepareReauthCipher()` (`WebDavCredentialStore.kt:326`) prepares a DECRYPT cipher over
+    the stored auth-bound blob → `BiometricPrompt.CryptoObject` → on biometric success
+    `decryptWithReauthCipher(cipher)` (`:349`) completes the decrypt (mirrors
+    `SecurityService.getDecryptionCipher`/`decryptWithCipher`); a failed re-auth returns null
+    WITHOUT clearing. `WebDavSyncDialog` classifies on launch (`WebDavSyncDialog.kt:123-139`):
+    `AuthRequired` keeps remember-me checked and shows a non-alarming notice + an
+    "Unlock with biometrics" `OutlinedButton` wired through
+    `BiometricAuthHelper.promptBiometricAuth(..., cryptoObject, ...)`
+    (`WebDavSyncDialog.kt:82-119`). No new permission/dependency.
 - **LocalSend**: `services/localsend/LocalSendProtocol.kt:29`, `LocalSendSender.kt:48`.
   - **Implemented in phase-41**: confirmed-pairing gate for sends. Pure-JVM
     `services/localsend/LocalSendPairing.kt` (`gate` = HTTPS-only +

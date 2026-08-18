@@ -184,7 +184,7 @@ class B1Db07PlainZipRestoreRejectedTest {
         // and BEFORE the legacy zip extraction can happen.
         val rejectIndex = region.indexOf("Restore rejected: this is an unencrypted")
         val decryptIndex = region.indexOf("decryptDeviceKeyedToFile(backupFile, stagingZip, key)")
-        val extractIndex = region.indexOf("restoreFromZip(context, stagingZip, 0, null, currentDekHex, allowEmptyVault)")
+        val extractIndex = region.indexOf("restoreFromZip(context, stagingZip, 0, null, key, allowEmptyVault)")
         assertTrue("the plain-zip reject must precede the decrypt path", rejectIndex >= 0 && rejectIndex < decryptIndex)
         assertTrue("the plain-zip reject must precede any extraction", rejectIndex >= 0 && rejectIndex < extractIndex)
     }
@@ -215,8 +215,8 @@ class B1Db07PlainZipRestoreRejectedTest {
             region.contains("listOfNotNull(backupDekHex, currentDekHex, \"\")")
         )
         assertTrue(
-            "the DB open must use the candidate VARIABLE, never a literal key",
-            region.contains("tempDb, candidate, null, null, null")
+            "the DB open must use the candidate VARIABLE (as bytes, R2-B1C-03), never a literal key",
+            region.contains("tempDb, candidateBytes, null, null, null")
         )
         assertTrue("the old v2/device-keyed integrity check must still run", region.contains("PRAGMA integrity_check"))
     }
@@ -228,8 +228,8 @@ class B1Db07PlainZipRestoreRejectedTest {
             ieSource.contains("internal fun backupRestoreOpenCandidates(backupDekHex: String?, currentDekHex: String?)")
         )
         assertTrue(
-            "the restore path must open the DB with the candidate variable, never a literal key",
-            ieSource.contains("tempDb, candidate, null, null, null")
+            "the restore path must open the DB with the candidate BYTES variable, never a literal key",
+            ieSource.contains("tempDb, candidateBytes, null, null, null")
         )
         // The only remaining `""` text in the file documents the historical bug
         // (KDoc); no open call in the CODE may pass a literal empty key.

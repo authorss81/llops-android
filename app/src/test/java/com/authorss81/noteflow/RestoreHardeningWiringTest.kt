@@ -84,8 +84,8 @@ class RestoreHardeningWiringTest {
             .substringBefore("private fun extractBackupEntriesTo")
 
         assertTrue("importBackup must carry the confirmed flag", importRegion.contains("allowEmptyVault: Boolean = false"))
-        assertTrue("both parse paths thread the flag through", importRegion.contains("restoreFromZip(context, v2.zipFile, v2.offsetBytes, v2.dekHex, currentDekHex, allowEmptyVault)"))
-        assertTrue("the legacy path threads the flag too", importRegion.contains("restoreFromZip(context, stagingZip, 0, null, currentDekHex, allowEmptyVault)"))
+        assertTrue("both parse paths thread the flag through (DEKs as byte[], R2-B1C-03)", importRegion.contains("restoreFromZip(context, v2.zipFile, v2.offsetBytes, v2.dek, currentDek, allowEmptyVault)"))
+        assertTrue("the legacy path threads the flag too", importRegion.contains("restoreFromZip(context, stagingZip, 0, null, key, allowEmptyVault)"))
         assertTrue("restoreFromZip must forward it to the validator", restoreRegion.contains("allowEmptyVault"))
     }
 
