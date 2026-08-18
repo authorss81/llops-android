@@ -135,10 +135,15 @@ class MainActivity : FragmentActivity() {
         AppStartupLogger.init(applicationContext)
         AppStartupLogger.logEvent(this, "MainActivity.onCreate started")
         enableEdgeToEdge()
-        // B1-PLAT-4 (phase-60): FLAG_SECURE is applied UNCONDITIONALLY. The old
-        // debug carve-out that cleared the flag for debug builds is gone — there
-        // is no debug exception to the screenshot / recents-thumbnail ban.
-        window.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
+        // Phase-130: FLAG_SECURE is applied ONLY in non-debug builds (AGENTS.md
+        // hard rule). Debug / emulator streaming environments (cloud Android
+        // emulators that mirror the display buffer) render the UI instead of a
+        // pitch-black surface; release builds keep the screenshot / recording /
+        // recents-thumbnail ban. The decision lives in
+        // SecureWindowPolicy.shouldApplySecureFlag (pure JVM, unit-pinned).
+        if (com.authorss81.noteflow.services.SecureWindowPolicy.shouldApplySecureFlag(BuildConfig.DEBUG)) {
+            window.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
+        }
 
         readShareIntent(intent)
 

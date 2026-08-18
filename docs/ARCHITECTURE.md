@@ -929,6 +929,20 @@
     applies FLAG_SECURE unconditionally (debug clearFlags carve-out deleted). `ON_STOP` → lock
     retained. `ON_PAUSE` → lock explicitly NOT chosen (system-overlay pauses like phase-59's SAF
     pickers, biometric prompts and the share sheet must not force a lock).
+  - **Implemented in phase-130** (user-requested UI/UX, see `workspace/phase-130/REPORT.md`):
+    FLAG_SECURE is gated on `!BuildConfig.DEBUG` per the AGENTS.md hard rule. New pure-JVM
+    `services/SecureWindowPolicy.kt` = single decision `shouldApplySecureFlag(debug)` (debug →
+    false, release → true); `MainActivity.onCreate` (`MainActivity.kt:144-146`) applies the flag
+    ONLY via `if (SecureWindowPolicy.shouldApplySecureFlag(BuildConfig.DEBUG)) { window.addFlags(FLAG_SECURE) }`
+    — the phase-60 unconditional `addFlags` (and the old `B1Plat04AutoLockTest` pin that forbade a
+    debug gate) is superseded. Debug/cloud-emulator streaming environments (which mirror the
+    display buffer) render the UI instead of a black surface; release builds keep the
+    screenshot/recording/recents-thumbnail ban, and R8 keeps the call because `onCreate` is an
+    activity entry point and `BuildConfig.DEBUG` = false folds the branch to always-true in release.
+    `buildConfig = true` is already on (`app/build.gradle.kts:89`). Tests: `B1Plat04AutoLockTest`
+    now 11 (decision-helper tests + a source pin that the ONLY `window.addFlags` in MainActivity
+    sits inside the BuildConfig.DEBUG guard). `gradle testDebugUnitTest` 1842 green (0 failures) +
+    `assembleDebug` green.
   - **Implemented in phase-72** (B2-UI-2, see `workspace/phase-72/REPORT.md`): `NoteflowViewModel.lock()`
     (`NoteflowViewModel.kt:3219-3234`) scrubs the system clipboard as its FIRST statement —
     `ClipboardGuard.scrubIfOwnCopy(appContext)`, before `repository.zeroizeKey()` and before the

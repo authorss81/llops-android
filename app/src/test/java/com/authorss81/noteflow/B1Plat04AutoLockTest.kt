@@ -1,6 +1,7 @@
 package com.authorss81.noteflow
 
 import com.authorss81.noteflow.services.AutoLockPolicy
+import com.authorss81.noteflow.services.SecureWindowPolicy
 import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -27,7 +28,16 @@ import org.junit.Test
  *  - `MainActivity` locks on the runtime `ACTION_SCREEN_OFF` broadcast (display-off
  *    is no longer dependent on pause-vs-stop semantics) and runs a continuous 1 s
  *    idle poller while unlocked instead of consulting the timeout only on touch;
- *  - `FLAG_SECURE` is applied unconditionally.
+ *  - `FLAG_SECURE` was applied UNCONDITIONALLY (the phase-60 carve-out removal).
+ *
+ * Phase-130 (user-requested UI/UX, 2026-08-18) REVERSED the unconditional
+ * FLAG_SECURE per the AGENTS.md hard rule ("FLAG_SECURE is applied in
+ * non-debug builds"): the flag is applied ONLY when `!BuildConfig.DEBUG`, so
+ * debug / cloud-emulator streaming environments (which mirror the display
+ * buffer) render the UI instead of a black surface while release builds keep
+ * the screenshot / recording / recents-thumbnail ban. The pure-JVM decision
+ * lives in [SecureWindowPolicy.shouldApplySecureFlag]; `MainActivity` gates
+ * `window.addFlags(FLAG_SECURE)` on it fed with `BuildConfig.DEBUG`.
  *
  * Behavior below is pure JVM (the decision table). The wiring of the activity /
  * settings is pinned at source level, same technique as B2Log01CrashReportingTest /
@@ -142,16 +152,47 @@ class B1Plat04AutoLockTest {
     // ---------- MainActivity wiring (source pins) ----------
 
     @Test
-    fun `FLAG_SECURE is applied unconditionally with no debug carve-out`() {
+    fun `FLAG_SECURE is applied only under the non-debug BuildConfig guard`() {
         val source = readMainActivitySource()
-        assertTrue("FLAG_SECURE must be applied in onCreate", source.contains("window.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)"))
+
+        // The addFlags application appears EXACTLY ONCE in MainActivity — it must
+        // be the one inside the non-debug guard (never an unconditional one).
+        assertEquals(
+            "window.addFlags must appear exactly once in MainActivity.kt (the guarded one)",
+            1,
+            source.split("window.addFlags").size - 1
+        )
+        // The guard routes the pure-JVM decision fed with BuildConfig.DEBUG.
+        assertTrue(
+            "the addFlags must be gated on the non-debug decision (BuildConfig.DEBUG)",
+            source.contains(
+                "if (com.authorss81.noteflow.services.SecureWindowPolicy.shouldApplySecureFlag(BuildConfig.DEBUG))"
+            )
+        )
+        // The addFlags call must sit INSIDE that guarded block, never outside it.
+        val guardBlock = source.substringAfter("shouldApplySecureFlag(BuildConfig.DEBUG))")
+        assertTrue("the guard must open a code block", guardBlock.trimStart().startsWith("{"))
+        val guardedBody = guardBlock.substringAfter("{").substringBefore("}")
+        assertTrue(
+            "the guarded block must contain the addFlags call",
+            guardedBody.contains("window.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)")
+        )
+        // No debug clearFlags carve-out may exist (release keeps no opposite path).
         assertFalse(
-            "the debug clearFlags carve-out must be gone",
+            "the debug clearFlags carve-out must stay gone",
             source.contains("clearFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)")
         )
+    }
+
+    @Test
+    fun `SecureWindowPolicy decision is debug-absent and release-present`() {
+        assertTrue(
+            "release (BuildConfig.DEBUG = false) must apply FLAG_SECURE",
+            SecureWindowPolicy.shouldApplySecureFlag(debug = false)
+        )
         assertFalse(
-            "FLAG_SECURE must not be gated behind a debug build",
-            source.contains("if (!BuildConfig.DEBUG)") || source.contains("if (BuildConfig.DEBUG)")
+            "debug (BuildConfig.DEBUG = true) must NOT apply FLAG_SECURE",
+            SecureWindowPolicy.shouldApplySecureFlag(debug = true)
         )
     }
 
