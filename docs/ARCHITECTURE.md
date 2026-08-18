@@ -1332,9 +1332,14 @@
   Room schema → `app/schemas`, R8 minify on for release, `jniLibs.useLegacyPackaging = true`.
 - **Gradle provisioning** — a committed wrapper exists for INTEGRITY-PINNING only: `gradle/wrapper/gradle-wrapper.properties:7`
   pins `distributionSha256Sum` for 8.13, but CI and grading builds run system `gradle` (8.13) directly, so the
-  wrapper's checksum is NOT enforced on CI (wiring `distribution-sha256-sum` / switching CI to `./gradlew` is
-  DEFERRED to phase-147, workflow edits require user approval). Tests: `gradle testDebugUnitTest`; build: `gradle assembleDebug`
+  wrapper's checksum is NOT enforced on CI. Wiring `distribution-sha256-sum` / switching CI to `./gradlew` and
+  pinning every workflow action to a commit SHA (R2-b2b2-DEP-01) are **PENDING USER APPROVAL** (workflow edits gate):
+  the ready-to-apply mapping lives in `docs/CI_PINNING.md` and `.github/dependabot.yml` is committed. Tests: `gradle testDebugUnitTest`; build: `gradle assembleDebug`
   / `assembleRelease`. Runs in GitHub Actions (gradle 8.13, Temurin JDK 21).
+  - **Implemented in phase-147** (R2-b2b2-DEP-01, `workspace/phase-147/REPORT.md` + `docs/CI_PINNING.md`):
+    NOT-APPROVED path — all 19 `uses:` tags in `release.yml`/`android.yml`/`llops.yml` are mapped to full
+    commit SHAs (GitHub-API resolved 2026-08-18) and `.github/dependabot.yml` (github-actions, weekly, grouped)
+    now maintains SHA pins once applied; the workflow edits themselves stay PENDING USER APPROVAL per AGENTS.md.
   - **Implemented in phase-146** (R2-b2b2-DEP-02/03/04, `workspace/phase-146/REPORT.md`): the wrapper
     (`gradlew`/`gradlew.bat`/`gradle/wrapper/gradle-wrapper.jar` + pinned `.properties`) is committed; the
     lockfile now runs `<verify-signatures>true</verify-signatures>` against a committed 57-key `<trusted-keys>`

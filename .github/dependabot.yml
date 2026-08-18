@@ -1,0 +1,20 @@
+# Dependabot configuration — applied by GitHub's own infrastructure (Dependabot),
+# NOT a workflow. Committed by phase-147 (finding R2-b2b2-DEP-01, MEDIUM):
+# once every action `uses:` is pinned to a full commit SHA (see
+# docs/CI_PINNING.md), the `github-actions` ecosystem keeps each pin current by
+# opening PRs that update the SHA and the trailing `# vX.Y.Z` comment together.
+# Caveat: Dependabot does NOT convert floating major-version tags (`@v4`) into
+# SHAs — the one-time operator pinning step is documented in docs/CI_PINNING.md.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "deps(actions)"
