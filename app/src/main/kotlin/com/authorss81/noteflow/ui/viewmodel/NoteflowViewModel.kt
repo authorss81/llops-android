@@ -77,6 +77,7 @@ import com.authorss81.noteflow.services.EncryptionService
 import com.authorss81.noteflow.services.ImportExportService
 import com.authorss81.noteflow.services.EmptyVaultRestoreDecisionException
 import com.authorss81.noteflow.services.RestoreInflightGate
+import com.authorss81.noteflow.services.RestoreFailSafe
 import com.authorss81.noteflow.services.IntegrityWarningDismissalGate
 import com.authorss81.noteflow.services.KeystoreKeyLostException
 import com.authorss81.noteflow.services.MarkdownBodySaveCoordinator
@@ -2288,32 +2289,44 @@ fun updatePageTags(id: String, tags: String) {
                 onError("A restore is already in progress. Wait for it to finish.")
                 return@launch
             }
+            var stagedFile: java.io.File? = null
             try {
-                val bytes = ImportExportService.readUriBytes(
+                // R2-B1D-04 (phase-138): stage the picked URI to a cache file
+                // under the same 400MB cap — never the whole archive in heap just
+                // to hand it to importBackup.
+                val staged = ImportExportService.stageBackupUriToFile(
                     getApplication(),
                     uri,
                     ImportExportService.MAX_BACKUP_INPUT_BYTES
-                )
-                    ?: throw IllegalStateException("Could not read the selected backup file.")
+                ) ?: throw IllegalStateException("Could not read the selected backup file.")
+                stagedFile = staged
                 // H1 (phase-09): reject a wrong password BEFORE closing the live DB
                 // so the common failure case leaves the vault fully intact.
                 if (backupPassword != null) {
-                    ImportExportService.validateBackupPassword(bytes, backupPassword)
+                    ImportExportService.validateBackupPasswordFile(staged, backupPassword)
                 }
-                repository.closeDatabase()
+                // R2-B1D-04 (phase-138): close + restore through the failsafe seam
+                // (guaranteeReopenAfterRestore) — ANY failure after the close,
+                // including an unchecked Throwable, reopens the vault. The
+                // EmptyVault path below RELIES on that reopen already having run.
                 try {
-                    ImportExportService.importBackup(getApplication(), bytes, repository.encryptionKey, backupPassword, allowEmptyVault = false)
+                    RestoreFailSafe.guaranteeReopenAfterRestore(
+                        closeDatabase = { repository.closeDatabase() },
+                        restore = {
+                            ImportExportService.importBackup(getApplication(), staged, repository.encryptionKey, backupPassword, allowEmptyVault = false)
+                        },
+                        reopenDatabase = { repository.reopenDatabase(getApplication()) }
+                    )
                 } catch (e: EmptyVaultRestoreDecisionException) {
                     // R2-B1D-02 (phase-135): never silently swap a valid-schema but
-                    // EMPTY vault. Reopen the untouched live DB, ask the user, and
-                    // only re-run the import if they explicitly confirm.
-                    runCatching { repository.reopenDatabase(getApplication()) }
+                    // EMPTY vault. The failsafe already reopened the untouched live
+                    // DB; ask the user, and only re-run the import if they confirm.
                     if (!awaitEmptyVaultConfirm()) {
                         onError("Restore cancelled — the selected backup contains no notes. Your vault is unchanged.")
                         return@launch
                     }
                     repository.closeDatabase()
-                    ImportExportService.importBackup(getApplication(), bytes, repository.encryptionKey, backupPassword, allowEmptyVault = true)
+                    ImportExportService.importBackup(getApplication(), staged, repository.encryptionKey, backupPassword, allowEmptyVault = true)
                 }
                 DatabaseSecurityHelper.clearRestoreBlock(getApplication())
                 // B1-DB-1 (phase-43): the corruption flag was set when the vault open
@@ -2331,13 +2344,17 @@ fun updatePageTags(id: String, tags: String) {
                 settings.fieldAadMigrated = false
                 delay(500)
                 kotlin.system.exitProcess(0)
-            } catch (e: Exception) {
-                // H1 (phase-09): a failed recovery (wrong password, corrupt backup)
-                // must never leave a dead Room instance behind — reopen it so any
-                // subsequent operation hits a live connection, then surface the error.
+            } catch (e: Throwable) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                // H1 (phase-09) + R2-B1D-04: a failed recovery (wrong password,
+                // corrupt backup) must never leave a dead Room instance behind —
+                // reopen it so any subsequent operation hits a live connection,
+                // then surface the error. (Runs again here to cover failures
+                // BEFORE the failsafe, e.g. the staged-read or password check.)
                 runCatching { repository.reopenDatabase(getApplication()) }
                 onError(e.message ?: "Recovery failed.")
             } finally {
+                stagedFile?.delete()
                 restoreGate.end()
             }
         }
@@ -2359,16 +2376,20 @@ fun updatePageTags(id: String, tags: String) {
                 onError("A restore is already in progress. Wait for it to finish.")
                 return@launch
             }
+            var stagedFile: java.io.File? = null
             try {
-                val bytes = ImportExportService.readUriBytes(
+                // R2-B1D-04 (phase-138): stage the picked URI to a cache file
+                // under the same 400MB cap (never the whole archive in heap).
+                val staged = ImportExportService.stageBackupUriToFile(
                     getApplication(),
                     uri,
                     ImportExportService.MAX_BACKUP_INPUT_BYTES
                 )
                     ?: throw IllegalStateException("Could not read the selected backup file.")
+                stagedFile = staged
                 // H1 (phase-09): reject a wrong password BEFORE closing the live DB.
                 if (backupPassword != null) {
-                    ImportExportService.validateBackupPassword(bytes, backupPassword)
+                    ImportExportService.validateBackupPasswordFile(staged, backupPassword)
                 }
                 // Mint a FRESH DEK to re-key the restored vault into. The wrapper is
                 // persisted ONLY after the restore succeeds, so a failed restore never
@@ -2376,21 +2397,27 @@ fun updatePageTags(id: String, tags: String) {
                 // recovery screen stays shown and the user can simply retry.
                 val newDek = EncryptionService.generateDek()
                 repository.encryptionKey = newDek
-                repository.closeDatabase()
+                // R2-B1D-04 (phase-138): the failsafe seam reopens the vault after
+                // ANY post-close failure; the EmptyVault path relies on it.
                 try {
-                    ImportExportService.importBackup(getApplication(), bytes, newDek, backupPassword, allowEmptyVault = false)
+                    RestoreFailSafe.guaranteeReopenAfterRestore(
+                        closeDatabase = { repository.closeDatabase() },
+                        restore = {
+                            ImportExportService.importBackup(getApplication(), staged, newDek, backupPassword, allowEmptyVault = false)
+                        },
+                        reopenDatabase = { repository.reopenDatabase(getApplication()) }
+                    )
                 } catch (e: EmptyVaultRestoreDecisionException) {
                     // R2-B1D-02 (phase-135): never silently swap an EMPTY vault. The
-                    // live DB untouched is reopenable only on the key-lost path's
-                    // failure handling — surface the confirm and re-run if accepted.
-                    runCatching { repository.reopenDatabase(getApplication()) }
+                    // failsafe reopened the untouched live DB; surface the confirm
+                    // and only re-run if accepted.
                     if (!awaitEmptyVaultConfirm()) {
                         onError("Restore cancelled — the selected backup contains no notes. Your vault is unchanged.")
                         return@launch
                     }
                     repository.encryptionKey = newDek
                     repository.closeDatabase()
-                    ImportExportService.importBackup(getApplication(), bytes, newDek, backupPassword, allowEmptyVault = true)
+                    ImportExportService.importBackup(getApplication(), staged, newDek, backupPassword, allowEmptyVault = true)
                 }
                 if (!security.storeDek(newDek, authRequired = false)) {
                     throw IllegalStateException("Could not persist the new device key — recovery aborted.")
@@ -2406,10 +2433,12 @@ fun updatePageTags(id: String, tags: String) {
                 settings.fieldAadMigrated = false
                 delay(500)
                 kotlin.system.exitProcess(0)
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 runCatching { repository.reopenDatabase(getApplication()) }
                 onError(e.message ?: "Recovery failed.")
             } finally {
+                stagedFile?.delete()
                 restoreGate.end()
             }
         }
@@ -3718,17 +3747,14 @@ fun updatePageTags(id: String, tags: String) {
                 return@launch
             }
             try {
-                // B2-DOS-05 (phase-81): never slurp the whole downloaded archive
-                // into heap unbounded. Bound the read during the read with the
-                // same 400 MB backup budget the local restore path enforces, so a
-                // huge/malicious WebDAV download cannot OOM the restore.
-                val bytes = withContext(Dispatchers.IO) {
-                    java.io.FileInputStream(sourceZip).use { input ->
-                        com.authorss81.noteflow.services.AttachmentIngestPolicy.boundedReadBytes(
-                            input,
-                            ImportExportService.MAX_BACKUP_INPUT_BYTES
-                        )
-                    }
+                // R2-B1D-04 (phase-138): the download was already bounded by the
+                // WebDAV policy (MAX_DOWNLOAD_BYTES mirrors this same 400 MB cap);
+                // re-check the FILE length here and fail CLOSED with a truthful
+                // message before any close/swap work — never a heap readBytes of
+                // the archive just to size it (B2-DOS-05).
+                if (sourceZip.length() > ImportExportService.MAX_BACKUP_INPUT_BYTES) {
+                    onComplete(false, "Backup is too large to restore (max 400 MB).")
+                    return@launch
                 }
                 // R2-b2b1-UI-03 (phase-135): NEVER import into a vault that locked
                 // while the download ran — check auth + DEK presence right before
@@ -3738,14 +3764,23 @@ fun updatePageTags(id: String, tags: String) {
                     onComplete(false, "The vault locked during the download — restore cancelled. Unlock the vault and try again.")
                     return@launch
                 }
-                repository.closeDatabase()
-                // R2-B1D-02 (phase-135): a valid-schema-but-empty backup is refused
-                // pre-swap on this path (no "start fresh" confirm in WebDAV) —
-                // surface the refusal truthfully, never swap silently.
+                // R2-B1D-04 (phase-138): close + restore through the failsafe seam
+                // so ANY post-close failure (incl. an unchecked Throwable) reopens
+                // the vault; the fresh download file is handed to importBackup
+                // directly — the archive is never re-read into heap.
                 try {
-                    ImportExportService.importBackup(getApplication(), bytes, repository.encryptionKey, allowEmptyVault = false)
+                    RestoreFailSafe.guaranteeReopenAfterRestore(
+                        closeDatabase = { repository.closeDatabase() },
+                        restore = {
+                            ImportExportService.importBackup(getApplication(), sourceZip, repository.encryptionKey, allowEmptyVault = false)
+                        },
+                        reopenDatabase = { repository.reopenDatabase(getApplication()) }
+                    )
                 } catch (e: EmptyVaultRestoreDecisionException) {
-                    runCatching { repository.reopenDatabase(getApplication()) }
+                    // R2-B1D-02 (phase-135): a valid-schema-but-empty backup is refused
+                    // pre-swap on this path (no "start fresh" confirm in WebDAV) —
+                    // surface the refusal truthfully, never swap silently. The
+                    // failsafe already reopened the untouched vault.
                     onComplete(false, e.message)
                     return@launch
                 }
@@ -3758,18 +3793,15 @@ fun updatePageTags(id: String, tags: String) {
                 repository.resetDecryptFailures()
                 decryptPersistenceEscalated = false
                 onComplete(true, null)
-            } catch (e: com.authorss81.noteflow.services.ImportArchivePolicy.ImportSizeLimitException) {
-                // B2-DOS-05 (phase-81 review fix): an over-budget WebDAV archive
-                // fails CLOSED with a truthful, non-alarming message (never a
-                // generic "failed") — the vault is reopened untouched.
+            } catch (e: Throwable) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                // H1 (phase-09) + R2-B1D-04: a failed WebDAV restore (wrong key,
+                // corrupt archive) — reopen the vault so it is not bricked (runs
+                // again here to cover failures before the failsafe, e.g. a locked
+                // mid-download vault). The caller (WebDavSyncDialog) tells the
+                // user to restart to fully re-initialize.
                 runCatching { repository.reopenDatabase(getApplication()) }
-                onComplete(false, "Backup is too large to restore (max 400 MB).")
-            } catch (e: Exception) {
-                // H1 (phase-09): a failed WebDAV restore leaves the live DB closed —
-                // reopen it so the vault behind the dialog is not bricked. The caller
-                // (WebDavSyncDialog) tells the user to restart to fully re-initialize.
-                runCatching { repository.reopenDatabase(getApplication()) }
-                onComplete(false, null)
+                onComplete(false, e.message)
             } finally {
                 restoreGate.end()
             }

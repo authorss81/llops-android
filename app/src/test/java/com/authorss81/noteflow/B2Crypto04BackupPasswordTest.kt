@@ -5,6 +5,7 @@ import com.authorss81.noteflow.services.EncryptionService
 import com.authorss81.noteflow.services.ImportExportService
 import com.authorss81.noteflow.services.PasswordStrengthVerdict
 import java.io.File
+import java.nio.file.Files
 import javax.crypto.AEADBadTagException
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -60,6 +61,15 @@ class B2Crypto04BackupPasswordTest {
     }
 
     private fun dekHex(dek: ByteArray): String = dek.joinToString("") { "%02x".format(it) }
+
+    /** R2-B1D-04 (phase-138): the restore parse/verify API is file-backed. */
+    private fun tempFileOf(bytes: ByteArray): File {
+        val dir = Files.createTempDirectory("b2crypto04").toFile()
+        dir.deleteOnExit()
+        val file = File(dir, "backup.dat").also { it.writeBytes(bytes) }
+        file.deleteOnExit()
+        return file
+    }
 
     // ---------------------------------------------------------------------
     // password-strength policy (the raised minimum + complexity)
@@ -191,10 +201,18 @@ class B2Crypto04BackupPasswordTest {
     @Test
     fun `a v3 backup round-trips through the restore parse with the right password`() {
         val (full, _, _) = buildV3Backup()
+        val file = tempFileOf(full)
 
-        val parsed = ImportExportService.tryParseBackupV2(full, PASSWORD)
+        val parsed = ImportExportService.tryParseBackupV2File(file, PASSWORD)
         assertNotNull("v3 must parse via the restore path", parsed)
-        assertArrayEquals("the split payload-derived half is stripped, the zip recovered", ZIP_BYTES, parsed!!.zipBytes)
+        // R2-B1D-04 (phase-138): the staging file carries BOTH the payload-derived
+        // key half prefix AND the zip — the zip starts at offsetBytes.
+        val recoveredZip = parsed!!.zipFile.readBytes()
+        assertArrayEquals(
+            "the split payload-derived half is stripped, the zip recovered",
+            ZIP_BYTES,
+            recoveredZip.copyOfRange(parsed.offsetBytes, recoveredZip.size)
+        )
         assertEquals("the wrapped DEK unwraps to the vault DEK", dekHex(DEK), parsed.dekHex)
         assertNotNull("the derived KEK is handed to importBackup for zeroization", parsed.kek)
         parsed.kek?.fill(0.toByte())
@@ -205,29 +223,29 @@ class B2Crypto04BackupPasswordTest {
         val (full, _, _) = buildV3Backup()
         // Wrong password: no candidate decrypts the payload -> rejected loudly.
         val wrong = assertThrows(IllegalArgumentException::class.java) {
-            ImportExportService.tryParseBackupV2(full, "wrong-Password-2026!")
+            ImportExportService.tryParseBackupV2File(tempFileOf(full), "wrong-Password-2026!")
         }
         assertTrue(wrong.message.orEmpty().contains("Incorrect backup password"))
 
         // An NFLB3 magic + header with NO payload parses to null (handed to the
         // legacy device-keyed reader, which can never match v3 bytes) — never a
         // password success on an incomplete file.
-        assertNull(ImportExportService.tryParseBackupV2(full.copyOfRange(0, 110), PASSWORD))
+        assertNull(ImportExportService.tryParseBackupV2File(tempFileOf(full.copyOfRange(0, 110)), PASSWORD))
     }
 
     @Test
     fun `validateBackupPassword exercises both magics and never strength-gates`() {
         val (v3Bytes, _, _) = buildV3Backup()
         // v3 validate = one full payload decrypt + DEK unwrap (the only test).
-        ImportExportService.validateBackupPassword(v3Bytes, PASSWORD)
+        ImportExportService.validateBackupPasswordFile(tempFileOf(v3Bytes), PASSWORD)
         val ex = assertThrows(IllegalArgumentException::class.java) {
-            ImportExportService.validateBackupPassword(v3Bytes, "wrong-Password-2026!")
+            ImportExportService.validateBackupPasswordFile(tempFileOf(v3Bytes), "wrong-Password-2026!")
         }
         assertTrue(ex.message.orEmpty().contains("Incorrect backup password"))
 
         // v2 file still validates (that path keeps its cheap wrapped-DEK probe).
         val v2 = buildV2Backup()
-        ImportExportService.validateBackupPassword(v2, PASSWORD)
+        ImportExportService.validateBackupPasswordFile(tempFileOf(v2), PASSWORD)
     }
 
     // ---------------------------------------------------------------------
@@ -248,16 +266,16 @@ class B2Crypto04BackupPasswordTest {
     @Test
     fun `pre-fix v2 backups still restore with the exact same format`() {
         val v2 = buildV2Backup()
-        val parsed = ImportExportService.tryParseBackupV2(v2, PASSWORD)
+        val parsed = ImportExportService.tryParseBackupV2File(tempFileOf(v2), PASSWORD)
         assertNotNull(
             "v2 backups must keep parsing after the v3 introduction",
             parsed
         )
-        assertArrayEquals(ZIP_BYTES, parsed!!.zipBytes)
+        assertArrayEquals(ZIP_BYTES, parsed!!.zipFile.readBytes())
         assertEquals(dekHex(DEK), parsed.dekHex)
 
         val wrong = assertThrows(IllegalArgumentException::class.java) {
-            ImportExportService.tryParseBackupV2(v2, "wrong-Password-2026!")
+            ImportExportService.tryParseBackupV2File(tempFileOf(v2), "wrong-Password-2026!")
         }
         assertTrue(wrong.message.orEmpty().contains("Incorrect backup password"))
         parsed.kek?.fill(0.toByte())

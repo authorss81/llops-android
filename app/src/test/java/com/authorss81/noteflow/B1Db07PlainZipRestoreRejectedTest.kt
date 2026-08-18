@@ -173,7 +173,7 @@ class B1Db07PlainZipRestoreRejectedTest {
 
         assertTrue(
             "the plain-zip gate must fire on PK-headed payloads",
-            region.contains("if (isPlainPkBackupBytes(rawBytes))")
+            region.contains("if (isPlainPkBackupFile(backupFile))")
         )
         assertTrue(
             "the rejection message must flag the backup as unencrypted/unsigned",
@@ -183,8 +183,8 @@ class B1Db07PlainZipRestoreRejectedTest {
         // The gate must be structural: the reject fires BEFORE any keyed decrypt
         // and BEFORE the legacy zip extraction can happen.
         val rejectIndex = region.indexOf("Restore rejected: this is an unencrypted")
-        val decryptIndex = region.indexOf("EncryptionService.decrypt(encryptedStr, key)")
-        val extractIndex = region.indexOf("restoreFromZip(context, rawBytes, null, currentDekHex, allowEmptyVault)")
+        val decryptIndex = region.indexOf("decryptDeviceKeyedToFile(backupFile, stagingZip, key)")
+        val extractIndex = region.indexOf("restoreFromZip(context, stagingZip, 0, null, currentDekHex, allowEmptyVault)")
         assertTrue("the plain-zip reject must precede the decrypt path", rejectIndex >= 0 && rejectIndex < decryptIndex)
         assertTrue("the plain-zip reject must precede any extraction", rejectIndex >= 0 && rejectIndex < extractIndex)
     }
@@ -194,7 +194,7 @@ class B1Db07PlainZipRestoreRejectedTest {
         val region = importBackupRegion
         assertTrue(
             "device-DEK-encrypted (non-PK) legacy backups must still restore",
-            region.contains("rawBytes = EncryptionService.decrypt(encryptedStr, key)")
+            region.contains("decryptDeviceKeyedToFile(backupFile, stagingZip, key)")
         )
         assertTrue(
             "the device-keyed path still needs an encryption key",
@@ -248,11 +248,11 @@ class B1Db07PlainZipRestoreRejectedTest {
 
         assertTrue(
             "the picker must classify a plain zip and refuse it",
-            picker.contains("isPlainPkBackupBytes(bytes)")
+            picker.contains("isPlainPkBackupFile(staged)")
         )
         assertTrue(
             "the refusal must happen before the legacy-confirm dialog is shown",
-            picker.indexOf("isPlainPkBackupBytes(bytes)") < picker.indexOf("showLegacyRestoreConfirmDialog = true")
+            picker.indexOf("isPlainPkBackupFile(staged)") < picker.indexOf("showLegacyRestoreConfirmDialog = true")
         )
         assertTrue(
             "the refusal surfaces a non-alarming snackbar",

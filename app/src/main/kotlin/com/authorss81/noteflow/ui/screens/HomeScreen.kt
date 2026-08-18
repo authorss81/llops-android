@@ -37,7 +37,9 @@ import com.authorss81.noteflow.services.ExportDestinationPolicy
 import com.authorss81.noteflow.services.ImportArchivePolicy
 import com.authorss81.noteflow.services.ImportExportService
 import com.authorss81.noteflow.services.OrphanImportCleanupPolicy
-import com.authorss81.noteflow.services.isPlainPkBackupBytes
+import com.authorss81.noteflow.services.isPlainPkBackupFile
+import com.authorss81.noteflow.services.isNflbBackupFile
+import com.authorss81.noteflow.services.RestoreFailSafe
 import com.authorss81.noteflow.theme.AppThemeMode
 import com.authorss81.noteflow.ui.components.*
 import com.authorss81.noteflow.ui.viewmodel.NoteflowViewModel
@@ -98,7 +100,7 @@ fun HomeScreen(
     var showPluginStoreDialog by remember { mutableStateOf(false) }
     var showBackupPasswordDialog by rememberSaveable { mutableStateOf(false) }
     var showLegacyRestoreConfirmDialog by rememberSaveable { mutableStateOf(false) }
-    var pendingRestoreBytes by remember { mutableStateOf<ByteArray?>(null) }
+    var pendingRestoreFile by remember { mutableStateOf<File?>(null) }
     var backupPasswordInput by rememberSaveable { mutableStateOf("") }
     var backupPasswordError by rememberSaveable { mutableStateOf<String?>(null) }
     var isValidating by rememberSaveable { mutableStateOf(false) }
@@ -135,7 +137,7 @@ fun HomeScreen(
     var restartDialogTitle by remember { mutableStateOf("Restore successful") }
     var restartDialogMessage by remember { mutableStateOf("Your vault has been restored. The app will restart to load the restored data.") }
 
-    fun performRestore(context: android.content.Context, bytes: ByteArray, password: String? = null) {
+    fun performRestore(context: android.content.Context, file: File, password: String? = null) {
         // R2-b2b1-UI-03 (phase-135): the local restore shares the SAME one-in-flight
         // gate as the recovery/WebDAV paths — refuse a second restore instead of
         // racing two file swaps of the same SQLCipher file.
@@ -156,7 +158,7 @@ fun HomeScreen(
                 // vault is closed — the common failure case never touches the DB
                 // and the user can simply correct the password.
                 if (password != null) {
-                    ImportExportService.validateBackupPassword(bytes, password)
+                    ImportExportService.validateBackupPasswordFile(file, password)
                 }
                 // R2-b2b1-UI-03 (phase-135): never import into a vault that locked
                 // while the file was being picked/read — fail closed and reopen.
@@ -164,20 +166,31 @@ fun HomeScreen(
                     runCatching { viewModel.repository.reopenDatabase(context) }
                     throw IllegalStateException("The vault locked before the restore — please unlock and try again.")
                 }
-                viewModel.repository.closeDatabase()
-                // R2-B1D-02 (phase-135): a valid-schema-but-empty backup fails here
-                // with a truthful message (no "start fresh" confirm on this screen) —
-                // it is never swapped in silently.
-                ImportExportService.importBackup(context, bytes, viewModel.repository.encryptionKey, password, allowEmptyVault = false)
+                // R2-B1D-04 (phase-138): close + restore through the failsafe seam —
+                // ANY post-close failure (incl. an unchecked Throwable) reopens the
+                // vault, so a corrupt/key-wrong archive can never brick the DB.
+                RestoreFailSafe.guaranteeReopenAfterRestore(
+                    closeDatabase = { viewModel.repository.closeDatabase() },
+                    restore = {
+                        // R2-B1D-02 (phase-135): a valid-schema-but-empty backup fails
+                        // here with a truthful message (no "start fresh" confirm on
+                        // this screen) — it is never swapped in silently.
+                        ImportExportService.importBackup(context, file, viewModel.repository.encryptionKey, password, allowEmptyVault = false)
+                    },
+                    reopenDatabase = { viewModel.repository.reopenDatabase(context) }
+                )
                 restartDialogTitle = "Restore successful"
                 restartDialogMessage = "Your vault has been restored. The app will restart to load the restored data."
                 showRestartConfirmDialog = true
                 viewModel.showSnackbar("Restore completed — the app will restart to load the restored data.", isLong = true)
-            } catch (e: Exception) {
-                // H1 (phase-09): the DB was already closed for the swap. A failure
-                // here must never leave a dead Room instance behind — reopen it and
-                // restart the process so the vault flows re-initialize cleanly
-                // (same pattern the success path uses).
+            } catch (e: Throwable) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                // H1 (phase-09) + R2-B1D-04: the DB was already closed for the swap.
+                // A failure here must never leave a dead Room instance behind — the
+                // failsafe already reopens on post-close failures; this re-reopen
+                // covers pre-close failures (e.g. a lock mid-pick), and the process
+                // restarts so the vault flows re-initialize cleanly (same pattern
+                // the success path uses).
                 runCatching { viewModel.repository.reopenDatabase(context) }
                 restartDialogTitle = "Restore failed"
                 restartDialogMessage = "Restore failed: ${e.message}. The app will restart with your current vault unchanged."
@@ -199,30 +212,42 @@ fun HomeScreen(
             // performRestore) silently.
             vaultScope.launch {
                 try {
-                    val bytes = ImportExportService.readUriBytes(
+                    // R2-B1D-04 (phase-138): the picked URI is staged to a cache
+                    // file under the same 400 MB budget — the whole archive is never
+                    // materialized in heap.
+                    val staged = ImportExportService.stageBackupUriToFile(
                         context,
                         uri,
                         ImportExportService.MAX_BACKUP_INPUT_BYTES
                     ) ?: return@launch
-                    if (bytes.size >= 5 && String(bytes.copyOfRange(0, 5)) == "NFLB2") {
-                        pendingRestoreBytes = bytes
-                        backupPasswordInput = ""
-                        backupPasswordError = null
-                        showBackupPasswordDialog = true
-                    } else if (isPlainPkBackupBytes(bytes)) {
-                        // B1-DB-7 (phase-56): an unencrypted (unsigned) plain zip is
-                        // never restoreable — refuse before any confirm dialog, the
-                        // same gate importBackup enforces.
-                        viewModel.showSnackbar(
-                            "Restore rejected: this is an unencrypted (unsigned) backup. " +
-                                "Only password-protected or device-keyed backups can be restored.",
-                            isLong = true
-                        )
-                    } else {
-                        // B4/34.1: legacy (device-keyed) restores replace the whole vault —
-                        // require explicit user confirmation instead of silently doing it.
-                        pendingRestoreBytes = bytes
-                        showLegacyRestoreConfirmDialog = true
+                    when {
+                        isNflbBackupFile(staged) -> {
+                            // B2-CRYPTO-05/06 (phase-93): NFLB2 (v2, password-protected)
+                            // and NFLB3 (v3, scrypt-derived) backups both carry a
+                            // wrapped-DEK header — ask for the password, never treat
+                            // them as legacy.
+                            pendingRestoreFile = staged
+                            backupPasswordInput = ""
+                            backupPasswordError = null
+                            showBackupPasswordDialog = true
+                        }
+                        isPlainPkBackupFile(staged) -> {
+                            // B1-DB-7 (phase-56): an unencrypted (unsigned) plain zip is
+                            // never restoreable — refuse before any confirm dialog, the
+                            // same gate importBackup enforces.
+                            staged.delete()
+                            viewModel.showSnackbar(
+                                "Restore rejected: this is an unencrypted (unsigned) backup. " +
+                                    "Only password-protected or device-keyed backups can be restored.",
+                                isLong = true
+                            )
+                        }
+                        else -> {
+                            // B4/34.1: legacy (device-keyed) restores replace the whole vault —
+                            // require explicit user confirmation instead of silently doing it.
+                            pendingRestoreFile = staged
+                            showLegacyRestoreConfirmDialog = true
+                        }
                     }
                 } catch (e: Exception) {
                     viewModel.showSnackbar("Restore failed: ${e.message}", isLong = true)
@@ -1293,7 +1318,7 @@ fun HomeScreen(
             AlertDialog(
                 onDismissRequest = {
                     showLegacyRestoreConfirmDialog = false
-                    pendingRestoreBytes = null
+                    pendingRestoreFile = null
                 },
                 title = { Text("Restore legacy backup?") },
                 text = {
@@ -1309,8 +1334,8 @@ fun HomeScreen(
                     TextButton(
                         onClick = {
                             showLegacyRestoreConfirmDialog = false
-                            val pending = pendingRestoreBytes
-                            pendingRestoreBytes = null
+                            val pending = pendingRestoreFile
+                            pendingRestoreFile = null
                             if (pending != null) performRestore(context, pending)
                         },
                         enabled = !isRestoring
@@ -1320,7 +1345,7 @@ fun HomeScreen(
                     TextButton(
                         onClick = {
                             showLegacyRestoreConfirmDialog = false
-                            pendingRestoreBytes = null
+                            pendingRestoreFile = null
                         }
                     ) { Text("Cancel") }
                 }
@@ -1331,13 +1356,13 @@ fun HomeScreen(
             AlertDialog(
                 onDismissRequest = {
                     showBackupPasswordDialog = false
-                    pendingRestoreBytes = null
+                    pendingRestoreFile = null
                 },
-                title = { Text(if (pendingRestoreBytes != null) "Restore Backup" else "Backup Password") },
+                title = { Text(if (pendingRestoreFile != null) "Restore Backup" else "Backup Password") },
                 text = {
                     Column {
                         Text(
-                            if (pendingRestoreBytes != null) {
+                            if (pendingRestoreFile != null) {
                                 "Enter the password used to create this backup."
                             } else {
                                 "Enter your Master Password to encrypt this backup. It can be restored on any device with this password."
@@ -1348,7 +1373,7 @@ fun HomeScreen(
                         // silent — a backup seeded to Downloads/WebDAV is only as
                         // strong as this password (no lockout protects an offline
                         // PBKDF2 crack of a leaked file).
-                        if (pendingRestoreBytes == null) {
+                        if (pendingRestoreFile == null) {
                             Text(
                                 BackupPasswordPolicy.OFFLINE_BACKUP_NOTICE,
                                 style = MaterialTheme.typography.bodySmall,
@@ -1377,13 +1402,18 @@ fun HomeScreen(
                 confirmButton = {
                     Button(
                         onClick = {
-                            val pending = pendingRestoreBytes
+                            val pending = pendingRestoreFile
                             if (pending != null) {
                                 if (backupPasswordInput.isBlank()) {
                                     backupPasswordError = "Password required for this backup"
                                 } else {
+                                    // H1 (phase-09) + R2-B1D-04 (phase-138): the wrong
+                                    // password is rejected against the staged FILE
+                                    // before any closeDatabase — the archive never
+                                    // re-enters heap, and the user simply corrects the
+                                    // password.
                                     showBackupPasswordDialog = false
-                                    pendingRestoreBytes = null
+                                    pendingRestoreFile = null
                                     performRestore(context, pending, backupPasswordInput)
                                 }
                             } else {
@@ -1444,13 +1474,13 @@ fun HomeScreen(
                         },
                         enabled = !isRestoring
                     ) {
-                        Text(if (pendingRestoreBytes != null) "Restore" else "Backup")
+                        Text(if (pendingRestoreFile != null) "Restore" else "Backup")
                     }
                 },
                 dismissButton = {
                     TextButton(onClick = {
                         showBackupPasswordDialog = false
-                        pendingRestoreBytes = null
+                        pendingRestoreFile = null
                     }) {
                         Text("Cancel")
                     }

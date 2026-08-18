@@ -197,10 +197,17 @@ class B2Dos05AttachmentIngestTest {
             "restoreEncryptedBackupFromZip must never call sourceZip.readBytes()",
             source.contains("sourceZip.readBytes()")
         )
+        // R2-B1D-04 (phase-138): the archive is handed to importBackup as a FILE —
+        // never read into heap. The pre-close size gate is a bounded File.length()
+        // check against the SAME 400MB backup budget, failing closed before any
+        // DB work with a truthful message.
         assertTrue(
-            "the restore must route through the bounded reader with the backup budget",
-            source.contains("AttachmentIngestPolicy.boundedReadBytes") &&
-                source.contains("ImportExportService.MAX_BACKUP_INPUT_BYTES")
+            "the restore must keep the backup budget as a pre-close length gate",
+            source.contains("sourceZip.length() > ImportExportService.MAX_BACKUP_INPUT_BYTES")
+        )
+        assertTrue(
+            "the over-budget refusal must stay truthful and non-alarming",
+            source.contains("Backup is too large to restore (max 400 MB).")
         )
     }
 

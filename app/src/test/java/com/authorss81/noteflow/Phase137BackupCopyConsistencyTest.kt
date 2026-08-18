@@ -189,7 +189,9 @@ class Phase137BackupCopyConsistencyTest {
         val checkpointIdx = exportRegion.indexOf("repository.checkpointWal()")
         val rearmIdx = exportRegion.indexOf("repository.stampDatabaseChecksum(context)")
         val verifiedIdx = exportRegion.indexOf("VaultSnapshotCopyPolicy.checkpointThenCopy(dbFile, stagedDb)")
-        val zipIdx = exportRegion.indexOf("zos.putNextEntry(ZipEntry(\"noteflow.sqlite\"))")
+        // R2-B1D-04 (phase-138): the DB entry is packed via the guarded packFile
+        // (never a bare zos.putNextEntry over the live file).
+        val zipIdx = exportRegion.indexOf("packFile(\"noteflow.sqlite\", stagedDb)")
 
         assertTrue("the signature must take the repository (the discipline source)", exportRegion.contains("repository:"))
         assertTrue("exportBackup must run the FULL WAL checkpoint before any copy", checkpointIdx >= 0)
@@ -200,8 +202,9 @@ class Phase137BackupCopyConsistencyTest {
             zipIdx > verifiedIdx
         )
 
-        // The DB zip entry reads the VERIFIED staged copy, never the raw live file.
-        assertTrue("the db entry must zip the staged snapshot", exportRegion.contains("FileInputStream(stagedDb)"))
+        // The DB zip entry reads the VERIFIED staged copy, never the raw live file —
+// and runs through the budget-guarded packer.
+        assertTrue("the db entry must zip the staged snapshot", exportRegion.contains("packFile(\"noteflow.sqlite\", stagedDb)"))
         assertFalse(
             "the pre-fix raw live-file copy must be gone from the db path",
             exportRegion.contains("FileInputStream(dbFile).use { fis -> fis.copyTo(zos) }")

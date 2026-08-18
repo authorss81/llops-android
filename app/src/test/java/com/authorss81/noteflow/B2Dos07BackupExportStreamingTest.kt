@@ -384,7 +384,11 @@ class B2Dos07BackupExportStreamingTest {
     fun `BackupExportPolicy holds only bounded chunk buffers, never the archive`() {
         val source = codeOnly(mainSourceRootFile("services/BackupExportPolicy.kt").readText())
         assertEquals("the chunk budget is 64 KiB", 64 * 1024, BackupExportPolicy.ENCRYPT_CHUNK_BYTES)
-        assertEquals("each streamer draws exactly ONE fixed chunk buffer", 2, Regex("ByteArray\\(ENCRYPT_CHUNK_BYTES\\)").findAll(source).count())
+        assertEquals(
+            "each streamer draws exactly ONE fixed chunk buffer (encrypt v3/v2 + decrypt v3 + decrypt legacy-zero-AAD + device-keyed base64)",
+            4,
+            Regex("ByteArray\\(ENCRYPT_CHUNK_BYTES\\)").findAll(source).count()
+        )
         assertFalse("no whole-file read may survive in the streamers", source.contains("readBytes("))
         assertFalse("no whole-archive byte array may be materialized", source.contains(".toByteArray()"))
         assertFalse("no in-heap zip accumulator may survive", source.contains("ByteArrayOutputStream"))

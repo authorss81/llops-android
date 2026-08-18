@@ -131,6 +131,128 @@ object BackupExportPolicy {
     }
 
     /**
+     * R2-B1D-04 (phase-138): the inverse of [encryptStreamGcm] — AES-GCM
+     * file-to-file restore decrypt with the same bounded chunk loop, so the
+     * restore path never materializes BOTH the encrypted archive and the
+     * decrypted zip in heap (~800 MB peak on a large vault). [cipherIn] must be
+     * positioned at the FIRST ciphertext byte (the caller skips the header via
+     * [skipFully]); [header] is re-fed as AAD so the tag check is byte-identical
+     * to the one-shot [com.authorss81.noteflow.services.ImportExportService.decryptBackupPayload].
+     * On success the output is byte-identical to one `Cipher.doFinal` (the JCE
+     * stream-mode contract), so a decrypted file can be consumed exactly where
+     * the old array was. A wrong key / corrupt payload surfaces on the final
+     * `doFinal` as [javax.crypto.AEADBadTagException] — the decrypt is
+     * all-or-nothing, exactly like the one-shot path. Owns + closes both streams.
+     *
+     * Memory bound: one [ENCRYPT_CHUNK_BYTES] input buffer + one `Cipher.update`
+     * output, never the archive.
+     */
+    fun decryptStreamGcm(
+        cipherIn: InputStream,
+        dest: OutputStream,
+        kek: ByteArray,
+        payloadIv: ByteArray,
+        header: ByteArray,
+        payloadAad: ByteArray
+    ) {
+        val cipher = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(
+            javax.crypto.Cipher.DECRYPT_MODE,
+            javax.crypto.spec.SecretKeySpec(kek, "AES"),
+            javax.crypto.spec.GCMParameterSpec(EncryptionService.GCM_TAG_LENGTH, payloadIv)
+        )
+        cipher.updateAAD(payloadAad)
+        cipher.updateAAD(header)
+        dest.use { out ->
+            cipherIn.use { ins ->
+                val buffer = ByteArray(ENCRYPT_CHUNK_BYTES)
+                var idleReads = 0
+                while (true) {
+                    val n = ins.read(buffer)
+                    if (n < 0) break
+                    if (n == 0) {
+                        if (++idleReads > IDLE_READ_LIMIT) {
+                            throw IOException("Decrypt stream made no progress; aborting restore decryption")
+                        }
+                        continue
+                    }
+                    idleReads = 0
+                    out.write(cipher.update(buffer, 0, n))
+                }
+            }
+            // doFinal verifies the 128-bit GCM tag over (AAD|header|ciphertext)
+            // and writes the tail — a corrupt/forged payload throws here.
+            out.write(cipher.doFinal())
+        }
+    }
+
+    /**
+     * R2-B1D-04 (phase-138): the legacy zero-AAD restore decrypt, used ONLY as
+     * the v2 retry when an [AEADBadTagException] proves the AAD-bound attempt
+     * failed — the file-to-file mirror of the one-shot
+     * [com.authorss81.noteflow.services.ImportExportService.decryptBackupPayload]
+     * retry. Like the one-shot, it can never rescue a spliced/corrupt NEW-format
+     * payload (that tag was computed over AAD+header) nor a wrong password (the
+     * GCM tag also covers the key); it rescues only payloads genuinely written
+     * before the B2-CRYPTO-03 binding. The caller truncates [dest] between the
+     * two attempts (a fresh FileOutputStream).
+     */
+    fun decryptStreamGcmLegacyZeroAad(
+        cipherIn: InputStream,
+        dest: OutputStream,
+        kek: ByteArray,
+        payloadIv: ByteArray
+    ) {
+        val cipher = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(
+            javax.crypto.Cipher.DECRYPT_MODE,
+            javax.crypto.spec.SecretKeySpec(kek, "AES"),
+            javax.crypto.spec.GCMParameterSpec(EncryptionService.GCM_TAG_LENGTH, payloadIv)
+        )
+        dest.use { out ->
+            cipherIn.use { ins ->
+                val buffer = ByteArray(ENCRYPT_CHUNK_BYTES)
+                var idleReads = 0
+                while (true) {
+                    val n = ins.read(buffer)
+                    if (n < 0) break
+                    if (n == 0) {
+                        if (++idleReads > IDLE_READ_LIMIT) {
+                            throw IOException("Decrypt stream made no progress; aborting restore decryption")
+                        }
+                        continue
+                    }
+                    idleReads = 0
+                    out.write(cipher.update(buffer, 0, n))
+                }
+            }
+            out.write(cipher.doFinal())
+        }
+    }
+
+    /**
+     * R2-B1D-04 (phase-138): skips exactly [bytesToSkip] bytes (the backup
+     * header) off [input]. `InputStream.skip` may skip fewer bytes on non-file
+     * streams — loop until the full offset is consumed; a non-advancing stream
+     * is out of contract and fails loudly instead of busy-spinning.
+     */
+    fun skipFully(input: InputStream, bytesToSkip: Long) {
+        var remaining = bytesToSkip
+        var idleSkips = 0
+        while (remaining > 0) {
+            val skipped = input.skip(remaining)
+            if (skipped <= 0) {
+                if (++idleSkips > IDLE_READ_LIMIT) {
+                    throw IOException("Backup header skip made no progress; aborting restore decryption")
+                }
+                continue
+            }
+            idleSkips = 0
+            remaining -= skipped
+        }
+    }
+
+    /**
      * Legacy device-keyed export: stream GCM encrypt (the app's FIELD_AAD domain)
      * and Base64-wrap to [dest] with a streaming `java.util.Base64.Encoder`, so
      * the on-disk file is the UTF-8/ASCII Base64 of

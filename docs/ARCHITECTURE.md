@@ -1143,6 +1143,24 @@
     checkpoint and shipped WAL-stale archives (R2-B1D-03). The now-redundant explicit
     checkpoint/re-stamp were removed from HomeScreen/WebDAV (single owner, no double HMAC).
     Tests: `Phase137BackupCopyConsistencyTest` (7).
+  - **Implemented in phase-138** (R2-B1D-04, see `workspace/phase-138/REPORT.md`): restore DECRYPT is now
+    FILE-TO-FILE (was ~800MB in-heap peak: encrypted archive + decrypted zip both materialized). The v2/v3
+    payload decrypt streams to a transient staging FILE (`ImportExportService.decryptPayloadToFile` `:1528`,
+    `tryParseBackupV2File` `:1661`, `validateBackupPasswordFile` `:1779`, legacy `decryptDeviceKeyedToFile`
+    `:1992` — streaming Base64 + GCM chunk loop); picked URIs stage to cache files (`stageBackupUriToFile`
+    `:1879`); `importBackup` takes a `File` (`:1910`); the v3 16-byte split-key prefix is skipped at extract
+    (`restoreFromZip(zipFile, offsetBytes…)` `:2053` + `BackupExportPolicy.skipFully` `:239`). Mirror
+    streamers `decryptStreamGcm`/`decryptStreamGcmLegacyZeroAad` live in `services/BackupExportPolicy.kt`
+    (`:150`, `:200`). Budgets are now ONE pure-JVM `services/BackupBudgetPolicy.kt`: 100MB/entry, total =
+    400MB wire cap (GCM out = in + 16 ⇒ a decryptable archive is always under the total), 40k entry belt,
+    100x ratio seal — the export packer refuses at pack time (`claimPackFile` `:118`) exactly what the
+    extractor refuses (`claimRestoreChunk` `:136`), killing "exportable-unrestorable" archives (was
+    200MB/50MB asymmetric). Post-restore-failure reopen is guaranteed by the pure-JVM
+    `services/RestoreFailSafe.kt` seam (`guaranteeReopenAfterRestore` `:28`, catches ANY Throwable incl.
+    OOM) wired into all four entry points (`NoteflowViewModel.kt:2313/:2403/:3772`, `HomeScreen.kt:172`).
+    The HomeScreen picker now classifies by FILE (`isNflbBackupFile`/`isPlainPkBackupFile`
+    `ImportExportService.kt:3116/:3129`) — NFLB3 backups finally get the password dialog, not the legacy
+    UNTRUSTED dialog. Tests: `Phase138RestoreStreamingTest` (10).
 - **Update / self-install**: `services/UpdateService.kt:128` (`checkForDownloadedUpdates` — scans ONLY app-private
   `filesDir`/`cacheDir` through `UpdateTrustPolicy.isScanSafeDirectory`; public Downloads/external dirs are NEVER
   scanned, B1-PLAT-7), `:60` (`inspectApkFile` — classifies via the policy, trust-neutral copy), `:175`

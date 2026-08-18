@@ -6,6 +6,7 @@ import android.net.Uri
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
@@ -1131,6 +1132,10 @@ object ImportExportService {
     // Restore-path input cap. Larger than the import budget (200MB) so a
     // legitimate vault backup (DB + media + voice blobs) still restores; the
     // import callers use ImportArchivePolicy.MAX_IMPORT_ARCHIVE_INPUT_BYTES.
+    // R2-B1D-04 (phase-138): still THE single wire-level cap (the WebDAV download
+    // cap and every restore entry point keep passing it); the DECOMPRESSED budget
+    // it feeds is now the shared BackupBudgetPolicy (== this value), so the
+    // export packer and the restore extractor can never drift out of parity.
     const val MAX_BACKUP_INPUT_BYTES = 400L * 1024 * 1024 // 400MB hard cap before any decrypt/decompress
 
     // B2-CRYPTO-03: domain separation for the two KEK uses in backup v2. The DEK
@@ -1340,19 +1345,28 @@ object ImportExportService {
                     )
                 }
             }
+            // R2-B1D-04 (phase-138): the same BackupBudgetPolicy that bounds the
+            // restore extractor now bounds the packer, so a backup is only ever
+            // SHIPPED if it can be RESTORED — no more "exportable but
+            // unrestorable" archives (a DB/import/blob over the per-entry cap, or
+            // a vault whose decompressed total exceeds the wire-level 400MB, is
+            // rejected loudly at export time, never silently shipped).
+            val packAccounting = BackupBudgetPolicy.Accounting()
             BackupExportPolicy.zipVaultEntriesToStream(FileOutputStream(stagingZip)) { zos ->
-                if (dbFile.exists()) {
-                    zos.putNextEntry(ZipEntry("noteflow.sqlite"))
-                    FileInputStream(stagedDb).use { fis -> fis.copyTo(zos) }
+                fun packFile(entryName: String, source: File) {
+                    BackupBudgetPolicy.claimPackFile(packAccounting, entryName, source.length())
+                    zos.putNextEntry(ZipEntry(entryName))
+                    FileInputStream(source).use { fis -> fis.copyTo(zos) }
                     zos.closeEntry()
+                }
+
+                if (dbFile.exists()) {
+                    packFile("noteflow.sqlite", stagedDb)
                 }
 
                 if (importsDir.exists()) {
                     importsDir.walkTopDown().filter { it.isFile }.forEach { file ->
-                        val relativePath = "imports/" + file.relativeTo(importsDir).path.replace('\\', '/')
-                        zos.putNextEntry(ZipEntry(relativePath))
-                        FileInputStream(file).use { fis -> fis.copyTo(zos) }
-                        zos.closeEntry()
+                        packFile("imports/" + file.relativeTo(importsDir).path.replace('\\', '/'), file)
                     }
                 }
 
@@ -1366,9 +1380,7 @@ object ImportExportService {
                     voiceNotesDir.listFiles()?.filter { it.isFile && VoiceNoteCrypto.isEncryptedBlobName(it.name) }
                         ?.sortedBy { it.name }
                         ?.forEach { file ->
-                            zos.putNextEntry(ZipEntry("voice_notes/${file.name}"))
-                            FileInputStream(file).use { fis -> fis.copyTo(zos) }
-                            zos.closeEntry()
+                            packFile("voice_notes/${file.name}", file)
                         }
                 }
             }
@@ -1451,73 +1463,92 @@ object ImportExportService {
     private fun copyWithLimit(
         zis: ZipInputStream,
         fos: FileOutputStream,
-        maxBytes: Long,
-        totalWrittenSoFar: Long,
-        maxTotalBytes: Long,
+        accounting: BackupBudgetPolicy.Accounting,
         entry: ZipEntry
     ): Long {
         val buffer = ByteArray(8192)
         var entryBytes = 0L
         var bytesRead: Int
-        val maxExpansionRatio = 100L
-        val ratioFloor = 4 * 1024L // don't trigger on tiny entries
         while (zis.read(buffer).also { bytesRead = it } != -1) {
             entryBytes += bytesRead
-            if (entryBytes > maxBytes) {
-                throw IllegalStateException("Single file extraction limit exceeded (max 50MB).")
-            }
-            // B5/34.5: declared compressedSize can be forged (data-descriptor/zip64) —
-            // the ACTUAL bytes read (entryBytes) are the source of truth for the
-            // ratio, and both declared size and declared compressedSize are cross-checked.
-            val declaredUncompressed = entry.size
-            val declaredCompressed = entry.compressedSize
-            val ratioTriggered = when {
-                declaredUncompressed > 0 && entryBytes > ratioFloor && entryBytes > declaredUncompressed * maxExpansionRatio -> true
-                declaredCompressed > 0 && entryBytes > ratioFloor && entryBytes > declaredCompressed * maxExpansionRatio -> true
-                else -> false
-            }
-            if (ratioTriggered) {
-                throw IllegalStateException("Suspicious compression ratio detected — backup rejected (possible zip bomb).")
-            }
-            if (totalWrittenSoFar + entryBytes > maxTotalBytes) {
-                throw IllegalStateException("Total backup extraction limit exceeded (max 200MB).")
-            }
+            // R2-B1D-04 (phase-138): the shared budget — per-entry cap, the
+            // 100x expansion-ratio seal (keyed off ACTUAL bytes read, so a
+            // forged declared size can never bypass it) and the ≤400MB total
+            // ceiling, all from BackupBudgetPolicy so export and restore stay
+            // in parity.
+            BackupBudgetPolicy.claimRestoreChunk(accounting, entryBytes, entry.size, entry.compressedSize)
             fos.write(buffer, 0, bytesRead)
         }
+        BackupBudgetPolicy.settleRestoreEntry(accounting, entryBytes)
         return entryBytes
     }
 
-    internal data class BackupV2Payload(val zipBytes: ByteArray, val dekHex: String?, val kek: ByteArray?)
+    /**
+     * R2-B1D-04 (phase-138): the decrypted v2/v3 payload now lives as a FILE (a
+     * staging zip under cacheDir) instead of a ByteArray — [zipFile] is at
+     * [offsetBytes] into that file ([BACKUP_WRAP_KEY_HALF_SIZE] for v3, 0 for
+     * v2), the unwrapped vault DEK hex, and the KEK handed to importBackup for
+     * zeroization (never held past that call).
+     */
+    internal data class BackupV2Payload(
+        val zipFile: File,
+        val offsetBytes: Int,
+        val dekHex: String?,
+        val kek: ByteArray?
+    )
+
+    /** A unique transient staging file next to the input (deleted after use). */
+    private fun newRestoreStagingFile(dir: File?): File {
+        val base = dir ?: File(System.getProperty("java.io.tmpdir") ?: ".")
+        return File(base, "restore_decrypt_${System.nanoTime()}_${(Math.random() * 1_000_000).toInt()}.zip")
+    }
+
+    /** True iff [wrappedDek] opens with [kek] under the DEK-wrap AAD (cheap probe). */
+    private fun passwordProbe(wrappedDek: ByteArray, kek: ByteArray): Boolean {
+        return try {
+            EncryptionService.decryptAad(wrappedDek, kek, BACKUP_DEK_WRAP_AAD).also { it.fill(0.toByte()) }
+            true
+        } catch (t: Exception) {
+            false
+        }
+    }
 
     /**
-     * Payload decrypt with the B2-CRYPTO-03 diagnostics: a tag failure is
-     * reported as CORRUPTION when a probe unwrap of the wrapped DEK proves the
-     * password was correct (header/payload tampering or a splice), and as a
-     * wrong password only when the DEK does not open either. A one-size-fits-all
-     * 'Incorrect backup password' would mislead on a spliced/corrupt file. v2 only.
+     * R2-B1D-04 (phase-138): AES-GCM payload decrypt FILE-to-FILE, mirroring
+     * [BackupExportPolicy.encryptStreamGcm] — [headerSize] bytes are skipped off
+     * the encrypted file, then the bounded chunk loop writes the plaintext
+     * directly into [destFile]. The encrypted archive and the decrypted zip are
+     * never BOTH in heap (the old `ByteArrayOutputStream` + `doFinal` peak).
+     *
+     * v2 retries the pre-B2-CRYPTO-03 zero-AAD layout on an AEADBadTag exactly
+     * like the one-shot [decryptBackupPayload]; v3 (which only ever existed in
+     * the AAD-bound form) does not. Returns true on success; a wrong key or a
+     * corrupt/forged payload surfaces via the final `doFinal` tag check.
      */
-    private fun decryptBackupPayloadOrThrow(
-        cipherText: ByteArray,
+    private fun decryptPayloadToFile(
+        backupFile: File,
+        headerSize: Int,
+        destFile: File,
         kek: ByteArray,
         payloadIv: ByteArray,
         header: ByteArray,
-        wrappedDek: ByteArray
-    ): ByteArray {
+        payloadAad: ByteArray,
+        allowZeroAadRetry: Boolean
+    ): Boolean {
+        fun openCipherStream(): InputStream {
+            val raw = FileInputStream(backupFile)
+            BackupExportPolicy.skipFully(raw, headerSize.toLong())
+            return raw
+        }
         try {
-            return decryptBackupPayload(cipherText, kek, payloadIv, header)
-        } catch (e: Exception) {
-            val passwordCorrect = try {
-                EncryptionService.decryptAad(wrappedDek, kek, BACKUP_DEK_WRAP_AAD).also { it.fill(0.toByte()) }
-                true
-            } catch (t: Exception) {
-                false
-            }
-            if (passwordCorrect) {
-                throw IllegalArgumentException(
-                    "Backup appears corrupted: the header and the encrypted payload do not match.", e
-                )
-            }
-            throw IllegalArgumentException("Incorrect backup password.", e)
+            BackupExportPolicy.decryptStreamGcm(openCipherStream(), FileOutputStream(destFile), kek, payloadIv, header, payloadAad)
+            return true
+        } catch (e: javax.crypto.AEADBadTagException) {
+            if (!allowZeroAadRetry) throw e
+            // The AAD-bound attempt already closed destFile; a fresh FileOutputStream
+            // truncates the partial plaintext before the legacy retry re-decrypts.
+            BackupExportPolicy.decryptStreamGcmLegacyZeroAad(openCipherStream(), FileOutputStream(destFile), kek, payloadIv)
+            return true
         }
     }
 
@@ -1591,14 +1622,50 @@ object ImportExportService {
         )
     }
 
-    internal fun tryParseBackupV2(rawBytes: ByteArray, backupPassword: String?): BackupV2Payload? {
-        val h = parseBackupHeader(rawBytes) ?: return null
-        val cipherText = rawBytes.copyOfRange(h.headerSize, rawBytes.size)
+    /** Bytes of the backup HEAD probe this file reads — enough for either magic,
+     *  the full v2/v3 header fields and the PK signature. */
+    private const val BACKUP_HEAD_READ_BYTES = 128
+
+    /**
+     * R2-B1D-04 (phase-138): reads up to [maxBytes] bytes from the head of
+     * [file] (fewer on short files) — a small, constant-memory probe. Never a
+     * whole-file read; the reason no restore step needs the archive in heap.
+     */
+    internal fun readFileHead(file: File, maxBytes: Int = BACKUP_HEAD_READ_BYTES): ByteArray {
+        FileInputStream(file).use { input ->
+            val buffer = ByteArray(maxBytes)
+            var total = 0
+            var idle = 0
+            while (total < maxBytes) {
+                val n = input.read(buffer, total, maxBytes - total)
+                if (n < 0) break
+                if (n == 0) {
+                    if (++idle > 8) break
+                    continue
+                }
+                idle = 0
+                total += n
+            }
+            return if (total == maxBytes) buffer else buffer.copyOf(total)
+        }
+    }
+
+    /**
+     * R2-B1D-04 (phase-138): the file-based restore parse. Reads only the 128-byte
+     * head to classify the format, then streams EACH candidate's payload decrypt
+     * file-to-file ([decryptPayloadToFile]) — the decrypted zip lands in a
+     * transient staging file, never a full in-heap byte array. The KEK ownership
+     * contract is unchanged: the returned payload carries the elected KEK and
+     * importBackup zeroizes it on every outcome.
+     */
+    internal fun tryParseBackupV2File(backupFile: File, backupPassword: String?): BackupV2Payload? {
+        val h = parseBackupHeader(readFileHead(backupFile)) ?: return null
 
         if (backupPassword == null) {
             throw IllegalStateException("This backup is protected by a password. Enter the backup password to restore.")
         }
         var kek: ByteArray? = null
+        var currentStaging: File? = null
         try {
             // B2-CRYPTO-07 (phase-113): try the NFKC-normalized password first
             // (the form used to WRITE keys since phase-113); if that yields a
@@ -1607,71 +1674,93 @@ object ImportExportService {
             // password was set with a non-NFKC byte sequence still restores.
             for (derivedKek in EncryptionService.deriveKeyCandidates(backupPassword, h.salt)) {
                 kek = derivedKek
-                val payload = try {
-                    if (h.version == 3) {
-                        decryptBackupPayloadV3(cipherText, derivedKek, h.iv, h.header)
-                    } else {
-                        decryptBackupPayloadOrThrow(cipherText, derivedKek, h.iv, h.header, h.wrappedDek)
-                    }
+                val staging = newRestoreStagingFile(backupFile.parentFile)
+                currentStaging = staging
+                var payloadGood = try {
+                    decryptPayloadToFile(
+                        backupFile, h.headerSize, staging, derivedKek, h.iv, h.header, BACKUP_PAYLOAD_AAD,
+                        allowZeroAadRetry = h.version == 2
+                    )
                 } catch (e: Exception) {
+                    staging.delete()
                     // A corruption diagnosis means THIS candidate's password was
                     // proven correct and the header/payload no longer match — it
-                    // is final, never retried against the other byte form. v3 has
-                    // no cheap DEK probe, so a v3 payload tag failure surfaces as
-                    // 'Incorrect backup password' (see B2Crypto04 REPORT).
+                    // is final, never retried against the other byte form.
                     if (e.message?.contains("corrupted", ignoreCase = true) == true) throw e
-                    null
-                }
-                if (payload != null) {
-                    // B2-CRYPTO-04: v3 payload = [16B wrapKeyPart2][zip...]; the
-                    // header alone never forms the wrap key, the payload-derived
-                    // half must be recovered from the decrypted bytes first.
-                    var wrapKey: ByteArray? = null
-                    var part2: ByteArray? = null
-                    val zipBytes: ByteArray
                     if (h.version == 3) {
-                        if (payload.size <= h.payloadKeyPrefix) {
+                        // v3 has no cheap DEK probe, so a payload tag failure is
+                        // re-tried against the other candidate form and only
+                        // reported as 'Incorrect backup password' once both fail
+                        // (see B2Crypto04 REPORT).
+                        false
+                    } else {
+                        // v2: distinguish a wrong password from a corrupt payload
+                        // exactly like the old decryptBackupPayloadOrThrow — the
+                        // wrapped-DEK probe proves whether THIS candidate was right.
+                        if (passwordProbe(h.wrappedDek, derivedKek)) {
                             throw IllegalArgumentException(
-                                "Backup appears corrupted: the encrypted payload is too short."
+                                "Backup appears corrupted: the header and the encrypted payload do not match.", e
                             )
                         }
-                        part2 = payload.copyOfRange(0, h.payloadKeyPrefix)
-                        wrapKey = combineWrapKey(h.wrapKeyPart1!!, part2!!)
-                        zipBytes = payload.copyOfRange(h.payloadKeyPrefix, payload.size)
-                    } else {
-                        zipBytes = payload
+                        false
                     }
-                    val dekHex = try {
-                        val unwrapKey = wrapKey ?: derivedKek
-                        val unwrappedDek = EncryptionService.decryptAad(h.wrappedDek, unwrapKey, BACKUP_DEK_WRAP_AAD)
-                        try {
-                            unwrappedDek.toHexString()
-                        } finally {
-                            unwrappedDek.fill(0.toByte())
-                        }
-                    } catch (e: Exception) {
-                        // v3: correct password + untangled payload, but the DEK did
-                        // not open with the reassembled wrap key — a header/payload
-                        // splice. v2 never reaches here (its probe ran inside the
-                        // payload decrypt). Treat as corruption so the user is not
-                        // told their (correct) password is wrong.
-                        throw IllegalArgumentException(
-                            "Backup appears corrupted: the header and the encrypted payload do not match.", e
-                        )
-                    } finally {
-                        wrapKey?.fill(0.toByte())
-                        part2?.fill(0.toByte())
-                    }
-                    // KEK ownership hands off to importBackup, which zeroizes it
-                    // on every outcome; the failure paths below zeroize it too.
-                    return BackupV2Payload(zipBytes, dekHex, derivedKek)
                 }
-                // Wrong-password candidate — zeroize it before trying the next.
-                kek?.fill(0.toByte())
-                kek = null
+                if (!payloadGood) {
+                    staging.delete()
+                    currentStaging = null
+                    // Wrong-password candidate — zeroize it before trying the next.
+                    kek?.fill(0.toByte())
+                    kek = null
+                    continue
+                }
+                // B2-CRYPTO-04: v3 payload = [16B wrapKeyPart2][zip...]; the
+                // header alone never forms the wrap key, the payload-derived
+                // half must be recovered from the decrypted bytes first.
+                var wrapKey: ByteArray? = null
+                var part2: ByteArray? = null
+                val offsetBytes: Int
+                if (h.version == 3) {
+                    if (staging.length() <= h.payloadKeyPrefix) {
+                        staging.delete()
+                        throw IllegalArgumentException(
+                            "Backup appears corrupted: the encrypted payload is too short."
+                        )
+                    }
+                    part2 = readFileHead(staging, h.payloadKeyPrefix)
+                    wrapKey = combineWrapKey(h.wrapKeyPart1!!, part2!!)
+                    offsetBytes = h.payloadKeyPrefix
+                } else {
+                    offsetBytes = 0
+                }
+                val dekHex = try {
+                    val unwrapKey = wrapKey ?: derivedKek
+                    val unwrappedDek = EncryptionService.decryptAad(h.wrappedDek, unwrapKey, BACKUP_DEK_WRAP_AAD)
+                    try {
+                        unwrappedDek.toHexString()
+                    } finally {
+                        unwrappedDek.fill(0.toByte())
+                    }
+                } catch (e: Exception) {
+                    staging.delete()
+                    // v3: correct password + untangled payload, but the DEK did
+                    // not open with the reassembled wrap key — a header/payload
+                    // splice. v2 never reaches here (its probe ran inside the
+                    // payload decrypt). Treat as corruption so the user is not
+                    // told their (correct) password is wrong.
+                    throw IllegalArgumentException(
+                        "Backup appears corrupted: the header and the encrypted payload do not match.", e
+                    )
+                } finally {
+                    wrapKey?.fill(0.toByte())
+                    part2?.fill(0.toByte())
+                }
+                // KEK ownership hands off to importBackup, which zeroizes it
+                // on every outcome; the failure paths below zeroize it too.
+                return BackupV2Payload(staging, offsetBytes, dekHex, derivedKek)
             }
             throw IllegalArgumentException("Incorrect backup password.")
         } catch (e: Exception) {
+            currentStaging?.delete()
             kek?.fill(0.toByte())
             throw e
         }
@@ -1682,40 +1771,60 @@ object ImportExportService {
      * touched. v2's wrapped DEK opens only with the correct password (a cheap
      * GCM-tag probe). v3 has no such cheap authenticator by design (the header
      * carries only half of the wrap key), so a v3 check performs ONE full
-     * payload decrypt + DEK unwrap — same memory budget (MAX_BACKUP_INPUT_BYTES)
-     * and cost class as the import itself, and the only way the password can be
-     * tested at all. Legacy backups carry no password and are skipped.
+     * FILE-streamed payload decrypt + DEK unwrap (R2-B1D-04: written to a
+     * transient staging file, never an in-heap array — same memory budget and
+     * cost class as the import itself, and the only way the password can be
+     * tested at all). Legacy backups carry no password and are skipped.
      */
-    fun validateBackupPassword(rawBytes: ByteArray, backupPassword: String?) {
-        val h = parseBackupHeader(rawBytes) ?: return
+    fun validateBackupPasswordFile(backupFile: File, backupPassword: String?) {
+        val h = parseBackupHeader(readFileHead(backupFile)) ?: return
 
         if (backupPassword == null) {
             throw IllegalStateException("This backup is protected by a password. Enter the backup password to restore.")
         }
         var kek: ByteArray? = null
+        var staging: File? = null
         try {
             // B2-CRYPTO-07 (phase-113): normalized password first, then the raw
-            // legacy bytes when it differs — see tryParseBackupV2.
+            // legacy bytes when it differs — see tryParseBackupV2File.
             for (derivedKek in EncryptionService.deriveKeyCandidates(backupPassword, h.salt)) {
                 kek = derivedKek
-                val payload = try {
-                    if (h.version == 3) {
-                        decryptBackupPayloadV3(rawBytes.copyOfRange(h.headerSize, rawBytes.size), derivedKek, h.iv, h.header)
-                    } else {
-                        // v2 cheap probe: a 61-byte wrapped-DEK GCM-tag check.
+                if (h.version == 2) {
+                    // v2 cheap probe: a 61-byte wrapped-DEK GCM-tag check.
+                    try {
                         EncryptionService.decryptAad(h.wrappedDek, derivedKek, BACKUP_DEK_WRAP_AAD)
+                            .also { it.fill(0.toByte()) }
                         return
+                    } catch (e: Exception) {
+                        kek?.fill(0.toByte())
+                        kek = null
+                        continue
                     }
+                }
+                // v3: ONE full streaming payload decrypt, then unwrap the DEK
+                // with the reassembled split key.
+                val s = newRestoreStagingFile(backupFile.parentFile)
+                staging = s
+                var payloadGood = try {
+                    decryptPayloadToFile(
+                        backupFile, h.headerSize, s, derivedKek, h.iv, h.header, BACKUP_PAYLOAD_AAD,
+                        allowZeroAadRetry = false
+                    )
                 } catch (e: Exception) {
+                    false
+                }
+                if (!payloadGood) {
+                    s.delete()
+                    staging = null
                     kek?.fill(0.toByte())
                     kek = null
                     continue
                 }
                 try {
-                    if (payload.size <= h.payloadKeyPrefix) {
+                    if (s.length() <= h.payloadKeyPrefix) {
                         throw IllegalArgumentException("Backup appears corrupted: the encrypted payload is too short.")
                     }
-                    val part2 = payload.copyOfRange(0, h.payloadKeyPrefix)
+                    val part2 = readFileHead(s, h.payloadKeyPrefix)
                     val wrapKey = combineWrapKey(h.wrapKeyPart1!!, part2)
                     try {
                         EncryptionService.decryptAad(h.wrappedDek, wrapKey, BACKUP_DEK_WRAP_AAD)
@@ -1735,6 +1844,7 @@ object ImportExportService {
             }
             throw IllegalArgumentException("Incorrect backup password.")
         } finally {
+            staging?.delete()
             kek?.fill(0.toByte())
         }
     }
@@ -1754,9 +1864,52 @@ object ImportExportService {
 
     private fun ByteArray.toHexString(): String = joinToString("") { "%02x".format(it) }
 
+    /** A unique transient staging file under the app-private cache dir. */
+    private fun newRestoreStagingFile(context: Context, tag: String): File =
+        File(context.cacheDir, "restore_${tag}_${System.nanoTime()}_${(Math.random() * 1_000_000).toInt()}")
+
+    /**
+     * R2-B1D-04 (phase-138): stages a ContentResolver URI into an app-private
+     * cache file with the SAME bounded, fail-closed read the old restore paths
+     * applied in-heap — so the HomeScreen/CorruptionRecovery pickers no longer
+     * hold the whole archive in memory just to hand it to importBackup. Returns
+     * null when the URI cannot be opened; an over-budget file throws loudly
+     * (never silently truncated). The caller owns and deletes the returned file.
+     */
+    suspend fun stageBackupUriToFile(context: Context, uri: Uri, maxBytes: Long = MAX_BACKUP_INPUT_BYTES): File? =
+        withContext(Dispatchers.IO) {
+            val stream = try {
+                context.contentResolver.openInputStream(uri)
+            } catch (e: Exception) {
+                return@withContext null
+            } ?: return@withContext null
+            val staged = newRestoreStagingFile(context, "input")
+            try {
+                staged.outputStream().use { out ->
+                    stream.use { input ->
+                        val buffer = ByteArray(64 * 1024)
+                        var total = 0L
+                        var read = input.read(buffer)
+                        while (read != -1) {
+                            total += read
+                            if (total > maxBytes) {
+                                throw IllegalStateException("Backup file too large (max ${maxBytes / (1024L * 1024L)}MB).")
+                            }
+                            out.write(buffer, 0, read)
+                            read = input.read(buffer)
+                        }
+                    }
+                }
+                staged
+            } catch (e: Throwable) {
+                staged.delete()
+                throw e
+            }
+        }
+
     suspend fun importBackup(
         context: Context,
-        backupBytes: ByteArray,
+        backupFile: File,
         key: ByteArray?,
         backupPassword: String? = null,
         // R2-B1D-02 (phase-135): ONLY set after the user explicitly confirmed the
@@ -1764,15 +1917,17 @@ object ImportExportService {
         // structural gate.
         allowEmptyVault: Boolean = false
     ) = withContext(Dispatchers.IO) {
-        var rawBytes = backupBytes
 
         // B5/34.5: hard cap on input size before any decryption/decompression work.
-        if (rawBytes.size > MAX_BACKUP_INPUT_BYTES) {
+        if (backupFile.length() > MAX_BACKUP_INPUT_BYTES) {
             throw IllegalStateException("Backup file too large (max 400MB).")
         }
 
-        // v2 password-derived format (portable across devices).
-        tryParseBackupV2(rawBytes, backupPassword)?.let { v2 ->
+        // v2/v3 password-derived format (portable across devices). R2-B1D-04:
+        // the payload decrypt is FILE-TO-FILE — the decrypted zip is a staging
+        // file next to the input, deleted on every outcome, never a full in-heap
+        // ByteArrayOutputStream + decrypted array (the old ~800MB restore peak).
+        tryParseBackupV2File(backupFile, backupPassword)?.let { v2 ->
             try {
                 val currentDek = key
                     ?: throw IllegalStateException("Cannot restore: no data key available on this device.")
@@ -1783,12 +1938,13 @@ object ImportExportService {
                     throw IllegalStateException("Backup appears corrupted: could not unlock the backup key.")
                 }
 
-                rawBytes = v2.zipBytes
-                restoreFromZip(context, rawBytes, v2.dekHex, currentDekHex, allowEmptyVault)
+                restoreFromZip(context, v2.zipFile, v2.offsetBytes, v2.dekHex, currentDekHex, allowEmptyVault)
             } finally {
                 // The derived KEK is zeroized on every restore outcome (success,
                 // corrupt-DEK early throw, no-data-key early throw, restore failure).
                 v2.kek?.fill(0.toByte())
+                // The decrypted zip staging file is transient — never persists.
+                v2.zipFile.delete()
             }
             return@withContext
         }
@@ -1802,7 +1958,7 @@ object ImportExportService {
         // (validate-pass, re-key to the victim's DEK, HMAC-rearm, move over the
         // live vault). Only NFLB2 password-protected (v2) or device-DEK-encrypted
         // backups are restoreable; both are authenticated by unguessable keys.
-        if (isPlainPkBackupBytes(rawBytes)) {
+        if (isPlainPkBackupFile(backupFile)) {
             throw IllegalStateException(
                 "Restore rejected: this is an unencrypted (unsigned) backup. " +
                     "Only password-protected or device-keyed backups can be restored."
@@ -1811,11 +1967,71 @@ object ImportExportService {
         if (key == null) {
             throw IllegalStateException("This backup is encrypted. Please set and verify your Master Password first.")
         }
-        val encryptedStr = String(rawBytes, Charsets.UTF_8)
-        rawBytes = EncryptionService.decrypt(encryptedStr, key)
+        // R2-B1D-04: the legacy device-keyed payload (Base64 of
+        // [version][iv][GCM ciphertext+tag] under FIELD_AAD) is decrypted
+        // FILE-TO-FILE through a streaming Base64 decoder + bounded chunk loop —
+        // never `String(bytes) + doFinal` (a ~1.37x Base64 amplification AND the
+        // whole decrypted zip in heap).
+        val stagingZip = newRestoreStagingFile(context, "decrypted")
+        try {
+            decryptDeviceKeyedToFile(backupFile, stagingZip, key)
+            val currentDekHex = key.toHexString()
+            restoreFromZip(context, stagingZip, 0, null, currentDekHex, allowEmptyVault)
+        } finally {
+            stagingZip.delete()
+        }
+    }
 
-        val currentDekHex = key?.toHexString()
-        restoreFromZip(context, rawBytes, null, currentDekHex, allowEmptyVault)
+    /**
+     * R2-B1D-04 (phase-138): decrypts the legacy device-keyed backup file
+     * ([version byte][12-byte IV][FIELD_AAD GCM ciphertext+tag], Base64 text on
+     * disk) file-to-file into [destFile]. Streams through a `Base64.Decoder` so
+     * the ~1.37x Base64 expansion and the decrypted zip are never both in heap;
+     * memory is one 64 KiB chunk at a time.
+     */
+    private fun decryptDeviceKeyedToFile(backupFile: File, destFile: File, key: ByteArray) {
+        val decoded = java.util.Base64.getDecoder().wrap(BufferedInputStream(FileInputStream(backupFile)))
+        try {
+            val version = decoded.read()
+            if (version != EncryptionService.PAYLOAD_VERSION.toInt()) {
+                throw IllegalArgumentException("Unsupported payload format: missing version marker")
+            }
+            val iv = ByteArray(EncryptionService.GCM_IV_LENGTH)
+            var ivRead = 0
+            while (ivRead < iv.size) {
+                val n = decoded.read(iv, ivRead, iv.size - ivRead)
+                if (n < 0) throw IllegalArgumentException("Invalid encrypted payload")
+                if (n == 0) continue
+                ivRead += n
+            }
+            val cipher = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
+            cipher.init(
+                javax.crypto.Cipher.DECRYPT_MODE,
+                javax.crypto.spec.SecretKeySpec(key, "AES"),
+                javax.crypto.spec.GCMParameterSpec(EncryptionService.GCM_TAG_LENGTH, iv)
+            )
+            cipher.updateAAD(EncryptionService.FIELD_AAD)
+            FileOutputStream(destFile).use { out ->
+                val buffer = ByteArray(64 * 1024)
+                var idle = 0
+                while (true) {
+                    val n = decoded.read(buffer)
+                    if (n < 0) break
+                    if (n == 0) {
+                        if (++idle > 16) {
+                            throw java.io.IOException("Decrypt stream made no progress; aborting restore decryption")
+                        }
+                        continue
+                    }
+                    idle = 0
+                    out.write(cipher.update(buffer, 0, n))
+                }
+                // doFinal verifies the GCM tag — a corrupt/forged backup throws here.
+                out.write(cipher.doFinal())
+            }
+        } finally {
+            runCatching { decoded.close() }
+        }
     }
 
     /**
@@ -1828,15 +2044,20 @@ object ImportExportService {
      * zero-row-but-real-schema case — the caller has already shown the user the
      * empty-vault "start fresh" confirmation. It NEVER bypasses the structural
      * gate (missing tables / blank user_version are rejected regardless).
+     *
+     * R2-B1D-04 (phase-138): the archive is now a FILE ([zipFile] at byte
+     * [offsetBytes] — 0 for v2/legacy, [BACKUP_WRAP_KEY_HALF_SIZE] for v3 whose
+     * payload prefixes the split key half) plus a streamed extraction; no caller
+     * ever hands a whole-archive ByteArray here anymore.
      */
-    private fun restoreFromZip(context: Context, rawBytes: ByteArray, backupDekHex: String?, currentDekHex: String?, allowEmptyVault: Boolean = false) {
+    private fun restoreFromZip(context: Context, zipFile: File, offsetBytes: Int, backupDekHex: String?, currentDekHex: String?, allowEmptyVault: Boolean = false) {
         val tempRoot = File(context.cacheDir, "restore_tmp_${System.currentTimeMillis()}")
         tempRoot.mkdirs()
         val tempDb = File(tempRoot, "noteflow.sqlite")
         val tempImports = File(tempRoot, "imports")
         val tempVoiceNotes = File(tempRoot, "voice_notes")
         try {
-            extractBackupEntriesTo(rawBytes, tempDb, tempImports, tempVoiceNotes)
+            extractBackupEntriesTo(zipFile, offsetBytes, tempDb, tempImports, tempVoiceNotes)
             validateAndPrepareRestoredDb(context, tempDb, backupDekHex, currentDekHex, tempVoiceNotes, allowEmptyVault)
             // B2/34.1 + 34.8: re-arm the tamper baseline to the restored DB copy
             // BEFORE it swaps into place. A DB we cannot checksum must never
@@ -1853,45 +2074,54 @@ object ImportExportService {
 
     private data class RestoredEntries(val tempRoot: File, val dbFile: File, val importsDir: File, val voiceNotesDir: File)
 
-    private fun extractBackupEntriesTo(rawBytes: ByteArray, tempDb: File, tempImports: File, tempVoiceNotes: File) {
-        val maxSingleFileBytes = 50 * 1024 * 1024L // 50 MB
-        val maxTotalBytes = 200 * 1024 * 1024L // 200 MB
-        var totalWritten = 0L
+    /**
+     * R2-B1D-04 (phase-138): streams the zip FILE through a bounded extractor.
+     * [BackupBudgetPolicy] now owns the restorable-size contracts (100MB per
+     * entry, 400MB total, 40k entry-count belt, 100x ratio seal), and the SAME
+     * policy gates the export packer — an archive is only ever shipped if it can
+     * be unpacked here.
+     */
+    private fun extractBackupEntriesTo(zipFile: File, offsetBytes: Int, tempDb: File, tempImports: File, tempVoiceNotes: File) {
         var sawDatabase = false
+        val accounting = BackupBudgetPolicy.Accounting()
 
-        ZipInputStream(ByteArrayInputStream(rawBytes)).use { zis ->
-            var entry: ZipEntry? = zis.nextEntry
-            while (entry != null) {
-                val entryName = entry.name
-                if (!entry.isDirectory) {
-                    if (entryName == "noteflow.sqlite") {
-                        sawDatabase = true
-                        tempDb.parentFile?.mkdirs()
-                        FileOutputStream(tempDb).use { fos ->
-                            totalWritten += copyWithLimit(zis, fos, maxSingleFileBytes, totalWritten, maxTotalBytes, entry)
-                        }
-                    } else if (entryName.startsWith("imports/")) {
-                        val relPath = safeImportRelativePath(entryName.substring("imports/".length))
-                            ?: throw IllegalStateException("Backup contains unsafe relative path: $entryName")
-                        val targetFile = File(tempImports, relPath)
-                        targetFile.parentFile?.mkdirs()
-                        FileOutputStream(targetFile).use { fos ->
-                            totalWritten += copyWithLimit(zis, fos, maxSingleFileBytes, totalWritten, maxTotalBytes, entry)
-                        }
-                    } else if (entryName.startsWith("voice_notes/")) {
-                        // B1-DB-3 (phase-54): encrypted voice blobs ride in the
-                        // backup by name; same traversal/zip-bomb protection as
-                        // imports.
-                        val relPath = safeImportRelativePath(entryName.substring("voice_notes/".length))
-                            ?: throw IllegalStateException("Backup contains unsafe relative path: $entryName")
-                        val targetFile = File(tempVoiceNotes, relPath)
-                        targetFile.parentFile?.mkdirs()
-                        FileOutputStream(targetFile).use { fos ->
-                            totalWritten += copyWithLimit(zis, fos, maxSingleFileBytes, totalWritten, maxTotalBytes, entry)
+        FileInputStream(zipFile).use { raw ->
+            if (offsetBytes > 0) BackupExportPolicy.skipFully(raw, offsetBytes.toLong())
+            ZipInputStream(raw).use { zis ->
+                var entry: ZipEntry? = zis.nextEntry
+                while (entry != null) {
+                    accounting.claimEntry()
+                    val entryName = entry.name
+                    if (!entry.isDirectory) {
+                        if (entryName == "noteflow.sqlite") {
+                            sawDatabase = true
+                            tempDb.parentFile?.mkdirs()
+                            FileOutputStream(tempDb).use { fos ->
+                                copyWithLimit(zis, fos, accounting, entry)
+                            }
+                        } else if (entryName.startsWith("imports/")) {
+                            val relPath = safeImportRelativePath(entryName.substring("imports/".length))
+                                ?: throw IllegalStateException("Backup contains unsafe relative path: $entryName")
+                            val targetFile = File(tempImports, relPath)
+                            targetFile.parentFile?.mkdirs()
+                            FileOutputStream(targetFile).use { fos ->
+                                copyWithLimit(zis, fos, accounting, entry)
+                            }
+                        } else if (entryName.startsWith("voice_notes/")) {
+                            // B1-DB-3 (phase-54): encrypted voice blobs ride in the
+                            // backup by name; same traversal/zip-bomb protection as
+                            // imports.
+                            val relPath = safeImportRelativePath(entryName.substring("voice_notes/".length))
+                                ?: throw IllegalStateException("Backup contains unsafe relative path: $entryName")
+                            val targetFile = File(tempVoiceNotes, relPath)
+                            targetFile.parentFile?.mkdirs()
+                            FileOutputStream(targetFile).use { fos ->
+                                copyWithLimit(zis, fos, accounting, entry)
+                            }
                         }
                     }
+                    entry = zis.nextEntry
                 }
-                entry = zis.nextEntry
             }
         }
         if (!sawDatabase) {
@@ -2876,6 +3106,31 @@ internal fun isPlainPkBackupBytes(bytes: ByteArray): Boolean {
     //   PK\x06\x06 ZIP64 EOCD record, PK\x07\x08 data descriptor.
     val sig = (((bytes[2].toInt() and 0xFF) shl 8) or (bytes[3].toInt() and 0xFF))
     return sig == 0x0304 || sig == 0x0506 || sig == 0x0606 || sig == 0x0708
+}
+
+/**
+ * R2-B1D-04 (phase-138): file-form of [isPlainPkBackupBytes] — reads only the
+ * 4-byte head so the picker/restore gate can classify a backup without ever
+ * loading it into heap.
+ */
+internal fun isPlainPkBackupFile(file: File): Boolean {
+    val head = ImportExportService.readFileHead(file, 4)
+    return head.size == 4 && isPlainPkBackupBytes(head)
+}
+
+/**
+ * R2-B1D-04 (phase-138): true when [file] starts with a v2 (NFLB2) or v3
+ * (NFLB3) backup magic — the password-protected, portable format. Reads only
+ * the 5-byte head. (Fixed a pre-existing gap on this path: the picker only
+ * recognized NFLB2 and routed a v3 backup to the legacy "UNTRUSTED" dialog,
+ * which then failed with "This backup is protected by a password" — a v3
+ * backup is now offered the password dialog like a v2 one.)
+ */
+internal fun isNflbBackupFile(file: File): Boolean {
+    val head = ImportExportService.readFileHead(file, 5)
+    if (head.size < 5) return false
+    val magic = String(head, Charsets.US_ASCII)
+    return magic == "NFLB2" || magic == "NFLB3"
 }
 
 /**
