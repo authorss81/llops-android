@@ -1,4 +1,6 @@
 *.sh text eol=lf
 *.yml text eol=lf
 *.yaml text eol=lf
+# R2-b2b2-DEP-04 (phase-146): Gradle's binary PGP keyring must commit as binary.
+*.gpg binary
 * text=auto

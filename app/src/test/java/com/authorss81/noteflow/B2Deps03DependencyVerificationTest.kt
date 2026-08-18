@@ -51,14 +51,30 @@ class B2Deps03DependencyVerificationTest {
     }
 
     @Test
-    fun `maven central remains available for non-google groups`() {
+    fun `maven central remains available but one-way allow-listed for non-google groups`() {
         val text = settingsText()
         val resolutionBlock = text.substringAfter("dependencyResolutionManagement {")
             .substringBefore("include(\":app\")")
         assertTrue(
             "mavenCentral() must stay in dependencyResolutionManagement for non-google artifacts (B2-DEPS-03)",
-            resolutionBlock.contains("mavenCentral()")
+            resolutionBlock.contains("mavenCentral {") || resolutionBlock.contains("mavenCentral()")
         )
+        // R2-b2b2-DEP-04 (phase-146): Central must now carry a content allow-list,
+        // closing the reverse gap of the google() one-way filter — unknown groups
+        // (and androidx.*/com.google.* versions google() does not host) fail fast.
+        assertTrue(
+            "mavenCentral must be content-filtered with an allow-list (R2-b2b2-DEP-04)",
+            resolutionBlock.contains("mavenCentral {") && resolutionBlock.contains("content {")
+        )
+        centralAllowlist().forEach { regex ->
+            // The settings source stores each regex as a Kotlin string literal, so a
+            // backslash in the logical regex appears doubled in the raw source text.
+            val raw = regex.replace("\\", "\\\\")
+            assertTrue(
+                "mavenCentral allow-list must include group '$regex' (R2-b2b2-DEP-04)",
+                resolutionBlock.contains("includeGroupByRegex(\"$raw\")")
+            )
+        }
     }
 
     @Test
@@ -115,6 +131,61 @@ class B2Deps03DependencyVerificationTest {
         "includeGroupByRegex(\"com\\\\.android.*\")",
         "includeGroupByRegex(\"com\\\\.google.*\")",
         "includeGroupByRegex(\"androidx.*\")"
+    )
+
+    /** Every group this build legitimately resolves from Central (R2-b2b2-DEP-04 allow-list). */
+    private fun centralAllowlist(): List<String> = listOf(
+        "org\\.jetbrains.*",
+        "io\\.coil.*",
+        "com\\.squareup.*",
+        "org\\.commonmark.*",
+        "org\\.jsoup.*",
+        "net\\.zetetic.*",
+        "com\\.github.*",
+        "junit",
+        "org\\.hamcrest.*",
+        "org\\.junit.*",
+        "org\\.jspecify.*",
+        "org\\.checkerframework.*",
+        "com\\.google\\.errorprone.*",
+        "com\\.google\\.j2objc.*",
+        "com\\.google\\.code.*",
+        "org\\.tensorflow.*",
+        "com\\.google\\.protobuf.*",
+        "com\\.google\\.flatbuffers.*",
+        "io\\.grpc.*",
+        "io\\.netty.*",
+        "io\\.perfmark.*",
+        "org\\.xerial.*",
+        "com\\.google\\.guava.*",
+        "com\\.google\\.crypto.*",
+        "com\\.google\\.dagger.*",
+        "com\\.google\\.jimfs.*",
+        "com\\.google\\.auto.*",
+        "com\\.google\\.api.*",
+        "com\\.google\\.accompanist.*",
+        "com\\.google\\.devtools.*",
+        "com\\.google\\.android",
+        "com\\.googlecode.*",
+        "com\\.intellij.*",
+        "com\\.sun.*",
+        "jakarta.*",
+        "javax.*",
+        "commons-.*",
+        "org\\.apache.*",
+        "org\\.bouncycastle.*",
+        "org\\.codehaus.*",
+        "org\\.ow2.*",
+        "org\\.jdom.*",
+        "org\\.eclipse.*",
+        "org\\.glassfish.*",
+        "org\\.jvnet.*",
+        "org\\.sonatype.*",
+        "org\\.bitbucket.*",
+        "org\\.slf4j.*",
+        "it\\.unimi\\.dsi.*",
+        "net\\.java.*",
+        "net\\.sf.*"
     )
 
     private fun buildPluginGroups(): List<String> = listOf(
