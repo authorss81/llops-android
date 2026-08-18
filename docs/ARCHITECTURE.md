@@ -229,6 +229,25 @@
     locked interval loses the last stashed page delta/body. A durable pending-queue is impossible
     without writing the data to disk while locked (i.e. plaintext), which is exactly what this
     finding forbids, so the in-memory stash is deliberate and bounded (latest-wins per page).
+  - **Implemented in phase-149** (R2-b2b4-DOS-01, see `workspace/phase-149/REPORT.md`): the
+    `note_versions` table is BOUNDED and never decrypted wholesale. New pure-JVM
+    `services/NoteVersionRetentionPolicy.kt` owns the budgets (`MAX_VERSIONS_PER_PAGE` = 20,
+    `DECRYPT_BATCH_SIZE` = 20, `REENCRYPT_BATCH_SIZE` = 100) plus the retention decision and the
+    shared prune SQL. `NoteRepository.createNoteVersion` (`:1436`) inserts AND prunes the oldest
+    rows past the cap inside ONE transaction (`NoteVersionDao.pruneVersionsForPage`, `Daos.kt`),
+    so a save/autosave/translate loop can never accumulate an unbounded table. `getNoteVersions`
+    (`:1465`) pages newest-first via `NoteVersionDao.getVersionsForPagePaged`
+    (`LIMIT :limit OFFSET :offset`) and decrypts batch-by-batch (whole-table read gone), and the
+    `VersionHistoryBottomSheet` materializes lazily — it keeps the pinned guarded
+    `viewModel.getNoteVersions(page.id)` for the first window and streams further windows via the
+    new `viewModel.getNoteVersionsPaged` sentinel as the list scrolls. Both whole-table re-key
+    sweeps (`migrateFieldRecordAad`, `reencryptPlaintextFields`) now page via
+    `getVersionsForReencryptPaged`. The backup writer prunes (`repository.pruneVersionsToRetention()`)
+    before its checkpoint-then-copy so an export never serializes a page's oversized legacy history;
+    the restore path runs `sanitizeRestoredNoteVersions` under the candidate key (raw SQL sharing
+    the policy's `PRUNE_KEEP_NEWEST_SQL`) BEFORE re-key/field-migration, so a crafted
+    ~5,000-row × ~50 KB-body archive can no longer OOM the process on history open or restore.
+    Schema-compatible (no migration). Tests: `Phase149NoteVersionsRetentionTest` (14).
   - **Implemented in phase-74** (B2-UI-5, see `workspace/phase-74/REPORT.md`): the markdown-body
     save+read ARE serialized and latest-wins now, closing the last non-atomic body path (the old
     dispose-flush `File.writeText` / `produceState` `File.readText` truncate-race is gone; bodies

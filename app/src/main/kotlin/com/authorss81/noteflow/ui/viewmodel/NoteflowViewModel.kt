@@ -3703,6 +3703,18 @@ fun updatePageTags(id: String, tags: String) {
     }
 
     /**
+     * R2-b2b4-DOS-01 (phase-149): single bounded newest-first window of a page's
+     * version history, consumed by the lazily-materializing VersionHistoryBottomSheet
+     * as it scrolls. Same lock-race degradation as [getNoteVersions]: an armed
+     * EMPTY window on a lock race, never a crash.
+     */
+    suspend fun getNoteVersionsPaged(pageId: String, limit: Int, offset: Int): List<com.authorss81.noteflow.data.model.NoteVersionEntity> {
+        return withLockedPoolGuard("version history", emptyList()) {
+            repository.getNoteVersionsPaged(pageId, limit, offset)
+        }
+    }
+
+    /**
      * R2-b2b1-UI-01 (phase-134): composition-scoped READ of a canvas page's
      * full inked payload (strokes + layers + sticky notes + media embeds), kept
      * inside ONE guard invocation so a lock race between the three reads yields

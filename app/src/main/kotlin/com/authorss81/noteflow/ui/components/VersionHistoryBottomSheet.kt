@@ -5,6 +5,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.History
@@ -17,6 +18,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.authorss81.noteflow.data.model.NotePageEntity
 import com.authorss81.noteflow.data.model.NoteVersionEntity
+import com.authorss81.noteflow.services.NoteVersionRetentionPolicy
 import com.authorss81.noteflow.ui.viewmodel.NoteflowViewModel
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -31,20 +33,52 @@ fun VersionHistoryBottomSheet(
     onDismiss: () -> Unit
 ) {
     val scheme = MaterialTheme.colorScheme
-    var versions by remember { mutableStateOf<List<NoteVersionEntity>>(emptyList()) }
+    // R2-b2b4-DOS-01 (phase-149): the sheet only ever holds the VISIBLE window.
+    // [loadedVersions] starts with the first bounded batch and extends lazily as
+    // the list scrolls toward the end — never a whole oversized history in heap.
+    val loadedVersions = remember { mutableStateListOf<NoteVersionEntity>() }
     var selectedVersion by remember { mutableStateOf<NoteVersionEntity?>(null) }
     var isLoading by remember { mutableStateOf(true) }
+    var endReached by remember { mutableStateOf(false) }
+    val listState = rememberLazyListState()
 
     LaunchedEffect(page.id) {
+        loadedVersions.clear()
+        selectedVersion = null
+        endReached = false
+        isLoading = true
         // R2-b2b1-UI-01 (phase-134): getNoteVersions is guard-armed in the VM
         // (empty history + notice on a lock race) and only applied while the
         // auth gate is still up.
         val loaded = viewModel.getNoteVersions(page.id)
         if (viewModel.authenticated.value) {
-            versions = loaded
-            selectedVersion = loaded.firstOrNull()
+            loadedVersions.addAll(loaded)
+            selectedVersion = loadedVersions.firstOrNull()
+            endReached = loaded.size < NoteVersionRetentionPolicy.DECRYPT_BATCH_SIZE
         }
         isLoading = false
+    }
+
+    // R2-b2b4-DOS-01 (phase-149): near-end sentinel — the next bounded window is
+    // fetched only when the user actually scrolls to it, so only the visible
+    // rows are decrypted/materialized at any moment.
+    LaunchedEffect(listState, loadedVersions.size) {
+        val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+        val threshold = (loadedVersions.size - 5).coerceAtLeast(0)
+        if (!isLoading && !endReached && lastVisible >= threshold) {
+            isLoading = true
+            val start = loadedVersions.size
+            val more = viewModel.getNoteVersionsPaged(
+                page.id,
+                NoteVersionRetentionPolicy.DECRYPT_BATCH_SIZE,
+                start
+            )
+            if (viewModel.authenticated.value) {
+                loadedVersions.addAll(more)
+                endReached = more.size < NoteVersionRetentionPolicy.DECRYPT_BATCH_SIZE
+            }
+            isLoading = false
+        }
     }
 
     ModalBottomSheet(
@@ -76,14 +110,14 @@ fun VersionHistoryBottomSheet(
                 }
             }
 
-            if (isLoading) {
+            if (isLoading && loadedVersions.isEmpty()) {
                 Box(
                     modifier = Modifier.fillMaxWidth().height(200.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     CircularProgressIndicator()
                 }
-            } else if (versions.isEmpty()) {
+            } else if (loadedVersions.isEmpty()) {
                 Box(
                     modifier = Modifier.fillMaxWidth().height(180.dp),
                     contentAlignment = Alignment.Center
@@ -103,12 +137,13 @@ fun VersionHistoryBottomSheet(
                 ) {
                     // Left list: Version snapshots
                     LazyColumn(
+                        state = listState,
                         modifier = Modifier
                             .weight(1f)
                             .fillMaxHeight(),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        items(versions) { version ->
+                        items(loadedVersions) { version ->
                             val isSelected = version.id == selectedVersion?.id
                             val dateStr = SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()).format(Date(version.timestampMs))
                             Surface(

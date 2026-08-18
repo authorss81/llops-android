@@ -291,8 +291,34 @@ interface NoteVersionDao {
     @Query("SELECT * FROM note_versions WHERE pageId = :pageId ORDER BY timestampMs DESC")
     suspend fun getVersionsForPage(pageId: String): List<NoteVersionEntity>
 
+    // R2-b2b4-DOS-01 (phase-149): bounded newest-first read for paged decrypt /
+    // lazy Version History materialization. A LIMIT/OFFSET window is never the
+    // whole table in heap.
+    @Query("SELECT * FROM note_versions WHERE pageId = :pageId ORDER BY timestampMs DESC LIMIT :limit OFFSET :offset")
+    suspend fun getVersionsForPagePaged(pageId: String, limit: Int, offset: Int): List<NoteVersionEntity>
+
+    @Query("SELECT COUNT(*) FROM note_versions WHERE pageId = :pageId")
+    suspend fun countVersionsForPage(pageId: String): Int
+
+    @Query("SELECT DISTINCT pageId FROM note_versions")
+    suspend fun getDistinctVersionPageIds(): List<String>
+
     @Query("SELECT * FROM note_versions")
     suspend fun getAllVersionsForReencrypt(): List<NoteVersionEntity>
+
+    // R2-b2b4-DOS-01 (phase-149): the same whole-table re-encrypt coverage,
+    // realized page-by-page so the sweeps never hold the table in heap at once.
+    @Query("SELECT * FROM note_versions ORDER BY timestampMs DESC LIMIT :limit OFFSET :offset")
+    suspend fun getVersionsForReencryptPaged(limit: Int, offset: Int): List<NoteVersionEntity>
+
+    // R2-b2b4-DOS-01 (phase-149): retention-cap prune. Called inside the insert
+    // transaction (createNoteVersion), at export time, and by the restore-time
+    // raw-SQL sanitizer (which uses the same statement with bound args).
+    @Query(
+        "DELETE FROM note_versions WHERE pageId = :pageId AND id NOT IN (" +
+            "SELECT id FROM note_versions WHERE pageId = :pageId ORDER BY timestampMs DESC LIMIT :keepNewest)"
+    )
+    suspend fun pruneVersionsForPage(pageId: String, keepNewest: Int)
 
     @Query("UPDATE note_versions SET title = :title, extractedText = :extractedText WHERE id = :id")
     suspend fun updateVersionFields(id: String, title: String, extractedText: String?)

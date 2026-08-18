@@ -8,6 +8,7 @@ import com.authorss81.noteflow.services.DatabaseSecurityHelper
 import com.authorss81.noteflow.services.DecryptFailurePolicy
 import com.authorss81.noteflow.services.EncryptionService
 import com.authorss81.noteflow.services.NoteBodyVaultPolicy
+import com.authorss81.noteflow.services.NoteVersionRetentionPolicy
 import com.authorss81.noteflow.services.SourceFilePathPolicy
 import com.authorss81.noteflow.services.StrokeGeometryGateResult
 import com.authorss81.noteflow.services.StrokeGeometryPolicy
@@ -396,25 +397,34 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
                     }
                 }
             }
-            db.noteVersionDao().getAllVersionsForReencrypt().forEach { version ->
-                var title = version.title
-                var extracted = version.extractedText
-                var dirty = false
-                if (title.isNotBlank() && !EncryptionService.isFieldBoundToRecord(title, dek, "note_versions", version.id, "title")) {
-                    val plain = try { EncryptionService.decrypt(title, dek) } catch (e: Exception) { null }
-                    if (plain != null) {
-                        title = EncryptionService.encryptField(plain, dek, "note_versions", version.id, "title")
-                        dirty = true
+            // R2-b2b4-DOS-01 (phase-149): the re-key sweep covers the whole
+            // table but pages through it — never one all-row heap materialization.
+            var versionOffset = 0
+            while (true) {
+                val versionBatch = db.noteVersionDao().getVersionsForReencryptPaged(NoteVersionRetentionPolicy.REENCRYPT_BATCH_SIZE, versionOffset)
+                if (versionBatch.isEmpty()) break
+                versionBatch.forEach { version ->
+                    var title = version.title
+                    var extracted = version.extractedText
+                    var dirty = false
+                    if (title.isNotBlank() && !EncryptionService.isFieldBoundToRecord(title, dek, "note_versions", version.id, "title")) {
+                        val plain = try { EncryptionService.decrypt(title, dek) } catch (e: Exception) { null }
+                        if (plain != null) {
+                            title = EncryptionService.encryptField(plain, dek, "note_versions", version.id, "title")
+                            dirty = true
+                        }
                     }
-                }
-                if (!extracted.isNullOrBlank() && !EncryptionService.isFieldBoundToRecord(extracted, dek, "note_versions", version.id, "extractedText")) {
-                    val plain = try { EncryptionService.decrypt(extracted, dek) } catch (e: Exception) { null }
-                    if (plain != null) {
-                        extracted = EncryptionService.encryptField(plain, dek, "note_versions", version.id, "extractedText")
-                        dirty = true
+                    if (!extracted.isNullOrBlank() && !EncryptionService.isFieldBoundToRecord(extracted, dek, "note_versions", version.id, "extractedText")) {
+                        val plain = try { EncryptionService.decrypt(extracted, dek) } catch (e: Exception) { null }
+                        if (plain != null) {
+                            extracted = EncryptionService.encryptField(plain, dek, "note_versions", version.id, "extractedText")
+                            dirty = true
+                        }
                     }
+                    if (dirty) db.noteVersionDao().updateVersionFields(version.id, title, extracted)
                 }
-                if (dirty) db.noteVersionDao().updateVersionFields(version.id, title, extracted)
+                if (versionBatch.size < NoteVersionRetentionPolicy.REENCRYPT_BATCH_SIZE) break
+                versionOffset += versionBatch.size
             }
         }
     }
@@ -478,21 +488,31 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
             // (fieldEncryptedColumns), but the local plaintext sweep was missing
             // them — any legacy plaintext version snapshot written before a master
             // password existed stayed in the clear at rest.
-            db.noteVersionDao().getAllVersionsForReencrypt().forEach { version ->
-                var title = version.title
-                var extracted = version.extractedText ?: ""
-                var dirty = false
-                if (EncryptionService.shouldReencryptField(title, dek, "note_versions", version.id, "title")) {
-                    title = EncryptionService.encryptField(title.toByteArray(), dek, "note_versions", version.id, "title")
-                    dirty = true
+            // R2-b2b4-DOS-01 (phase-149): the C1 sweep covers the whole table but
+            // runs in bounded pages — a vault that accumulated thousands of
+            // snapshots before the retention cap can never be loaded wholesale.
+            var versionOffset = 0
+            while (true) {
+                val versionBatch = db.noteVersionDao().getVersionsForReencryptPaged(NoteVersionRetentionPolicy.REENCRYPT_BATCH_SIZE, versionOffset)
+                if (versionBatch.isEmpty()) break
+                versionBatch.forEach { version ->
+                    var title = version.title
+                    var extracted = version.extractedText ?: ""
+                    var dirty = false
+                    if (EncryptionService.shouldReencryptField(title, dek, "note_versions", version.id, "title")) {
+                        title = EncryptionService.encryptField(title.toByteArray(), dek, "note_versions", version.id, "title")
+                        dirty = true
+                    }
+                    if (EncryptionService.shouldReencryptField(extracted, dek, "note_versions", version.id, "extractedText")) {
+                        extracted = EncryptionService.encryptField(extracted.toByteArray(), dek, "note_versions", version.id, "extractedText")
+                        dirty = true
+                    }
+                    if (dirty) {
+                        db.noteVersionDao().updateVersionFields(version.id, title, extracted)
+                    }
                 }
-                if (EncryptionService.shouldReencryptField(extracted, dek, "note_versions", version.id, "extractedText")) {
-                    extracted = EncryptionService.encryptField(extracted.toByteArray(), dek, "note_versions", version.id, "extractedText")
-                    dirty = true
-                }
-                if (dirty) {
-                    db.noteVersionDao().updateVersionFields(version.id, title, extracted)
-                }
+                if (versionBatch.size < NoteVersionRetentionPolicy.REENCRYPT_BATCH_SIZE) break
+                versionOffset += versionBatch.size
             }
         }
     }
@@ -1426,27 +1446,86 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
             timestampMs = System.currentTimeMillis(),
             versionNote = versionNote
         )
-        db.noteVersionDao().insertVersion(version)
+        // R2-b2b4-DOS-01 (phase-149): snapshots are written on every manual
+        // save / autosave / before-translation-replace — the insert AND the
+        // retention-cap prune must be atomic, so a rapid-fire save loop can
+        // never accumulate an unbounded version table. The INSERT is the new
+        // newest row; the prune then keeps only
+        // NoteVersionRetentionPolicy.MAX_VERSIONS_PER_PAGE newest per page.
+        db.withTransaction {
+            db.noteVersionDao().insertVersion(version)
+            db.noteVersionDao().pruneVersionsForPage(pageId, NoteVersionRetentionPolicy.MAX_VERSIONS_PER_PAGE)
+        }
     }
 
     suspend fun getNoteVersions(pageId: String): List<NoteVersionEntity> = withContext(Dispatchers.IO) {
-        val versions = db.noteVersionDao().getVersionsForPage(pageId)
-        // B1-DB-8 (phase-88): version title/body decrypt failures render the
-        // explicit UNREADABLE_MARKER via the single policy decision — the old
-        // `decryptFieldOrNull(...) ?: v.title` fallback returned the raw blob.
-        versions.map { v ->
-            val decTitle = if (v.title.isNotBlank()) {
-                decryptFieldForDisplay(v.title, "note_versions", v.id, "title", v.pageId)
-            } else {
-                v.title
+        // R2-b2b4-DOS-01 (phase-149): the history read is PAGED — one bounded
+        // LIMIT/OFFSET window at a time, decrypted and stitched batch-by-batch,
+        // never a single in-heap decrypt of the whole table. A crafted page with
+        // thousands of snapshots can no longer OOM the process on history open.
+        val retention = NoteVersionRetentionPolicy
+        val result = mutableListOf<NoteVersionEntity>()
+        var offset = 0
+        while (true) {
+            val batch = db.noteVersionDao().getVersionsForPagePaged(pageId, retention.DECRYPT_BATCH_SIZE, offset)
+            if (batch.isEmpty()) break
+            for (v in batch) {
+                result += decryptVersionForDisplay(v)
             }
-            val decText = if (!v.extractedText.isNullOrBlank()) {
-                decryptFieldForDisplay(v.extractedText, "note_versions", v.id, "extractedText", v.pageId)
-            } else {
-                v.extractedText
-            }
-            v.copy(title = decTitle, extractedText = decText)
+            if (batch.size < retention.DECRYPT_BATCH_SIZE) break
+            offset += batch.size
         }
+        result
+    }
+
+    /**
+     * R2-b2b4-DOS-01 (phase-149): a single bounded newest-first window of a
+     * page's version history. The lazily-materializing VersionHistoryBottomSheet
+     * fetches the initial window via [getNoteVersions] (the pinned guarded read)
+     * and streams further windows here as the list scrolls — only the visible
+     * window is decrypted at any moment.
+     */
+    suspend fun getNoteVersionsPaged(pageId: String, limit: Int, offset: Int): List<NoteVersionEntity> = withContext(Dispatchers.IO) {
+        db.noteVersionDao().getVersionsForPagePaged(pageId, limit, offset).map { v ->
+            decryptVersionForDisplay(v)
+        }
+    }
+
+    /**
+     * R2-b2b4-DOS-01 (phase-149): prune every page's version history to the
+     * retention cap (newest [NoteVersionRetentionPolicy.MAX_VERSIONS_PER_PAGE]).
+     * Invoked by the backup writer right before the checkpoint-then-copy so a
+     * legacy vault that accumulated > cap snapshots before this deploy stops
+     * inflating every export forever — the archive never serializes a page's
+     * retained-but-oversized history.
+     */
+    suspend fun pruneVersionsToRetention() = withContext(Dispatchers.IO) {
+        val cap = NoteVersionRetentionPolicy.MAX_VERSIONS_PER_PAGE
+        db.withTransaction {
+            db.noteVersionDao().getDistinctVersionPageIds().forEach { pageId ->
+                db.noteVersionDao().pruneVersionsForPage(pageId, cap)
+            }
+        }
+    }
+
+    /**
+     * R2-b2b4-DOS-01 (phase-149): the single decrypt decision for one version
+     * row, shared by the paged full read and the lazy window read.
+     * B1-DB-8 (phase-88): version title/body decrypt failures render the
+     * explicit UNREADABLE_MARKER via the single policy decision.
+     */
+    private fun decryptVersionForDisplay(v: NoteVersionEntity): NoteVersionEntity {
+        val decTitle = if (v.title.isNotBlank()) {
+            decryptFieldForDisplay(v.title, "note_versions", v.id, "title", v.pageId)
+        } else {
+            v.title
+        }
+        val decText = if (!v.extractedText.isNullOrBlank()) {
+            decryptFieldForDisplay(v.extractedText, "note_versions", v.id, "extractedText", v.pageId)
+        } else {
+            v.extractedText
+        }
+        return v.copy(title = decTitle, extractedText = decText)
     }
 
     /**

@@ -1337,6 +1337,13 @@ object ImportExportService {
             // rewrote the main file). The verified copy then guarantees the staged
             // bytes are a main-file state the source held for the whole copy.
             if (dbFile.exists()) {
+                // R2-b2b4-DOS-01 (phase-149): bound the version table BEFORE the
+                // snapshot — every page is pruned to its newest retained window,
+                // so a legacy vault that outgrew the cap before this deploy stops
+                // inflating every export forever and the archive never serializes
+                // a page's retained-but-oversized version history. The prune is
+                // WAL-committed by the FULL checkpoint that follows it.
+                repository.pruneVersionsToRetention()
                 repository.checkpointWal()
                 repository.stampDatabaseChecksum(context)
                 if (!VaultSnapshotCopyPolicy.checkpointThenCopy(dbFile, stagedDb)) {
@@ -2240,6 +2247,14 @@ object ImportExportService {
                             // compress) exceeds the budget must never migrate or swap
                             // into the live vault.
                             sanitizeRestoredStrokeGeometry(db)
+                            // R2-b2b4-DOS-01 (phase-149): cap a crafted backup's
+                            // note_versions table to the newest retained window per
+                            // page NOW, while this candidate key can open the file —
+                            // the oversized rows never reach the re-key /
+                            // field-migration steps nor the live vault, so a
+                            // ~5,000-row × ~50 KB-body archive can no longer OOM
+                            // the process on version-history open or restore.
+                            sanitizeRestoredNoteVersions(db)
                             // B1-AUTH-05 (phase-69): strip sourceFilePath rows that
                             // escape the imports root BEFORE they can migrate or swap
                             // into the live vault — the zip entry-names validation
@@ -2420,6 +2435,45 @@ object ImportExportService {
     private fun shouldPropagateRestoreStripFailure(e: Exception): Boolean {
         val msg = e.message?.lowercase() ?: return true
         return !msg.contains("no such table")
+    }
+
+    /**
+     * R2-b2b4-DOS-01 (phase-149): caps a restored backup's `note_versions` table
+     * to the newest [com.authorss81.noteflow.services.NoteVersionRetentionPolicy.MAX_VERSIONS_PER_PAGE]
+     * rows per page, oldest dropped.
+     *
+     * The row bodies are encrypted at rest and their base64 length is an EXACT
+     * proxy for the plaintext size (AES-GCM does not compress), so the uncapped
+     * table is the DOS vector: a crafted backup with ~5,000 rows × ~50 KB bodies
+     * becomes ~250 MB in heap the moment Version History opens or the table is
+     * re-encrypted on restore. Running here, under the candidate key that can
+     * open the backup, the table is trimmed BEFORE the re-key /
+     * [migrateFieldCiphertexts] steps — those then walk a bounded history and a
+     * crafted archive can never inflate the live vault. The statement matches
+     * the Room DAO prune exactly (bound [keepNewest], never interpolated).
+     */
+    private fun sanitizeRestoredNoteVersions(db: net.zetetic.database.sqlcipher.SQLiteDatabase) {
+        try {
+            val keepNewest = com.authorss81.noteflow.services.NoteVersionRetentionPolicy.MAX_VERSIONS_PER_PAGE
+            val pageIds = mutableListOf<String>()
+            val cursor = db.rawQuery("SELECT DISTINCT pageId FROM note_versions", null)
+            try {
+                while (cursor.moveToNext()) pageIds.add(cursor.getString(0))
+            } finally {
+                cursor.close()
+            }
+            for (pageId in pageIds) {
+                db.execSQL(
+                    com.authorss81.noteflow.services.NoteVersionRetentionPolicy.PRUNE_KEEP_NEWEST_SQL,
+                    arrayOf<Any>(pageId, pageId, keepNewest)
+                )
+            }
+        } catch (e: Exception) {
+            // A note_versions table that doesn't exist (schema not yet applied) is
+            // not an error here — there is nothing to strip. Any real failure is
+            // re-thrown so the restore-abort path handles it.
+            if (shouldPropagateRestoreStripFailure(e)) throw e
+        }
     }
 
     /**
