@@ -1003,6 +1003,21 @@
     scrub the guard forgets its timestamp so a foreign (other-app) copy is never wiped. ON_PAUSE scrub
     retained as defense-in-depth; both note-content copy sources stamp the guard before writing
     (`OcrResultDialog.kt:149-150`, `MediaEmbedComponents.kt:352-354`). Tests: `B2Ui2ClipboardScrubTest` (13).
+    - **Implemented in phase-139** (R2-B1P-01, see `workspace/phase-139/REPORT.md`): the primary
+      note-content copy surfaces that stamp no `recordCopy()` (the markdown editor's platform
+      selection Copy, `HybridMarkdownEditor.kt:219` `OutlinedTextField`; the OCR dialog's native
+      `SelectionContainer` Copy, `OcrResultDialog.kt:121`) are covered by making the LOCK clear the
+      clip UNCONDITIONALLY. `NoteflowViewModel.lock()` (`NoteflowViewModel.kt:4057`, scrub `:4073`)
+      now calls `ClipboardGuard.scrubUnconditionally(appContext)` (new, `ClipboardGuard.kt:84`,
+      shared private `clearPrimaryClip` `:88` — no stamp check, no 60s window, API 28+
+      `clearPrimaryClip` / API 26-27 empty `setPrimaryClip`, best-effort, forgets the stamp) so a
+      decrypted note body copied via an untracked native path can never survive a lock. The windowed
+      own-copy decision (`ClipboardScrubPolicy.shouldScrub`) stays on the ON_PAUSE hook
+      (`MainActivity.kt:154`) so a brief app switch never wipes a foreign copy, and both stamped
+      copy sites keep `recordCopy()`. Grep-pins: `B2Ui2ClipboardScrubTest` (18) enumerates every
+      `clipboardManager.setText(` in `ui/` (must be preceded by `recordCopy()`) and pins that raw
+      `{set,clear}PrimaryClip` lives only inside `ClipboardGuard.kt`. `B1Db08DecryptFailureTest`
+      lock-region boundary token updated to `scrubUnconditionally`.
   - **Implemented in phase-133** (user-requested UI/UX, see `workspace/phase-133/REPORT.md`): new
     pages (Add Page FAB) and Daily Journal entries now open IMMEDIATELY on click. Root cause: the
     active page was resolved only via `pages.find { it.id == activePageId }` against the

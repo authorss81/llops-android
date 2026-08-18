@@ -240,7 +240,7 @@ class B1Db08DecryptFailureTest {
         // the data-layer teardown (B1-AUTH-02 / phase-47). Bound on stable code
         // tokens (scrub -> hasMasterPassword teardown), never on comment text.
         val lockRegion = viewModelSource
-            .substringAfter("ClipboardGuard.scrubIfOwnCopy(appContext)")
+            .substringAfter("ClipboardGuard.scrubUnconditionally(appContext)")
             .substringBefore("\n        if (settings.hasMasterPassword)")
         assertTrue("lock() zeroizes the DEK before resetting the ledger",
             lockRegion.contains("repository.zeroizeKey()"))

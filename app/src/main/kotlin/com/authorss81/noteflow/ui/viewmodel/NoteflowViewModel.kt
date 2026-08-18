@@ -4055,17 +4055,22 @@ fun updatePageTags(id: String, tags: String) {
     )
 
     fun lock() {
-        // B2-UI-2 (phase-72): decrypted note content this app copied to the
-        // system clipboard (code blocks, OCR results) must not survive an in-app
-        // lock. The in-app lock paths (manual "Lock Vault Now", idle auto-lock,
-        // ACTION_SCREEN_OFF) keep the app foregrounded, so ON_PAUSE — the only
-        // existing scrub trigger — may never fire. Centralizing the scrub here
-        // (instead of in every viewModel.lock() call site) makes EVERY lock path
-        // clear an app-owned copy inside its window and forget the timestamp,
-        // while a foreign (other-app) copy on the clipboard is never wiped.
-        // Best-effort by design — the guard swallows platform failures so the
-        // lock itself can never break.
-        ClipboardGuard.scrubIfOwnCopy(appContext)
+        // B2-UI-2 (phase-72) + R2-B1P-01 (phase-139): decrypted note content on
+        // the system clipboard must not survive an in-app lock. The in-app lock
+        // paths (manual "Lock Vault Now", idle auto-lock, ACTION_SCREEN_OFF)
+        // keep the app foregrounded, so ON_PAUSE — the pre-fix scrub trigger —
+        // may never fire, and several note-content copy surfaces (the markdown
+        // editor's platform selection Copy, the OCR dialog's `SelectionContainer`
+        // Copy) are NATIVE and stamp no [ClipboardGuard.recordCopy]. Centralizing
+        // the scrub here (instead of in every viewModel.lock() call site) makes
+        // EVERY lock path clear the primary clip UNCONDITIONALLY — windowed,
+        // stamp-checked or not — so an untracked decrypted note body copied via
+        // the editor never survives a lock (no window). The windowed
+        // [ClipboardGuard.scrubIfOwnCopy] decision stays on the ON_PAUSE hook
+        // (defense-in-depth, own-copy-within-window only, so a brief app switch
+        // never wipes a foreign copy). Best-effort by design — the guard
+        // swallows platform failures so the lock itself can never break.
+        ClipboardGuard.scrubUnconditionally(appContext)
 
         // R2-B1A-02 (phase-134): the lock boundary must stop the shared vault
         // search job here — it was only ever cancelled on a new keystroke, so an
