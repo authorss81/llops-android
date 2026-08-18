@@ -78,25 +78,15 @@ enum class WindowSizeCategory {
 }
 
 /**
- * B1-PLAT-2 (phase-58): content captured from the Android share sheet.
- *
- * [imagePaths] are local files already copied into app storage; empty until the
- * bounded copy runs. [rawUris] are the source content URIs, staged ONLY after an
- * explicit in-app "Clip into InkFlow?" confirmation AND only when the vault is
- * unlocked — the copy is performed by the post-unlock apply effect, never while
- * locked.
+ * B1-PLAT-2 (phase-58) + R2-B1P-05 (phase-140): the share-confirmation flow
+ * state now lives in the ViewModel (`NoteflowViewModel.pendingShareConfirm` /
+ * `pendingShare`) so it survives rotation and is dropped at the lock boundary.
+ * The [imagePaths] below are local files already copied into app storage; empty
+ * until the bounded copy runs. [rawUris] are the source content URIs, staged
+ * ONLY after an explicit in-app "Clip into InkFlow?" confirmation AND only when
+ * the vault is unlocked — the copy is performed by the post-unlock apply
+ * effect, never while locked.
  */
-private data class SharedContent(
-    val text: String?,
-    val imagePaths: List<String>,
-    val rawUris: List<String> = emptyList()
-)
-
-/** B1-PLAT-2 (phase-58): an incoming share held behind an explicit confirmation. */
-private data class PendingShareConfirm(
-    val clip: com.authorss81.noteflow.plugins.SharedClip,
-    val uriStrings: List<String>
-)
 
 @android.annotation.SuppressLint("ProduceStateDoesNotAssignValue")
 class MainActivity : FragmentActivity() {
@@ -106,13 +96,25 @@ class MainActivity : FragmentActivity() {
     // 22.1: last user interaction (touch) timestamp for the inactivity auto-lock.
     private var lastActivityAtMs = System.currentTimeMillis()
 
-    // 22.5: pending share-sheet capture; applied once the vault is unlocked.
-    private var pendingShare by mutableStateOf<SharedContent?>(null)
+    // R2-B1P-05 (phase-140): the share-confirmation flow is held by the
+    // ViewModel (`pendingShareConfirm` = un-confirmed hold, `pendingShare` =
+    // confirmed, deferred post-unlock copy). Hoisted off the activity so a
+    // rotation (no configChanges → recreation with the ORIGINAL SEND intent)
+    // cannot re-prompt a confirm the user already answered, and so lock() can
+    // drop both at the lock boundary.
 
-    // B1-PLAT-2 (phase-58): an incoming share that passed cli classification but
-    // is HELD behind an explicit "Clip into InkFlow?" confirmation. Nothing is
-    // copied or staged until the user confirms.
-    private var pendingShareConfirm by mutableStateOf<PendingShareConfirm?>(null)
+    // R2-B1A-03 (phase-140): an opaque full-screen cover, raised the instant the
+    // activity pauses while a has-master-password vault is authenticated, and
+    // cleared on ANY resume (picker / biometric / share-sheet returns). See
+    // OnPauseCoverPolicy for the decision table — showing decrypted content
+    // beneath a SYSTEM_ALERT_WINDOW overlay / OEM in-call UI / translucent
+    // anti-theft app is exactly the exposure this closes.
+    private var pauseCoverActive by mutableStateOf(false)
+
+    // Phase 38: the global Command Palette HUD is activity-level state so the
+    // ON_PAUSE cover can also dismiss its window (it is a separate Dialog window
+    // and spans above the activity content).
+    private var showCommandPalette by mutableStateOf(false)
 
     // B1-PLAT-4 (phase-60): lock the INSTANT the screen turns off. On a no-keyguard
     // / tablet device (a natural target for an ink-notes app) display-off may pause
@@ -152,6 +154,34 @@ class MainActivity : FragmentActivity() {
             when (event) {
                 Lifecycle.Event.ON_PAUSE -> {
                     com.authorss81.noteflow.services.ClipboardGuard.scrubIfOwnCopy(this)
+                    // R2-B1A-03 (phase-140): cover the decrypted vault the moment
+                    // a has-master-password + authenticated activity pauses. A
+                    // SYSTEM_ALERT_WINDOW overlay / OEM in-call UI / translucent
+                    // anti-theft app can sit over the activity at ON_PAUSE
+                    // indefinitely, and the old ON_STOP-only lock left the
+                    // screen-away window open. The opaque cover is dismissed on
+                    // ANY resume (SAF picker / biometric prompt / share-sheet
+                    // return — the phase-60 reason locking on ON_PAUSE was
+                    // rejected), so picks still work while cover apps never see
+                    // decrypted content. Also dismiss the un-confirmed
+                    // share-confirm dialog (attacker-chosen preview text) and the
+                    // Command Palette (decrypted note-title list) — both are
+                    // separate windows that would float ABOVE the activity cover.
+                    if (com.authorss81.noteflow.services.OnPauseCoverPolicy.shouldCoverOnPause(
+                            hasMasterPassword = viewModel.hasMasterPassword.value,
+                            authenticated = viewModel.authenticated.value
+                        )
+                    ) {
+                        pauseCoverActive = true
+                        viewModel.cancelPendingShareConfirm()
+                        showCommandPalette = false
+                    }
+                }
+                Lifecycle.Event.ON_RESUME -> {
+                    // R2-B1A-03: every legitimate return path clears the cover.
+                    if (com.authorss81.noteflow.services.OnPauseCoverPolicy.shouldDismissOnResume(pauseCoverActive)) {
+                        pauseCoverActive = false
+                    }
                 }
                 Lifecycle.Event.ON_STOP -> {
                     lastActivityAtMs = System.currentTimeMillis()
@@ -239,7 +269,12 @@ class MainActivity : FragmentActivity() {
             // of creation; see ActivePageTracker.
             var activeTracker by remember { mutableStateOf(com.authorss81.noteflow.services.ActivePageTrackerState()) }
             var showGraphView by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
-            var showCommandPalette by remember { mutableStateOf(false) }
+            // R2-B1P-05 (phase-140): share-flow state + the command-palette HUD
+            // open/close live at activity level (ViewModel-scoped / activity
+            // field) so rotation can neither re-prompt an answered confirm nor
+            // reopen a palette the cover dismissed.
+            val pendingShareConfirm by viewModel.pendingShareConfirm.collectAsState()
+            val pendingShare by viewModel.pendingShare.collectAsState()
 
             // Phase 133: resolve with fallback matching — synchronous in-memory
             // copy first, then allActivePages, then the section-filtered pages
@@ -320,11 +355,13 @@ class MainActivity : FragmentActivity() {
 
             // 22.5 + B1-PLAT-2: apply a confirmed share-sheet capture once the
             // vault is unlocked. Bytes are copied ONLY here — never at intent
-            // arrival and never while locked.
+            // arrival and never while locked. The state is consumed from the
+            // ViewModel (R2-B1P-05) so a rotation mid-deferral keeps the deferred
+            // clip without re-prompting, and lock() drops it so it never
+            // auto-applies at the NEXT unlock.
             LaunchedEffect(authenticated, pendingShare) {
-                val share = pendingShare ?: return@LaunchedEffect
                 if (!authenticated) return@LaunchedEffect
-                pendingShare = null
+                val share = viewModel.consumePendingShare() ?: return@LaunchedEffect
                 val paths = if (share.rawUris.isNotEmpty()) {
                     withContext(Dispatchers.IO) {
                         try {
@@ -635,36 +672,65 @@ class MainActivity : FragmentActivity() {
                             modifier = Modifier.align(Alignment.BottomCenter)
                         )
 
-                        // B1-PLAT-2 (phase-58): an incoming share is NEVER copied on
-                        // arrival — it is held behind this explicit confirmation.
-                        // Only a human tapping "Clip" stages it (and even then only
-                        // after the vault is unlocked; see the apply LaunchedEffect).
-                        pendingShareConfirm?.let { request ->
-                            androidx.compose.material3.AlertDialog(
-                                onDismissRequest = { pendingShareConfirm = null },
-                                title = { Text("Clip into InkFlow?") },
-                                text = {
-                                    Column {
-                                        Text(com.authorss81.noteflow.plugins.clipshare.ClipShareConfirmNotice.summary(request.clip))
-                                        Spacer(Modifier.height(8.dp))
-                                        Text(
-                                            com.authorss81.noteflow.plugins.clipshare.ClipShareConfirmNotice.body(request.clip),
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
+                        // B1-PLAT-2 (phase-58) + R2-B1P-05 (phase-140): an incoming
+                        // share is NEVER copied on arrival — it is held behind this
+                        // explicit confirmation. Only a human tapping "Clip" stages it
+                        // (and even then only after the vault is unlocked; see the apply
+                        // LaunchedEffect). State lives in the ViewModel (survives
+                        // rotation), and the dialog is rendered ONLY while authenticated
+                        // — it must never float above the LockScreen after a screen-off
+                        // lock.
+                        if (authenticated) {
+                            pendingShareConfirm?.let { request ->
+                                androidx.compose.material3.AlertDialog(
+                                    onDismissRequest = { viewModel.cancelPendingShareConfirm() },
+                                    title = { Text("Clip into InkFlow?") },
+                                    text = {
+                                        Column {
+                                            Text(com.authorss81.noteflow.plugins.clipshare.ClipShareConfirmNotice.summary(request.clip))
+                                            Spacer(Modifier.height(8.dp))
+                                            Text(
+                                                com.authorss81.noteflow.plugins.clipshare.ClipShareConfirmNotice.body(request.clip),
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    },
+                                    confirmButton = {
+                                        TextButton(onClick = { viewModel.confirmPendingShare() }) {
+                                            Text("Clip")
+                                        }
+                                    },
+                                    dismissButton = {
+                                        TextButton(onClick = { viewModel.cancelPendingShareConfirm() }) {
+                                            Text("Not now")
+                                        }
                                     }
-                                },
-                                confirmButton = {
-                                    TextButton(onClick = { confirmPendingShare() }) {
-                                        Text("Clip")
-                                    }
-                                },
-                                dismissButton = {
-                                    TextButton(onClick = { pendingShareConfirm = null }) {
-                                        Text("Not now")
-                                    }
-                                }
+                                )
+                            }
+                        }
+
+                        // R2-B1A-03 (phase-140): opaque cover over the WHOLE content
+                        // once ON_PAUSE fires for an authenticated has-master-password
+                        // vault. Last child of the Box = drawn on top of the content,
+                        // the snackbar host, and the inactive command palette — a
+                        // SYSTEM_ALERT_WINDOW overlay, in-call UI or translucent
+                        // anti-theft app drawn over the paused activity can never read
+                        // decrypted notes through it. Cleared on every legitimate
+                        // resume (picker / biometric / share-sheet return).
+                        if (pauseCoverActive &&
+                            com.authorss81.noteflow.services.OnPauseCoverPolicy.shouldCoverOnPause(
+                                hasMasterPassword = hasMasterPassword,
+                                authenticated = authenticated
                             )
+                        ) {
+                            androidx.compose.material3.Surface(
+                                modifier = androidx.compose.ui.Modifier.fillMaxSize(),
+                                color = MaterialTheme.colorScheme.background
+                            ) {
+                                // Intentionally empty — an opaque barrier, never a
+                                // content preview.
+                            }
                         }
                     }
 
@@ -714,6 +780,11 @@ class MainActivity : FragmentActivity() {
     // arrival, and the bounded copy runs only after confirmation and unlock.
     private fun readShareIntent(intent: Intent?) {
         if (intent == null) return
+        // R2-B1P-05 (phase-140): on a rotated-recreated activity onCreate re-fires
+        // the ORIGINAL SEND intent. If a confirm is already pending (or already
+        // answered and awaiting the post-unlock copy), do NOT re-parse — the
+        // pre-fix behavior re-prompted a confirm the user already handled.
+        if (viewModel.pendingShareConfirm.value != null || viewModel.pendingShare.value != null) return
         val text = intent.getStringExtra(Intent.EXTRA_TEXT)
         val uriStrings = when (intent.action) {
             Intent.ACTION_SEND -> {
@@ -755,11 +826,10 @@ class MainActivity : FragmentActivity() {
                     when (val parsed = outcome.value) {
                         is com.authorss81.noteflow.plugins.ClipParseOutcome.Success -> {
                             // B1-PLAT-2: hold the share behind an explicit
-                            // confirmation. NO bytes are copied here.
-                            pendingShareConfirm = PendingShareConfirm(
-                                clip = parsed.clip,
-                                uriStrings = parsed.clip.streams.map { it.uriString }
-                            )
+                            // confirmation. NO bytes are copied here. State lives
+                            // in the ViewModel (R2-B1P-05) so rotation cannot
+                            // re-prompt or drop an answered confirm.
+                            viewModel.stagePendingShare(parsed.clip, parsed.clip.streams.map { it.uriString })
                         }
                         is com.authorss81.noteflow.plugins.ClipParseOutcome.Rejected -> {
                             withContext(Dispatchers.Main) {
@@ -777,21 +847,10 @@ class MainActivity : FragmentActivity() {
         }
     }
 
-    // B1-PLAT-2 (phase-58): the user explicitly confirmed the pending share.
-    // The share is staged for a POST-UNLOCK bounded copy (see the
-    // LaunchedEffect above) — nothing has touched disk yet.
-    private fun confirmPendingShare() {
-        val request = pendingShareConfirm ?: return
-        pendingShareConfirm = null
-        pendingShare = SharedContent(
-            text = request.clip.text,
-            imagePaths = emptyList(),
-            rawUris = request.uriStrings
-        )
-        if (!viewModel.authenticated.value) {
-            viewModel.showSnackbar("Clip confirmed — it will be added once you unlock.", isLong = true)
-        }
-    }
+    // R2-B1P-05: the "user explicitly confirmed" transition now lives in the
+    // ViewModel (`confirmPendingShare`) — it stages the POST-UNLOCK bounded copy
+    // (see the LaunchedEffect above) without copying any bytes, and lock()
+    // drops the staged clip so it never auto-applies at the next unlock.
 
     // 22.5 + B1-PLAT-2: copy shared content URIs into app-private storage with a
     // HARD byte budget (50 MB per item, 200 MB total — see BoundedStreamCopier).

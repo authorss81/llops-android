@@ -27,7 +27,6 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import com.authorss81.noteflow.services.CommandPaletteHeaderPolicy
 import com.authorss81.noteflow.services.graph.CommandPaletteMath
 import com.authorss81.noteflow.theme.LocalReduceMotion
@@ -166,7 +165,10 @@ fun CommandPaletteOverlay(
 
     Dialog(
         onDismissRequest = onClose,
-        properties = DialogProperties(
+        // R2-b2b1-UI-02 (phase-140): the palette lists DECRYPTED note titles in a
+        // separate window that does not inherit the activity's FLAG_SECURE — the
+        // window must carry the flag itself in release builds.
+        properties = secureDialogProperties(
             dismissOnBackPress = true,
             dismissOnClickOutside = true,
             usePlatformDefaultWidth = false

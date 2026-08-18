@@ -94,6 +94,9 @@ fun OcrResultDialog(
             job?.cancel()
             onDismiss()
         },
+        // R2-b2b1-UI-02 (phase-140): this dialog shows the FULL recognized note
+        // text in a separate window — carry FLAG_SECURE itself in release.
+        properties = secureDialogProperties(),
         icon = {
             androidx.compose.material3.Icon(
                 androidx.compose.material.icons.Icons.Outlined.TextFields,

@@ -113,6 +113,9 @@ fun DictionaryDialog(
 
     AlertDialog(
         onDismissRequest = { job?.cancel(); onDismiss() },
+        // R2-b2b1-UI-02 (phase-140): dialog over an open decrypted note — carry
+        // FLAG_SECURE itself in release builds.
+        properties = secureDialogProperties(),
         icon = { Icon(Icons.Outlined.Book, contentDescription = null) },
         title = { Text("Dictionary") },
         text = {
@@ -269,6 +272,9 @@ fun WeatherDialog(
 
     AlertDialog(
         onDismissRequest = { job?.cancel(); onDismiss() },
+        // R2-b2b1-UI-02 (phase-140): dialog over an open decrypted note — carry
+        // FLAG_SECURE itself in release builds.
+        properties = secureDialogProperties(),
         icon = { Icon(Icons.Outlined.WbSunny, contentDescription = null) },
         title = { Text("Weather snapshot") },
         text = {
@@ -424,6 +430,9 @@ fun UnitConverterDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
+        // R2-b2b1-UI-02 (phase-140): dialog over an open decrypted note — carry
+        // FLAG_SECURE itself in release builds.
+        properties = secureDialogProperties(),
         icon = { Icon(Icons.Outlined.Calculate, contentDescription = null) },
         title = { Text("Unit Converter") },
         text = {
@@ -507,6 +516,9 @@ fun OutlineGeneratorDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
+        // R2-b2b1-UI-02 (phase-140): dialog over an open decrypted note — carry
+        // FLAG_SECURE itself in release builds.
+        properties = secureDialogProperties(),
         icon = { Icon(Icons.Outlined.ListAlt, contentDescription = null) },
         title = { Text("Outline & Checklist") },
         text = {
@@ -607,6 +619,9 @@ fun CitationFormatterDialog(
 
     AlertDialog(
         onDismissRequest = { job?.cancel(); onDismiss() },
+        // R2-b2b1-UI-02 (phase-140): dialog over an open decrypted note — carry
+        // FLAG_SECURE itself in release builds.
+        properties = secureDialogProperties(),
         icon = { Icon(Icons.Outlined.Link, contentDescription = null) },
         title = { Text("Citation Formatter") },
         text = {

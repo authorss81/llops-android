@@ -1018,6 +1018,26 @@
       `clipboardManager.setText(` in `ui/` (must be preceded by `recordCopy()`) and pins that raw
       `{set,clear}PrimaryClip` lives only inside `ClipboardGuard.kt`. `B1Db08DecryptFailureTest`
       lock-region boundary token updated to `scrubUnconditionally`.
+    - **Implemented in phase-140** (R2-B1A-03 + R2-b2b1-UI-02 + R2-B1P-05, see `workspace/phase-140/REPORT.md`):
+      (1) **ON_PAUSE opaque cover** — new pure-JVM `services/OnPauseCoverPolicy.kt` (decision table:
+      cover only `hasMasterPassword && authenticated`; ANY resume dismisses) drives a last-child
+      full-screen opaque `Surface` composed in `MainActivity.kt` whenever `pauseCoverActive`
+      (`MainActivity.kt:112`) is set by the ON_PAUSE lifecycle hook (`:170-179`, which also dismisses
+      the share-confirm dialog + Command Palette — both separate windows that would float above the
+      activity cover) and cleared on ON_RESUME. Locking on ON_PAUSE stays rejected (phase-60);
+      covers never break picker/biometric/share-sheet returns. (2) **per-dialog FLAG_SECURE** — shared
+      `@Composable secureDialogProperties(...)` (`ui/components/SecureDialogProperties.kt`) maps the
+      pure-JVM `services/SecureDialogPolicy.kt` gate (reuses `SecureWindowPolicy.shouldApplySecureFlag(
+      BuildConfig.DEBUG)`) to `DialogProperties(securePolicy = SecureOn|Inherit)`; wired into every
+      content-bearing dialog window (CommandPalette, OcrResultDialog, MarkdownPreviewScreen's
+      transform/TextTools/LanguageDetection, WebSearchDialog, Phase16PluginDialogs, Phase26PluginDialogs)
+      since Compose dialog windows do NOT inherit the activity's flags. (3) **share-confirm state** —
+      `pendingShareConfirm`/`pendingShare` hoisted from activity fields into the ViewModel
+      (`NoteflowViewModel.kt:1377-1381`, models + `PendingSharePolicy` in `services/PendingShareState.kt`);
+      `readShareIntent` bails while a share is in flight (`MainActivity.kt:787`) so rotation
+      (singleTask, no configChanges) cannot re-prompt an answered confirm; the confirm `AlertDialog`
+      renders only under `authenticated`; `lock()` drops both states via `PendingSharePolicy.clearOnLock`
+      (`NoteflowViewModel.kt:4154-4163`) so a pre-lock "Clip" never auto-applies at the next unlock.
   - **Implemented in phase-133** (user-requested UI/UX, see `workspace/phase-133/REPORT.md`): new
     pages (Add Page FAB) and Daily Journal entries now open IMMEDIATELY on click. Root cause: the
     active page was resolved only via `pages.find { it.id == activePageId }` against the

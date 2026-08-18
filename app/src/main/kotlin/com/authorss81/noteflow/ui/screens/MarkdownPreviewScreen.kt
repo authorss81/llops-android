@@ -46,6 +46,7 @@ import com.authorss81.noteflow.ui.components.WeatherDialog
 import com.authorss81.noteflow.ui.components.UnitConverterDialog
 import com.authorss81.noteflow.ui.components.OutlineGeneratorDialog
 import com.authorss81.noteflow.ui.components.CitationFormatterDialog
+import com.authorss81.noteflow.ui.components.secureDialogProperties
 import com.authorss81.noteflow.ui.components.overflowMenuScrollModifier
 import com.authorss81.noteflow.ui.components.overflowMenuScrollState
 import kotlinx.coroutines.launch
@@ -755,6 +756,9 @@ fun MarkdownPreviewScreen(
             pendingTransformPlugin?.let { plugin ->
                 AlertDialog(
                     onDismissRequest = { pendingTransformPlugin = null },
+                    // R2-b2b1-UI-02 (phase-140): confirm dialog over an open
+                    // decrypted note — dialog window carries its own FLAG_SECURE.
+                    properties = secureDialogProperties(),
                     title = { Text("Run ${plugin.name}?") },
                     text = {
                         Text(
@@ -1421,6 +1425,9 @@ private fun TextToolsDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
+        // R2-b2b1-UI-02 (phase-140): shows decrypted note statistics/text over an
+        // open note — the dialog window must carry FLAG_SECURE itself in release.
+        properties = secureDialogProperties(),
         title = { Text("Text Tools") },
         text = {
             when {
@@ -1493,6 +1500,9 @@ private fun LanguageDetectionDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
+        // R2-b2b1-UI-02 (phase-140): shows a sample of the note's text — the
+        // dialog window must carry FLAG_SECURE itself in release.
+        properties = secureDialogProperties(),
         title = { Text("Language Detection") },
         text = {
             when {

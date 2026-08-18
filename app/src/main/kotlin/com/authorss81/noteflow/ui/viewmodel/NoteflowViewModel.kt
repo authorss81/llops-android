@@ -53,6 +53,7 @@ import com.authorss81.noteflow.plugins.ReadAloudOutcome
 import com.authorss81.noteflow.plugins.ReadAloudPlugin
 import com.authorss81.noteflow.plugins.ScreenshotCaptureOutcome
 import com.authorss81.noteflow.plugins.ScreenshotNotePlugin
+import com.authorss81.noteflow.plugins.SharedClip
 import com.authorss81.noteflow.plugins.SharedInput
 import com.authorss81.noteflow.plugins.TextAnalysis
 import com.authorss81.noteflow.plugins.TextToolsPlugin
@@ -83,6 +84,9 @@ import com.authorss81.noteflow.services.KeystoreKeyLostException
 import com.authorss81.noteflow.services.MarkdownBodySaveCoordinator
 import com.authorss81.noteflow.services.NoteBodyVaultPolicy
 import com.authorss81.noteflow.services.PasswordStrengthPolicy
+import com.authorss81.noteflow.services.PendingShareConfirmState
+import com.authorss81.noteflow.services.PendingSharePolicy
+import com.authorss81.noteflow.services.PendingShareState
 import com.authorss81.noteflow.services.SecurityService
 import com.authorss81.noteflow.services.SettingsManager
 import com.authorss81.noteflow.services.SettingsPluginEnableStore
@@ -1361,6 +1365,50 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
 
     private val _p2pNotification = MutableStateFlow<String?>(null)
     val p2pNotification: StateFlow<String?> = _p2pNotification.asStateFlow()
+
+    // R2-B1P-05 (phase-140): the share-confirmation flow lives HERE, not on the
+    // activity. MainActivity is singleTask with no configChanges, so the old
+    // activity-scoped `mutableStateOf` fields were wiped-and-restaged on every
+    // rotation (re-prompting a confirm the user already answered) and the confirm
+    // AlertDialog was composed outside the lock branch (floated above LockScreen
+    // after a screen-off lock). These flows survive rotation; the dialog render
+    // is gated under `authenticated`; and lock() drops both states (R2-B1P-05:
+    // a pre-lock "Clip" must NOT auto-apply at the next unlock).
+    private val _pendingShareConfirm = MutableStateFlow<PendingShareConfirmState?>(null)
+    val pendingShareConfirm: StateFlow<PendingShareConfirmState?> = _pendingShareConfirm.asStateFlow()
+
+    private val _pendingShare = MutableStateFlow<PendingShareState?>(null)
+    val pendingShare: StateFlow<PendingShareState?> = _pendingShare.asStateFlow()
+
+    /** B1-PLAT-2: hold a freshly-parsed clip behind the explicit confirmation. */
+    fun stagePendingShare(clip: SharedClip, uriStrings: List<String>) {
+        // R2-B1P-05: a re-parsed SEND intent on a rotated-recreated activity must
+        // not clobber a confirm the user already answered.
+        if (!PendingSharePolicy.shouldStage(_pendingShareConfirm.value, _pendingShare.value)) return
+        _pendingShareConfirm.value = PendingShareConfirmState(clip, uriStrings)
+    }
+
+    fun cancelPendingShareConfirm() {
+        _pendingShareConfirm.value = null
+    }
+
+    /** B1-PLAT-2: user tapped "Clip" — stage the POST-UNLOCK bounded copy. */
+    fun confirmPendingShare() {
+        val request = _pendingShareConfirm.value ?: return
+        _pendingShareConfirm.value = null
+        if (_pendingShare.value != null) return
+        _pendingShare.value = PendingSharePolicy.toPendingShare(request)
+        if (!_authenticated.value) {
+            showSnackbar("Clip confirmed — it will be added once you unlock.", isLong = true)
+        }
+    }
+
+    /** Atomically claim the deferred clip for the apply effect (single consumer). */
+    fun consumePendingShare(): PendingShareState? {
+        val share = _pendingShare.value ?: return null
+        _pendingShare.value = null
+        return share
+    }
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     val notebooks: StateFlow<List<NotebookEntity>> = dbGate
@@ -4103,6 +4151,16 @@ fun updatePageTags(id: String, tags: String) {
         if (settings.hasMasterPassword) {
             sectionsJob?.cancel()
             pagesJob?.cancel()
+            // R2-B1P-05 (phase-140): the share flow is dropped at the lock
+            // boundary — an un-confirmed "Clip into InkFlow?" hold and a
+            // confirmed-but-deferred clip must NOT survive a lock (the confirm
+            // floats as a window nested over nothing and the deferred "Clip"
+            // would otherwise auto-apply at the NEXT unlock with no per-session
+            // expiry). No bytes move anywhere in the flow, so nothing is lost.
+            if (PendingSharePolicy.clearOnLock(settings.hasMasterPassword)) {
+                _pendingShareConfirm.value = null
+                _pendingShare.value = null
+            }
             // R2-B1D-01 (phase-136): the master-password session end. dispose() is
             // the session-end funnel — it FULL-checkpoints the WAL and re-arms the
             // tamper baseline against the quiescent vault, so ordinary note edits

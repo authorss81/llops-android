@@ -103,6 +103,9 @@ fun WebSearchDialog(
             job?.cancel()
             onDismiss()
         },
+        // R2-b2b1-UI-02 (phase-140): dialog over an open decrypted note — carry
+        // FLAG_SECURE itself in release builds.
+        properties = secureDialogProperties(),
         icon = { Icon(Icons.Outlined.Search, contentDescription = null) },
         title = { Text("Search the web") },
         text = {
