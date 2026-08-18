@@ -33,6 +33,7 @@ painting engine, free features).
 | phase-159 | **Build Release APK + verify it assembles without error** (feeds phase-160) | Kali redo |
 | phase-160 | Kali full-environment dynamic pentest (6-hr budget) on the phase-159 APK → `docs/kali-report-round2.md` | Kali redo |
 | phase-161 | Triage the Kali round-2 report → generate new phases | Kali redo |
+| phase-162 | Build & code failure fixes (dup methods, deprecated project.exec, trusted-artifacts) + verify decryption-safety edge cases | build/code hardening |
 
 ## How phases run
 
