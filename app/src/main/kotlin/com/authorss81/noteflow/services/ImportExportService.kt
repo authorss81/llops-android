@@ -1337,13 +1337,6 @@ object ImportExportService {
             // rewrote the main file). The verified copy then guarantees the staged
             // bytes are a main-file state the source held for the whole copy.
             if (dbFile.exists()) {
-                // R2-b2b4-DOS-01 (phase-149): bound the version table BEFORE the
-                // snapshot — every page is pruned to its newest retained window,
-                // so a legacy vault that outgrew the cap before this deploy stops
-                // inflating every export forever and the archive never serializes
-                // a page's retained-but-oversized version history. The prune is
-                // WAL-committed by the FULL checkpoint that follows it.
-                repository.pruneVersionsToRetention()
                 repository.checkpointWal()
                 repository.stampDatabaseChecksum(context)
                 if (!VaultSnapshotCopyPolicy.checkpointThenCopy(dbFile, stagedDb)) {
@@ -1351,6 +1344,14 @@ object ImportExportService {
                         "Backup failed: the vault database kept changing during the snapshot copy. Please try again."
                     )
                 }
+                // R2-b2b4-DOS-01 (phase-149): the version-history retention prune
+                // runs on the STAGED SNAPSHOT — never the live vault — so every
+                // page's newest retained window is what the archive serializes
+                // (a legacy vault that outgrew the cap before this deploy stops
+                // inflating every export forever) and a backup that later fails
+                // (copy teardown, budget rejection, encryption) can never
+                // permanently delete the user's older version history.
+                pruneStagedSnapshotVersions(stagedDb)
             }
             // R2-B1D-04 (phase-138): the same BackupBudgetPolicy that bounds the
             // restore extractor now bounds the packer, so a backup is only ever
@@ -2438,42 +2439,101 @@ object ImportExportService {
     }
 
     /**
-     * R2-b2b4-DOS-01 (phase-149): caps a restored backup's `note_versions` table
-     * to the newest [com.authorss81.noteflow.services.NoteVersionRetentionPolicy.MAX_VERSIONS_PER_PAGE]
-     * rows per page, oldest dropped.
+     * R2-b2b4-DOS-01 (phase-149): caps a `note_versions` table to the newest
+     * [com.authorss81.noteflow.services.NoteVersionRetentionPolicy.MAX_VERSIONS_PER_PAGE]
+     * rows per page, oldest dropped. The SINGLE retention-prune implementation
+     * shared by the restore sanitizer ([sanitizeRestoredNoteVersions]) and the
+     * export-time staged-snapshot trim ([pruneStagedSnapshotVersions]).
      *
      * The row bodies are encrypted at rest and their base64 length is an EXACT
      * proxy for the plaintext size (AES-GCM does not compress), so the uncapped
      * table is the DOS vector: a crafted backup with ~5,000 rows × ~50 KB bodies
      * becomes ~250 MB in heap the moment Version History opens or the table is
-     * re-encrypted on restore. Running here, under the candidate key that can
-     * open the backup, the table is trimmed BEFORE the re-key /
-     * [migrateFieldCiphertexts] steps — those then walk a bounded history and a
-     * crafted archive can never inflate the live vault. The statement matches
-     * the Room DAO prune exactly (bound [keepNewest], never interpolated).
+     * re-encrypted on restore. Running under the key that can open the DB, the
+     * table is trimmed BEFORE the re-key / [migrateFieldCiphertexts] steps (restore)
+     * or BEFORE the archive is packed (export) — those then walk a bounded history
+     * and the archive never serializes a page's retained-but-oversized history.
+     * The statement is the policy's single raw SQL literal, bound [keepNewest],
+     * never interpolated, and ordered by `timestampMs DESC, rowid DESC` so
+     * same-millisecond snapshots prune deterministically.
+     */
+    private fun pruneVersionPagesToRetention(db: net.zetetic.database.sqlcipher.SQLiteDatabase) {
+        val keepNewest = com.authorss81.noteflow.services.NoteVersionRetentionPolicy.MAX_VERSIONS_PER_PAGE
+        val pageIds = mutableListOf<String>()
+        val cursor = db.rawQuery("SELECT DISTINCT pageId FROM note_versions", null)
+        try {
+            while (cursor.moveToNext()) pageIds.add(cursor.getString(0))
+        } finally {
+            cursor.close()
+        }
+        for (pageId in pageIds) {
+            db.execSQL(
+                com.authorss81.noteflow.services.NoteVersionRetentionPolicy.PRUNE_KEEP_NEWEST_SQL,
+                arrayOf<Any>(pageId, pageId, keepNewest)
+            )
+        }
+    }
+
+    /**
+     * R2-b2b4-DOS-01 (phase-149): restore-time version-table sanitizer — runs
+     * under the candidate key that can open a crafted backup (see
+     * [pruneVersionPagesToRetention] for the SQL). A missing `note_versions`
+     * table (schema not yet applied) is not an error here — there is nothing to
+     * strip; any real failure is re-thrown so the restore-abort path handles it.
      */
     private fun sanitizeRestoredNoteVersions(db: net.zetetic.database.sqlcipher.SQLiteDatabase) {
         try {
-            val keepNewest = com.authorss81.noteflow.services.NoteVersionRetentionPolicy.MAX_VERSIONS_PER_PAGE
-            val pageIds = mutableListOf<String>()
-            val cursor = db.rawQuery("SELECT DISTINCT pageId FROM note_versions", null)
-            try {
-                while (cursor.moveToNext()) pageIds.add(cursor.getString(0))
-            } finally {
-                cursor.close()
-            }
-            for (pageId in pageIds) {
-                db.execSQL(
-                    com.authorss81.noteflow.services.NoteVersionRetentionPolicy.PRUNE_KEEP_NEWEST_SQL,
-                    arrayOf<Any>(pageId, pageId, keepNewest)
-                )
-            }
+            pruneVersionPagesToRetention(db)
         } catch (e: Exception) {
-            // A note_versions table that doesn't exist (schema not yet applied) is
-            // not an error here — there is nothing to strip. Any real failure is
-            // re-thrown so the restore-abort path handles it.
             if (shouldPropagateRestoreStripFailure(e)) throw e
         }
+    }
+
+    /**
+     * R2-b2b4-DOS-01 (phase-149 review fix): the export-time version-history
+     * trim. Runs on the STAGED SNAPSHOT copy — opened with the in-memory DEK and
+     * pruned via [pruneVersionPagesToRetention] — and NEVER on the live vault, so
+     * a backup that later fails (copy teardown, budget rejection, encryption
+     * error) can never permanently delete the user's older version history. The
+     * staged file is a standalone snapshot by then (post [VaultSnapshotCopyPolicy.checkpointThenCopy]),
+     * so writing it does not touch the live WAL connection.
+     */
+    private fun pruneStagedSnapshotVersions(stagedDb: File) {
+        val dek = VaultKeyHolder.dek
+            ?: throw IllegalStateException(
+                "Backup failed: the vault is locked; cannot bound the version-history snapshot."
+            )
+        val passphrase = dek.toSqlcipherPassphraseBytes()
+        try {
+            System.loadLibrary("sqlcipher")
+            val db = net.zetetic.database.sqlcipher.SQLiteDatabase.openOrCreateDatabase(
+                stagedDb, passphrase, null, null, null
+            )
+            try {
+                pruneVersionPagesToRetention(db)
+            } finally {
+                db.close()
+            }
+        } finally {
+            passphrase.fill(0.toByte())
+        }
+    }
+
+    /**
+     * R2-B1C-03 (phase-145) / phase-149 review fix: build the SQLCipher passphrase
+     * (the DEK's lowercase hex) DIRECTLY as ASCII bytes with no intermediate
+     * immutable hex [String], so no unzeroizable heap residue is ever created
+     * ([pruneStagedSnapshotVersions] zeroizes the returned array after use).
+     */
+    private fun ByteArray.toSqlcipherPassphraseBytes(): ByteArray {
+        val hex = "0123456789abcdef".toByteArray(Charsets.US_ASCII)
+        val out = ByteArray(size * 2)
+        for (i in indices) {
+            val b = this[i].toInt() and 0xFF
+            out[i * 2] = hex[b ushr 4]
+            out[i * 2 + 1] = hex[b and 0x0F]
+        }
+        return out
     }
 
     /**

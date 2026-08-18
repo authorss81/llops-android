@@ -232,18 +232,20 @@
   - **Implemented in phase-149** (R2-b2b4-DOS-01, see `workspace/phase-149/REPORT.md`): the
     `note_versions` table is BOUNDED and never decrypted wholesale. New pure-JVM
     `services/NoteVersionRetentionPolicy.kt` owns the budgets (`MAX_VERSIONS_PER_PAGE` = 20,
-    `DECRYPT_BATCH_SIZE` = 20, `REENCRYPT_BATCH_SIZE` = 100) plus the retention decision and the
-    shared prune SQL. `NoteRepository.createNoteVersion` (`:1436`) inserts AND prunes the oldest
-    rows past the cap inside ONE transaction (`NoteVersionDao.pruneVersionsForPage`, `Daos.kt`),
-    so a save/autosave/translate loop can never accumulate an unbounded table. `getNoteVersions`
-    (`:1465`) pages newest-first via `NoteVersionDao.getVersionsForPagePaged`
-    (`LIMIT :limit OFFSET :offset`) and decrypts batch-by-batch (whole-table read gone), and the
+    `DECRYPT_BATCH_SIZE` = 20, `REENCRYPT_BATCH_SIZE` = 100) plus the shared prune/paged SQL
+    (single literal, wired into the DAO `@Query` AND the raw restore/export sanitizers; ties on
+    `timestampMs` break on `rowid`). `NoteRepository.createNoteVersion` (`:1436`) inserts AND
+    prunes the oldest rows past the cap inside ONE transaction (`NoteVersionDao.pruneVersionsForPage`,
+    `Daos.kt`), so a save/autosave/translate loop can never accumulate an unbounded table.
+    `getNoteVersions` (`:1461`) returns ONLY the newest bounded initial window via
+    `NoteVersionDao.getVersionsForPagePaged` (`LIMIT :limit OFFSET :offset`), and the
     `VersionHistoryBottomSheet` materializes lazily — it keeps the pinned guarded
     `viewModel.getNoteVersions(page.id)` for the first window and streams further windows via the
     new `viewModel.getNoteVersionsPaged` sentinel as the list scrolls. Both whole-table re-key
     sweeps (`migrateFieldRecordAad`, `reencryptPlaintextFields`) now page via
-    `getVersionsForReencryptPaged`. The backup writer prunes (`repository.pruneVersionsToRetention()`)
-    before its checkpoint-then-copy so an export never serializes a page's oversized legacy history;
+    `getVersionsForReencryptPaged`. The backup writer prunes the STAGED snapshot
+    (`pruneStagedSnapshotVersions`, after its checkpoint-then-copy — never the live vault, so a
+    failed export can't delete user history) so an export never serializes a page's oversized legacy history;
     the restore path runs `sanitizeRestoredNoteVersions` under the candidate key (raw SQL sharing
     the policy's `PRUNE_KEEP_NEWEST_SQL`) BEFORE re-key/field-migration, so a crafted
     ~5,000-row × ~50 KB-body archive can no longer OOM the process on history open or restore.

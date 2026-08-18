@@ -112,6 +112,41 @@ the phase constraint).
 - The pre-existing `Phase148UiFailureTextScrubTest` UNC-path assertion failure is tracked
   here (see above); needs a follow-up phase, not this one.
 
+## Review fixes (2026-08-18, applied after the phase review → commit `llops: phase-149 review fixes`)
+
+The review surfaced six findings; five were fixed in code:
+
+1. **Initial history-open was not actually lazy** (MED). `getNoteVersions` looped over every
+   LIMIT/OFFSET batch and decrypted the WHOLE history into one heap list, so the bottom sheet's
+   "first window" still materialized everything. Fixed: `getNoteVersions` (NoteRepository.kt:1461)
+   now returns ONLY the newest bounded initial window (`getVersionsForPagePaged(pageId,
+   DECRYPT_BATCH_SIZE, 0)`); the sheet streams further windows via `getNoteVersionsPaged`. No code
+   path decrypts the whole table on open anymore.
+2. **Export pruned the LIVE vault** (MED). `pruneVersionsToRetention()` ran on the live repository
+   DB BEFORE the snapshot copy — a failed/cancelled export (WebDAV/LocalSend included) permanently
+   deleted user history even though no archive was produced. Fixed: the prune now runs on the
+   STAGED snapshot copy, opened with the in-memory DEK (`pruneStagedSnapshotVersions`,
+   ImportExportService.kt) AFTER `checkpointThenCopy`; the live vault is never touched by export.
+   `pruneVersionsToRetention`/`getDistinctVersionPageIds` deleted.
+3. **Retention tie-break non-determinism** (LOW). Same-millisecond snapshots made
+   `ORDER BY timestampMs DESC LIMIT` arbitrary. Fixed: all prune + paged SQL now orders by
+   `timestampMs DESC, rowid DESC` (insertion order); new pure-JVM test pins the tie-break model.
+4. **Orphaned whole-table DAO methods** (LOW). `getVersionsForPage` + `getAllVersionsForReencrypt`
+   left as unbounded API any caller could re-invoke. Fixed: deleted; only the paged variants exist.
+5. **Parallel SQL literals + test-only helpers** (LOW). `SELECT_PAGED_DESC_SQL` was a drift-prone
+   copy of the DAO query and `decideRetention`/`pruneCountForPage` were dead production code.
+   Fixed: `@Query(NoteVersionRetentionPolicy.SELECT_PAGED_DESC_SQL)` /
+   `@Query(NoteVersionRetentionPolicy.PRUNE_KEEP_NEWEST_ROOM_SQL)` make the policy the SINGLE SQL
+   source; `decideRetention`/`pruneCountForPage` deleted; `exceedsCap` + `countVersionsForPage`
+   wired into `createNoteVersion` (count-gated prune). `PRUNE_KEEP_NEWEST_SQL` (raw `?`) is shared
+   by restore + export sanitizers via `pruneVersionPagesToRetention`.
+6. **INFO (not code)** — feedback on export side effects is covered by fix 2; documented here.
+
+Verification after fixes: `gradle testDebugUnitTest` = 2029 tests / 2028 pass / the same single
+pre-existing `Phase148UiFailureTextScrubTest` UNC-path failure (untouched); `gradle assembleDebug`
+green. Tests updated: `Phase149NoteVersionsRetentionTest` 16 (was 14: +`rowid` tie-break,
++initial-window bound, staged-snapshot export pin, single-source SQL pins).
+
 ## Definition of done
 
 - [x] R2-b2b4-DOS-01 closed with `file:line` before/after evidence (above +

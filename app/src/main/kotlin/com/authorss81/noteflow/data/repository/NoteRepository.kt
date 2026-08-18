@@ -1450,32 +1450,31 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
         // save / autosave / before-translation-replace — the insert AND the
         // retention-cap prune must be atomic, so a rapid-fire save loop can
         // never accumulate an unbounded version table. The INSERT is the new
-        // newest row; the prune then keeps only
-        // NoteVersionRetentionPolicy.MAX_VERSIONS_PER_PAGE newest per page.
+        // newest row; when the page has outgrown the cap the prune drops the
+        // oldest past-cap rows, keeping only
+        // NoteVersionRetentionPolicy.MAX_VERSIONS_PER_PAGE newest per page
+        // (the COUNT keeps the DELETE cheap below the cap).
         db.withTransaction {
             db.noteVersionDao().insertVersion(version)
-            db.noteVersionDao().pruneVersionsForPage(pageId, NoteVersionRetentionPolicy.MAX_VERSIONS_PER_PAGE)
+            if (NoteVersionRetentionPolicy.exceedsCap(db.noteVersionDao().countVersionsForPage(pageId))) {
+                db.noteVersionDao().pruneVersionsForPage(pageId, NoteVersionRetentionPolicy.MAX_VERSIONS_PER_PAGE)
+            }
         }
     }
 
     suspend fun getNoteVersions(pageId: String): List<NoteVersionEntity> = withContext(Dispatchers.IO) {
-        // R2-b2b4-DOS-01 (phase-149): the history read is PAGED — one bounded
-        // LIMIT/OFFSET window at a time, decrypted and stitched batch-by-batch,
-        // never a single in-heap decrypt of the whole table. A crafted page with
-        // thousands of snapshots can no longer OOM the process on history open.
-        val retention = NoteVersionRetentionPolicy
-        val result = mutableListOf<NoteVersionEntity>()
-        var offset = 0
-        while (true) {
-            val batch = db.noteVersionDao().getVersionsForPagePaged(pageId, retention.DECRYPT_BATCH_SIZE, offset)
-            if (batch.isEmpty()) break
-            for (v in batch) {
-                result += decryptVersionForDisplay(v)
-            }
-            if (batch.size < retention.DECRYPT_BATCH_SIZE) break
-            offset += batch.size
-        }
-        result
+        // R2-b2b4-DOS-01 (phase-149): the history read is NEVER whole-table. The
+        // initial window is one bounded LIMIT/OFFSET read
+        // (NoteVersionRetentionPolicy.DECRYPT_BATCH_SIZE rows), decrypted row by
+        // row; the Version History bottom sheet streams further windows via
+        // [getNoteVersionsPaged] as the list scrolls, so no path ever decrypts
+        // the whole history in one heap read. A crafted page with thousands of
+        // snapshots can no longer OOM the process on history open.
+        db.noteVersionDao().getVersionsForPagePaged(
+            pageId,
+            NoteVersionRetentionPolicy.DECRYPT_BATCH_SIZE,
+            0
+        ).map { v -> decryptVersionForDisplay(v) }
     }
 
     /**
@@ -1488,23 +1487,6 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
     suspend fun getNoteVersionsPaged(pageId: String, limit: Int, offset: Int): List<NoteVersionEntity> = withContext(Dispatchers.IO) {
         db.noteVersionDao().getVersionsForPagePaged(pageId, limit, offset).map { v ->
             decryptVersionForDisplay(v)
-        }
-    }
-
-    /**
-     * R2-b2b4-DOS-01 (phase-149): prune every page's version history to the
-     * retention cap (newest [NoteVersionRetentionPolicy.MAX_VERSIONS_PER_PAGE]).
-     * Invoked by the backup writer right before the checkpoint-then-copy so a
-     * legacy vault that accumulated > cap snapshots before this deploy stops
-     * inflating every export forever — the archive never serializes a page's
-     * retained-but-oversized history.
-     */
-    suspend fun pruneVersionsToRetention() = withContext(Dispatchers.IO) {
-        val cap = NoteVersionRetentionPolicy.MAX_VERSIONS_PER_PAGE
-        db.withTransaction {
-            db.noteVersionDao().getDistinctVersionPageIds().forEach { pageId ->
-                db.noteVersionDao().pruneVersionsForPage(pageId, cap)
-            }
         }
     }
 

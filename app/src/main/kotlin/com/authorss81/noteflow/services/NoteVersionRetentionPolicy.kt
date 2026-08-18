@@ -10,21 +10,31 @@ package com.authorss81.noteflow.services
  * heap. A crafted backup holding ~5,000 rows × ~50 KB bodies grows to ~250 MB
  * in heap on Version History open → OOM.
  *
- * This policy owns the three budget numbers the rest of the fix wires to:
+ * This policy owns the budget numbers and the SQL the rest of the fix wires to:
  *  - [MAX_VERSIONS_PER_PAGE] — retention cap: how many newest snapshots a page
  *    keeps. Everything older is pruned in `createNoteVersion` (inside the same
- *    transaction as the insert), at export time, and on restore sanitize.
+ *    transaction as the insert) and on the restore-time sanitize / export-time
+ *    staged-snapshot prune.
  *  - [DECRYPT_BATCH_SIZE] — the LIMIT for the paged history/decrypt reads, so
  *    no code path ever materializes the whole table in one heap read. The
- *    Version History bottom sheet renders the first window and streams the rest
- *    lazily on scroll.
+ *    Version History bottom sheet renders the first bounded window and streams
+ *    the rest lazily on scroll.
  *  - [REENCRYPT_BATCH_SIZE] — the LIMIT for the re-key / re-encrypt sweeps that
  *    still must cover the whole table (migrateFieldRecordAad,
  *    reencryptPlaintextFields) but must never hold it in heap at once.
  *
+ * The SQL strings are the SINGLE literal source: the Room `@Query` annotations
+ * in `NoteVersionDao` reference [PRUNE_KEEP_NEWEST_ROOM_SQL] and
+ * [SELECT_PAGED_DESC_SQL] by name and the raw restore/export sanitizers use
+ * [PRUNE_KEEP_NEWEST_SQL], so the retention shape can never drift between the
+ * DAO and the raw SQL paths. The `?` / `:name` forms differ only in binding
+ * syntax; both keep the same keep-set: the newest [keepNewest] rows ordered by
+ * `timestampMs DESC, rowid DESC` (rowid is the insertion tie-break, so a mobile
+ * clock that steps backwards — or two snapshots in the same millisecond — can
+ * never make retention chooser non-deterministic).
+ *
  * Pure-JVM by design (no Room/SQLCipher/Android), so the whole decision table
- * is unit-testable and the SQL strings are the single literal source used by
- * both the Room DAO annotations and the raw restore sanitizer.
+ * is unit-testable.
  */
 object NoteVersionRetentionPolicy {
 
@@ -38,45 +48,35 @@ object NoteVersionRetentionPolicy {
     const val REENCRYPT_BATCH_SIZE: Int = 100
 
     /**
-     * The prune statement executed by both the Room DAO and the restore-time
-     * raw-SQL sanitizer: delete every row of a page that is NOT among the
-     * [keepNewest] newest (timestampMs ORDER BY DESC), keeping the newest ones.
-     * SQLite accepts a bound parameter inside LIMIT, so [keepNewest] is bound,
-     * never string-interpolated.
+     * The raw-SQL prune statement used by the restore-time and export-time
+     * sanitizers (`SQLiteDatabase.execSQL` with positional `?` binds): delete
+     * every row of a page that is NOT among the [keepNewest] newest — ordered by
+     * `timestampMs DESC, rowid DESC` so timestamp ties break deterministically on
+     * insertion order. SQLite accepts a bound parameter inside LIMIT, so
+     * [keepNewest] is bound, never string-interpolated.
      */
     const val PRUNE_KEEP_NEWEST_SQL: String =
         "DELETE FROM note_versions WHERE pageId = ? AND id NOT IN (" +
-            "SELECT id FROM note_versions WHERE pageId = ? ORDER BY timestampMs DESC LIMIT ?)"
+            "SELECT id FROM note_versions WHERE pageId = ? ORDER BY timestampMs DESC, rowid DESC LIMIT ?)"
 
     /**
-     * The paged newest-first story read. Bound [limit]/[offset] placeholders are
-     * the syntax of the Room @Query that realizes this shape; the sanitizer and
-     * the pure-JVM tests reference the policy object for the constants instead.
+     * The same prune statement in Room `@Query` syntax (named `:pageId` /
+     * `:keepNewest` binds), referenced BY NAME by `NoteVersionDao.pruneVersionsForPage`
+     * so the DAO and the raw sanitizer can never drift.
+     */
+    const val PRUNE_KEEP_NEWEST_ROOM_SQL: String =
+        "DELETE FROM note_versions WHERE pageId = :pageId AND id NOT IN (" +
+            "SELECT id FROM note_versions WHERE pageId = :pageId ORDER BY timestampMs DESC, rowid DESC LIMIT :keepNewest)"
+
+    /**
+     * The bounded newest-first history read in Room `@Query` syntax (named
+     * `:pageId` / `:limit` / `:offset` binds), referenced BY NAME by
+     * `NoteVersionDao.getVersionsForPagePaged` — this is the production query the
+     * Version History bottom sheet pages through.
      */
     const val SELECT_PAGED_DESC_SQL: String =
-        "SELECT * FROM note_versions WHERE pageId = ? ORDER BY timestampMs DESC LIMIT :limit OFFSET :offset"
+        "SELECT * FROM note_versions WHERE pageId = :pageId ORDER BY timestampMs DESC, rowid DESC LIMIT :limit OFFSET :offset"
 
-    /** A page already at/below [cap] needs no pruning. */
+    /** A page already at/below [cap] needs no pruning (checked in the insert txn). */
     fun exceedsCap(count: Int, cap: Int = MAX_VERSIONS_PER_PAGE): Boolean = count > cap
-
-    /** How many of the OLDEST rows a page with [pageCount] rows must drop to fit [cap]. */
-    fun pruneCountForPage(pageCount: Int, cap: Int = MAX_VERSIONS_PER_PAGE): Int =
-        (pageCount - cap).coerceAtLeast(0)
-
-    /**
-     * Pure retention decision: given a page's rows newest-first (id, timestampMs),
-     * which stay and which go under [cap]. Insertion ties on timestampMs are
-     * broken by the newest-first input order (matching the DAO's ORDER BY DESC,
-     * which Room keeps stable per database insertion order).
-     */
-    data class RetentionDecision(val keepIds: Set<String>, val dropIds: List<String>)
-
-    fun decideRetention(
-        rowsNewestFirst: List<Pair<String, Long>>,
-        cap: Int = MAX_VERSIONS_PER_PAGE
-    ): RetentionDecision {
-        val keepIds = rowsNewestFirst.take(cap).map { it.first }.toSet()
-        val dropIds = rowsNewestFirst.drop(cap).map { it.first }
-        return RetentionDecision(keepIds, dropIds)
-    }
 }
