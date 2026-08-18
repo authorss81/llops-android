@@ -99,10 +99,15 @@ fun CommandPaletteOverlay(
         searchJob.value?.cancel()
         val job = launch {
             delay(250)
+            // R2-b2b1-UI-01 (phase-134): commandPaletteSearch is guarded in the
+            // VM (empty palette + notice on a lock race); only publish results
+            // while the auth gate is still up.
             if (query.isBlank() && filterTags.isEmpty()) {
-                results = viewModel.commandPaletteSearch("")
+                val result = viewModel.commandPaletteSearch("")
+                if (viewModel.authenticated.value) results = result
             } else {
-                results = viewModel.commandPaletteSearch(query, filterTags, requireAllTags)
+                val result = viewModel.commandPaletteSearch(query, filterTags, requireAllTags)
+                if (viewModel.authenticated.value) results = result
             }
         }
         searchJob.value = job
@@ -114,7 +119,8 @@ fun CommandPaletteOverlay(
 
     LaunchedEffect(Unit) {
         // Initial recency list appears instantly (no keystroke needed).
-        results = viewModel.commandPaletteSearch("")
+        val initial = viewModel.commandPaletteSearch("")
+        if (viewModel.authenticated.value) results = initial
         focusRequester.requestFocus()
     }
 

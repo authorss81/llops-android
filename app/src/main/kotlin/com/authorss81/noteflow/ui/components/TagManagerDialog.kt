@@ -40,8 +40,10 @@ fun TagManagerDialog(
     fun refreshTags() {
         scope.launch {
             isLoading = true
-            val nbs = viewModel.repository.getAllNotebooks()
-            val pgs = viewModel.repository.getAllActivePages()
+            // R2-b2b1-UI-01 (phase-134): guarded VM reads (armed-empty on a lock
+            // race) + auth re-check before assigning decrypted tags into state.
+            val nbs = viewModel.loadAllNotebooks()
+            val pgs = viewModel.loadAllActivePages()
             val tagSet = mutableSetOf<String>()
             nbs.forEach { nb ->
                 nb.tags.split(",").map { it.trim() }.filter { it.isNotEmpty() }.forEach { tagSet.add(it) }
@@ -49,7 +51,9 @@ fun TagManagerDialog(
             pgs.forEach { pg ->
                 pg.tags.split(",").map { it.trim() }.filter { it.isNotEmpty() }.forEach { tagSet.add(it) }
             }
-            allTags = tagSet.sorted()
+            if (viewModel.authenticated.value) {
+                allTags = tagSet.sorted()
+            }
             isLoading = false
         }
     }

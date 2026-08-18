@@ -503,24 +503,29 @@ fun EditorScreen(
     var isInitialLoadComplete by remember { mutableStateOf(false) }
 
     // Load Initial Strokes & Media Embeds & Sticky Notes
+    // R2-b2b1-UI-01 (phase-134): all three reads run through ONE guarded VM
+    // accessor (loadEditorCanvasPage) so a lock() disposing the SQLCipher pool
+    // mid-load degrades to armed-empty data + a notice instead of an uncaught
+    // closed-pool ISE in this composition-scoped coroutine, and the results are
+    // only assigned while the auth gate is still up.
     LaunchedEffect(page.id) {
-        val loadedStrokes = viewModel.repository.getStrokesForPage(page.id)
-        strokes = loadedStrokes
+        val data = viewModel.loadEditorCanvasPage(page.id)
 
-        val loadedLayers = viewModel.repository.getLayersForPage(page.id)
-        layers = loadedLayers
-        activeLayerId = loadedLayers.firstOrNull { !it.locked }?.id ?: loadedLayers.firstOrNull()?.id
+        if (viewModel.authenticated.value) {
+            strokes = data.strokes
+            layers = data.layers
+            activeLayerId = data.layers.firstOrNull { !it.locked }?.id ?: data.layers.firstOrNull()?.id
 
-        val (loadedNotes, loadedEmbeds) = viewModel.repository.getCanvasItemsForPage(page.id)
-        stickyNotes = loadedNotes
-        mediaEmbeds = loadedEmbeds
+            stickyNotes = data.stickyNotes
+            mediaEmbeds = data.mediaEmbeds
 
-        if (!isPdf) {
-            val maxStrokePage = loadedStrokes.maxOfOrNull { it.pdfPage } ?: 0
-            val maxNotePage = loadedNotes.maxOfOrNull { it.pdfPage } ?: 0
-            val maxEmbedPage = loadedEmbeds.maxOfOrNull { it.pdfPage } ?: 0
-            val maxPage = maxOf(maxStrokePage, maxNotePage, maxEmbedPage)
-            pdfTotalPages = maxOf(1, maxPage + 1)
+            if (!isPdf) {
+                val maxStrokePage = data.strokes.maxOfOrNull { it.pdfPage } ?: 0
+                val maxNotePage = data.stickyNotes.maxOfOrNull { it.pdfPage } ?: 0
+                val maxEmbedPage = data.mediaEmbeds.maxOfOrNull { it.pdfPage } ?: 0
+                val maxPage = maxOf(maxStrokePage, maxNotePage, maxEmbedPage)
+                pdfTotalPages = maxOf(1, maxPage + 1)
+            }
         }
         isInitialLoadComplete = true
     }

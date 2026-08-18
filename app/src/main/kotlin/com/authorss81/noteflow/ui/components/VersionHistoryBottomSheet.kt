@@ -36,8 +36,14 @@ fun VersionHistoryBottomSheet(
     var isLoading by remember { mutableStateOf(true) }
 
     LaunchedEffect(page.id) {
-        versions = viewModel.getNoteVersions(page.id)
-        selectedVersion = versions.firstOrNull()
+        // R2-b2b1-UI-01 (phase-134): getNoteVersions is guard-armed in the VM
+        // (empty history + notice on a lock race) and only applied while the
+        // auth gate is still up.
+        val loaded = viewModel.getNoteVersions(page.id)
+        if (viewModel.authenticated.value) {
+            versions = loaded
+            selectedVersion = loaded.firstOrNull()
+        }
         isLoading = false
     }
 

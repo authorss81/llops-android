@@ -48,18 +48,24 @@ fun BacklinksInspectorBottomSheet(
     fun refreshBacklinks(forceRefresh: Boolean = false) {
         scope.launch {
             isLoading = true
-            val allPages = viewModel.repository.getAllActivePages()
-            // B2-DOS-11: findBacklinks caches per unlock epoch + caps the scanned
-            // set; the rememberCoroutineScope teardown cancels the build when the
-            // bottom sheet closes. forceRefresh=true bypasses the cache after an
-            // in-place file edit (convert-to-[[WikiLink]]).
-            // B1-AUTH-05 (phase-69): legacy source-file reads are confined to the
-            // app-private imports root.
-            val (linked, unlinked) = WikiLinkParser.findBacklinks(
-                activePage, allPages, forceRefresh, ImportExportService.getImportsDir(context)
-            )
-            explicitLinks = linked
-            unlinkedMentions = unlinked
+            // R2-b2b1-UI-01 (phase-134): the read goes through the VM's
+            // lock-race guard — a lock() disposing the pool mid-load degrades to
+            // an empty list + notice instead of crashing this composition; the
+            // results are only applied while the auth gate is still up.
+            val allPages = viewModel.loadAllActivePages()
+            if (viewModel.authenticated.value) {
+                // B2-DOS-11: findBacklinks caches per unlock epoch + caps the scanned
+                // set; the rememberCoroutineScope teardown cancels the build when the
+                // bottom sheet closes. forceRefresh=true bypasses the cache after an
+                // in-place file edit (convert-to-[[WikiLink]]).
+                // B1-AUTH-05 (phase-69): legacy source-file reads are confined to the
+                // app-private imports root.
+                val (linked, unlinked) = WikiLinkParser.findBacklinks(
+                    activePage, allPages, forceRefresh, ImportExportService.getImportsDir(context)
+                )
+                explicitLinks = linked
+                unlinkedMentions = unlinked
+            }
             isLoading = false
         }
     }

@@ -153,7 +153,13 @@ fun KnowledgeGraphScreen(
     // WikiLinkParser.buildWikiLinkEdges (cached per unlock epoch, scan-set
     // capped). Physics layout is deterministic pure-JVM math.
     LaunchedEffect(Unit) {
-        val active = viewModel.repository.getAllActivePages()
+        // R2-b2b1-UI-01 (phase-134): getAllActivePages decrypts the WHOLE vault —
+        // seconds on big vaults. It was a bare repository call: a lock() disposing
+        // the pool mid-decrypt threw an uncaught closed-pool ISE inside this
+        // composition scoped coroutine. Now the read is guarded (armed-empty +
+        // notice) and the results are only applied while the auth gate is still up.
+        val active = viewModel.loadAllActivePages()
+        if (!viewModel.authenticated.value) return@LaunchedEffect
         allPages = active
 
         val wikiEdges = WikiLinkParser.buildWikiLinkEdges(

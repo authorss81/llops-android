@@ -43,13 +43,17 @@ fun TagExplorerView(
     LaunchedEffect(Unit) {
         scope.launch {
             isLoading = true
-            val pages = viewModel.repository.getAllActivePages()
-            allActivePages = pages
-            // B2-DOS-11: cached per unlock epoch + capped scan set; the LaunchEffect
-            // teardown cancels the build when the panel closes.
-            // B1-AUTH-05 (phase-69): legacy source-file reads are confined to the
-            // app-private imports root.
-            tagHierarchy = WikiLinkParser.buildTagHierarchy(pages, ImportExportService.getImportsDir(context))
+            // R2-b2b1-UI-01 (phase-134): guarded VM read (armed-empty on a lock
+            // race) + auth re-check before assigning decrypted pages into state.
+            val pages = viewModel.loadAllActivePages()
+            if (viewModel.authenticated.value) {
+                allActivePages = pages
+                // B2-DOS-11: cached per unlock epoch + capped scan set; the LaunchEffect
+                // teardown cancels the build when the panel closes.
+                // B1-AUTH-05 (phase-69): legacy source-file reads are confined to the
+                // app-private imports root.
+                tagHierarchy = WikiLinkParser.buildTagHierarchy(pages, ImportExportService.getImportsDir(context))
+            }
             isLoading = false
         }
     }

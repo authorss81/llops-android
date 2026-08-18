@@ -482,7 +482,7 @@ fun HomeScreen(
                         onDeleteNotebook = { nb ->
                             targetEntityId = nb.id
                             scope.launch {
-                                val (secCount, pageCount) = viewModel.repository.getNotebookCounts(nb.id)
+                                val (secCount, pageCount) = viewModel.loadNotebookCounts(nb.id)
                                 deleteWarningMessage = "Are you sure you want to delete '${nb.name}'? Deleting this notebook will permanently delete $secCount section(s) and $pageCount page(s)."
                                 deleteConfirmType = "nb"
                             }
@@ -495,7 +495,7 @@ fun HomeScreen(
                         onDeleteSection = { sec ->
                             targetEntityId = sec.id
                             scope.launch {
-                                val pageCount = viewModel.repository.getSectionCounts(sec.id)
+                                val pageCount = viewModel.loadSectionCounts(sec.id)
                                 deleteWarningMessage = "Are you sure you want to delete '${sec.name}'? Deleting this section/quick notes will permanently delete $pageCount page(s)."
                                 deleteConfirmType = "sec"
                             }
@@ -507,12 +507,12 @@ fun HomeScreen(
                         },
                         onDeletePage = { page ->
                             scope.launch {
-                                viewModel.repository.trashPage(page.id)
+                                viewModel.trashPage(page.id)
                             }
                         },
                         onTogglePinPage = { page ->
                             scope.launch {
-                                viewModel.repository.togglePin(page.id, !page.pinned)
+                                viewModel.togglePinPage(page.id, page.pinned)
                             }
                         },
                         modifier = Modifier.fillMaxWidth()
@@ -704,7 +704,7 @@ fun HomeScreen(
                             onDeleteNotebook = { nb ->
                                 targetEntityId = nb.id
                                 scope.launch {
-                                    val (secCount, pageCount) = viewModel.repository.getNotebookCounts(nb.id)
+                                    val (secCount, pageCount) = viewModel.loadNotebookCounts(nb.id)
                                     deleteWarningMessage = "Are you sure you want to delete '${nb.name}'? Deleting this notebook will permanently delete $secCount section(s) and $pageCount page(s)."
                                     deleteConfirmType = "nb"
                                 }
@@ -717,7 +717,7 @@ fun HomeScreen(
                             onDeleteSection = { sec ->
                                 targetEntityId = sec.id
                                 scope.launch {
-                                    val pageCount = viewModel.repository.getSectionCounts(sec.id)
+                                    val pageCount = viewModel.loadSectionCounts(sec.id)
                                     deleteWarningMessage = "Are you sure you want to delete '${sec.name}'? Deleting this section/quick notes will permanently delete $pageCount page(s)."
                                     deleteConfirmType = "sec"
                                 }
@@ -729,12 +729,12 @@ fun HomeScreen(
                             },
                             onDeletePage = { page ->
                                 scope.launch {
-                                    viewModel.repository.trashPage(page.id)
+                                    viewModel.trashPage(page.id)
                                 }
                             },
                             onTogglePinPage = { page ->
                                 scope.launch {
-                                    viewModel.repository.togglePin(page.id, !page.pinned)
+                                    viewModel.togglePinPage(page.id, page.pinned)
                                 }
                             },
                             modifier = Modifier
@@ -759,7 +759,7 @@ fun HomeScreen(
                             onDeleteNotebook = { nb ->
                                 targetEntityId = nb.id
                                 scope.launch {
-                                    val (secCount, pageCount) = viewModel.repository.getNotebookCounts(nb.id)
+                                    val (secCount, pageCount) = viewModel.loadNotebookCounts(nb.id)
                                     deleteWarningMessage = "Are you sure you want to delete '${nb.name}'? Deleting this notebook will permanently delete $secCount section(s) and $pageCount page(s)."
                                     deleteConfirmType = "nb"
                                 }
@@ -807,7 +807,7 @@ fun HomeScreen(
                             onDeleteSection = { sec ->
                                 targetEntityId = sec.id
                                 scope.launch {
-                                    val pageCount = viewModel.repository.getSectionCounts(sec.id)
+                                    val pageCount = viewModel.loadSectionCounts(sec.id)
                                     deleteWarningMessage = "Are you sure you want to delete '${sec.name}'? Deleting this section/quick notes will permanently delete $pageCount page(s)."
                                     deleteConfirmType = "sec"
                                 }
@@ -894,7 +894,7 @@ fun HomeScreen(
                             onDeleteNotebook = { nb ->
                                 targetEntityId = nb.id
                                 scope.launch {
-                                    val (secCount, pageCount) = viewModel.repository.getNotebookCounts(nb.id)
+                                    val (secCount, pageCount) = viewModel.loadNotebookCounts(nb.id)
                                     deleteWarningMessage = "Are you sure you want to delete '${nb.name}'? Deleting this notebook will permanently delete $secCount section(s) and $pageCount page(s)."
                                     deleteConfirmType = "nb"
                                 }
@@ -907,7 +907,7 @@ fun HomeScreen(
                             onDeleteSection = { sec ->
                                 targetEntityId = sec.id
                                 scope.launch {
-                                    val pageCount = viewModel.repository.getSectionCounts(sec.id)
+                                    val pageCount = viewModel.loadSectionCounts(sec.id)
                                     deleteWarningMessage = "Are you sure you want to delete '${sec.name}'? Deleting this section/quick notes will permanently delete $pageCount page(s)."
                                     deleteConfirmType = "sec"
                                 }

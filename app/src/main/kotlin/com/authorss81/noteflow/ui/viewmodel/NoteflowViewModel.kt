@@ -1710,42 +1710,59 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
 
     fun addNotebook(name: String, tags: String = "") {
         viewModelScope.launch {
-            val newNb = repository.createNotebook(name, tags)
-            selectNotebook(newNb)
+            // R2-B1A-01 (phase-134): creation writes encrypted columns — a lock
+            // racing the create must be a notice, never a crash.
+            writeGuardedAgainstLock("Vault is locked — notebook not created") {
+                val newNb = repository.createNotebook(name, tags)
+                selectNotebook(newNb)
+            }
         }
     }
 
     fun renameNotebook(id: String, name: String) {
         viewModelScope.launch {
-            repository.renameNotebook(id, name)
-            if (selectedNotebook.value?.id == id) {
-                _selectedNotebook.value = repository.getNotebookById(id)
+            // R2-B1A-01 (phase-134): a lock() racing the write/disposed-pool
+            // follow-up read must be a notice, not a crash.
+            writeGuardedAgainstLock("Vault is locked — notebook not renamed") {
+                repository.renameNotebook(id, name)
+                if (selectedNotebook.value?.id == id) {
+                    _selectedNotebook.value = repository.getNotebookById(id)
+                }
             }
         }
     }
 
     fun updateNotebookNameAndTags(id: String, name: String, tags: String) {
         viewModelScope.launch {
-            repository.updateNotebookNameAndTags(id, name, tags)
-            if (selectedNotebook.value?.id == id) {
-                _selectedNotebook.value = repository.getNotebookById(id)
+            writeGuardedAgainstLock("Vault is locked — notebook not updated") {
+                repository.updateNotebookNameAndTags(id, name, tags)
+                if (selectedNotebook.value?.id == id) {
+                    _selectedNotebook.value = repository.getNotebookById(id)
+                }
             }
         }
     }
 
     fun updateNotebookTags(id: String, tags: String) {
         viewModelScope.launch {
-            repository.updateNotebookTags(id, tags)
-            if (selectedNotebook.value?.id == id) {
-                _selectedNotebook.value = repository.getNotebookById(id)
+            writeGuardedAgainstLock("Vault is locked — notebook tags not saved") {
+                repository.updateNotebookTags(id, tags)
+                if (selectedNotebook.value?.id == id) {
+                    _selectedNotebook.value = repository.getNotebookById(id)
+                }
             }
         }
     }
 
     fun deleteNotebook(id: String) {
         viewModelScope.launch {
-            repository.deleteNotebook(id)
-            val remaining = notebooks.value.filter { it.id != id }
+            // R2-B1A-01 (phase-134): the destructive delete touches the DAO and
+            // reads back siblings — keep both inside one guard so a lock racing
+            // it degrades to a notice instead of a process crash.
+            val remaining = writeGuardedAgainstLock("Vault is locked — notebook not deleted") {
+                repository.deleteNotebook(id)
+                notebooks.value.filter { it.id != id }
+            } ?: return@launch
             if (remaining.isNotEmpty()) {
                 selectNotebook(remaining.first())
             } else {
@@ -1759,24 +1776,30 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     fun addSection(name: String) {
         val nb = selectedNotebook.value ?: return
         viewModelScope.launch {
-            val sec = repository.createSection(nb.id, name)
-            selectSection(sec)
+            writeGuardedAgainstLock("Vault is locked — section not created") {
+                val sec = repository.createSection(nb.id, name)
+                selectSection(sec)
+            }
         }
     }
 
     fun renameSection(id: String, name: String) {
         viewModelScope.launch {
-            repository.renameSection(id, name)
-            if (selectedSection.value?.id == id) {
-                _selectedSection.value = repository.getSectionById(id)
+            writeGuardedAgainstLock("Vault is locked — section not renamed") {
+                repository.renameSection(id, name)
+                if (selectedSection.value?.id == id) {
+                    _selectedSection.value = repository.getSectionById(id)
+                }
             }
         }
     }
 
     fun deleteSection(id: String) {
         viewModelScope.launch {
-            repository.deleteSection(id)
-            val remaining = sections.value.filter { it.id != id }
+            val remaining = writeGuardedAgainstLock("Vault is locked — section not deleted") {
+                repository.deleteSection(id)
+                sections.value.filter { it.id != id }
+            } ?: return@launch
             if (remaining.isNotEmpty()) {
                 selectSection(remaining.first())
             } else {
@@ -1983,12 +2006,127 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    fun updatePageTags(id: String, tags: String) {
+fun updatePageTags(id: String, tags: String) {
         viewModelScope.launch {
-            repository.updatePageTags(id, tags)
-            if (selectedPage.value?.id == id) {
-                _selectedPage.value = repository.getPageById(id)
+            // R2-B1A-01 (phase-134): the write + read-back stay inside one guard.
+            writeGuardedAgainstLock("Vault is locked — page tags not saved") {
+                repository.updatePageTags(id, tags)
+                if (selectedPage.value?.id == id) {
+                    _selectedPage.value = repository.getPageById(id)
+                }
             }
+        }
+    }
+
+    fun renameTag(oldTag: String, newTag: String) {
+        val cleanNewTag = newTag.trim().lowercase().removePrefix("#")
+        if (cleanNewTag.isEmpty()) return
+        viewModelScope.launch {
+            // R2-B1A-01 (phase-134): the rename sweeps the WHOLE vault (all
+            // notebooks + all pages) on the IO dispatcher — the widest
+            // lock-race window in the app. One guard wraps the scan + every
+            // write so a 1 s idle-autolock mid-sweep is a notice, not a crash.
+            writeGuardedAgainstLock("Vault is locked — tag not renamed") {
+                val allNotebooks = repository.getAllNotebooks()
+                allNotebooks.forEach { nb ->
+                    val tagList = nb.tags.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+                    if (tagList.contains(oldTag)) {
+                        val updatedTags = tagList.map { if (it == oldTag) cleanNewTag else it }.distinct().joinToString(",")
+                        repository.updateNotebookTags(nb.id, updatedTags)
+                    }
+                }
+                val allPages = repository.getAllActivePages()
+                allPages.forEach { pg ->
+                    val tagList = pg.tags.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+                    if (tagList.contains(oldTag)) {
+                        val updatedTags = tagList.map { if (it == oldTag) cleanNewTag else it }.distinct().joinToString(",")
+                        repository.updatePageTags(pg.id, updatedTags)
+                    }
+                }
+                // If the selected page was modified, refresh it
+                selectedPage.value?.id?.let { id ->
+                    _selectedPage.value = repository.getPageById(id)
+                }
+            }
+        }
+    }
+
+    fun deleteTag(tag: String) {
+        viewModelScope.launch {
+            // R2-B1A-01 (phase-134): the tag sweep hits the whole vault — a lock
+            // mid-sweep must degrade, and the entries updated BEFORE the lock
+            // are already committed, so a graceful abort is loss-free.
+            writeGuardedAgainstLock("Vault is locked — tag not deleted") {
+                val allNotebooks = repository.getAllNotebooks()
+                allNotebooks.forEach { nb ->
+                    val tagList = nb.tags.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+                    if (tagList.contains(tag)) {
+                        val updatedTags = tagList.filter { it != tag }.joinToString(",")
+                        repository.updateNotebookTags(nb.id, updatedTags)
+                    }
+                }
+                val allPages = repository.getAllActivePages()
+                allPages.forEach { pg ->
+                    val tagList = pg.tags.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+                    if (tagList.contains(tag)) {
+                        val updatedTags = tagList.filter { it != tag }.joinToString(",")
+                        repository.updatePageTags(pg.id, updatedTags)
+                    }
+                }
+                // If the selected page was modified, refresh it
+                selectedPage.value?.id?.let { id ->
+                    _selectedPage.value = repository.getPageById(id)
+                }
+            }
+        }
+    }
+
+    fun togglePinPage(id: String, currentPinned: Boolean) {
+        viewModelScope.launch {
+            writeGuardedAgainstLock("Vault is locked — pin not saved") {
+                repository.togglePin(id, !currentPinned)
+            }
+        }
+    }
+
+    fun trashPage(id: String) {
+        viewModelScope.launch {
+            writeGuardedAgainstLock("Vault is locked — page not trashed") {
+                repository.trashPage(id)
+                if (selectedPage.value?.id == id) {
+                    _selectedPage.value = null
+                }
+            }
+        }
+    }
+
+    fun updatePageTemplate(id: String, template: String) {
+        viewModelScope.launch {
+            writeGuardedAgainstLock("Vault is locked — template not saved") {
+                repository.updatePageTemplate(id, template)
+                if (selectedPage.value?.id == id) {
+                    _selectedPage.value = _selectedPage.value?.copy(template = template)
+                }
+            }
+        }
+    }
+
+    fun updatePageSource(id: String, sourceFilePath: String?, sourceFileType: String?) {
+        viewModelScope.launch {
+            // R2-B1A-01 (phase-134): the repository write runs on the disposed-pool
+            // risk window; keep the confined-value computation outside the guard
+            // (pure) and only the DAO write + read-back inside it.
+            val confined = com.authorss81.noteflow.services.SourceFilePathPolicy.confine(
+                sourceFilePath, com.authorss81.noteflow.services.ImportExportService.getImportsDir(appContext)
+            )
+            writeGuardedAgainstLock("Vault is locked — page source not saved") {
+                repository.updatePageSource(id, confined, sourceFileType)
+                if (selectedPage.value?.id == id) {
+                    _selectedPage.value = repository.getPageById(id)
+                }
+            }
+        }
+    }
         }
     }
 
@@ -2114,10 +2252,45 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
 
     fun searchVault(query: String, onResult: (List<NotePageEntity>) -> Unit) {
         searchVaultJob?.cancel()
+        // R2-B1A-02 (phase-134): fail closed when the vault is already locked —
+        // never launch a search that will hit the disposed pool, and publish an
+        // empty batch so the UI stays consistent if a lock beat the keystroke.
+        if (repository.encryptionKey == null) {
+            onResult(emptyList())
+            return
+        }
         searchVaultJob = viewModelScope.launch {
-            val results = repository.searchPages(query)
+            val results = searchFailClosed() { repository.searchPages(query) }
+            if (results == null) {
+                onResult(emptyList())
+                return@launch
+            }
             coroutineContext.ensureActive()
-            onResult(results)
+            // The job may not have been cancelled yet when a lock races the
+            // finishing search: re-check the auth gate BEFORE publishing so
+            // decrypted rows can never land in UI state after the vault locked.
+            if (repository.encryptionKey != null) {
+                onResult(results)
+            }
+        }
+    }
+
+    /**
+     * R2-B1A-02 (phase-134): runs one vault-search batch, converting a lock race
+     * (DEK zeroized or the SQLCipher pool disposed mid-decrypt) into `null` so
+     * the caller publishes an empty batch instead of crashing the process.
+     * Genuine errors re-throw.
+     */
+    private suspend fun <T> searchFailClosed(block: suspend () -> T): T? = try {
+        block()
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        if (isLockRacedWrite(e)) {
+            showSnackbar("Vault is locked — search results cleared")
+            null
+        } else {
+            throw e
         }
     }
 
@@ -2129,10 +2302,25 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
      */
     fun deepSearchVault(query: String, onResult: (List<NotePageEntity>) -> Unit) {
         searchVaultJob?.cancel()
+        // R2-B1A-02 (phase-134): same fail-closed entry check as the shallow
+        // search — a deep (full-corpus) scan started after the lock would page
+        // the disposed pool directly.
+        if (repository.encryptionKey == null) {
+            onResult(emptyList())
+            return
+        }
         searchVaultJob = viewModelScope.launch(Dispatchers.IO) {
-            val results = repository.deepSearchPages(query)
+            val results = searchFailClosed() { repository.deepSearchPages(query) }
+            if (results == null) {
+                onResult(emptyList())
+                return@launch
+            }
             coroutineContext.ensureActive()
-            onResult(results)
+            // R2-B1A-02: never publish decrypted rows after the auth gate dropped —
+            // the job may outlive lock() until its next suspension point.
+            if (repository.encryptionKey != null) {
+                onResult(results)
+            }
         }
     }
 
@@ -2274,49 +2462,69 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
 
     fun restorePage(id: String) {
         viewModelScope.launch {
-            repository.restorePage(id)
+            // R2-B1A-01 (phase-134): restore writes encrypted columns — guard it.
+            writeGuardedAgainstLock("Vault is locked — page not restored") {
+                repository.restorePage(id)
+            }
         }
     }
 
     fun deletePagePermanently(id: String) {
         viewModelScope.launch {
-            repository.deletePagePermanently(id)
-            // Phase 07: drop the page's paper-texture pref so the orphan-file sweep
-            // in EditorScreen can reclaim the stored file too.
-            settings.setPaperTexturePathForPage(id, null)
-            if (selectedPage.value?.id == id) {
-                _selectedPage.value = null
+            // R2-B1A-01 (phase-134): the permanent delete ALSO cleans up audio
+            // embed files on the filesystem (NoteRepository embed sweep) — the
+            // DAO call is guarded so a lock racing the delete is a notice.
+            writeGuardedAgainstLock("Vault is locked — page not deleted") {
+                repository.deletePagePermanently(id)
+                // Phase 07: drop the page's paper-texture pref so the orphan-file sweep
+                // in EditorScreen can reclaim the stored file too.
+                settings.setPaperTexturePathForPage(id, null)
+                if (selectedPage.value?.id == id) {
+                    _selectedPage.value = null
+                }
             }
         }
     }
 
     fun movePage(id: String, targetSectionId: String) {
         viewModelScope.launch {
-            repository.movePage(id, targetSectionId)
+            writeGuardedAgainstLock("Vault is locked — page not moved") {
+                repository.movePage(id, targetSectionId)
+            }
         }
     }
 
     fun emptyTrash() {
         viewModelScope.launch {
-            repository.emptyTrash()
+            writeGuardedAgainstLock("Vault is locked — trash not emptied") {
+                repository.emptyTrash()
+            }
         }
     }
 
     fun insertPaletteItem(item: PaletteItemEntity) {
         viewModelScope.launch {
-            repository.insertPaletteItem(item)
+            // R2-B1A-01 (phase-134): palette rows are culled via the same
+            // closed-pool hit — fail closed with a notice like the rest.
+            writeGuardedAgainstLock("Vault is locked — palette not saved") {
+                repository.insertPaletteItem(item)
+            }
         }
     }
 
     fun deletePaletteItem(id: String) {
         viewModelScope.launch {
-            repository.deletePaletteItem(id)
+            writeGuardedAgainstLock("Vault is locked — palette not updated") {
+                repository.deletePaletteItem(id)
+            }
         }
     }
 
     fun clearPaletteItemsByType(type: String) {
         viewModelScope.launch {
-            repository.clearPaletteItemsByType(type)
+            writeGuardedAgainstLock("Vault is locked — palette not updated") {
+                repository.clearPaletteItemsByType(type)
+            }
         }
     }
 
@@ -3208,15 +3416,18 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     }
 
     /**
-     * B2-UI-1 (phase-49 review-fix): single predicate for "this write failed
-     * BECAUSE the vault locked" — either the repository threw the fail-closed
-     * gate exception, or a lock zeroized the DEK / disposed the pool before the
-     * failure surfaced. Callers of the non-flush page writes (create/rename/tag/
-     * daily/wiki/template) use it to turn a lock-race crash into a handled
-     * rejection with a non-alarming notice.
+     * B2-UI-1 (phase-49 review-fix) + R2-B1A-01/R2-B1A-02/R2-b2b1-UI-01
+     * (phase-134): single predicate for "this DAO call failed BECAUSE the vault
+     * locked" — either the repository threw the fail-closed gate exception, a
+     * lock zeroized the DEK, or the lock disposed the SQLCipher pool underneath
+     * the in-flight round trip ("connection pool has been closed"). Classified
+     * by the pure-JVM [LockedPoolGuard] decision table. Callers of the non-flush
+     * page writes (create/rename/tag/daily/wiki/template/notebook/section/pin/
+     * trash/palette) and every guarded read use it to turn a lock-race crash
+     * into a handled rejection with a non-alarming notice.
      */
     private fun isLockRacedWrite(e: Exception): Boolean =
-        e is VaultLockedWriteException || repository.encryptionKey == null
+        com.authorss81.noteflow.services.LockedPoolGuard.isLockRace(e, repository.encryptionKey != null)
 
     /**
      * B2-UI-1 (phase-49 review-fix): wraps a page write so a lock racing it
@@ -3241,6 +3452,36 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
             } else {
                 throw e
             }
+        }
+    }
+
+    /**
+     * R2-b2b1-UI-01 (phase-134): the READ-side counterpart of
+     * [writeGuardedAgainstLock] — a shared checked accessor for every
+     * composition-scoped vault load (`LaunchedEffect(page.id)`/`LaunchedEffect(Unit)`
+     * in EditorScreen, KnowledgeGraphScreen, BacklinksInspector, TagExplorerView,
+     * TagManagerDialog, VersionHistoryBottomSheet, CommandPaletteOverlay). A
+     * `lock()` disposes the SQLCipher pool underneath an in-flight read, which
+     * used to throw an uncaught closed-pool `IllegalStateException` into the
+     * composition scope → process crash. Now the closed-pool race is classified
+     * via [LockedPoolGuard] and degrades to [fallback] (armed empty list) with a
+     * one-time non-alarming notice; anything that is NOT a lock race still
+     * re-throws so real DAO/corruption failures stay loud.
+     */
+    private suspend fun <T> withLockedPoolGuard(
+        readNotice: String,
+        fallback: T,
+        block: suspend () -> T
+    ): T = try {
+        block()
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        if (isLockRacedWrite(e)) {
+            showSnackbar("Vault is locked — $readNotice not loaded")
+            fallback
+        } else {
+            throw e
         }
     }
 
@@ -3371,8 +3612,74 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     }
 
     suspend fun getNoteVersions(pageId: String): List<com.authorss81.noteflow.data.model.NoteVersionEntity> {
-        return repository.getNoteVersions(pageId)
+        // R2-B1A-02 (phase-134): a lock() raced mid-query must degrade to an
+        // empty history, never crash the VersionHistoryBottomSheet composition.
+        return withLockedPoolGuard("version history", emptyList()) {
+            repository.getNoteVersions(pageId)
+        }
     }
+
+    /**
+     * R2-b2b1-UI-01 (phase-134): composition-scoped READ of a canvas page's
+     * full inked payload (strokes + layers + sticky notes + media embeds), kept
+     * inside ONE guard invocation so a lock race between the three reads yields
+     * a single armed-empty snapshot + one non-alarming notice instead of three
+     * crash candidates. EditorScreen's `LaunchedEffect(page.id)` consumes this.
+     */
+    data class EditorCanvasData(
+        val strokes: List<Stroke>,
+        val layers: List<LayerEntity>,
+        val stickyNotes: List<CanvasStickyNote>,
+        val mediaEmbeds: List<CanvasMediaEmbed>
+    )
+
+    suspend fun loadEditorCanvasPage(pageId: String): EditorCanvasData =
+        withLockedPoolGuard("canvas data", EditorCanvasData(emptyList(), emptyList(), emptyList(), emptyList())) {
+            val strokes = repository.getStrokesForPage(pageId)
+            val layers = repository.getLayersForPage(pageId)
+            val (stickyNotes, mediaEmbeds) = repository.getCanvasItemsForPage(pageId)
+            EditorCanvasData(strokes, layers, stickyNotes, mediaEmbeds)
+        }
+
+    /**
+     * R2-b2b1-UI-01 (phase-134): every composition-scoped consumer of the
+     * whole-corpus read (KnowledgeGraphScreen, BacklinksInspector,
+     * TagExplorerView, TagManagerDialog) goes through this guarded accessor — a
+     * `getAllActivePages` decrypt in flight when `lock()` disposes the pool is a
+     * crash today; it becomes an empty list + notice here.
+     */
+    suspend fun loadAllActivePages(): List<NotePageEntity> =
+        withLockedPoolGuard("vault pages", emptyList()) {
+            repository.getAllActivePages()
+        }
+
+    /**
+     * R2-b2b1-UI-01 (phase-134): guarded counterpart of [loadAllActivePages] for
+     * TagManagerDialog's notebook read.
+     */
+    suspend fun loadAllNotebooks(): List<NotebookEntity> =
+        withLockedPoolGuard("notebook list", emptyList()) {
+            repository.getAllNotebooks()
+        }
+
+    /**
+     * R2-b2b1-UI-01 (phase-134): guarded counts read backing HomeScreen's
+     * delete-confirm dialogs (they run in a composition scope coroutine — a
+     * lock disposing the pool under them used to crash the screen).
+     */
+    suspend fun loadNotebookCounts(notebookId: String): Pair<Int, Int> =
+        withLockedPoolGuard("notebook counts", 0 to 0) {
+            repository.getNotebookCounts(notebookId)
+        }
+
+    /**
+     * R2-b2b1-UI-01 (phase-134): guarded section-count read (see
+     * [loadNotebookCounts]).
+     */
+    suspend fun loadSectionCounts(sectionId: String): Int =
+        withLockedPoolGuard("section counts", 0) {
+            repository.getSectionCounts(sectionId)
+        }
 
     /**
      * C2b: builds a genuine encrypted backup archive for WebDAV upload. Runs a
@@ -3520,7 +3827,17 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         selectedTags: Set<String> = emptySet(),
         requireAllTags: Boolean = true
     ): CommandPaletteSearchResult = withContext(Dispatchers.IO) {
-        val index = buildPaletteIndex()
+        // R2-b2b1-UI-01 (phase-134): the palette overlay's commands are
+        // composition-scoped (`LaunchedEffect(query, ...)` in
+        // CommandPaletteOverlay) and their search reads the corpus via the DAO.
+        // A lock() racing the build must degrade to an empty palette, never
+        // crash the overlay with a closed-pool ISE.
+        val index = withLockedPoolGuard(
+            "command palette",
+            PaletteIndex(emptyList(), emptyMap(), -1L)
+        ) {
+            buildPaletteIndex()
+        }
         val notes = if (query.isBlank()) {
             // Blank query → show most recently updated notes (recency browse).
             index.docs
@@ -3688,6 +4005,17 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         // Best-effort by design — the guard swallows platform failures so the
         // lock itself can never break.
         ClipboardGuard.scrubIfOwnCopy(appContext)
+
+        // R2-B1A-02 (phase-134): the lock boundary must stop the shared vault
+        // search job here — it was only ever cancelled on a new keystroke, so an
+        // in-flight `searchPages`/`deepSearchPages` full-corpus decrypt kept
+        // paging the pool that dispose() closes below. Cancelling before
+        // `NoteflowDatabase.dispose()` (cooperative — the batch either already
+        // finished, re-checking the auth gate, or dies at its next suspension)
+        // plus the entry/auth re-checks in searchVault/deepSearchVault make the
+        // search path fail closed on every lock regardless of timing.
+        searchVaultJob?.cancel()
+        searchVaultJob = null
 
         repository.zeroizeKey()
         // B1-DB-8 (phase-88): the session ledger must not survive a lock — the
