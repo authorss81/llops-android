@@ -121,8 +121,11 @@ if [ -f "${SESSION_FILE}" ]; then
   fi
 fi
 
-# Build the injected context header so every phase starts oriented (no cold start):
-# AGENTS.md rules + docs/ARCHITECTURE.md map + docs/phase-status.md truth table.
+# Build the injected context header so every phase starts oriented (no cold start).
+# KEPT COMPACT on purpose: the agent has file tools and must read the big docs
+# itself. Dumping the full ARCHITECTURE.md (1181 lines) + phase-status.md into
+# every ctx made logs grow ~10 lines per phase and burned tokens. This header is
+# a short orientation + pointers; the agent reads the docs on demand.
 build_context_header() {
   {
     echo "# PIPELINE CONTEXT (injected by phase_runner.sh — do not delete)"
@@ -132,11 +135,14 @@ build_context_header() {
       sed -n '/^## Hard rules/,/^## /p' AGENTS.md | head -n 120
     fi
     echo ""
-    echo "## Architecture map (docs/ARCHITECTURE.md — living doc, read + update)"
-    if [ -f docs/ARCHITECTURE.md ]; then cat docs/ARCHITECTURE.md; fi
-    echo ""
-    echo "## Phase status truth table (docs/phase-status.md — read + update your row)"
-    if [ -f docs/phase-status.md ]; then cat docs/phase-status.md; fi
+    echo "## Orientation (read these files yourself — do NOT rely on memory)"
+    echo "- docs/ARCHITECTURE.md = living architecture map (package layout, core"
+    echo "  subsystem file:line anchors, build/CI essentials, gotchas). READ IT."
+    echo "- docs/phase-status.md = phase status truth table. READ IT, then UPDATE"
+    echo "  your phase's row when you finish."
+    echo "- workspace/PHASES.md = full phase table."
+    echo "- workspace/SECURITY_FIX_PLAN.md + docs/security-report*.md = security"
+    echo "  findings status (only if your phase touches security)."
     echo ""
     if [ -f "${PHASE_DIR}/.checkpoint" ]; then
       echo "## CONTINUATION MODE"
