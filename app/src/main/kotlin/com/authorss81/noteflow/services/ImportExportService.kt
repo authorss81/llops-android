@@ -1352,6 +1352,12 @@ object ImportExportService {
                 // (copy teardown, budget rejection, encryption) can never
                 // permanently delete the user's older version history.
                 pruneStagedSnapshotVersions(stagedDb)
+                // R2-b2b4-DOS-02 (phase-150): the live layer-count cap prune runs
+                // on the SAME staged snapshot, so the archive never serializes a
+                // page's retained-but-oversized layers backlog. Mirrors the
+                // version-history trim's safety: a backup that later fails can
+                // never permanently delete a user's extra layers.
+                pruneStagedSnapshotLayers(stagedDb)
             }
             // R2-B1D-04 (phase-138): the same BackupBudgetPolicy that bounds the
             // restore extractor now bounds the packer, so a backup is only ever
@@ -2256,6 +2262,16 @@ object ImportExportService {
                             // ~5,000-row × ~50 KB-body archive can no longer OOM
                             // the process on version-history open or restore.
                             sanitizeRestoredNoteVersions(db)
+                            // R2-b2b4-DOS-02 (phase-150): cap a crafted backup's
+                            // `layers` table to the top
+                            // LayerRenderBudgetPolicy.MAX_LIVE_LAYER_COUNT rows per
+                            // page NOW, while this candidate key can open the file —
+                            // the renderer materializes one full-page ARGB bitmap per
+                            // visible layer (~10.4 MB at 1080x2400), so an
+                            // attacker-planted 40-layer page (~416 MB native) must
+                            // never migrate or swap into the live vault and make the
+                            // canvas OOM on open.
+                            sanitizeRestoredLayerCounts(db)
                             // B1-AUTH-05 (phase-69): strip sourceFilePath rows that
                             // escape the imports root BEFORE they can migrate or swap
                             // into the live vault — the zip entry-names validation
@@ -2486,6 +2502,90 @@ object ImportExportService {
             pruneVersionPagesToRetention(db)
         } catch (e: Exception) {
             if (shouldPropagateRestoreStripFailure(e)) throw e
+        }
+    }
+
+    /**
+     * R2-b2b4-DOS-02 (phase-150): caps a `layers` table to the top
+     * [com.authorss81.noteflow.services.LayerRenderBudgetPolicy.MAX_LIVE_LAYER_COUNT]
+     * rows per page (highest `zOrder`, ties by `rowid`), the lower rows dropped.
+     * The SINGLE prune implementation shared by the restore sanitizer
+     * ([sanitizeRestoredLayerCounts]) and the export-time staged-snapshot trim
+     * ([pruneStagedSnapshotLayers]).
+     *
+     * The canvas caches one full-page ARGB_8888 bitmap per visible layer
+     * (~10.4 MB at 1080x2400) with no per-layer cap, so the uncapped table is a
+     * DOS vector: a crafted backup spreading strokes across 40 layers on one
+     * page becomes ~416 MB native the moment the editor opens it. Running under
+     * the key that can open the DB, the table is trimmed BEFORE the re-key /
+     * [migrateFieldCiphertexts] steps (restore) or BEFORE the archive is packed
+     * (export) — those then walk a bounded layer list, the live save on open
+     * persists only what the editor can render, and the archive never
+     * serializes a page's retained-but-oversized backlog. The statement is the
+     * policy's single raw SQL literal, bound [keepTop], never interpolated, and
+     * ordered by `zOrder DESC, rowid DESC` so crafted equal-`zOrder` rows prune
+     * deterministically. A missing `layers` table (schema not yet applied) is
+     * not an error here — there is nothing to strip.
+     */
+    private fun pruneLayerPagesToLiveCap(db: net.zetetic.database.sqlcipher.SQLiteDatabase) {
+        val keepTop = com.authorss81.noteflow.services.LayerRenderBudgetPolicy.MAX_LIVE_LAYER_COUNT
+        val pageIds = mutableListOf<String>()
+        val cursor = db.rawQuery("SELECT DISTINCT pageId FROM layers", null)
+        try {
+            while (cursor.moveToNext()) pageIds.add(cursor.getString(0))
+        } finally {
+            cursor.close()
+        }
+        for (pageId in pageIds) {
+            db.execSQL(
+                com.authorss81.noteflow.services.LayerRenderBudgetPolicy.KEEP_HIGHEST_Z_LAYERS_RAW_SQL,
+                arrayOf<Any>(pageId, pageId, keepTop)
+            )
+        }
+    }
+
+    /**
+     * R2-b2b4-DOS-02 (phase-150): restore-time layer-table sanitizer — runs
+     * under the candidate key that can open a crafted backup (see
+     * [pruneLayerPagesToLiveCap] for the SQL). A missing `layers` table is not
+     * an error here — any real failure is re-thrown so the restore-abort path
+     * handles it.
+     */
+    private fun sanitizeRestoredLayerCounts(db: net.zetetic.database.sqlcipher.SQLiteDatabase) {
+        try {
+            pruneLayerPagesToLiveCap(db)
+        } catch (e: Exception) {
+            if (shouldPropagateRestoreStripFailure(e)) throw e
+        }
+    }
+
+    /**
+     * R2-b2b4-DOS-02 (phase-150): the export-time layer trim, mirroring the
+     * phase-149 version-history trim. Runs on the STAGED SNAPSHOT copy — opened
+     * with the in-memory DEK and pruned via [pruneLayerPagesToLiveCap] — and
+     * NEVER on the live vault, so a backup that later fails can never
+     * permanently delete a user's extra layers. The staged file is a standalone
+     * snapshot by then (post [com.authorss81.noteflow.utils.VaultSnapshotCopyPolicy.checkpointThenCopy]),
+     * so writing it does not touch the live WAL connection.
+     */
+    private fun pruneStagedSnapshotLayers(stagedDb: File) {
+        val dek = VaultKeyHolder.dek
+            ?: throw IllegalStateException(
+                "Backup failed: the vault is locked; cannot bound the layer snapshot."
+            )
+        val passphrase = dek.toSqlcipherPassphraseBytes()
+        try {
+            System.loadLibrary("sqlcipher")
+            val db = net.zetetic.database.sqlcipher.SQLiteDatabase.openOrCreateDatabase(
+                stagedDb, passphrase, null, null, null
+            )
+            try {
+                pruneLayerPagesToLiveCap(db)
+            } finally {
+                db.close()
+            }
+        } finally {
+            passphrase.fill(0.toByte())
         }
     }
 

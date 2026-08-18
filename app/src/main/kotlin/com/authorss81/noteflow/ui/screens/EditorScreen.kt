@@ -78,6 +78,7 @@ import com.authorss81.noteflow.services.DockSnapMath
 import com.authorss81.noteflow.services.FloatingWidgetDragPolicy
 import com.authorss81.noteflow.services.MinimapGeometryPolicy
 import com.authorss81.noteflow.services.HarmonyScheme
+import com.authorss81.noteflow.services.LayerRenderBudgetPolicy
 import com.authorss81.noteflow.services.PaletteCatalog
 import com.authorss81.noteflow.services.PaletteMath
 import com.authorss81.noteflow.services.PressureCurve
@@ -667,6 +668,16 @@ fun EditorScreen(
     }
 
     fun onAddLayer() {
+        // R2-b2b4-DOS-02 (phase-150): the LIVE canvas caps at
+        // LayerRenderBudgetPolicy.MAX_LIVE_LAYER_COUNT — the renderer keeps one
+        // full-page ARGB bitmap per visible layer, so an uncapped add was a DoS
+        // vector (crafted 40-layer page ≈ 416 MB native). Exact same number as
+        // the PSD export cap, and the gate fails CLOSED with a non-alarming
+        // notice (AGENTS.md: never silent degradation, always a message).
+        if (LayerRenderBudgetPolicy.layerLimitReached(layers.size)) {
+            viewModel.showSnackbar(LayerRenderBudgetPolicy.layerLimitNotice(), isLong = true)
+            return
+        }
         if (com.authorss81.noteflow.services.MotionPolicy.hapticsAllowed(hapticsEnabled, reduceMotion)) {
             haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
         }
@@ -712,6 +723,12 @@ fun EditorScreen(
     }
 
     fun onDuplicateLayer(layerToDuplicate: LayerEntity) {
+        // R2-b2b4-DOS-02 (phase-150): same live-cap gate as [onAddLayer] — a
+        // duplicate adds one full layer the renderer must rasterize per page.
+        if (LayerRenderBudgetPolicy.layerLimitReached(layers.size)) {
+            viewModel.showSnackbar(LayerRenderBudgetPolicy.layerLimitNotice(), isLong = true)
+            return
+        }
         val nextZ = (layers.maxOfOrNull { it.zOrder } ?: -1) + 1
         val dupLayerId = "layer_" + java.util.UUID.randomUUID().toString()
         val dupLayer = layerToDuplicate.copy(

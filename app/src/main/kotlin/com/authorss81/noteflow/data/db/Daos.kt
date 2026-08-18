@@ -9,6 +9,7 @@ import com.authorss81.noteflow.data.model.StrokeEntity
 import com.authorss81.noteflow.data.model.PaletteItemEntity
 import com.authorss81.noteflow.data.model.LayerEntity
 import com.authorss81.noteflow.data.model.NoteVersionEntity
+import com.authorss81.noteflow.services.LayerRenderBudgetPolicy
 import com.authorss81.noteflow.services.NoteVersionRetentionPolicy
 import kotlinx.coroutines.flow.Flow
 
@@ -273,6 +274,19 @@ interface PaletteDao {
 interface LayerDao {
     @Query("SELECT * FROM layers WHERE pageId = :pageId ORDER BY zOrder ASC")
     suspend fun getLayersForPage(pageId: String): List<LayerEntity>
+
+    // R2-b2b4-DOS-02 (phase-150): the LIVE read is bounded — the renderer
+    // materializes one full-page bitmap per visible layer (a 1080x2400 page
+    // costs ~10.4 MB per layer), so the DAO must never hand the whole restored
+    // `layers` table to the canvas. Keeps only the TOP
+    // LayerRenderBudgetPolicy.MAX_LIVE_LAYER_COUNT layers per page by zOrder
+    // DESC, ties broken by rowid (insertion) — the policy's single ordering
+    // literal, shared by the raw restore sanitizer.
+    @Query(LayerRenderBudgetPolicy.BOUNDED_TOP_LAYERS_ROOM_SQL)
+    suspend fun getTopLayersForPageBounded(pageId: String, limit: Int): List<LayerEntity>
+
+    @Query("SELECT COUNT(*) FROM layers WHERE pageId = :pageId")
+    suspend fun countLayersForPage(pageId: String): Int
 
     @Upsert
     suspend fun insertLayers(layers: List<LayerEntity>)

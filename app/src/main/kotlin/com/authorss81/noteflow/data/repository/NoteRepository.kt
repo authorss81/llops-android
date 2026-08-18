@@ -7,6 +7,7 @@ import com.authorss81.noteflow.services.AttachmentIngestPolicy
 import com.authorss81.noteflow.services.DatabaseSecurityHelper
 import com.authorss81.noteflow.services.DecryptFailurePolicy
 import com.authorss81.noteflow.services.EncryptionService
+import com.authorss81.noteflow.services.LayerRenderBudgetPolicy
 import com.authorss81.noteflow.services.NoteBodyVaultPolicy
 import com.authorss81.noteflow.services.NoteVersionRetentionPolicy
 import com.authorss81.noteflow.services.SourceFilePathPolicy
@@ -1385,7 +1386,20 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
     }
 
     suspend fun getLayersForPage(pageId: String): List<LayerEntity> = withContext(Dispatchers.IO) {
-        val layers = db.layerDao().getLayersForPage(pageId)
+        // R2-b2b4-DOS-02 (phase-150): the LIVE read is bounded. The renderer
+        // materializes one full-page ARGB_8888 bitmap per visible layer (~10.4 MB
+        // at 1080x2400), so a crafted restore's `layers` table can never be handed
+        // to the canvas whole. Keeps only the TOP
+        // LayerRenderBudgetPolicy.MAX_LIVE_LAYER_COUNT layers per page by zOrder
+        // (ties by rowid) and returns them in ascending zOrder so the editor sees
+        // the same ordering as the pre-fix ASC read. Callers that care whether
+        // layers were dropped use [getLayerCountForPage].
+        val layers = db.layerDao()
+            .getTopLayersForPageBounded(
+                pageId,
+                LayerRenderBudgetPolicy.MAX_LIVE_LAYER_COUNT
+            )
+            .sortedBy { it.zOrder }
         if (layers.isEmpty()) {
             val defaultLayerId = "layer_$pageId"
             val defaultLayer = LayerEntity(
@@ -1403,6 +1417,16 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
         } else {
             layers
         }
+    }
+
+    /**
+     * R2-b2b4-DOS-02 (phase-150): raw `layers` row count for the one-time
+     * non-alarming notice — a page whose count exceeds
+     * [LayerRenderBudgetPolicy.MAX_LIVE_LAYER_COUNT] had crafted/legacy layers
+     * folded onto the retained stack at load.
+     */
+    suspend fun getLayerCountForPage(pageId: String): Int = withContext(Dispatchers.IO) {
+        db.layerDao().countLayersForPage(pageId)
     }
 
     /**

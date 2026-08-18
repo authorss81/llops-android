@@ -82,6 +82,7 @@ import com.authorss81.noteflow.services.RestoreFailSafe
 import com.authorss81.noteflow.services.UiFailureTextPolicy
 import com.authorss81.noteflow.services.IntegrityWarningDismissalGate
 import com.authorss81.noteflow.services.KeystoreKeyLostException
+import com.authorss81.noteflow.services.LayerRenderBudgetPolicy
 import com.authorss81.noteflow.services.MarkdownBodySaveCoordinator
 import com.authorss81.noteflow.services.NoteBodyVaultPolicy
 import com.authorss81.noteflow.services.PasswordStrengthPolicy
@@ -192,6 +193,21 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     private fun maybeNotifyGeometryCapped(pageId: String, gate: com.authorss81.noteflow.services.StrokeGeometryGateResult) {
         if (!gate.geometryWasCapped) return
         if (geometryCappedNotifiedPages.add(pageId)) showSnackbar(gate.noticeText)
+    }
+
+    // R2-b2b4-DOS-02 (phase-150): the live-layer-cap notice is a ONE-TIME
+    // message per page per session — the pixel-per-layer render budget means an
+    // over-cap page is opened with only the top
+    // LayerRenderBudgetPolicy.MAX_LIVE_LAYER_COUNT layers retained (the lower
+    // ones stay in the vault until the page is saved). Same keying + clear-at-lock
+    // semantics as [geometryCappedNotifiedPages].
+    private val layerCappedNotifiedPages = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    private fun maybeNotifyLayersCapped(pageId: String, kept: Int, dropped: Int) {
+        if (dropped <= 0) return
+        if (layerCappedNotifiedPages.add(pageId)) {
+            showSnackbar(com.authorss81.noteflow.services.LayerRenderBudgetPolicy.layersCappedNotice(kept, dropped))
+        }
     }
 
     // Phase 10/11: plugin framework (see docs/PLUGINS.md + docs/PLUGIN_SDK.md).
@@ -3731,7 +3747,17 @@ fun updatePageTags(id: String, tags: String) {
     suspend fun loadEditorCanvasPage(pageId: String): EditorCanvasData =
         withLockedPoolGuard("canvas data", EditorCanvasData(emptyList(), emptyList(), emptyList(), emptyList())) {
             val strokes = repository.getStrokesForPage(pageId)
+            // R2-b2b4-DOS-02 (phase-150): the repository read is ALREADY bounded
+            // to the top LayerRenderBudgetPolicy.MAX_LIVE_LAYER_COUNT layers (the
+            // canvas rasterizes one full-page bitmap per layer). Compare the raw
+            // row count to the retained list and, when layers were held back,
+            // raise the one-time non-alarming notice here.
             val layers = repository.getLayersForPage(pageId)
+            maybeNotifyLayersCapped(
+                pageId,
+                layers.size,
+                LayerRenderBudgetPolicy.omittedLayerCount(repository.getLayerCountForPage(pageId))
+            )
             val (stickyNotes, mediaEmbeds) = repository.getCanvasItemsForPage(pageId)
             EditorCanvasData(strokes, layers, stickyNotes, mediaEmbeds)
         }
@@ -4197,6 +4223,7 @@ fun updatePageTags(id: String, tags: String) {
         invalidatePaletteIndex()
         // B2-DOS-01 (phase-50): a new unlock session may re-notify a capped page.
         geometryCappedNotifiedPages.clear()
+        layerCappedNotifiedPages.clear()
         // N6/A1: decrypted content must not stay resident in StateFlows after lock.
         _pages.value = emptyList()
         _selectedPage.value = null

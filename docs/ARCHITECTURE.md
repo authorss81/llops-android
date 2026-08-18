@@ -661,6 +661,24 @@
     gated by `minimapDraggable` (default OFF), collapsible header kept; `minimapHudEnabled` default
     reverted to OFF (`SettingsManager.kt:317` ← `MinimapGeometryPolicy.VISIBLE_BY_DEFAULT=false`).
     Settings sheet gained the 4 toggles (`EditorScreen.kt:4049`). Tests: `Phase129InkBarMinimapPolicyTest` (23).
+  - **Implemented in phase-150** (R2-b2b4-DOS-02/03 + R2-b2b5-FEA-04, see `workspace/phase-150/REPORT.md`): canvas
+    memory + per-frame render budgets. `services/LayerRenderBudgetPolicy.kt` owns the LIVE layer cap
+    (`MAX_LIVE_LAYER_COUNT` = 16, the SAME number as the phase-82 export cap) + `MAX_RESIDENT_BITMAP_BYTES` = 64 MB,
+    and the top-`zOrder`-`rowid` ordering SQL (`BOUNDED_TOP_LAYERS_ROOM_SQL` wired verbatim into
+    `LayerDao.getTopLayersForPageBounded`, `KEEP_HIGHEST_Z_LAYERS_RAW_SQL` into the raw restore sanitizer).
+    `NoteRepository.getLayersForPage` materializes ONLY the top-16 read; `EditorScreen.onAddLayer`/`onDuplicateLayer`
+    fail closed at the cap with the non-alarming `layerLimitNotice()`; `NoteflowViewModel.loadEditorCanvasPage`
+    raises the one-time `maybeNotifyLayersCapped` notice; the restore path runs `sanitizeRestoredLayerCounts`
+    under the candidate key and the export trims the STAGED snapshot (`pruneStagedSnapshotLayers`), both via
+    the shared `pruneLayerPagesToLiveCap`. The renderer's resident rasters are now `ui/components/LayerBitmapLruCache.kt`
+    — a byte-budgeted LRU (access-order `LinkedHashMap`, evicts to `BitmapPool`, `.clear()` releases on
+    invalidation/unmount) replacing the old never-evicted `mutableMapOf`. `services/MinimapGeometryPolicy.kt`
+    gained the minimap work budget (`MAX_MINIMAP_SAMPLED_STROKES` 120 + `MAX_MINIMAP_POLYLINE_SEGMENTS` 400 +
+    `strokeStepFor`/`pointStepFor`, ceil-div) — the minimap's fixed 1/2/4 re-walk became bounded global strides
+    (worst case 520 `drawLine`). `services/CanvasPageBudgetPolicy.kt` clamps end-of-stroke Y (`clampMaxStrokeY`,
+    non-finite → 0) to a `MAX_DYNAMIC_PAGES` = 2000 world ceiling and `clampCalculatedPages` bounds
+    `dynamicPageCount`; the per-page `filter` is hoisted to one `groupBy` per frame
+    (`strokesByPage[pageIdx] ?: emptyList()`). Tests: `Phase150CanvasRenderBudgetTest` (23).
 - **Downloadable runtime**: `plugins/runtime/RuntimePluginLoader.kt:68`; `services/AppClassLoaderFactory.kt:23`
   (`DexClassLoader`); `services/AppFacadeHost.kt:27` (deny-by-default facade, NO direct DB/keystore handles);
   `plugins/runtime/PinnedCertHash.kt:25`; `plugins/runtime/ArtifactSignatureVerifier.kt:52`.

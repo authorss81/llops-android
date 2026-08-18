@@ -30,6 +30,53 @@ object MinimapGeometryPolicy {
 
     const val FALLBACK_WORLD = 1000f
 
+    // ---- R2-b2b4-DOS-03 (phase-150): minimap per-frame work budget -----------
+    // The pre-fix thumbnail loop iterated EVERY stroke and EVERY point with a
+    // FIXED stride (`step <= 4`) and issued one `drawLine` per retained pair —
+    // ~50k draw commands per frame at the phase-50 geometry cap
+    // (StrokeGeometryPolicy.MAX_POINTS_PER_PAGE ≈ 200k), recomputed on every
+    // pan/zoom frame. These two budgets turn it into a bounded polyline pass:
+    // sample at most [MAX_MINIMAP_SAMPLED_STROKES] strokes and derive a GLOBAL
+    // point stride from the sampled total so the whole thumbnail issues at most
+    // [MAX_MINIMAP_POLYLINE_SEGMENTS] poly-line calls (+ the sampled single-
+    // segment strokes' overhead ≤ [MAX_MINIMAP_SAMPLED_STROKES]).
+
+    /** Total `drawLine` budget for the minimap's stroke-polyline pass. */
+    const val MAX_MINIMAP_POLYLINE_SEGMENTS = 400
+
+    /** Never more than this many strokes are sampled into the thumbnail. */
+    const val MAX_MINIMAP_SAMPLED_STROKES = 120
+
+    private fun ceilDiv(a: Int, b: Int): Int = if (b <= 0 || a <= 0) 1 else (a + b - 1) / b
+
+    /** Iteration stride over the stroke list so ≤ [MAX_MINIMAP_SAMPLED_STROKES] strokes are sampled. */
+    fun strokeStepFor(strokeCount: Int): Int = ceilDiv(strokeCount, MAX_MINIMAP_SAMPLED_STROKES)
+
+    /**
+     * Global point iteration stride derived from the sampled total point count
+     * so the poly-line pass settles at ≤ [MAX_MINIMAP_POLYLINE_SEGMENTS]
+     * segments (plus the [MAX_MINIMAP_SAMPLED_STROKES] single-segment cap).
+     */
+    fun pointStepFor(totalPoints: Int): Int = ceilDiv(totalPoints, MAX_MINIMAP_POLYLINE_SEGMENTS)
+
+    /** How many strokes the stride-based sampler will visit (informational). */
+    fun sampledStrokeCount(strokeCount: Int): Int =
+        strokeCount.coerceAtLeast(0).coerceAtMost(MAX_MINIMAP_SAMPLED_STROKES)
+
+    /**
+     * Worst-case `drawLine` count the budgeted loop can issue for a page of
+     * [strokeCount] strokes totalling [totalPoints] points: one segment per
+     * sampled stroke at most (single-segment strokes / polylines) plus the
+     * poly-line segments. Guaranteed ≤ [MAX_MINIMAP_SAMPLED_STROKES] +
+     * [MAX_MINIMAP_POLYLINE_SEGMENTS] regardless of geometry size.
+     */
+    fun maxLineDraws(strokeCount: Int, totalPoints: Int): Int {
+        val strokes = strokeCount.coerceAtLeast(0)
+        val pts = totalPoints.coerceAtLeast(0)
+        val sampled = minOf(strokes, MAX_MINIMAP_SAMPLED_STROKES)
+        return sampled + ceilDiv(pts, pointStepFor(pts))
+    }
+
     data class FitResult(val width: Float, val height: Float)
 
     /** Minimap visibility gate — ON only when the user enabled it. */

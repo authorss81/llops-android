@@ -475,13 +475,16 @@ fun AnnotationCanvas(
         (0.299f * parsedPaperColor.red + 0.587f * parsedPaperColor.green + 0.114f * parsedPaperColor.blue) < 0.5f
     }
 
-    val layerBitmapCache = remember { mutableMapOf<String, com.authorss81.noteflow.ui.components.LayerBitmapCache>() }
+    // R2-b2b4-DOS-02 (phase-150): the reusable layer rasters live in a BOUNDED
+    // LRU (was an unbounded `mutableMapOf`), so the native resident bytes stay at
+    // or under LayerRenderBudgetPolicy.MAX_RESIDENT_BITMAP_BYTES regardless of
+    // how many layers × pages the viewport touches. Evicted entries go back to
+    // BitmapPool, never orphaned.
+    val layerBitmapCache = remember { com.authorss81.noteflow.ui.components.LayerBitmapLruCache() }
     // Phase 19: vibrancy is baked into the layer bitmaps, so a vibe change
-    // invalidates the cache the same way a stroke/layer change does.
+    // invalidates the cache the same way a stroke/layer change does. The LRU's
+    // clear() releases every cached bitmap back to the pool.
     LaunchedEffect(strokes, layers, vibrancyBoost) {
-        layerBitmapCache.values.forEach {
-            com.authorss81.noteflow.utils.BitmapPool.release(it.bitmap.asAndroidBitmap())
-        }
         layerBitmapCache.clear()
     }
     val wetMixingEffect = remember {
@@ -547,9 +550,8 @@ fun AnnotationCanvas(
 
     DisposableEffect(Unit) {
         onDispose {
-            layerBitmapCache.values.forEach {
-                com.authorss81.noteflow.utils.BitmapPool.release(it.bitmap.asAndroidBitmap())
-            }
+            // R2-b2b4-DOS-02 (phase-150): the LRU's clear() releases every
+            // cached bitmap back to the pool on unmount.
             layerBitmapCache.clear()
         }
     }
@@ -1012,9 +1014,19 @@ fun AnnotationCanvas(
                     }
                 }
                 val visibleBottomY = -layoutPanOffset.y / layoutZoomScale + (viewHeightPx / layoutZoomScale)
-                val maxY = kotlin.math.max(maxStrokeY, visibleBottomY)
-                val calculatedPages = (maxY / (pageHeightPx + pageGapPx)).toInt() + 1
-                kotlin.math.max(1, calculatedPages)
+                // R2-b2b5-FEA-04 (phase-150): the DAO/restore guards cap strokes
+                // by LENGTH only, never by coordinate VALUE — a crafted backup can
+                // carry `{"y":1e9}` in a short stroke and previously derived
+                // ~628k pages here. Clamp the end-of-stroke Y to the world ceiling
+                // (CanvasPageBudgetPolicy) BEFORE the count math, then clamp the
+                // derived count itself, so the render loop stays bounded.
+                val pageStride = pageHeightPx + pageGapPx
+                val maxY = kotlin.math.max(
+                    com.authorss81.noteflow.services.CanvasPageBudgetPolicy.clampMaxStrokeY(maxStrokeY, pageStride),
+                    visibleBottomY
+                )
+                val calculatedPages = com.authorss81.noteflow.services.CanvasPageBudgetPolicy.calculatedPagesFor(maxY, pageStride)
+                com.authorss81.noteflow.services.CanvasPageBudgetPolicy.clampCalculatedPages(calculatedPages)
             } else {
                 1
             }
@@ -1476,6 +1488,14 @@ fun AnnotationCanvas(
                     val renderPageCount = dynamicPageCount
                     val canvasW = max(size.width, pageWidthPx)
 
+                    // R2-b2b4-DOS-03 (phase-150): the pre-fix loop ran
+                    // `activeStrokeList.filter { it.pdfPage == pageIdx }` for EACH
+                    // visible page, so a zoomed-out long document paid O(pages ×
+                    // strokes) every frame. One O(strokes) groupBy per frame (done
+                    // here, once) turns every page's stroke retrieval into a map
+                    // lookup.
+                    val strokesByPage = activeStrokeList.groupBy { it.pdfPage }
+
                     for (pageIdx in 0 until renderPageCount) {
                         val pageTopY = pageIdx * (pageHeightPx + pageGapPx)
 
@@ -1540,7 +1560,9 @@ fun AnnotationCanvas(
                         }
 
                         // 3. Render Strokes belonging to this page
-                        val pageStrokes = activeStrokeList.filter { it.pdfPage == pageIdx }
+                        // R2-b2b4-DOS-03 (phase-150): map lookup (hoisted above)
+                        // instead of a fresh whole-list filter per page.
+                        val pageStrokes = strokesByPage[pageIdx] ?: emptyList()
                         val previewStroke = if (activeTargetPage == pageIdx && (activePoints.isNotEmpty() || (activeStart != null && activeEnd != null))) {
 Stroke(
                             id = "preview",
@@ -1959,16 +1981,24 @@ Stroke(
                                         size = Size(spW * mapScale, spH * mapScale)
                                     )
 
-                                    // Draw stroke preview thumbnails
+                                    // Draw stroke preview thumbnails — R2-b2b4-DOS-03 (phase-150): the pre-fix
+                                    // loop re-walked EVERY stroke/point from the main
+                                    // thread at a fixed 1-4 stride (~50k drawLine at the
+                                    // phase-50 geometry cap) on every pan/zoom frame.
+                                    // Budgeted strides (MinimapGeometryPolicy) hold the
+                                    // pass to <= MAX_MINIMAP_SAMPLED_STROKES sampled
+                                    // strokes and <= MAX_MINIMAP_POLYLINE_SEGMENTS
+                                    // poly-line segments total.
                                     val strokeCount = activeStrokeList.size
-                                    val step = if (strokeCount > 500) 4 else if (strokeCount > 200) 2 else 1
-                                    for (sIdx in 0 until strokeCount step step) {
+                                    val totalPoints = activeStrokeList.sumOf { it.points.size }
+                                    val strokeStep = MinimapGeometryPolicy.strokeStepFor(strokeCount)
+                                    val pointStep = MinimapGeometryPolicy.pointStepFor(totalPoints)
+                                    for (sIdx in 0 until strokeCount step strokeStep) {
                                         val stroke = activeStrokeList[sIdx]
                                         if (stroke.points.size > 1) {
                                             val pCount = stroke.points.size
-                                            val pStep = if (pCount > 100) 4 else if (pCount > 40) 2 else 1
                                             var prevPt = stroke.points[0]
-                                            for (i in pStep until pCount step pStep) {
+                                            for (i in pointStep until pCount step pointStep) {
                                                 val nextPt = stroke.points[i]
                                                 drawLine(
                                                     color = stroke.color.copy(alpha = 0.7f),
@@ -2551,7 +2581,7 @@ private fun DrawScope.drawCompositedLayersStrokes(
     offsetY: Float,
     isDarkPaper: Boolean,
     inkRenderer: CanvasStrokeRenderer?,
-    layerBitmapCache: MutableMap<String, com.authorss81.noteflow.ui.components.LayerBitmapCache>? = null,
+    layerBitmapCache: com.authorss81.noteflow.ui.components.LayerBitmapLruCache? = null,
     canvasDrawScope: androidx.compose.ui.graphics.drawscope.CanvasDrawScope? = null,
     density: androidx.compose.ui.unit.Density? = null,
     layoutDirection: androidx.compose.ui.unit.LayoutDirection? = null,
@@ -2620,15 +2650,17 @@ private fun DrawScope.drawCompositedLayersStrokes(
             val defaultLayerId = "layer_default"
             val cacheKey = "${pageIdx}_${defaultLayerId}_${symmetryMode}_v${vibrancyBoost}"
             val strokesHash = strokes.hashCode()
-            var cache = layerBitmapCache[cacheKey]
+            var cache = layerBitmapCache.get(cacheKey)
             val pw = pageWidth.toInt().coerceAtLeast(1)
             val ph = pageHeight.toInt().coerceAtLeast(1)
             if (cache == null || cache.bitmap.width != pw || cache.bitmap.height != ph) {
-                cache?.let { com.authorss81.noteflow.utils.BitmapPool.release(it.bitmap.asAndroidBitmap()) }
                 val androidBmp = com.authorss81.noteflow.utils.BitmapPool.acquire(pw, ph, android.graphics.Bitmap.Config.ARGB_8888)
                 val bmp = androidBmp.asImageBitmap()
                 cache = com.authorss81.noteflow.ui.components.LayerBitmapCache(bmp, androidx.compose.ui.graphics.Canvas(bmp))
-                layerBitmapCache[cacheKey] = cache
+                // R2-b2b4-DOS-02 (phase-150): put() evicts least-recently-used
+                // entries (released to the pool) when the resident byte budget is
+                // busted; it also releases any bitmap already cached at this key.
+                layerBitmapCache.put(cacheKey, cache)
             }
 
             if (cache.hash != strokesHash || cache.hash == 0) {
@@ -2733,15 +2765,17 @@ private fun DrawScope.drawCompositedLayersStrokes(
         // mirrored per frame; this avoids re-vectorizing every layer every frame
         // while a symmetry mode is active.
         if (layerBitmapCache != null && canvasDrawScope != null && density != null && layoutDirection != null && pageWidth > 0f && pageHeight > 0f) {
-            var cache = layerBitmapCache[cacheKey]
+            var cache = layerBitmapCache.get(cacheKey)
             val pw = pageWidth.toInt().coerceAtLeast(1)
             val ph = pageHeight.toInt().coerceAtLeast(1)
             if (cache == null || cache.bitmap.width != pw || cache.bitmap.height != ph) {
-                cache?.let { com.authorss81.noteflow.utils.BitmapPool.release(it.bitmap.asAndroidBitmap()) }
+                // R2-b2b4-DOS-02 (phase-150): the LRU put releases a same-key
+                // stale bitmap AND evicts least-recently-used entries back to the
+                // pool when the resident byte budget would be exceeded.
                 val androidBmp = com.authorss81.noteflow.utils.BitmapPool.acquire(pw, ph, android.graphics.Bitmap.Config.ARGB_8888)
                 val bmp = androidBmp.asImageBitmap()
                 cache = com.authorss81.noteflow.ui.components.LayerBitmapCache(bmp, androidx.compose.ui.graphics.Canvas(bmp))
-                layerBitmapCache[cacheKey] = cache
+                layerBitmapCache.put(cacheKey, cache)
             }
             
             if (cache.hash != strokesHash || cache.hash == 0) {
