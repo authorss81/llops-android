@@ -42,10 +42,13 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.authorss81.noteflow.data.model.CanvasMediaEmbed
 import com.authorss81.noteflow.services.BrushTextureEngine
+import com.authorss81.noteflow.services.FloatingWidgetDragPolicy
+import com.authorss81.noteflow.services.MinimapGeometryPolicy
 import com.authorss81.noteflow.services.PressureCurve
 import com.authorss81.noteflow.services.PressureCurveHelper
 import com.authorss81.noteflow.services.ProtobufBrushLoader
@@ -73,6 +76,7 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.floor
 import kotlin.math.ceil
+import kotlin.math.roundToInt
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
@@ -113,6 +117,9 @@ fun AnnotationCanvas(
     stylusPressureEnabled: Boolean = true,
     advancedBrushesEnabled: Boolean = false,
     showMinimap: Boolean = false,
+    // Phase 129: the minimap is draggable only when the user opts in via the
+    // canvas settings sheet (default OFF) — the drag offset is session-scoped.
+    minimapDraggable: Boolean = false,
     isRecordingVoice: Boolean = false,
     recordingElapsedMsProvider: () -> Long = { 0L },
     activeVoicePlaybackFilePath: String? = null,
@@ -269,6 +276,10 @@ fun AnnotationCanvas(
 
     // Minimap Collapsible State
     var minimapExpanded by remember { mutableStateOf(true) }
+
+    // Phase 129: session-scoped drag offset for the minimap (null = default
+    // bottom-right anchor). Survives header collapse/re-expand.
+    var minimapDragOffset by remember { mutableStateOf<Offset?>(null) }
 
     val isLandscape = remember(pageTags, backgroundImage) {
         pageTags.contains("orientation_landscape") || (backgroundImage != null && backgroundImage.width > backgroundImage.height)
@@ -1691,22 +1702,93 @@ Stroke(
                 )
             }
 
-            // Canvas Viewport Minimap Widget (Bottom Right)
+            // Canvas Viewport Minimap Widget (bottom-right by default).
+            // Phase 129: the map box is proportional to the canvas WORLD aspect
+            // ratio (fitted inside the pre-35 120x140dp max box, aspect
+            // preserved) and pan/zoom mapping uses a single uniform scale so it
+            // agrees with the page — including seamless/infinite mode. The
+            // widget sits at its default bottom-right corner and is draggable
+            // only when the user opts in (default OFF); the drag offset is
+            // session-scoped. The collapsible header is kept.
             if (showMinimap) {
+                val configuration = androidx.compose.ui.platform.LocalConfiguration.current
+                val mapDensity = LocalDensity.current
+                val screenW = with(mapDensity) { configuration.screenWidthDp.dp.toPx() }
+                val screenH = with(mapDensity) { configuration.screenHeightDp.dp.toPx() }
+                val (worldW, worldH) = computeCanvasWorld(screenW)
+                val safePageW = if (worldW > 0f) worldW else 1000f
+                val safeCanvasH = if (worldH > 0f) worldH else 1000f
+
+                // Aspect-correct size: preserve the world ratio, fit the max box.
+                val maxBoxW = with(mapDensity) { MinimapGeometryPolicy.MAX_BOX_WIDTH_DP.dp.toPx() }
+                val maxBoxH = with(mapDensity) { MinimapGeometryPolicy.MAX_BOX_HEIGHT_DP.dp.toPx() }
+                val fit = MinimapGeometryPolicy.aspectFit(safePageW, safeCanvasH, maxBoxW, maxBoxH)
+                val minimapWidthPx = fit.width
+                val minimapHeightPx = fit.height
+                val minimapWidthDp = with(mapDensity) { minimapWidthPx.toDp() }
+                val minimapHeightDp = with(mapDensity) { minimapHeightPx.toDp() }
+                val headerWidthDp = maxOf(minimapWidthDp, with(mapDensity) { 72.dp })
+
+                val defaultAnchor = MinimapGeometryPolicy.defaultAnchorBottomEnd(
+                    screenW = screenW,
+                    screenH = screenH,
+                    mapW = minimapWidthPx,
+                    mapH = minimapHeightPx,
+                    marginPx = with(mapDensity) { MinimapGeometryPolicy.DEFAULT_MARGIN_DP.dp.toPx() }
+                )
+                val restingPos = if (
+                    FloatingWidgetDragPolicy.shouldApplyDraggedPosition(
+                        enabled = minimapDraggable,
+                        hasDraggedOffset = minimapDragOffset != null
+                    ) && minimapDragOffset != null
+                ) {
+                    minimapDragOffset!!
+                } else {
+                    Offset(defaultAnchor.x, defaultAnchor.y)
+                }
+                val minimapInsets = WindowInsets.safeDrawing
+                val topInsetPx = with(mapDensity) { minimapInsets.getTop(mapDensity).toFloat() }
+                val bottomInsetPx = with(mapDensity) { minimapInsets.getBottom(mapDensity).toFloat() }
+                val startInsetPx = with(mapDensity) { minimapInsets.getLeft(mapDensity, LayoutDirection.Ltr).toFloat() }
+                val endInsetPx = with(mapDensity) { minimapInsets.getRight(mapDensity, LayoutDirection.Ltr).toFloat() }
+
                 Surface(
                     tonalElevation = 6.dp,
                     shape = RoundedCornerShape(12.dp),
                     color = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f),
                     border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)),
                     modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(16.dp)
+                        .align(Alignment.TopStart)
+                        .offset { IntOffset(restingPos.x.roundToInt(), restingPos.y.roundToInt()) }
+                        .pointerInput(minimapDraggable, screenW, screenH, minimapWidthPx, minimapHeightPx) {
+                            if (!FloatingWidgetDragPolicy.mayDrag(minimapDraggable)) return@pointerInput
+                            var dragStart = Offset.Zero
+                            var dragBase = restingPos
+                            detectDragGestures(
+                                onDragStart = { dragStart = it; dragBase = restingPos },
+                                onDrag = { change, _ ->
+                                    change.consume()
+                                    val constrained = FloatingWidgetDragPolicy.constrainWithinSafeArea(
+                                        dragBase.x + change.position.x - dragStart.x,
+                                        dragBase.y + change.position.y - dragStart.y,
+                                        screenW, screenH, minimapWidthPx, minimapHeightPx,
+                                        topInsetPx, bottomInsetPx, startInsetPx, endInsetPx
+                                    )
+                                    minimapDragOffset = Offset(constrained.x, constrained.y)
+                                },
+                                onDragEnd = {},
+                                onDragCancel = {}
+                            )
+                        }
                 ) {
-                    Column(modifier = Modifier.padding(6.dp)) {
+                    Column(
+                        modifier = Modifier.padding(6.dp).width(headerWidthDp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween,
-                            modifier = Modifier.width(120.dp)
+                            modifier = Modifier.fillMaxWidth()
                         ) {
                             Text(
                                 text = "Minimap",
@@ -1727,12 +1809,6 @@ Stroke(
 
                         if (minimapExpanded) {
                             Spacer(modifier = Modifier.height(4.dp))
-                            val configuration = androidx.compose.ui.platform.LocalConfiguration.current
-                            val density = LocalDensity.current
-                            val minimapWidthPx = with(density) { 120.dp.toPx() }
-                            val minimapHeightPx = with(density) { 140.dp.toPx() }
-                            val screenW = with(density) { configuration.screenWidthDp.dp.toPx() }
-                            val screenH = with(density) { configuration.screenHeightDp.dp.toPx() }
 
                             // Phase 35: spatial HUD — spring-smoothed zoom %, active
                             // layer + layer count, and the viewport bounds in canvas
@@ -1824,20 +1900,21 @@ Stroke(
 
                             Box(
                                 modifier = Modifier
-                                    .size(120.dp, 140.dp)
+                                    .size(minimapWidthDp, minimapHeightDp)
                                     .background(if (isDarkTheme) Color(0xFF1E293B) else Color(0xFFF1F5F9), RoundedCornerShape(6.dp))
                                     .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f), RoundedCornerShape(6.dp))
                                     .pointerInput(isContinuousMode, dynamicPageCount, divideIntoPages, layoutZoomScale, screenW, screenH, pageWidthPx, pageHeightPx) {
-                                        val (worldW, worldH) = computeCanvasWorld(screenW)
-                                        val safePageW = if (worldW > 0f) worldW else 1000f
-                                        val safeCanvasH = if (worldH > 0f) worldH else 1000f
+                                        val (w, h) = computeCanvasWorld(screenW)
+                                        val spW = if (w > 0f) w else 1000f
+                                        val spH = if (h > 0f) h else 1000f
 
-                                        val mapScaleX = minimapWidthPx / safePageW
-                                        val mapScaleY = minimapHeightPx / safeCanvasH
+                                        // Single uniform scale — the map box's aspect was
+                                        // fitted to the world, so one scale maps both axes.
+                                        val mapScale = size.width / spW
 
                                         val updatePanFromMap = { touchPos: Offset ->
-                                            val targetCanvasX = (touchPos.x / mapScaleX).coerceIn(0f, safePageW)
-                                            val targetCanvasY = (touchPos.y / mapScaleY).coerceIn(0f, safeCanvasH)
+                                            val targetCanvasX = (touchPos.x / mapScale).coerceIn(0f, spW)
+                                            val targetCanvasY = (touchPos.y / mapScale).coerceIn(0f, spH)
 
                                             val newPanX = (screenW / 2f) - (targetCanvasX * internalZoomScale)
                                             val newPanY = (screenH / 2f) - (targetCanvasY * internalZoomScale)
@@ -1849,17 +1926,16 @@ Stroke(
                                         }
                                     }
                                     .pointerInput(isContinuousMode, dynamicPageCount, divideIntoPages, layoutZoomScale, screenW, screenH, pageWidthPx, pageHeightPx) {
-                                        val (worldW, worldH) = computeCanvasWorld(screenW)
-                                        val safePageW = if (worldW > 0f) worldW else 1000f
-                                        val safeCanvasH = if (worldH > 0f) worldH else 1000f
+                                        val (w, h) = computeCanvasWorld(screenW)
+                                        val spW = if (w > 0f) w else 1000f
+                                        val spH = if (h > 0f) h else 1000f
 
-                                        val mapScaleX = minimapWidthPx / safePageW
-                                        val mapScaleY = minimapHeightPx / safeCanvasH
+                                        val mapScale = size.width / spW
 
                                         detectDragGestures { change, _ ->
                                             change.consume()
-                                            val targetCanvasX = (change.position.x / mapScaleX).coerceIn(0f, safePageW)
-                                            val targetCanvasY = (change.position.y / mapScaleY).coerceIn(0f, safeCanvasH)
+                                            val targetCanvasX = (change.position.x / mapScale).coerceIn(0f, spW)
+                                            val targetCanvasY = (change.position.y / mapScale).coerceIn(0f, spH)
 
                                             val newPanX = (screenW / 2f) - (targetCanvasX * internalZoomScale)
                                             val newPanY = (screenH / 2f) - (targetCanvasY * internalZoomScale)
@@ -1868,18 +1944,19 @@ Stroke(
                                     }
                             ) {
                                 Canvas(modifier = Modifier.fillMaxSize()) {
-                                    val (worldW, worldH) = computeCanvasWorld(screenW)
-                                    val safePageW = if (worldW > 0f) worldW else 1000f
-                                    val safeCanvasH = if (worldH > 0f) worldH else 1000f
+                                    val (w, h) = computeCanvasWorld(screenW)
+                                    val spW = if (w > 0f) w else 1000f
+                                    val spH = if (h > 0f) h else 1000f
 
-                                    val mapScaleX = size.width / safePageW
-                                    val mapScaleY = size.height / safeCanvasH
+                                    // Uniform map scale so strokes + viewport align with
+                                    // the page at the fitted aspect ratio.
+                                    val mapScale = minOf(size.width / spW, size.height / spH)
 
                                     // Draw background paper
                                     drawRect(
                                         color = if (isDarkTheme) Color(0xFF334155) else Color.White,
                                         topLeft = Offset(0f, 0f),
-                                        size = Size(safePageW * mapScaleX, safeCanvasH * mapScaleY)
+                                        size = Size(spW * mapScale, spH * mapScale)
                                     )
 
                                     // Draw stroke preview thumbnails
@@ -1895,8 +1972,8 @@ Stroke(
                                                 val nextPt = stroke.points[i]
                                                 drawLine(
                                                     color = stroke.color.copy(alpha = 0.7f),
-                                                    start = Offset(prevPt.x * mapScaleX, prevPt.y * mapScaleY),
-                                                    end = Offset(nextPt.x * mapScaleX, nextPt.y * mapScaleY),
+                                                    start = Offset(prevPt.x * mapScale, prevPt.y * mapScale),
+                                                    end = Offset(nextPt.x * mapScale, nextPt.y * mapScale),
                                                     strokeWidth = 2f
                                                 )
                                                 prevPt = nextPt
@@ -1904,8 +1981,8 @@ Stroke(
                                         } else if (stroke.start != null && stroke.end != null) {
                                             drawLine(
                                                 color = stroke.color.copy(alpha = 0.7f),
-                                                start = Offset(stroke.start.x * mapScaleX, stroke.start.y * mapScaleY),
-                                                end = Offset(stroke.end.x * mapScaleX, stroke.end.y * mapScaleY),
+                                                start = Offset(stroke.start.x * mapScale, stroke.start.y * mapScale),
+                                                end = Offset(stroke.end.x * mapScale, stroke.end.y * mapScale),
                                                 strokeWidth = 2f
                                             )
                                         }
@@ -1917,10 +1994,10 @@ Stroke(
                                     val viewXOnCanvas = -internalPanOffset.x / internalZoomScale
                                     val viewYOnCanvas = -internalPanOffset.y / internalZoomScale
 
-                                    val rectX = (viewXOnCanvas * mapScaleX).coerceIn(0f, size.width)
-                                    val rectY = (viewYOnCanvas * mapScaleY).coerceIn(0f, size.height)
-                                    val rectW = (viewWOnCanvas * mapScaleX).coerceIn(10f, size.width)
-                                    val rectH = (viewHOnCanvas * mapScaleY).coerceIn(10f, size.height)
+                                    val rectX = (viewXOnCanvas * mapScale).coerceIn(0f, size.width)
+                                    val rectY = (viewYOnCanvas * mapScale).coerceIn(0f, size.height)
+                                    val rectW = (viewWOnCanvas * mapScale).coerceIn(10f, size.width)
+                                    val rectH = (viewHOnCanvas * mapScale).coerceIn(10f, size.height)
 
                                     drawRect(
                                         color = Color(0xFF2563EB).copy(alpha = 0.25f),

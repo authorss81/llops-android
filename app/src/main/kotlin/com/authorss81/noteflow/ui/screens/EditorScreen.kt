@@ -60,6 +60,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.authorss81.noteflow.data.model.*
@@ -71,6 +72,10 @@ import com.authorss81.noteflow.plugins.inktos.InkToShapePlugin
 import com.authorss81.noteflow.services.ImportExportService
 import com.authorss81.noteflow.services.ExportDestinationPolicy
 import com.authorss81.noteflow.services.PsdExportPolicy
+import com.authorss81.noteflow.services.DockPosturePolicy
+import com.authorss81.noteflow.services.DockSnapMath
+import com.authorss81.noteflow.services.FloatingWidgetDragPolicy
+import com.authorss81.noteflow.services.MinimapGeometryPolicy
 import com.authorss81.noteflow.services.HarmonyScheme
 import com.authorss81.noteflow.services.PaletteCatalog
 import com.authorss81.noteflow.services.PaletteMath
@@ -410,6 +415,45 @@ fun EditorScreen(
     // Phase 35: minimap HUD visibility, persisted in SettingsManager so the
     // canvas minimap toggle survives navigation.
     var showMinimap by remember { mutableStateOf(viewModel.settings.minimapHudEnabled) }
+
+    // Phase 129 restore: the ink bar is a horizontal capsule in portrait
+    // (pre-35 default) and a vertical side column in landscape. Dragging,
+    // snap-to-edge and cross-session dock persistence are opt-in extras
+    // (default OFF) that never move/resize the bar by default. The dragged
+    // offset is session-scoped (survives the bar's auto-hide) and additionally
+    // persisted when dock persistence is on.
+    var inkBarDraggable by remember { mutableStateOf(viewModel.settings.inkBarDraggable) }
+    var inkBarSnapToEdgeEnabled by remember { mutableStateOf(viewModel.settings.inkBarSnapToEdgeEnabled) }
+    var inkBarDockPersistEnabled by remember { mutableStateOf(viewModel.settings.inkBarDockPersistEnabled) }
+    var inkBarDragOffsetX by remember { mutableFloatStateOf(-1f) }
+    var inkBarDragOffsetY by remember { mutableFloatStateOf(-1f) }
+    var minimapDraggable by remember { mutableStateOf(viewModel.settings.minimapDraggable) }
+
+    // Phase 129: a persisted dock offset applies only when the user enabled
+    // dock persistence (fail-closed — otherwise the bar rests at its default
+    // pre-35 anchor).
+    val persistedInkBarOffset = remember(inkBarDockPersistEnabled) {
+        if (inkBarDockPersistEnabled &&
+            FloatingWidgetDragPolicy.hasPersistedOffset(
+                viewModel.settings.inkBarDragOffsetX,
+                viewModel.settings.inkBarDragOffsetY
+            )
+        ) {
+            com.authorss81.noteflow.services.FloatingWidgetDragPolicy.Offset(
+                viewModel.settings.inkBarDragOffsetX,
+                viewModel.settings.inkBarDragOffsetY
+            )
+        } else {
+            null
+        }
+    }
+    val effectiveInkBarDragOffset = remember(inkBarDragOffsetX, inkBarDragOffsetY, persistedInkBarOffset) {
+        if (inkBarDragOffsetX >= 0f && inkBarDragOffsetY >= 0f) {
+            com.authorss81.noteflow.services.FloatingWidgetDragPolicy.Offset(inkBarDragOffsetX, inkBarDragOffsetY)
+        } else {
+            persistedInkBarOffset
+        }
+    }
 
         LaunchedEffect(Unit) {
             val detectedTier = com.authorss81.noteflow.utils.DeviceCompatibilityManager.getDeviceTier(context, viewModel.settings)
@@ -1595,6 +1639,7 @@ fun EditorScreen(
                 stylusPressureEnabled = stylusPressureEnabled,
                 advancedBrushesEnabled = advancedBrushesEnabled,
                 showMinimap = showMinimap,
+                minimapDraggable = minimapDraggable,
                 isRecordingVoice = isRecordingVoice,
                 recordingElapsedMsProvider = { recordingElapsedMs },
                 activeVoicePlaybackFilePath = activeVoicePlaybackFilePath,
@@ -1745,6 +1790,18 @@ fun EditorScreen(
                     currentWidth = currentWidth,
                     toolbarState = toolbarState,
                     isLandscape = isLandscape,
+                    draggable = inkBarDraggable,
+                    snapToEdgeEnabled = inkBarSnapToEdgeEnabled,
+                    dockPersistEnabled = inkBarDockPersistEnabled,
+                    draggedOffset = effectiveInkBarDragOffset,
+                    onChangeDraggedOffset = { x, y ->
+                        inkBarDragOffsetX = x
+                        inkBarDragOffsetY = y
+                        if (inkBarDockPersistEnabled) {
+                            viewModel.settings.inkBarDragOffsetX = x
+                            viewModel.settings.inkBarDragOffsetY = y
+                        }
+                    },
                     onToolClick = {
                         toolbarState = if (toolbarState == FloatingToolbarState.TOOL_PICKER) FloatingToolbarState.COLLAPSED else FloatingToolbarState.TOOL_PICKER
                     },
@@ -1939,6 +1996,10 @@ fun EditorScreen(
                 template = template,
                 paperColorHex = paperColorHex,
                 showMinimap = showMinimap,
+                minimapDraggable = minimapDraggable,
+                inkBarDraggable = inkBarDraggable,
+                inkBarSnapToEdgeEnabled = inkBarSnapToEdgeEnabled,
+                inkBarDockPersistEnabled = inkBarDockPersistEnabled,
                 zoomScale = zoomScale,
                 panOffset = panOffset,
                 isPdf = isPdf,
@@ -2008,6 +2069,22 @@ fun EditorScreen(
                 onMinimapToggle = {
                     showMinimap = !showMinimap
                     viewModel.settings.minimapHudEnabled = showMinimap
+                },
+                onMinimapDraggableToggle = {
+                    minimapDraggable = !minimapDraggable
+                    viewModel.settings.minimapDraggable = minimapDraggable
+                },
+                onInkBarDraggableToggle = {
+                    inkBarDraggable = !inkBarDraggable
+                    viewModel.settings.inkBarDraggable = inkBarDraggable
+                },
+                onInkBarSnapToEdgeToggle = {
+                    inkBarSnapToEdgeEnabled = !inkBarSnapToEdgeEnabled
+                    viewModel.settings.inkBarSnapToEdgeEnabled = inkBarSnapToEdgeEnabled
+                },
+                onInkBarDockPersistToggle = {
+                    inkBarDockPersistEnabled = !inkBarDockPersistEnabled
+                    viewModel.settings.inkBarDockPersistEnabled = inkBarDockPersistEnabled
                 },
                 onResetZoomPan = {
                     zoomScale = 1f
@@ -2141,10 +2218,15 @@ fun EditorScreen(
 }
 
 /**
- * Floating minimalist tool dock — pill-shaped, freely draggable, and spring-
- * snapping to the nearest screen edge (Phase 35). The dock tucks away when a
- * stroke starts (toolbarState == HIDDEN_DRAWING) and returns on canvas tap/
- * stroke end. Expanding the pill reveals a one-tap quick-tool rail, so every
+ * Floating ink bar (Phase 129 restore) — the pre-phase-35 56dp horizontal
+ * capsule in portrait and a 56dp-wide vertical side column in landscape,
+ * posture decided by [DockPosturePolicy]. The bar sits at its default
+ * bottom-centred / end-centred anchor and is only draggable when the user opts
+ * in (`inkBarDraggable`, default OFF) — snap-to-edge on release and
+ * cross-session persistence are separate opt-in extras, so nothing moves or
+ * resizes the bar by default. The bar tucks away while a stroke is being drawn
+ * (toolbarState == HIDDEN_DRAWING) and returns on canvas tap/stroke end.
+ * Expanding the pill reveals the phase-35 one-tap quick-tool rail, so every
  * existing tool stays reachable in ≤2 taps (quick rail = 1, tool picker = 2).
  */
 @Composable
@@ -2155,6 +2237,11 @@ private fun FloatingToolDock(
     currentWidth: Float,
     toolbarState: FloatingToolbarState,
     isLandscape: Boolean,
+    draggable: Boolean,
+    snapToEdgeEnabled: Boolean,
+    dockPersistEnabled: Boolean,
+    draggedOffset: com.authorss81.noteflow.services.FloatingWidgetDragPolicy.Offset?,
+    onChangeDraggedOffset: (Float, Float) -> Unit,
     onToolClick: () -> Unit,
     onTogglePan: () -> Unit,
     onColorClick: () -> Unit,
@@ -2168,12 +2255,14 @@ private fun FloatingToolDock(
     val density = LocalDensity.current
     val scope = rememberCoroutineScope()
 
-    // Resting content top-left in screen pixels. rawPos tracks the finger while
-    // dragging; snapAnim drives the spring back to the nearest edge.
+    // Session drag state. rawPos tracks the finger while dragging; snapAnim
+    // springs the resting target. The resting target is the dragged offset
+    // (when the gate is open) else the orientation default anchor.
     var rawPos by remember { mutableStateOf(Offset.Zero) }
     var isDragging by remember { mutableStateOf(false) }
     val snapAnim = remember { Animatable(Offset.Zero, Offset.VectorConverter) }
     var initialized by remember { mutableStateOf(false) }
+    var waitForMeasure by remember { mutableStateOf(true) }
     var dockW by remember { mutableFloatStateOf(with(density) { 156.dp.toPx() }) }
     var dockH by remember { mutableFloatStateOf(with(density) { 56.dp.toPx() }) }
     var expanded by remember { mutableStateOf(false) }
@@ -2181,37 +2270,52 @@ private fun FloatingToolDock(
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val screenW = with(density) { maxWidth.toPx() }
         val screenH = with(density) { maxHeight.toPx() }
-        val marginPx = with(density) { 16.dp.toPx() }
+        val bottomMarginPx = with(density) { 20.dp.toPx() }
+        val endMarginPx = with(density) { 20.dp.toPx() }
 
-        LaunchedEffect(maxWidth, maxHeight, dockW, dockH) {
-            if (!initialized && dockW > 0f && dockH > 0f && screenW > 0f && screenH > 0f) {
-                initialized = true
-                snapAnim.snapTo(Offset((screenW - dockW) / 2f, screenH - dockH - marginPx))
-            }
+        // Phase 129: posture is orientation-only. A bar mid-screen no longer
+        // morphs into a vertical dock (phase-35 behaviour) — the portrait pill
+        // stays horizontal wherever it is dragged.
+        val horizontalPosture = DockPosturePolicy.isHorizontal(isLandscape)
+        val defaultAnchor = if (horizontalPosture) {
+            DockPosturePolicy.horizontalDefaultAnchor(screenW, screenH, dockW, dockH, bottomMarginPx)
+        } else {
+            DockPosturePolicy.verticalDefaultAnchor(screenW, screenH, dockW, dockH, endMarginPx)
         }
+        val restingPos = FloatingWidgetDragPolicy.restingPosition(
+            enabled = draggable,
+            draggedX = draggedOffset?.x,
+            draggedY = draggedOffset?.y,
+            defaultX = defaultAnchor.first,
+            defaultY = defaultAnchor.second
+        )
 
-        fun snapToEdge() {
-            val centre = Offset(rawPos.x + dockW / 2f, rawPos.y + dockH / 2f)
-            val anchor = com.authorss81.noteflow.services.DockSnapMath.snap(
-                centre = com.authorss81.noteflow.services.DockSnapMath.Offset(centre.x, centre.y),
-                screenW = screenW,
-                screenH = screenH,
-                marginPx = marginPx,
-                dockW = dockW,
-                dockH = dockH
-            )
-            val target = Offset(anchor.x, anchor.y)
-            isDragging = false
-            scope.launch {
-                snapAnim.snapTo(rawPos)
+        val insets = WindowInsets.safeDrawing
+        val topInsetPx = with(density) { insets.getTop(density).toFloat() }
+        val bottomInsetPx = with(density) { insets.getBottom(density).toFloat() }
+        val startInsetPx = with(density) { insets.getLeft(density, LayoutDirection.Ltr).toFloat() }
+        val endInsetPx = with(density) { insets.getRight(density, LayoutDirection.Ltr).toFloat() }
+
+        // Compose-space resting top-left (the policy Offset is a plain holder).
+        val restingOffset = Offset(restingPos.x, restingPos.y)
+
+        LaunchedEffect(restingPos.x, restingPos.y, waitForMeasure) {
+            // Wait for the first real measure so the bar is placed with its
+            // true size — no fly-in from the top-left, no initial misplacement.
+            if (waitForMeasure) return@LaunchedEffect
+            if (!initialized) {
+                initialized = true
+                snapAnim.snapTo(restingOffset)
+            } else if (!isDragging) {
+                snapAnim.snapTo(snapAnim.value)
                 if (reduceMotion) {
-                    snapAnim.snapTo(target)
+                    snapAnim.snapTo(restingOffset)
                 } else {
                     snapAnim.animateTo(
-                        targetValue = target,
-                        animationSpec = androidx.compose.animation.core.spring(
-                            dampingRatio = androidx.compose.animation.core.Spring.DampingRatioNoBouncy,
-                            stiffness = androidx.compose.animation.core.Spring.StiffnessMedium,
+                        targetValue = restingOffset,
+                        animationSpec = spring(
+                            dampingRatio = Spring.DampingRatioNoBouncy,
+                            stiffness = Spring.StiffnessMedium,
                             visibilityThreshold = Offset(1f, 1f)
                         )
                     )
@@ -2219,25 +2323,23 @@ private fun FloatingToolDock(
             }
         }
 
-        val snapPosition = snapAnim.value
-        val displayPos = if (isDragging) rawPos else snapPosition
-        val dockEdge = com.authorss81.noteflow.services.DockSnapMath.nearestEdge(
-            displayPos.x + dockW / 2f, displayPos.y + dockH / 2f, screenW, screenH
-        )
-        val vertical = isLandscape || dockEdge == com.authorss81.noteflow.services.DockSnapMath.DockEdge.START ||
-            dockEdge == com.authorss81.noteflow.services.DockSnapMath.DockEdge.END
-
+        val displayPos = if (isDragging) rawPos else snapAnim.value
         val displayTool = if (currentTool == StrokeTool.PAN || currentTool == StrokeTool.SELECT) {
             lastDrawingTool
         } else {
             currentTool
         }
+        val isPanActive = currentTool == StrokeTool.PAN || currentTool == StrokeTool.SELECT
 
         Box(
             modifier = Modifier
                 .offset { IntOffset(displayPos.x.roundToInt(), displayPos.y.roundToInt()) }
-                .onSizeChanged { size -> if (!isDragging) { dockW = size.width.toFloat(); dockH = size.height.toFloat() } }
-                .pointerInput(Unit) {
+                .onSizeChanged { size ->
+                    if (!isDragging) { dockW = size.width.toFloat(); dockH = size.height.toFloat() }
+                    if (waitForMeasure) waitForMeasure = false
+                }
+                .pointerInput(draggable, screenW, screenH, dockW, dockH) {
+                    if (!FloatingWidgetDragPolicy.mayDrag(draggable)) return@pointerInput
                     detectDragGestures(
                         onDragStart = {
                             rawPos = snapAnim.value
@@ -2245,13 +2347,50 @@ private fun FloatingToolDock(
                         },
                         onDrag = { change, amount ->
                             change.consume()
-                            val constrained = com.authorss81.noteflow.services.DockSnapMath.constrainInside(
-                                rawPos.x + amount.x, rawPos.y + amount.y, screenW, screenH, dockW, dockH
+                            val constrained = FloatingWidgetDragPolicy.constrainWithinSafeArea(
+                                rawPos.x + amount.x, rawPos.y + amount.y, screenW, screenH,
+                                dockW, dockH, topInsetPx, bottomInsetPx, startInsetPx, endInsetPx
                             )
                             rawPos = Offset(constrained.x, constrained.y)
                         },
-                        onDragEnd = { snapToEdge() },
-                        onDragCancel = { snapToEdge() }
+                        onDragEnd = {
+                            if (FloatingWidgetDragPolicy.maySnapToEdge(snapToEdgeEnabled)) {
+                                val centre = Offset(rawPos.x + dockW / 2f, rawPos.y + dockH / 2f)
+                                val anchor = DockSnapMath.snap(
+                                    centre = DockSnapMath.Offset(centre.x, centre.y),
+                                    screenW = screenW,
+                                    screenH = screenH,
+                                    marginPx = with(density) { 16.dp.toPx() },
+                                    dockW = dockW,
+                                    dockH = dockH
+                                )
+                                val target = Offset(anchor.x, anchor.y)
+                                isDragging = false
+                                scope.launch {
+                                    snapAnim.snapTo(rawPos)
+                                    if (reduceMotion) {
+                                        snapAnim.snapTo(target)
+                                    } else {
+                                        snapAnim.animateTo(
+                                            targetValue = target,
+                                            animationSpec = spring(
+                                                dampingRatio = Spring.DampingRatioNoBouncy,
+                                                stiffness = Spring.StiffnessMedium,
+                                                visibilityThreshold = Offset(1f, 1f)
+                                            )
+                                        )
+                                    }
+                                    onChangeDraggedOffset(target.x, target.y)
+                                }
+                            } else {
+                                isDragging = false
+                                scope.launch {
+                                    snapAnim.snapTo(rawPos)
+                                    onChangeDraggedOffset(rawPos.x, rawPos.y)
+                                }
+                            }
+                        },
+                        onDragCancel = { isDragging = false }
                     )
                 }
                 .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
@@ -2263,11 +2402,13 @@ private fun FloatingToolDock(
                 shadowElevation = 8.dp,
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
             ) {
-                if (vertical) {
+                if (!horizontalPosture) {
                     Column(
-                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp),
+                        modifier = Modifier
+                            .width(56.dp)
+                            .verticalScroll(rememberScrollState()),
                         horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         AnimatedVisibility(
                             visible = expanded,
@@ -2282,16 +2423,16 @@ private fun FloatingToolDock(
                                 currentTool = currentTool,
                                 onQuickTool = onQuickTool,
                                 onTogglePan = onTogglePan,
-                                onExpandToggled = { expanded = !expanded },
-                                expanded = expanded
+                                expanded = expanded,
+                                onExpandToggled = { expanded = !expanded }
                             )
                         }
-                        DockMainColumn(
+                        InkBarLandscapeBar(
                             displayTool = displayTool,
                             toolbarState = toolbarState,
                             currentColor = currentColor,
                             currentWidth = currentWidth,
-                            isPanActive = currentTool == StrokeTool.PAN || currentTool == StrokeTool.SELECT,
+                            isPanActive = isPanActive,
                             expanded = expanded,
                             onToolClick = onToolClick,
                             onTogglePan = onTogglePan,
@@ -2304,34 +2445,13 @@ private fun FloatingToolDock(
                         )
                     }
                 } else {
-                    Column(
-                        modifier = Modifier.padding(vertical = 4.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        AnimatedVisibility(
-                            visible = expanded,
-                            enter = com.authorss81.noteflow.theme.MotionSystem.enter(
-                                fadeIn() + androidx.compose.animation.expandVertically()
-                            ),
-                            exit = com.authorss81.noteflow.theme.MotionSystem.exit(
-                                fadeOut() + androidx.compose.animation.shrinkVertically()
-                            )
-                        ) {
-                            DockQuickToolsRow(
-                                currentTool = currentTool,
-                                onQuickTool = onQuickTool,
-                                onTogglePan = onTogglePan,
-                                expanded = expanded,
-                                onExpandToggled = { expanded = !expanded }
-                            )
-                        }
-                        DockMainRow(
+                    Column {
+                        InkBarPortraitBar(
                             displayTool = displayTool,
                             toolbarState = toolbarState,
                             currentColor = currentColor,
                             currentWidth = currentWidth,
-                            isPanActive = currentTool == StrokeTool.PAN || currentTool == StrokeTool.SELECT,
+                            isPanActive = isPanActive,
                             onToolClick = onToolClick,
                             onTogglePan = onTogglePan,
                             onColorClick = onColorClick,
@@ -2342,6 +2462,31 @@ private fun FloatingToolDock(
                             expanded = expanded,
                             onExpandToggled = { expanded = !expanded }
                         )
+                        AnimatedVisibility(
+                            visible = expanded,
+                            enter = com.authorss81.noteflow.theme.MotionSystem.enter(
+                                fadeIn() + androidx.compose.animation.expandVertically()
+                            ),
+                            exit = com.authorss81.noteflow.theme.MotionSystem.exit(
+                                fadeOut() + androidx.compose.animation.shrinkVertically()
+                            )
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(44.dp)
+                                    .horizontalScroll(rememberScrollState()),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                DockQuickToolsRow(
+                                    currentTool = currentTool,
+                                    onQuickTool = onQuickTool,
+                                    onTogglePan = onTogglePan,
+                                    expanded = expanded,
+                                    onExpandToggled = { expanded = !expanded }
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -2350,7 +2495,7 @@ private fun FloatingToolDock(
 }
 
 @Composable
-private fun DockMainRow(
+private fun InkBarPortraitBar(
     displayTool: StrokeTool,
     toolbarState: FloatingToolbarState,
     currentColor: Color,
@@ -2366,87 +2511,155 @@ private fun DockMainRow(
     expanded: Boolean,
     onExpandToggled: () -> Unit
 ) {
+    // Phase 129: the restored pre-35 horizontal capsule — 56dp tall, inner Row
+    // with horizontalScroll, padding 8/4, spacedBy 4.
     Row(
-        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+        modifier = Modifier
+            .height(56.dp)
+            .padding(horizontal = 8.dp, vertical = 4.dp)
+            .horizontalScroll(rememberScrollState()),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(2.dp)
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        DockToolButton(
+        // 1. Tool selector button — displayTool icon + label
+        Surface(
             onClick = onToolClick,
-            selected = toolbarState == FloatingToolbarState.TOOL_PICKER,
-            content = {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Icon(
-                        imageVector = getToolIcon(displayTool),
-                        contentDescription = displayTool.label,
-                        tint = if (toolbarState == FloatingToolbarState.TOOL_PICKER) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Text(
-                        text = displayTool.label,
-                        style = MaterialTheme.typography.labelMedium,
-                        maxLines = 1,
-                        color = if (toolbarState == FloatingToolbarState.TOOL_PICKER) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
-                    )
-                }
+            shape = RoundedCornerShape(20.dp),
+            color = if (toolbarState == FloatingToolbarState.TOOL_PICKER) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+            modifier = Modifier.minimumInteractiveComponentSize()
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Icon(
+                    imageVector = getToolIcon(displayTool),
+                    contentDescription = displayTool.label,
+                    tint = if (toolbarState == FloatingToolbarState.TOOL_PICKER) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.size(20.dp)
+                )
+                Text(
+                    text = displayTool.label,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (toolbarState == FloatingToolbarState.TOOL_PICKER) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+                )
             }
-        )
-
-        DockIconButton(
-            onClick = onTogglePan,
-            selected = isPanActive,
-            icon = { Icon(Icons.Outlined.PanTool, contentDescription = "Scroll / Pan Canvas", modifier = Modifier.size(18.dp)) }
-        )
-
-        DockColorButton(currentColor = currentColor, selected = toolbarState == FloatingToolbarState.COLOR_PICKER, onClick = onColorClick)
-
-        DockIconButton(
-            onClick = onWidthClick,
-            selected = toolbarState == FloatingToolbarState.WIDTH_PICKER,
-            icon = { Icon(Icons.Outlined.LineWeight, contentDescription = "Stroke Width · ${currentWidth.toInt()}pt", modifier = Modifier.size(18.dp)) }
-        )
-
-        if (toolbarState == FloatingToolbarState.WIDTH_PICKER) {
-            Text(
-                text = "${currentWidth.toInt()}pt",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
         }
 
-        androidx.compose.material3.VerticalDivider(
+        // 2. Scroll / Pan Canvas toggle button
+        Surface(
+            onClick = onTogglePan,
+            shape = RoundedCornerShape(20.dp),
+            color = if (isPanActive) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+            modifier = Modifier.minimumInteractiveComponentSize()
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Icon(
+                    Icons.Outlined.PanTool,
+                    contentDescription = "Scroll / Pan Canvas",
+                    tint = if (isPanActive) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp)
+                )
+                Text(
+                    text = "Scroll",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (isPanActive) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
+        // 3. Color swatch button
+        Surface(
+            onClick = onColorClick,
+            shape = CircleShape,
+            color = if (toolbarState == FloatingToolbarState.COLOR_PICKER) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+            modifier = Modifier.size(40.dp)
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Box(
+                    modifier = Modifier
+                        .size(24.dp)
+                        .clip(CircleShape)
+                        .background(currentColor)
+                        .border(1.5.dp, MaterialTheme.colorScheme.outline, CircleShape)
+                )
+            }
+        }
+
+        // 4. Width badge button
+        Surface(
+            onClick = onWidthClick,
+            shape = RoundedCornerShape(20.dp),
+            color = if (toolbarState == FloatingToolbarState.WIDTH_PICKER) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+            modifier = Modifier.minimumInteractiveComponentSize()
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Icon(
+                    Icons.Outlined.LineWeight,
+                    contentDescription = "Stroke Width",
+                    tint = if (toolbarState == FloatingToolbarState.WIDTH_PICKER) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp)
+                )
+                Text(
+                    text = "${currentWidth.toInt()}pt",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (toolbarState == FloatingToolbarState.WIDTH_PICKER) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
+        // 5. VerticalDivider
+        VerticalDivider(
             modifier = Modifier.height(24.dp).padding(horizontal = 2.dp),
             color = MaterialTheme.colorScheme.outlineVariant
         )
 
-        DockIconButton(
-            onClick = onSettingsClick,
-            selected = toolbarState == FloatingToolbarState.SETTINGS_MENU,
-            icon = { Icon(Icons.Outlined.Tune, contentDescription = "Canvas & Paper Settings", modifier = Modifier.size(18.dp)) }
-        )
+        // 6. Canvas settings button
+        IconButton(onClick = onSettingsClick, modifier = Modifier.size(40.dp)) {
+            Icon(
+                Icons.Outlined.Tune,
+                contentDescription = "Canvas & Paper Settings",
+                tint = if (toolbarState == FloatingToolbarState.SETTINGS_MENU) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
 
-        DockIconButton(onClick = onUndo, selected = false, icon = { Icon(Icons.Outlined.Undo, contentDescription = "Undo", modifier = Modifier.size(18.dp)) })
-        DockIconButton(onClick = onRedo, selected = false, icon = { Icon(Icons.Outlined.Redo, contentDescription = "Redo", modifier = Modifier.size(18.dp)) })
+        // 7. Undo / Redo
+        IconButton(onClick = onUndo, modifier = Modifier.size(36.dp)) {
+            Icon(Icons.Outlined.Undo, contentDescription = "Undo", modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        IconButton(onClick = onRedo, modifier = Modifier.size(36.dp)) {
+            Icon(Icons.Outlined.Redo, contentDescription = "Redo", modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
 
-        DockIconButton(
-            onClick = onExpandToggled,
-            selected = expanded,
-            icon = { Icon(Icons.Outlined.UnfoldMore, contentDescription = if (expanded) "Collapse Quick Tools" else "Expand Quick Tools", modifier = Modifier.size(18.dp)) }
-        )
+        // Phase 35 extra kept: quick-tool rail expand chevron (additive; no
+        // parity item is replaced by it).
+        IconButton(onClick = onExpandToggled, modifier = Modifier.size(36.dp)) {
+            Icon(
+                if (expanded) Icons.Outlined.UnfoldLess else Icons.Outlined.UnfoldMore,
+                contentDescription = if (expanded) "Collapse Quick Tools" else "Expand Quick Tools",
+                modifier = Modifier.size(18.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
     }
 }
 
 @Composable
-private fun DockMainColumn(
+private fun InkBarLandscapeBar(
     displayTool: StrokeTool,
     toolbarState: FloatingToolbarState,
     currentColor: Color,
     currentWidth: Float,
     isPanActive: Boolean,
-    expanded: Boolean,
     onToolClick: () -> Unit,
     onTogglePan: () -> Unit,
     onColorClick: () -> Unit,
@@ -2454,17 +2667,24 @@ private fun DockMainColumn(
     onSettingsClick: () -> Unit,
     onUndo: () -> Unit,
     onRedo: () -> Unit,
+    expanded: Boolean,
     onExpandToggled: () -> Unit
 ) {
+    // Phase 129: the restored pre-35 landscape side column — 56dp wide, inner
+    // Column with padding 4/8, spacedBy 6, HorizontalDivider before settings.
     Column(
-        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+        modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(2.dp)
+        verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        DockToolButton(
+        // 1. Tool selector button — displayTool icon
+        Surface(
             onClick = onToolClick,
-            selected = toolbarState == FloatingToolbarState.TOOL_PICKER,
-            content = {
+            shape = RoundedCornerShape(20.dp),
+            color = if (toolbarState == FloatingToolbarState.TOOL_PICKER) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+            modifier = Modifier.minimumInteractiveComponentSize()
+        ) {
+            Box(modifier = Modifier.padding(8.dp), contentAlignment = Alignment.Center) {
                 Icon(
                     imageVector = getToolIcon(displayTool),
                     contentDescription = displayTool.label,
@@ -2472,41 +2692,93 @@ private fun DockMainColumn(
                     modifier = Modifier.size(20.dp)
                 )
             }
-        )
+        }
 
-        DockIconButton(
+        // 2. Scroll / Pan Canvas toggle button
+        Surface(
             onClick = onTogglePan,
-            selected = isPanActive,
-            icon = { Icon(Icons.Outlined.PanTool, contentDescription = "Scroll / Pan Canvas", modifier = Modifier.size(18.dp)) }
-        )
+            shape = RoundedCornerShape(20.dp),
+            color = if (isPanActive) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+            modifier = Modifier.minimumInteractiveComponentSize()
+        ) {
+            Box(modifier = Modifier.padding(8.dp), contentAlignment = Alignment.Center) {
+                Icon(
+                    Icons.Outlined.PanTool,
+                    contentDescription = "Scroll / Pan Canvas",
+                    tint = if (isPanActive) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+        }
 
-        DockColorButton(currentColor = currentColor, selected = toolbarState == FloatingToolbarState.COLOR_PICKER, onClick = onColorClick)
+        // 3. Color swatch button
+        Surface(
+            onClick = onColorClick,
+            shape = CircleShape,
+            color = if (toolbarState == FloatingToolbarState.COLOR_PICKER) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+            modifier = Modifier.size(40.dp)
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Box(
+                    modifier = Modifier
+                        .size(24.dp)
+                        .clip(CircleShape)
+                        .background(currentColor)
+                        .border(1.5.dp, MaterialTheme.colorScheme.outline, CircleShape)
+                )
+            }
+        }
 
-        DockIconButton(
+        // 4. Width badge button
+        Surface(
             onClick = onWidthClick,
-            selected = toolbarState == FloatingToolbarState.WIDTH_PICKER,
-            icon = { Icon(Icons.Outlined.LineWeight, contentDescription = "Stroke Width", modifier = Modifier.size(18.dp)) }
-        )
+            shape = RoundedCornerShape(20.dp),
+            color = if (toolbarState == FloatingToolbarState.WIDTH_PICKER) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+            modifier = Modifier.minimumInteractiveComponentSize()
+        ) {
+            Box(modifier = Modifier.padding(8.dp), contentAlignment = Alignment.Center) {
+                Icon(
+                    Icons.Outlined.LineWeight,
+                    contentDescription = "Stroke Width",
+                    tint = if (toolbarState == FloatingToolbarState.WIDTH_PICKER) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+        }
 
-        androidx.compose.material3.HorizontalDivider(
+        // 5. HorizontalDivider
+        HorizontalDivider(
             modifier = Modifier.width(24.dp).padding(vertical = 2.dp),
             color = MaterialTheme.colorScheme.outlineVariant
         )
 
-        DockIconButton(
-            onClick = onSettingsClick,
-            selected = toolbarState == FloatingToolbarState.SETTINGS_MENU,
-            icon = { Icon(Icons.Outlined.Tune, contentDescription = "Canvas & Paper Settings", modifier = Modifier.size(18.dp)) }
-        )
+        // 6. Canvas settings button
+        IconButton(onClick = onSettingsClick, modifier = Modifier.size(40.dp)) {
+            Icon(
+                Icons.Outlined.Tune,
+                contentDescription = "Canvas & Paper Settings",
+                tint = if (toolbarState == FloatingToolbarState.SETTINGS_MENU) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
 
-        DockIconButton(onClick = onUndo, selected = false, icon = { Icon(Icons.Outlined.Undo, contentDescription = "Undo", modifier = Modifier.size(18.dp)) })
-        DockIconButton(onClick = onRedo, selected = false, icon = { Icon(Icons.Outlined.Redo, contentDescription = "Redo", modifier = Modifier.size(18.dp)) })
+        // 7. Undo / Redo
+        IconButton(onClick = onUndo, modifier = Modifier.size(36.dp)) {
+            Icon(Icons.Outlined.Undo, contentDescription = "Undo", modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        IconButton(onClick = onRedo, modifier = Modifier.size(36.dp)) {
+            Icon(Icons.Outlined.Redo, contentDescription = "Redo", modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
 
-        DockIconButton(
-            onClick = onExpandToggled,
-            selected = expanded,
-            icon = { Icon(Icons.Outlined.UnfoldMore, contentDescription = if (expanded) "Collapse Quick Tools" else "Expand Quick Tools", modifier = Modifier.size(18.dp)) }
-        )
+        // Phase 35 extra kept: quick-tool rail expand chevron (additive; no
+        // parity item is replaced by it).
+        IconButton(onClick = onExpandToggled, modifier = Modifier.size(36.dp)) {
+            Icon(
+                if (expanded) Icons.Outlined.UnfoldLess else Icons.Outlined.UnfoldMore,
+                contentDescription = if (expanded) "Collapse Quick Tools" else "Expand Quick Tools",
+                modifier = Modifier.size(18.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
     }
 }
 
@@ -2624,30 +2896,6 @@ private fun DockIconButton(
             contentAlignment = Alignment.Center
         ) {
             icon()
-        }
-    }
-}
-
-@Composable
-private fun DockColorButton(
-    currentColor: Color,
-    selected: Boolean,
-    onClick: () -> Unit
-) {
-    Surface(
-        onClick = onClick,
-        shape = CircleShape,
-        color = if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
-        modifier = Modifier.minimumInteractiveComponentSize()
-    ) {
-        Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(6.dp)) {
-            Box(
-                modifier = Modifier
-                    .size(24.dp)
-                    .clip(CircleShape)
-                    .background(currentColor)
-                    .border(1.5.dp, MaterialTheme.colorScheme.outline, CircleShape)
-            )
         }
     }
 }
@@ -3700,6 +3948,14 @@ private fun CanvasSettingsBottomSheet(
     template: String,
     paperColorHex: String,
     showMinimap: Boolean,
+    minimapDraggable: Boolean = false,
+    onMinimapDraggableToggle: () -> Unit = {},
+    inkBarDraggable: Boolean = false,
+    onInkBarDraggableToggle: () -> Unit = {},
+    inkBarSnapToEdgeEnabled: Boolean = false,
+    onInkBarSnapToEdgeToggle: () -> Unit = {},
+    inkBarDockPersistEnabled: Boolean = false,
+    onInkBarDockPersistToggle: () -> Unit = {},
     zoomScale: Float,
     panOffset: Offset,
     isPdf: Boolean,
@@ -4003,6 +4259,76 @@ private fun CanvasSettingsBottomSheet(
                     checked = showMinimap,
                     onCheckedChange = { onMinimapToggle() }
                 )
+            }
+
+            // Phase 129: movable-widget opt-ins (all default OFF). The restored
+            // horizontal ink bar and the minimap are draggable only when enabled;
+            // snap-to-edge and cross-session dock persistence are separate extras.
+            Spacer(modifier = Modifier.height(16.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Draggable Minimap", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Reposition the minimap anywhere on the canvas",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(checked = minimapDraggable, enabled = showMinimap, onCheckedChange = { onMinimapDraggableToggle() })
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Draggable Ink Bar", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Reposition the floating tool bar anywhere on the canvas",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(checked = inkBarDraggable, onCheckedChange = { onInkBarDraggableToggle() })
+            }
+            if (inkBarDraggable) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Snap Ink Bar to Edge", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "Spring to the nearest screen edge on release",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(checked = inkBarSnapToEdgeEnabled, onCheckedChange = { onInkBarSnapToEdgeToggle() })
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Remember Ink Bar Position", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "Keep the bar's position across sessions",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(checked = inkBarDockPersistEnabled, onCheckedChange = { onInkBarDockPersistToggle() })
+                }
             }
 
             // GPU Wet Brushes Toggle (conditional on AGSL availability)

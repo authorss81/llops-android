@@ -308,13 +308,45 @@ class SettingsManager(context: Context) {
         get() = prefs.getBoolean("show_stroke_previews_in_picker", false)
         set(value) = prefs.edit().putBoolean("show_stroke_previews_in_picker", value).apply()
 
-    // Phase 35: the spatial minimap HUD. ON by default; auto-disabled once on
-    // LOW_END devices (with a one-time message) and re-enableable here. The
-    // dock's pen auto-tuck is deliberately NOT a setting — it is the default
-    // scribe behaviour and only the canvas tap/end gesture restores the dock.
+    // Phase 129 restore: the spatial minimap HUD is OFF by default (the pre-35
+    // contract — a plain per-session toggle in the canvas settings sheet). The
+    // phase-35 persisted default-true regression is reverted. LOW_END devices
+    // still auto-disable it once (with a one-time message) and the user can
+    // re-enable it here / from the canvas settings sheet.
     var minimapHudEnabled: Boolean
-        get() = prefs.getBoolean("minimap_hud_enabled", true)
+        get() = prefs.getBoolean("minimap_hud_enabled", MinimapGeometryPolicy.VISIBLE_BY_DEFAULT)
         set(value) = prefs.edit().putBoolean("minimap_hud_enabled", value).apply()
+
+    // Phase 129: making the minimap draggable is a per-user opt-in (OFF by
+    // default). The drag offset itself is session-scoped.
+    var minimapDraggable: Boolean
+        get() = prefs.getBoolean("minimap_draggable", FloatingWidgetDragPolicy.MINIMAP_DRAGGABLE_DEFAULT)
+        set(value) = prefs.edit().putBoolean("minimap_draggable", value).apply()
+
+    // Phase 129: the restored horizontal ink bar is draggable only when opted
+    // in (OFF by default). Snap-to-edge on release and cross-session dock
+    // persistence are separate opt-in extras from phase-35, both default OFF —
+    // the default bar posture is the restored pre-35 bottom-centre capsule.
+    var inkBarDraggable: Boolean
+        get() = prefs.getBoolean("ink_bar_draggable", FloatingWidgetDragPolicy.INK_BAR_DRAGGABLE_DEFAULT)
+        set(value) = prefs.edit().putBoolean("ink_bar_draggable", value).apply()
+
+    var inkBarSnapToEdgeEnabled: Boolean
+        get() = prefs.getBoolean("ink_bar_snap_to_edge_enabled", FloatingWidgetDragPolicy.INK_BAR_SNAP_TO_EDGE_DEFAULT)
+        set(value) = prefs.edit().putBoolean("ink_bar_snap_to_edge_enabled", value).apply()
+
+    var inkBarDockPersistEnabled: Boolean
+        get() = prefs.getBoolean("ink_bar_dock_persist_enabled", FloatingWidgetDragPolicy.INK_BAR_DOCK_PERSIST_DEFAULT)
+        set(value) = prefs.edit().putBoolean("ink_bar_dock_persist_enabled", value).apply()
+
+    /** Last dragged ink-bar offset (only meaningful while [inkBarDockPersistEnabled]). */
+    var inkBarDragOffsetX: Float
+        get() = prefs.getFloat("ink_bar_drag_offset_x", -1f)
+        set(value) = prefs.edit().putFloat("ink_bar_drag_offset_x", value).apply()
+
+    var inkBarDragOffsetY: Float
+        get() = prefs.getFloat("ink_bar_drag_offset_y", -1f)
+        set(value) = prefs.edit().putFloat("ink_bar_drag_offset_y", value).apply()
 
     // Phase 35: remembers whether the low-end auto-disable message has been shown.
     var lowEndMinimapWarningShown: Boolean

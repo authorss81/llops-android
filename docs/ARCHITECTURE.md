@@ -563,6 +563,24 @@
     explicit choices via the persisted `plugin_enabled_<id>` + `plugin_ever_enabled_<id>`
     flags (`SettingsManager.kt:340-359`). CaseChangePlugin remains the store's OPTIONAL
     plugin (NOT in `defaultPlugins()`, downloaded → REGISTERED/off).
+  - **Implemented in phase-129** (see `workspace/phase-129/REPORT.md`): pre-phase-35 floating ink bar
+    restored + minimap fixed. Posture is orientation-only via pure-JVM `services/DockPosturePolicy.kt`
+    (`InkBarPosture.HORIZONTAL` portrait / `VERTICAL` landscape + default anchors): `FloatingToolDock`
+    (`EditorScreen.kt:2233`) renders `InkBarPortraitBar` (`:2498`, 56dp capsule, `surfaceContainerHigh`,
+    `tonalElevation 6dp`, `shadowElevation 8dp`, 1dp 50%-alpha `outlineVariant` border, `spacedBy(4.dp)`,
+    `BottomCenter` + `bottom 20dp`) and `InkBarLandscapeBar` (`:2657`, 56dp side `Column`, `spacedBy(6.dp)`,
+    `HorizontalDivider`, `CenterEnd` + `end 20dp`); all 9 pre-35 features exist in both (tool selector w/
+    `getToolIcon`/`displayTool.label` + `primaryContainer` highlight, Scroll/Pan toggle, color swatch,
+    width badge, divider, Tune settings, Undo/Redo, `HIDDEN_DRAWING` auto-tuck + tap restore `:1769`,
+    default anchors). Drag/snap/session-persist extras are opt-in, OFF by default via
+    `services/FloatingWidgetDragPolicy.kt` (defaults fail-closed; `compressedOffset`/`constrainWithinSafeArea`
+    pure-JVM), session offset hoisted to EditorScreen state (`:421-459`) and persisted only on opt-in.
+    Minimap: `services/MinimapGeometryPolicy.kt` (`aspectFit` uniform scale, `MAX_BOX_WIDTH_DP 120f`/
+    `MAX_BOX_HEIGHT_DP 140f`, `MIN_SIDE_DP 48f`, `DEFAULT_MARGIN_DP 16f`) drives the `AnnotationCanvas.kt:1705+`
+    HUD so size matches the canvas-world aspect, default anchor bottom-right, pointer-drag + snap-clamp
+    gated by `minimapDraggable` (default OFF), collapsible header kept; `minimapHudEnabled` default
+    reverted to OFF (`SettingsManager.kt:317` ← `MinimapGeometryPolicy.VISIBLE_BY_DEFAULT=false`).
+    Settings sheet gained the 4 toggles (`EditorScreen.kt:4049`). Tests: `Phase129InkBarMinimapPolicyTest` (23).
 - **Downloadable runtime**: `plugins/runtime/RuntimePluginLoader.kt:68`; `services/AppClassLoaderFactory.kt:23`
   (`DexClassLoader`); `services/AppFacadeHost.kt:27` (deny-by-default facade, NO direct DB/keystore handles);
   `plugins/runtime/PinnedCertHash.kt:25`; `plugins/runtime/ArtifactSignatureVerifier.kt:52`.
