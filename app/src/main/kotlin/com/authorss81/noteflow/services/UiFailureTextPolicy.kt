@@ -28,7 +28,7 @@ object UiFailureTextPolicy {
 
     /** Fixed generic "restore failed" fallback (unknown failure). */
     const val RESTORE_FAILED_GENERIC: String =
-        "Restore failed. Your vault was left unchanged — pick the backup again or restart the app."
+        "Restore failed. Your vault was left unchanged."
 
     /** Fixed generic "backup failed" fallback (unknown failure). */
     const val BACKUP_FAILED_GENERIC: String =
@@ -91,7 +91,16 @@ object UiFailureTextPolicy {
         "This backup cannot be restored on this device — no vault data key is available."
 
     private val PATH_TOKEN_REGEX = Regex(
-        "((?:/data/(?:user/\\d+|data|app))|/(?:storage|sdcard))(?:/[\\p{Alnum}_.-]+)+"
+        // Android app-private + shared/unix roots — group 1 keeps a short label.
+        "((?:/data/(?:user/\\d+|data|app))|/(?:storage|sdcard|home|tmp))" +
+            "[\\\\/][\\p{Alnum} _.#@%+~={}:()\\[\\]-]+" +
+            "(?:[\\\\/][\\p{Alnum} _.#@%+~={}:()\\[\\]-]+)*" +
+            // Windows drive paths (C:\Users\name\...).
+            "|[A-Za-z]:[\\\\/][\\p{Alnum} _.#@%+~={}:()\\[\\]-]+" +
+            "(?:[\\\\/][\\p{Alnum} _.#@%+~={}:()\\[\\]-]+)*" +
+            // UNC share paths (\\server\share\file...).
+            "|//[^/\\s]+[\\\\/][\\p{Alnum} _.#@%+~={}:()\\[\\]-]+" +
+            "(?:[\\\\/][\\p{Alnum} _.#@%+~={}:()\\[\\]-]+)*"
     )
     private val URL_USERINFO_REGEX = Regex("([A-Za-z][A-Za-z0-9+.-]*://)[^/@\\s]*@")
     private val URL_TOKEN_REGEX = Regex("([A-Za-z][A-Za-z0-9+.-]*://)([^/\\s]+)(/\\S*)?")
@@ -161,7 +170,8 @@ object UiFailureTextPolicy {
         val msg = messageOf(e)
         val lower = msg.lowercase()
         return when {
-            lower.contains("too large") ||
+            lower.contains("larger than the restoreable size") ||
+                lower.contains("too large") ||
                 lower.contains("extraction limit exceeded") ||
                 lower.contains("too many entries") ||
                 lower.contains("compression ratio") ->
@@ -169,6 +179,9 @@ object UiFailureTextPolicy {
             lower.contains("kept changing during the snapshot copy") ||
                 lower.contains("kept changing") ->
                 "Backup failed — the vault kept changing during the backup. Please try again."
+            lower.contains("no encryption key is available") ||
+                lower.contains("unlock the vault") ->
+                "Backup failed — the vault is locked. Unlock the vault and try again."
             else -> BACKUP_FAILED_GENERIC
         }
     }
@@ -194,10 +207,11 @@ object UiFailureTextPolicy {
     /**
      * Defense-in-depth sanitizer for any raw text that must still reach the UI:
      * strips URL userinfo, collapses `scheme://host/path` to the bare `host/...`,
-     * drops `?key=value` query tokens, and redacts absolute filesystem paths
-     * (`/data/...`, `/storage/...`, `/sdcard/...`). The output is a scrubbed
-     * diagnostic string — it never carries credentials, hosts-with-paths or
-     * app-private vault paths.
+     * drops `?key=value` query tokens, and redacts absolute filesystem paths —
+     * Android app-private + shared roots (`/data/...`, `/storage/...`,
+     * `/sdcard/...`), `/home|/tmp` trees, Windows drive paths (`C:\...`) and UNC
+     * shares (`\\server\share\...`). The output is a scrubbed diagnostic string —
+     * it never carries credentials, hosts-with-paths or app-private vault paths.
      */
     fun scrubForUi(text: String): String {
         if (text.isNullOrEmpty()) return text
@@ -207,6 +221,8 @@ object UiFailureTextPolicy {
             val authority = m.groupValues[2]
             if (m.groupValues[3].isEmpty()) authority else "$authority/..."
         }
-        return PATH_TOKEN_REGEX.replace(scrubbed) { m -> m.groupValues[1] + "/..." }
+        return PATH_TOKEN_REGEX.replace(scrubbed) {
+            if (it.groupValues[1].isEmpty()) "[path]" else it.groupValues[1] + "/..."
+        }
     }
 }

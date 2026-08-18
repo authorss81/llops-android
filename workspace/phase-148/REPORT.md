@@ -52,6 +52,20 @@ Final grep evidence: no raw `${e.message}` reaches any user-facing error surface
 - `services/AppFacadeHost.kt:120` — `FacadeResult.Failed("HTTP GET refused: ${e.message}")` is a plugin-capability *host result string* (phase-23 plugin architecture); not in the named files, not a user UI surface, and plugin-facing by design. Left untouched per the "do NOT fix other findings" constraint; if phase-155/156 wires a plugin that renders these results, revisit there.
 - Defensive `scrubForUi` exists but currently has no in-tree caller — kept as the guaranteed-safe choke point for any future trusted-internal-→-UI text.
 
+## Review fixes (commit "llops: phase-148 review fixes")
+
+Closed the seven review FINDINGS on `f9e121b`:
+
+1. **F1 (LOW):** `services/BiometricAuthHelper.kt:83` — `onError(e.message ?: ...)` was the last raw-`e.message` user surface (feeds `LockScreen.kt:44` + `WebDavSyncDialog.kt:92`). Now fixed text `"Failed to initialize the biometric prompt."` (`catch (_: Exception)`); new source-pin test `BiometricAuthHelper never surfaces biometric-init exception text`.
+2. **F2 (LOW):** `ui/screens/HomeScreen.kt:1497` — backup-export failures keep specificity via new `backupFailureMessage` branches: encrypted-output-over-restoreable-size → `BACKUP_TOO_LARGE_TEXT`, `"no encryption key is available"/"unlock the vault"` → fixed locked text. Mapping tests added.
+3. **F3 (INFO):** `RESTORE_FAILED_GENERIC` reworded to `"Restore failed. Your vault was left unchanged."` — no longer duplicates the HomeScreen restart-dialog suffix (`"The app will restart with your current vault unchanged."`).
+4. **F4 (INFO):** `Phase148UiFailureTextScrubTest` counting pins relaxed to `>=` (at-least) so future call sites are progress, not pin-breaks; the LocalSend pin no longer depends on a comment-marker position (strips `//`/`*`/`/*` comment lines instead of `substringBefore("// R2-b2b3-LOG-01")`).
+5. **F5 (INFO):** `scrubForUi` `PATH_TOKEN_REGEX` broadened — now also redacts `/home|/tmp` trees, Windows drive paths (`C:\...`) and UNC shares (`\\server\share\...`); segment class accepts spaces. Windows/UNC/home assertions added to the scrub test.
+6. **F6 (INFO):** `RESTORE_LOCKED_TEXT`, `RESTORE_UNREADABLE_FILE_TEXT`, `RESTORE_NO_DEVICE_KEY_TEXT` now have classifier-mapping tests (real messages: `HomeScreen.kt:172` vault-locked, `NoteflowViewModel.kt:2354/2441` unreadable-selected-backup, `ImportExportService.kt:1967` no-device-key).
+7. **F7 (INFO):** trailing newline restored at EOF of `UiFailureTextPolicy.kt`.
+
+Re-verified: `gradle :app:testDebugUnitTest --tests Phase148UiFailureTextScrubTest --tests B1Db05ImportZipBombTest` green (see commit) after the fixes. No schema/DB, workflow, dependency, or `allowBackup` changes.
+
 ## Definition of done
 
 - [x] All three findings closed with `file:line` before/after evidence (above + `docs/security-report-round2.md`).

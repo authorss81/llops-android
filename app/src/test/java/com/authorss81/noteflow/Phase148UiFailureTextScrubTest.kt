@@ -70,7 +70,11 @@ class Phase148UiFailureTextScrubTest {
             IllegalStateException("Backup file too large (max 400MB).") to
                 UiFailureTextPolicy.BACKUP_TOO_LARGE_TEXT,
             IllegalStateException("Cannot restore: no data key available on this device.") to
-                UiFailureTextPolicy.RESTORE_NO_DEVICE_KEY_TEXT
+                UiFailureTextPolicy.RESTORE_NO_DEVICE_KEY_TEXT,
+            IllegalStateException("The vault locked before the restore — please unlock and try again.") to
+                UiFailureTextPolicy.RESTORE_LOCKED_TEXT,
+            IllegalStateException("Could not read the selected backup file.") to
+                UiFailureTextPolicy.RESTORE_UNREADABLE_FILE_TEXT
         )
         for ((e, expected) in cases) {
             assertEquals("classification of ${e.message}", expected, UiFailureTextPolicy.restoreFailureMessage(e))
@@ -155,8 +159,16 @@ class Phase148UiFailureTextScrubTest {
             UiFailureTextPolicy.backupFailureMessage(IllegalStateException("Backup rejected: 'huge-note.md' is too large to be restored (max 100MB per entry)."))
         )
         assertEquals(
+            UiFailureTextPolicy.BACKUP_TOO_LARGE_TEXT,
+            UiFailureTextPolicy.backupFailureMessage(IllegalStateException("Backup rejected: the encrypted backup is larger than the restoreable size (max 400MB)."))
+        )
+        assertEquals(
             "Backup failed — the vault kept changing during the backup. Please try again.",
             UiFailureTextPolicy.backupFailureMessage(IllegalStateException("Backup failed: the vault database kept changing during the snapshot copy. Please try again."))
+        )
+        assertEquals(
+            "Backup failed — the vault is locked. Unlock the vault and try again.",
+            UiFailureTextPolicy.backupFailureMessage(IllegalStateException("Backup rejected: no encryption key is available and no backup password was provided. Unlock the vault before exporting."))
         )
         assertFalse(
             "budget text must not echo the entry name",
@@ -206,10 +218,26 @@ class Phase148UiFailureTextScrubTest {
             UiFailureTextPolicy.scrubForUi("plain words stay plain")
         )
         assertFalse(
+            "data path must be redacted: ${UiFailureTextPolicy.scrubForUi("err /data/user/0/com.aistudio.inkflow.app.bkxjrz/databases/noteflow.sqlite")}",
             UiFailureTextPolicy.scrubForUi("err /data/user/0/com.aistudio.inkflow.app.bkxjrz/databases/noteflow.sqlite").contains("com.aistudio")
         )
         assertFalse(
+            "storage path must be redacted: ${UiFailureTextPolicy.scrubForUi("err /storage/emulated/0/Download/vault/noteflow.backup")}",
             UiFailureTextPolicy.scrubForUi("err /storage/emulated/0/Download/vault/noteflow.backup").contains("Download")
+        )
+        // review-fix: Windows drive paths, UNC shares and /home|/tmp trees are
+        // redacted too.
+        assertFalse(
+            "windows path must be redacted: ${UiFailureTextPolicy.scrubForUi("err C:\\Users\\smith\\Documents\\Tax Return.docx")}",
+            UiFailureTextPolicy.scrubForUi("err C:\\Users\\smith\\Documents\\Tax Return.docx").contains("Tax Return")
+        )
+        assertFalse(
+            "UNC path must be redacted: ${UiFailureTextPolicy.scrubForUi("err \\\\fileserver\\share\\secret-wills.docx")}",
+            UiFailureTextPolicy.scrubForUi("err \\\\fileserver\\share\\secret-wills.docx").contains("secret-wills")
+        )
+        assertFalse(
+            "home path must be redacted: ${UiFailureTextPolicy.scrubForUi("err /home/runner/.ssh/id_rsa")}",
+            UiFailureTextPolicy.scrubForUi("err /home/runner/.ssh/id_rsa").contains("id_rsa")
         )
         assertEquals("", UiFailureTextPolicy.scrubForUi(""))
     }
@@ -226,20 +254,20 @@ class Phase148UiFailureTextScrubTest {
         )) {
             assertFalse("$leak must be gone from HomeScreen", source.contains(leak))
         }
-        assertEquals(
-            "restore-failure text must come from the policy",
-            3,
-            Regex("UiFailureTextPolicy\\.restoreFailureMessage\\(e\\)").findAll(source).toList().size
+        // Counting pins are intentionally "at least" (>=): adding another policy
+        // call site is progress, not a regression — the raw-interpolation
+        // assertFalse checks above are the real guards.
+        assertTrue(
+            "restore-failure text must route through the policy",
+            Regex("UiFailureTextPolicy\\.restoreFailureMessage\\(e\\)").findAll(source).toList().size >= 3
         )
-        assertEquals(
-            "import-skip text must come from the policy",
-            3,
-            Regex("UiFailureTextPolicy\\.importSkippedMessage\\(e\\)").findAll(source).toList().size
+        assertTrue(
+            "import-skip text must route through the policy",
+            Regex("UiFailureTextPolicy\\.importSkippedMessage\\(e\\)").findAll(source).toList().size >= 3
         )
-        assertEquals(
-            "backup-failure text must come from the policy",
-            2,
-            Regex("UiFailureTextPolicy\\.backupFailureMessage\\(e\\)").findAll(source).toList().size
+        assertTrue(
+            "backup-failure text must route through the policy",
+            Regex("UiFailureTextPolicy\\.backupFailureMessage\\(e\\)").findAll(source).toList().size >= 2
         )
     }
 
@@ -265,15 +293,13 @@ class Phase148UiFailureTextScrubTest {
         assertFalse("onError must not read e.message", source.contains("onError(e.message"))
         assertFalse("onComplete must not read e.message", source.contains("onComplete(false, e.message"))
         assertFalse("Recovery failed elvis must be gone", source.contains("e.message ?: \"Recovery failed.\""))
-        assertEquals(
+        assertTrue(
             "both recovery screens' error text must route through recoveryMessage",
-            2,
-            Regex("UiFailureTextPolicy\\.recoveryMessage\\(e\\)").findAll(source).toList().size
+            Regex("UiFailureTextPolicy\\.recoveryMessage\\(e\\)").findAll(source).toList().size >= 2
         )
-        assertEquals(
+        assertTrue(
             "both WebDAV restore-complete texts must route through restoreFailureMessage",
-            2,
-            Regex("UiFailureTextPolicy\\.restoreFailureMessage\\(e\\)").findAll(source).toList().size
+            Regex("UiFailureTextPolicy\\.restoreFailureMessage\\(e\\)").findAll(source).toList().size >= 2
         )
     }
 
@@ -310,10 +336,39 @@ class Phase148UiFailureTextScrubTest {
         val source = File(repoRoot(), "app/src/main/kotlin/com/authorss81/noteflow/services/localsend/LocalSendSender.kt").readText()
         assertTrue("mapTransportError must use the class-name token", source.contains("FailureLogPolicy.classNameToken(e)"))
         assertTrue("parse failures use the fixed text", source.contains("The receiving device returned an unexpected response."))
-        // The only remaining `e.message` in the file is the explanatory comment
-        // in mapTransportError — no code reads it.
-        val code = source.substringBefore("// R2-b2b3-LOG-01")
+        // `e.message` may appear only inside comments (the one explanatory
+        // comment in mapTransportError) — never in code. Comments are stripped
+        // (line comments, block comments and KDoc) before the check so the pin
+        // does not depend on a specific comment's position.
+        val code = source.lines()
+            .filterNot { line ->
+                val t = line.trimStart()
+                t.isEmpty() || t.startsWith("//") || t.startsWith("*") || t.startsWith("/*")
+            }
+            .joinToString("\n")
         assertFalse("no code path reads e.message", code.contains("e.message"))
+    }
+
+    // --- source pins: BiometricAuthHelper.kt (phase-148 review fix) ------------
+
+    @Test
+    fun `BiometricAuthHelper never surfaces biometric-init exception text`() {
+        val source = File(repoRoot(), "app/src/main/kotlin/com/authorss81/noteflow/services/BiometricAuthHelper.kt").readText()
+        // `e.message` may appear only inside comments (the finding note) — strip
+        // comment lines before scanning so the pin does not depend on comment
+        // wording.
+        val code = source.lines()
+            .filterNot { line ->
+                val t = line.trimStart()
+                t.isEmpty() || t.startsWith("//") || t.startsWith("*") || t.startsWith("/*")
+            }
+            .joinToString("\n")
+        assertFalse("no raw exception message may reach onError", code.contains("e.message"))
+        assertFalse("no raw message elvis may reach onError", code.contains("message ?:"))
+        assertTrue(
+            "the biometric-init failure is fixed text",
+            source.contains("Failed to initialize the biometric prompt.")
+        )
     }
 
     // --- source pins: VoiceNoteManager.kt --------------------------------------

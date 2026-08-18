@@ -79,8 +79,11 @@ object BiometricAuthHelper {
             } else {
                 prompt.authenticate(promptInfo)
             }
-        } catch (e: Exception) {
-            onError(e.message ?: "Failed to initialize biometric prompt")
+        } catch (_: Exception) {
+            // R2-b2b3-LOG-01 review (phase-148): never surface `e.message` — a
+            // biometric-init failure can carry ROM/package-specific text. Fixed
+            // text only; the user already has a password fallback.
+            onError("Failed to initialize the biometric prompt.")
         }
     }
 }
