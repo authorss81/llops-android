@@ -65,7 +65,8 @@ no DB/schema/workflow/dependency changes.
 - **`InteractiveTutorial.kt:181`** (was 181) — section chip label rendered the
   section `displayName` all-caps via `.uppercase()` (e.g. "CANVAS · 2/4"), an
   all-caps presentation label (not a data value).
-  - **Fix:** `.uppercase()` removed — sentence case "Canvas · 2/4"; chip styling
+  - **Fix:** `.uppercase()` removed — title case "Canvas · 2/4" (displayName values are
+    already title-cased, e.g. "Canvas & Brushes"); chip styling
     (`labelMedium`, `FontWeight.Bold`, `secondaryContainer` surface) unchanged.
 
 ### 2. `ui/components/UnifiedSidebar.kt` — the only hardcoded ALL-CAPS labels in the app
@@ -73,7 +74,7 @@ no DB/schema/workflow/dependency changes.
 - **`UnifiedSidebar.kt:124`** — `"QUICK NOTES"` section header. Fix: `"Quick Notes"`.
 - **`UnifiedSidebar.kt:164`** — `"ALL NOTEBOOKS"` section header. Fix: `"All Notebooks"`.
 - Both are the ONLY `text = "…ALL-CAPS…"` label strings in the app (grep-pinned);
-  every sibling sidebar/section header elsewhere is sentence case ("Notebooks",
+  every sibling sidebar/section header elsewhere is title case ("Notebooks",
   "Sections", "Knowledge Graph"). `labelMedium + FontWeight.Bold + 70% alpha`
   styling untouched; only the shout-casing was removed.
 
@@ -99,13 +100,40 @@ no DB/schema/workflow/dependency changes.
 
 ## Verification
 
-- `gradle testDebugUnitTest` — **BUILD SUCCESSFUL**; aggregated across all modules
-  `3536 tests, 0 failures, 0 errors, 0 skipped`.
+- `gradle testDebugUnitTest` — **BUILD SUCCESSFUL**; the true count from an independent
+  clean run is **1818 tests, 0 failures, 0 errors, 0 skipped** (163 `TEST-*.xml` suites
+  across `app` + plugin modules). The first draft's `3536` figure was wrong — see the
+  post-review corrections below.
 - `gradle assembleDebug` — **BUILD SUCCESSFUL** (first plain invocation hit the
   documented transient `IncrementalSplitterRunnable` incremental-packaging failure;
   the forced `--rerun-tasks` run rebuilt all 90 tasks green). Debug APK
   `app/build/outputs/apk/debug/app-debug.apk` 173,901,726 B, SHA-256
-  `cfdb1b12fbdd37ecb731c6bad77cbe7721d0c5aeed0003b62fe6aac388929223`.
+  `fa733fc6197020e714674b5997a5fefd3c17f365ff36e029b91409787f817df4`
+  (re-verified 2026-08-18 with a fresh `--rerun-tasks` rebuild; size and hash reproduce
+  exactly — the draft's `cfdb1b12…` was wrong, see below).
+
+## Post-review corrections (review findings, `llops: phase-128 review fixes` commit)
+
+Docs-only corrections; zero source changes, so this commit does not alter the verified
+green code above.
+
+- **F#4 — test-count accuracy:** the draft overstated the suite as `3536 tests`.
+  The true count from an independent clean `gradle testDebugUnitTest` run is **1818
+  tests, 0 failures / 0 errors / 0 skipped** (163 `TEST-*.xml` suites repo-wide).
+  Corrected in the Verification section above and in `docs/phase-status.md`.
+- **F#5 — APK hash accuracy:** the draft recorded SHA-256 `cfdb1b12…` for
+  `app/build/outputs/apk/debug/app-debug.apk`. Fresh `gradle assembleDebug --rerun-tasks`
+  rebuilds reproduce size 173,901,726 B and SHA-256 `fa733fc6…` deterministically; the
+  recorded hash is corrected to the true artifact hash.
+- **F#7 — wording:** the de-shouted labels are Title Case (the tutorial `displayName`
+  values are already title-cased, e.g. "Canvas & Brushes"; sidebar headers are
+  "Quick Notes"/"All Notebooks"), not strictly sentence case. Wording corrected; no
+  code impact.
+- **F#3 — process note (phase-127, not retroactively fixed):** phase-127 pushed the
+  non-compiling `Icons.AutoMirrored.Outlined.KeyboardArrowUp/Down` import to `main` and
+  shipped no `REPORT.md` (only `PROMPT.md` + `.done`); section 4 above (implemented in
+  this phase) was required to unblock every build. Recommendation for future phases: a
+  compile/CI gate before pushing.
 
 ## Constraints honoured
 

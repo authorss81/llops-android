@@ -884,7 +884,7 @@
   `theme/Type.kt:70`; `theme/Theme.kt:239` (`NoteflowTheme`, dynamic + paper/sepia/dark/AMOLED).
   - **Implemented in phase-128** (UI text hygiene, see `workspace/phase-128/REPORT.md`): UI chrome
     typography normalised to the standard `theme/TypeScale.kt` M3 ladder. All-caps gone:
-    `UnifiedSidebar.kt:124/:164` ("QUICK NOTES"/"ALL NOTEBOOKS" → sentence case) and the tutorial
+    `UnifiedSidebar.kt:124/:164` ("QUICK NOTES"/"ALL NOTEBOOKS" → title case) and the tutorial
     section chip's `.uppercase()` (`InteractiveTutorial.kt:181`). Extreme weight/tracking gone: the
     Step-kicker was the app's ONLY `FontWeight.ExtraBold` + `letterSpacing=1.sp`
     (`InteractiveTutorial.kt:210-214` → plain `labelLarge`); the tutorial slide title
