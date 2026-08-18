@@ -15,6 +15,7 @@ import com.authorss81.noteflow.data.model.MediaEmbedEntity
 import com.authorss81.noteflow.data.model.PaletteItemEntity
 import com.authorss81.noteflow.data.model.LayerEntity
 import com.authorss81.noteflow.data.model.NoteVersionEntity
+import com.authorss81.noteflow.services.DatabaseSecurityHelper
 import com.authorss81.noteflow.services.VaultKeyHolder
 import java.io.File
 
@@ -55,6 +56,15 @@ abstract class NoteflowDatabase : RoomDatabase() {
 
         @Volatile
         private var INSTANCE: NoteflowDatabase? = null
+
+        // R2-B1D-01 (phase-136): the session-end teardown funnel
+        // ([dispose]) re-arms the WAL-aware tamper baseline against the vault's
+        // quiescent, checkpointed state, which needs an application Context to
+        // reach the stored-checksum prefs. Cached when the database is built
+        // (application-scoped, no leak) so every disposal path — lock, app exit,
+        // restore swap — has it without threading a Context through each caller.
+        @Volatile
+        private var cachedAppContext: Context? = null
 
         val MIGRATION_1_2 = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {
@@ -406,6 +416,7 @@ abstract class NoteflowDatabase : RoomDatabase() {
         }
 
         fun getDatabase(context: Context): NoteflowDatabase {
+            cachedAppContext = context.applicationContext
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
                     context.applicationContext,
@@ -427,10 +438,45 @@ abstract class NoteflowDatabase : RoomDatabase() {
          * [getDatabase] builds a fresh one. Used by the restore paths so a failed
          * (or successful) restore never leaves the app with a closed live DB — the
          * old code closed the database and then bricked every DB call on failure.
+         *
+         * R2-B1D-01 (phase-136): this is the single session-end funnel (master-
+         * password lock, app exit, restore swap, reopen-after-lock), so it is the
+         * right place to implement the quiescent-checkpoint + re-arm cadence that
+         * the tamper baseline needs. Every path closes the keyed connection here,
+         * so the WAL is FULL-checkpointed while the connection is still live, the
+         * vault is closed, and the stored baseline is re-armed against the file's
+         * true resting state (main file + an empty, fully-checkpointed `-wal`).
+         * Ordinary in-session edits therefore land IN the baseline — the next
+         * start's verification matches instead of raising a false Mismatch — while
+         * post-exit tampering of either file is still detected. Best-effort on
+         * purpose: a keystore/prefs failure must never break the lock or restore.
          */
         fun dispose() {
             synchronized(this) {
-                INSTANCE?.close()
+                INSTANCE?.let { db ->
+                    // R2-B1D-01: collapse committed-but-uncheckpointed WAL frames
+                    // into the main file BEFORE the connection is dropped so the
+                    // re-armed baseline covers the session's true final state.
+                    // (Fully stepping the cursor is required for wal_checkpoint(FULL).)
+                    runCatching {
+                        db.query("PRAGMA wal_checkpoint(FULL)", null).use { cursor ->
+                            if (cursor != null) {
+                                while (cursor.moveToNext()) {
+                                    // Consume every row to run the FULL checkpoint
+                                }
+                            }
+                        }
+                    }
+                    db.close()
+                    // R2-B1D-01: re-arm the baseline against the now-quiescent,
+                    // closed file via the same trusted arm helper the fresh-vault /
+                    // migration / backup / restore sites use. No-op (never a
+                    // baseline) when the keystore key or the checksum prefs are
+                    // unreachable.
+                    cachedAppContext?.let { ctx ->
+                        runCatching { DatabaseSecurityHelper.updateStoredChecksum(ctx) }
+                    }
+                }
                 INSTANCE = null
             }
         }

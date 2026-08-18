@@ -4056,6 +4056,11 @@ fun updatePageTags(id: String, tags: String) {
         if (settings.hasMasterPassword) {
             sectionsJob?.cancel()
             pagesJob?.cancel()
+            // R2-B1D-01 (phase-136): the master-password session end. dispose() is
+            // the session-end funnel — it FULL-checkpoints the WAL and re-arms the
+            // tamper baseline against the quiescent vault, so ordinary note edits
+            // from this session are part of the baseline and a false "Database
+            // integrity check failed" banner never appears at the next start.
             NoteflowDatabase.dispose()
             databaseDisposedByLock = true
             dataInitialized = false
