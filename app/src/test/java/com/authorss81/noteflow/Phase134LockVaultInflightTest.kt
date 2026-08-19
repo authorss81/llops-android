@@ -145,7 +145,9 @@ class Phase134LockVaultInflightTest {
         assertTrue("backlinks must load pages through the guarded accessor", backlinks.contains("viewModel.loadAllActivePages()"))
 
         val explorer = java.io.File(repoRoot(), "app/src/main/kotlin/com/authorss81/noteflow/ui/components/TagExplorerView.kt").readText()
-        assertTrue("tag explorer must load pages through the guarded accessor", explorer.contains("viewModel.loadAllActivePages()"))
+        // Phase 164: the tag vault is notebook-scoped — it loads through the
+        // guarded scoped accessor (withLockedPoolGuard, never the whole-vault list).
+        assertTrue("tag explorer must load through the guarded scoped accessor", explorer.contains("viewModel.loadScopedTagHierarchy("))
 
         val tagManager = java.io.File(repoRoot(), "app/src/main/kotlin/com/authorss81/noteflow/ui/components/TagManagerDialog.kt").readText()
         assertTrue("tag manager must load notebooks through the guarded accessor", tagManager.contains("viewModel.loadAllNotebooks()"))

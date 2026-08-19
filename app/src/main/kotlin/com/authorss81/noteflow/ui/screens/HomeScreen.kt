@@ -136,6 +136,17 @@ fun HomeScreen(
     var activeTagFilterPath by remember { mutableStateOf<String?>(null) }
     var activeTagMatchingIds by remember { mutableStateOf<Set<String>?>(null) }
 
+    // Phase 164: the tag vault is notebook-scoped — when the active notebook
+    // changes, drop any stale cross-notebook tag filter (its matching page-ids
+    // belonged to the previous notebook and must not filter this notebook's
+    // pages). The vault itself re-keying on notebookId is handled in
+    // TagExplorerView.
+    val selectedNotebookId = selectedNotebook?.id
+    LaunchedEffect(selectedNotebookId) {
+        activeTagFilterPath = null
+        activeTagMatchingIds = null
+    }
+
     val isWide = BoxWithConstraintsScope_isWide()
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
 

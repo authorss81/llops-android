@@ -121,6 +121,7 @@ import com.authorss81.noteflow.services.DownloadablePluginInstaller
 import com.authorss81.noteflow.services.DownloadablePluginUpdater
 import com.authorss81.noteflow.services.PluginArtifactStorage
 import com.authorss81.noteflow.services.SettingsPluginEntryStore
+import com.authorss81.noteflow.services.TagNode
 import com.authorss81.noteflow.services.WikiLinkParser
 import com.authorss81.noteflow.services.graph.GraphPreviewPolicy
 import com.authorss81.noteflow.services.SettingsPluginUpdateStore
@@ -4044,6 +4045,24 @@ fun updatePageTags(id: String, tags: String) {
         withLockedPoolGuard("vault pages", emptyList()) {
             repository.getAllActivePages()
         }
+
+    /**
+     * Phase 164: the tag vault is scoped to the CURRENTLY selected notebook. This
+     * fetches ONLY that notebook's active pages (page → section → notebookId via
+     * `getPagesForNotebookOnce`) and builds the tag hierarchy from those pages'
+     * #tags + CSV tags PLUS the notebook's own tag list — a page in another
+     * notebook can never contribute a tag to this vault. No selected notebook ⇒
+     * empty scope. Guarded exactly like [loadAllActivePages] (armed-empty on a
+     * lock race) so a `lock()` disposing the pool mid-scope is a notice, not a crash.
+     */
+    suspend fun loadScopedTagHierarchy(importsRoot: File?): List<TagNode> {
+        val notebook = selectedNotebook.value ?: return emptyList()
+        return withLockedPoolGuard("tag vault", emptyList()) {
+            val pages = repository.getPagesForNotebookOnce(notebook.id)
+            val notebookTags = notebook.tags.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+            WikiLinkParser.buildScopedTagHierarchy(pages, notebookTags, importsRoot)
+        }
+    }
 
     /**
      * R2-b2b1-UI-01 (phase-134): guarded counterpart of [loadAllActivePages] for

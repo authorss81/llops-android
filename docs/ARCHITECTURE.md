@@ -951,6 +951,22 @@
     `edgeList.distinct()` materialization is gone. Tests:
     `KnowledgeGraphEdgePolicyTest` (15) + source pins in
     `Phase152FeatureDataBoundsWiringTest`.
+  - **Implemented in phase-164** (tag vault notebook-scoping, see
+    `workspace/phase-164/REPORT.md`): the tag vault/explorer now shows ONLY the
+    currently selected notebook's tags. New `WikiLinkParser.buildScopedTagHierarchy`
+    (`services/WikiLinkParser.kt`, `:526`) scans ONLY the selected notebook's active
+    pages (text `#tag`s + CSV `tags`-field) plus the notebook's OWN tag list,
+    reusing the shared bounded/cancellable `collectTextTags` + depth-bounded
+    `buildTagTree` (the whole-vault `buildTagHierarchy` behavior is byte-identical);
+    cached per unlock epoch + scope fingerprint (pages + notebook tags), new
+    `scopedTagRecomputes` metric. `NoteflowViewModel.loadScopedTagHierarchy`
+    (`:4058`) queries only that notebook via
+    `getPagesForNotebookOnce` (page→section→notebookId, no schema change) inside
+    `withLockedPoolGuard`. `TagExplorerView` keys its LaunchedEffect on
+    `(notebookId, notebook tags)` and runs the build in-effect (stale notebook's
+    scan is cancelled on switch); `HomeScreen` clears a stale tag filter on
+    notebook switch. Tests: `Phase164TagVaultScopingTest` (8) + updated
+    `Phase134LockVaultInflightTest` pin.
 - **Command Palette (Phase 38 HUD)**: `ui/components/CommandPaletteOverlay.kt`
   (global quick-switcher; two-finger swipe down in `MainActivity.kt`
   `detectTwoFingerSwipeDown`, keyboard icon in `HomeScreen.kt`), ranking/tag

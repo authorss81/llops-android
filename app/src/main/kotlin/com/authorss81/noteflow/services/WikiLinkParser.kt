@@ -92,6 +92,7 @@ object WikiLinkParser {
     private val backlinksCache =
         LruBoundedMap<BacklinkCacheKey, EpochEntry<Pair<List<BacklinkMatch>, List<BacklinkMatch>>>>(MAX_BACKLINK_CACHE_ENTRIES)
     private var tagHierarchyEntry: EpochEntry<List<TagNode>>? = null
+    private var scopedTagHierarchyEntry: EpochEntry<List<TagNode>>? = null
     private var edgesEntry: EpochEntry<List<WikiLinkEdge>>? = null
 
     private data class EpochEntry<T>(val epoch: Long, val fingerprint: String, val value: T)
@@ -129,6 +130,7 @@ object WikiLinkParser {
         val textRecomputes: Long,
         val backlinkRecomputes: Long,
         val tagRecomputes: Long,
+        val scopedTagRecomputes: Long,
         val edgeRecomputes: Long
     )
 
@@ -143,6 +145,8 @@ object WikiLinkParser {
     @Volatile
     private var metricsTagRecomputes = 0L
     @Volatile
+    private var metricsScopedTagRecomputes = 0L
+    @Volatile
     private var metricsEdgeRecomputes = 0L
 
     internal fun resetCacheMetrics() {
@@ -151,6 +155,7 @@ object WikiLinkParser {
         metricsTextRecomputes = 0L
         metricsBacklinkRecomputes = 0L
         metricsTagRecomputes = 0L
+        metricsScopedTagRecomputes = 0L
         metricsEdgeRecomputes = 0L
     }
 
@@ -160,6 +165,7 @@ object WikiLinkParser {
         textRecomputes = metricsTextRecomputes,
         backlinkRecomputes = metricsBacklinkRecomputes,
         tagRecomputes = metricsTagRecomputes,
+        scopedTagRecomputes = metricsScopedTagRecomputes,
         edgeRecomputes = metricsEdgeRecomputes
     )
 
@@ -178,6 +184,7 @@ object WikiLinkParser {
             fullTextCache.clear()
             backlinksCache.clear()
             tagHierarchyEntry = null
+            scopedTagHierarchyEntry = null
             edgesEntry = null
         }
     }
@@ -433,48 +440,144 @@ object WikiLinkParser {
         importsRoot: File?
     ): List<TagNode> =
         withContext(Dispatchers.Default) {
-            val tagToPagesMap = mutableMapOf<String, MutableSet<String>>()
+            val tagToPagesMap = collectTextTags(allPages.take(MAX_SCAN_PAGES), importsRoot)
+            buildTagTree(tagToPagesMap, epoch)
+        }
 
-            val scanSet = allPages.take(MAX_SCAN_PAGES)
-            for (page in scanSet) {
+    /**
+     * Phase 164: shared text-tag collector for BOTH the whole-vault [buildTagHierarchy]
+     * and the notebook-scoped [buildScopedTagHierarchy]. Scans [scanSet] for `#tag`
+     * mentions (title + extractedText + confined legacy file), returning
+     * `tag → page-id-set`. Cancellable per page; capped at [MAX_TAGS] distinct tags.
+     */
+    private suspend fun collectTextTags(
+        scanSet: List<NotePageEntity>,
+        importsRoot: File?
+    ): MutableMap<String, MutableSet<String>> {
+        val tagToPagesMap = mutableMapOf<String, MutableSet<String>>()
+        for (page in scanSet) {
+            currentCoroutineContext().ensureActive()
+            val fullText = getFullTextForPage(page, importsRoot)
+            val tags = extractTagsBounded(fullText, MAX_TAGS)
+            for (tag in tags) {
+                if (tagToPagesMap.size >= MAX_TAGS) break
+                tagToPagesMap.getOrPut(tag) { mutableSetOf() }.add(page.id)
+            }
+        }
+        return tagToPagesMap
+    }
+
+    /**
+     * Phase 164: shared hierarchical tree build (`/`-segment paths, depth bounded
+     * to [MAX_TAG_TREE_DEPTH], siblings sorted by name). Discards the build if the
+     * unlock epoch moved while scanning (no `#tag` tree for a locked/re-keyed vault).
+     */
+    private suspend fun buildTagTree(
+        tagToPagesMap: Map<String, Set<String>>,
+        epoch: Long
+    ): List<TagNode> {
+        if (synchronized(cacheLock) { cacheEpoch } != epoch || tagToPagesMap.isEmpty()) {
+            return emptyList()
+        }
+
+        // Build hierarchical tree from tags with '/'; depth bounded.
+        val rootNodes = mutableMapOf<String, MutableTagNodeBuilder>()
+
+        for ((fullTag, pageIds) in tagToPagesMap) {
+            currentCoroutineContext().ensureActive()
+            val parts = fullTag.split('/').filter { it.isNotBlank() }.take(MAX_TAG_TREE_DEPTH)
+            if (parts.isEmpty()) continue
+
+            var currentMap = rootNodes
+            var currentPath = ""
+
+            for (i in parts.indices) {
+                val part = parts[i]
+                currentPath = if (currentPath.isEmpty()) part else "$currentPath/$part"
+
+                val node = currentMap.getOrPut(part) {
+                    MutableTagNodeBuilder(name = part, fullTagPath = currentPath)
+                }
+                node.matchingPageIds.addAll(pageIds)
+                currentMap = node.children
+            }
+        }
+
+        return rootNodes.values.map { it.toTagNode() }.sortedBy { it.name }
+    }
+
+    /**
+     * Phase 164: notebook-scoped tag vault. Builds the identical hierarchical
+     * #tag tree as [buildTagHierarchy] but ONLY from [notebookPages] — the active
+     * pages of the CURRENTLY selected notebook (page → section → notebookId) — and
+     * augments it with:
+     *  - each page's CSV `tags` field entries (the app's explicit page-tag
+     *    representation), mapped to that page, and
+     *  - the notebook's OWN CSV tag list ([notebookTags]).
+     * Every tag a page of this notebook bears, or the notebook itself bears, shows
+     * in the vault; NO tag from pages or notebooks OUTSIDE this scope ever appears.
+     * Cached per unlock epoch + input fingerprint exactly like the whole-vault
+     * build (a different page list / notebook-tag list is never served a result
+     * built for another scope). Bounded: the same [MAX_SCAN_PAGES]/[MAX_TAGS]/
+     * [MAX_TAG_TREE_DEPTH] caps as [buildTagHierarchy], cancellable mid-scan.
+     */
+    suspend fun buildScopedTagHierarchy(
+        notebookPages: List<NotePageEntity>,
+        notebookTags: List<String>,
+        importsRoot: File? = null
+    ): List<TagNode> {
+        val epoch = synchronized(cacheLock) { cacheEpoch }
+        val fingerprint = scopeFingerprint(notebookPages, notebookTags)
+        val cached = synchronized(cacheLock) { scopedTagHierarchyEntry }
+        if (cached != null && cached.epoch == epoch && cached.fingerprint == fingerprint) {
+            return cached.value
+        }
+        val result = withContext(Dispatchers.Default) {
+            val tagToPagesMap = collectTextTags(notebookPages.take(MAX_SCAN_PAGES), importsRoot)
+
+            // Explicit CSV tags on the notebook's own pages (the page is a member of
+            // this notebook's scope, so its tags belong in this vault).
+            for (page in notebookPages) {
                 currentCoroutineContext().ensureActive()
-                val fullText = getFullTextForPage(page, importsRoot)
-                val tags = extractTagsBounded(fullText, MAX_TAGS)
-                for (tag in tags) {
+                for (tag in parseCsvTags(page.tags)) {
                     if (tagToPagesMap.size >= MAX_TAGS) break
                     tagToPagesMap.getOrPut(tag) { mutableSetOf() }.add(page.id)
                 }
             }
 
-            if (synchronized(cacheLock) { cacheEpoch } != epoch || tagToPagesMap.isEmpty()) {
-                return@withContext emptyList()
+            // The notebook's own tag list — tags the user attached to the notebook
+            // itself (no page member yet).
+            for (tag in notebookTags) {
+                if (tagToPagesMap.size >= MAX_TAGS) break
+                tagToPagesMap.getOrPut(tag) { mutableSetOf() }
             }
 
-            // Build hierarchical tree from tags with '/'; depth bounded.
-            val rootNodes = mutableMapOf<String, MutableTagNodeBuilder>()
-
-            for ((fullTag, pageIds) in tagToPagesMap) {
-                currentCoroutineContext().ensureActive()
-                val parts = fullTag.split('/').filter { it.isNotBlank() }.take(MAX_TAG_TREE_DEPTH)
-                if (parts.isEmpty()) continue
-
-                var currentMap = rootNodes
-                var currentPath = ""
-
-                for (i in parts.indices) {
-                    val part = parts[i]
-                    currentPath = if (currentPath.isEmpty()) part else "$currentPath/$part"
-
-                    val node = currentMap.getOrPut(part) {
-                        MutableTagNodeBuilder(name = part, fullTagPath = currentPath)
-                    }
-                    node.matchingPageIds.addAll(pageIds)
-                    currentMap = node.children
-                }
-            }
-
-            rootNodes.values.map { it.toTagNode() }.sortedBy { it.name }
+            buildTagTree(tagToPagesMap, epoch)
         }
+        synchronized(cacheLock) {
+            if (cacheEpoch == epoch) {
+                scopedTagHierarchyEntry = EpochEntry(epoch, fingerprint, result)
+                metricsScopedTagRecomputes++
+            }
+        }
+        return result
+    }
+
+    /** CSV `tags`-field parse normalized to the vault's lowercase `#tag` model. */
+    private fun parseCsvTags(csv: String): List<String> =
+        csv.split(",").map { it.trim().lowercase().trim('/') }.filter { it.isNotEmpty() }
+
+    /**
+     * Fingerprint of the notebook scope: page list (id + updatedAt) PLUS the
+     * notebook's own tag list — so switching notebooks or editing the notebook's
+     * tags recomputes, while an unchanged notebook within the same epoch reuses
+     * the cache.
+     */
+    private fun scopeFingerprint(pages: List<NotePageEntity>, notebookTags: List<String>): String {
+        val pagesPart = pagesFingerprint(pages)
+        if (notebookTags.isEmpty()) return pagesPart
+        return "$pagesPart|nb:${notebookTags.sorted().distinct().joinToString(",")}"
+    }
 
     /**
      * Cached per unlock epoch; used by KnowledgeGraphScreen so the force-directed

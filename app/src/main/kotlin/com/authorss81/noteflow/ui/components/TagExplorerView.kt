@@ -20,12 +20,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.authorss81.noteflow.data.model.NotePageEntity
 import com.authorss81.noteflow.services.ImportExportService
 import com.authorss81.noteflow.services.TagNode
-import com.authorss81.noteflow.services.WikiLinkParser
 import com.authorss81.noteflow.ui.viewmodel.NoteflowViewModel
-import kotlinx.coroutines.launch
 
 @Composable
 fun TagExplorerView(
@@ -34,28 +31,34 @@ fun TagExplorerView(
     activeTagFilter: String?
 ) {
     var tagHierarchy by remember { mutableStateOf<List<TagNode>>(emptyList()) }
-    var allActivePages by remember { mutableStateOf<List<NotePageEntity>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
 
     val context = androidx.compose.ui.platform.LocalContext.current
-    val scope = rememberCoroutineScope()
+    // Phase 164: the vault is scoped to the CURRENTLY selected notebook; keying
+    // the LaunchedEffect on (notebookId, notebook tags) re-runs the scoped build
+    // on every notebook switch / notebook-tag edit, so notebook A's tags never
+    // leak into notebook B's vault. Because the build runs directly in the
+    // effect's coroutine (not a remembered scope), a switch mid-build cancels the
+    // stale notebook's build before it can overwrite the vault (B2-DOS-11).
+    val selectedNotebook by viewModel.selectedNotebook.collectAsState()
+    val notebookId = selectedNotebook?.id
 
-    LaunchedEffect(Unit) {
-        scope.launch {
-            isLoading = true
-            // R2-b2b1-UI-01 (phase-134): guarded VM read (armed-empty on a lock
-            // race) + auth re-check before assigning decrypted pages into state.
-            val pages = viewModel.loadAllActivePages()
-            if (viewModel.authenticated.value) {
-                allActivePages = pages
-                // B2-DOS-11: cached per unlock epoch + capped scan set; the LaunchEffect
-                // teardown cancels the build when the panel closes.
-                // B1-AUTH-05 (phase-69): legacy source-file reads are confined to the
-                // app-private imports root.
-                tagHierarchy = WikiLinkParser.buildTagHierarchy(pages, ImportExportService.getImportsDir(context))
-            }
+    LaunchedEffect(notebookId, selectedNotebook?.tags) {
+        isLoading = true
+        if (notebookId == null) {
+            tagHierarchy = emptyList()
             isLoading = false
+            return@LaunchedEffect
         }
+        // R2-b2b1-UI-01 (phase-134): guarded VM read (armed-empty on a lock
+        // race) + auth re-check before assigning decrypted tags into state.
+        // Phase 164: scoped aggregation — only this notebook's pages' tags +
+        // this notebook's own tag list; no other notebook can contribute.
+        val hierarchy = viewModel.loadScopedTagHierarchy(ImportExportService.getImportsDir(context))
+        if (viewModel.authenticated.value) {
+            tagHierarchy = hierarchy
+        }
+        isLoading = false
     }
 
     Column(modifier = Modifier.fillMaxSize().padding(12.dp)) {
