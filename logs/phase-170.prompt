@@ -1,0 +1,163 @@
+# PIPELINE CONTEXT (injected by phase_runner.sh — do not delete)
+
+## Hard rules (AGENTS.md)
+## Hard rules
+- **MAJOR ARCHITECTURAL CHANGE → ASK THE USER FIRST.** Any change that restructures packages, replaces the navigation model (e.g., migrating away from `mutableStateOf` navigation to Navigation Compose), adds a new DB schema/migration, introduces SQLCipher, adds new dependencies with broad impact, or rewrites a subsystem (canvas renderer, encryption layer) MUST be proposed to the user and get explicit approval BEFORE writing code. Tell the user what's changing, why, and the risk. Do not silently refactor architecture.
+  - **USER APPROVED (2026-08-14): hybrid downloadable-plugin architecture** — the plugin model change (base-APK-size constraint, downloadable signature-verified plugins for heavy native features, compile-time for lightweight plugins, user-approved dynamic updates) was proposed to the user with risks and explicitly approved (commit `9292978`). Implementation proceeds per phases 22–26; the approved design doc is `docs/plugin-architecture.md`.
+- **Android hardware reality**: this is a native Kotlin app targeting API 26+. Every feature must ship with a fallback for older/lower-end devices (API 33- for AGSL, API 31- for dynamic color, low-RAM behavior for 2-core devices). Never silent degradation — one-time non-alarming message + settings re-enable. See ROADMAP Phase 33 + `docs/COMPATIBILITY.md` (to be created).
+- **Kali Linux pentest findings → write to a FILE immediately, not just the agent reply.** Security/pentest agents (running in opencode on the Kali VM) MUST append findings incrementally to `docs/pentest-findings-<YYYY-MM-DD>.md` as they work (one block per finding: severity, evidence, file/line or command output, reproducer), and commit/push after each agent batch. This prevents detail loss when a report grows long or context is truncated. The pentest plan lives in `docs/pentest-plan.md`; the summary report goes to `docs/pentest-report.md`.
+- `allowBackup="false"` + `data_extraction_rules.xml` — never re-enable backup.
+- **Base-APK size is a hard constraint.** Heavy/native features (ML Kit OCR, ML Kit
+  barcode/QR, the MediaPipe `tasks-genai` LLM) MUST NOT be baked into the base APK.
+  They ship as **downloadable, signature-verified plugins** (Phase 23 runtime:
+  HTTPS download → pinned-cert-hash verify → `DexClassLoader` load → capability
+  facade, never direct DB/keystore handles). Lightweight pure-JVM plugins stay
+  compile-time. Do NOT add large native deps to the base app; use a separate
+  plugin module instead. Plan: Phase 22 = architecture skeleton, Phase 23 =
+  downloadable runtime, Phase 24 = user-approved updates, Phase 25 = ink→shape,
+  Phase 26 = lightweight ecosystem, Phase 29 = move the LLM out of the base APK
+  into a downloadable plugin.
+- PBKDF2WithHmacSHA256 600k iterations, AES-256-GCM (12-byte IV, 128-bit tag), AndroidKeyStore-wrapped DEK, in-memory zeroization on lock (`NoteRepository.kt`, `EncryptionService.kt`, `SecurityService.kt`).
+- Never log keys, passwords, or decrypted note content. Never add `INTERNET` usage without a real feature.
+- Known broken things (do NOT trust ROADMAP [x] claims — see ROADMAP.md "POST-AUDIT TRUTH TABLE" @ commit ac781de):
+  - ~~Checksum hashes `noteflow.db`~~ — FIXED: `DatabaseSecurityHelper` HMACs the real `noteflow.sqlite` (`DatabaseSecurityHelper.kt:26`) and the result is surfaced as the `databaseTampered` banner in MainActivity (`NoteflowViewModel.kt:35-55`). This stale claim was corrected in Phase 09.
+  - `pointsJson` (stroke geometry) is FIELD-ENCRYPTED at rest now — title/extractedText/textContent/pointsJson are all encrypted fields (`saveStrokesForPage`, NoteRepository.kt); the Phase 02 restore re-key gap is closed.
+  - "Sync" = WebDAV upload/download of ENCRYPTED backup archives to/from the user's own server (`WebDavSyncService.kt`, HTTPS enforced, HTTP only with explicit opt-in for local-network hosts), reachable from HomeScreen's ⋮ menu via `WebDavSyncDialog` — Phase 14 FIXED the previously-dead menu trigger; AGSL wet-mixing is WIRED through `WetBrushEngine` in `AnnotationCanvas` (gated by `ShaderCapabilityHelper.isAgslSupported` + the `gpuWetBrushesEnabled` setting, verified in the Phase 14 audit); pressure/tilt/timestamp are captured via the official raw-MotionEvent bridge (`pointerInteropFilter`, no reflection); FLAG_SECURE is applied in non-debug builds; R8 minify is ON in release; baseline profiles are NOT wired (deferred — the dead `baseline-prof.txt` was deleted in the Phase 03 honesty audit).
+  - WAL checkpoint DOES execute — `checkpointWal()` fully steps the cursor (`NoteRepository.kt:136-144`).
+  - **Phase 14 (2026-08-13) production readiness + LocalSend**: full per-phase audit lives in `workspace/phase-14/AUDIT_REPORT.md`. LocalSend sender (Protocol v2.2, sender-only, local-network only, no new permissions) is implemented in `services/localsend/` (`LocalSendProtocol.kt` pure-JVM + `LocalSendSender.kt` network) and reachable from HomeScreen's ⋮ menu → "Send to Nearby Device (LocalSend)". It sends a single note as HTML, the encrypted vault backup, or the Obsidian/HTML vault archives; the receiving device must human-accept before bytes move. Unit tests: `LocalSendProtocolTest` (18 tests, no network). **Release signing (updated 2026-08-17, phase-57/B1-PLAT-1): the release build FAILS CLOSED when `RELEASE_KEYSTORE_B64` (or `KEYSTORE_FILE`) is unset — the old debug-keystore fallback is gone; see `docs/RELEASE.md` + `B1Plat01ReleaseSigningTest`.**
+  - **Phase 21 (2026-08-14) added the Plugin Store + verified the execution path** (see `docs/PLUGINS.md` "Plugin Store — install/uninstall lifecycle"): `PluginStoreCatalog` (bundled catalog, no network) + `PluginStoreController` (pure-JVM download/delete) + `PluginRegistry.installPlugin/uninstallPlugin` (install-aware registry; `compiledPlugins` = full shipped set, `allPlugins` = installed set) + `SettingsPluginInstallStore`/`SettingsManager.plugin_uninstalled_<id>` (default installed = backward compatible). Delete wipes opt-in + ever-enabled + all `plugins.<id>.*` settings and deletes downloaded assets (`NoteflowPlugin.deleteDownloadedAssets`); Disable keeps data. `CaseChangePlugin` is the store's OPTIONAL plugin (not in `defaultPlugins()`). UI: `PluginStoreDialog` reachable from HomeScreen ⋮ menu → "Plugin Store". Tests: `PluginStoreLifecycleTest` (8), `PluginExecutionSimulationTest` (4). Also fixed a pre-existing `PaletteCatalog.familyFor` hue-band bug (curated swatches misclassified) — `PaletteCatalogTest` is green again.
+  - **Phase 10 (2026-08-13) added a REAL plugin framework** (`app/src/main/kotlin/com/authorss81/noteflow/plugins/`): `NoteflowPlugin` + `PluginCapability` sealed type (`TextTransform`, `OCR`, `WebSearch`, `FileTransfer`, `Assistant`, `Export`), compile-time `PluginRegistry` (no dynamic APK loading), `PluginManager` routing that fails loudly via `PluginResult.Failure`, per-plugin opt-in persisted in `SettingsManager` (`plugin_enabled_<id>`, off by default), a Settings → Plugins dialog (`PluginSettingsDialog`, reachable from HomeScreen's ⋮ menu), and `Rot13TransformPlugin` served through the `TextTransformPlugin` interface and wired into the Markdown editor's Plugins menu (`MarkdownPreviewScreen`). Covered by `PluginFrameworkTest` (10 tests). **Phase 12 made OCR + Web Search real**: `OnDeviceOcrPlugin` (ML Kit text-recognition, offline, no API key) and `DuckDuckGoWebSearchPlugin` (HTTPS, keyless) are registered (`PluginRegistry.kt`) and wired into `EditorScreen` (OCR result dialog) and `MarkdownPreviewScreen` (web-search dialog). The still-unserved capabilities are `FileTransfer`, `Assistant`, `Export` — requests for those fail loudly with `NO_PLUGIN_INSTALLED`. See `docs/PLUGINS.md`.
+  - **Phase 09 (2026-08-13) fixed the two Phase-02 data-loss defects that were still live** (see workspace/phase-09/REPORT.md): (1) H2 — a corrupt/wrong-key DB open no longer DELETES the vault files; `SafeSupportSQLiteOpenHelper` now quarantines them as `*.corrupt-<timestamp>` (bytes preserved), sets a persistent corruption flag, and MainActivity shows `CorruptionRecoveryScreen` (restore-from-backup or explicit start-fresh) before any normal vault UI (`NoteflowDatabase.kt` `quarantineCorruptDatabase`, `DatabaseSecurityHelper.kt` corruption flags, `MainActivity.kt` `CorruptionRecoveryScreen`). (2) H1 — a failed restore no longer bricks the app: the backup password is validated BEFORE `closeDatabase()` (`ImportExportService.validateBackupPassword` now called from `HomeScreen.performRestore` and `NoteflowViewModel.attemptRecoveryFromBackup`), and on any post-close failure the Room instance is reopened (`NoteflowDatabase.dispose()` + `NoteRepository.reopenDatabase`) and the process restarts via the existing restart dialog. (3) C1 — `reencryptPlaintextFields` now also re-encrypts `note_versions.{title,extractedText}`, matching the cross-device migrate map.
+  - **Phase 03 (2026-08-13) removed these dead/fake features**: the LibMyPaint C++ stub + whole engine-selector stack (`mypaint_jni.cpp`/`CMakeLists.txt`, `LibMyPaintJni`, `BrushEngine`/`BrushEngineFactory`, `HardwareProfiler`/`RenderingEngineTier`, `BrushEngineSettingsDialog`, `SettingsManager.renderingEngineOverride` — all deleted; the canvas renders via `WetBrushEngine`); `HandwritingRecognitionService` + `HandwritingToTextDialog` (dictionary-hash stub, unreachable — deleted); `FtsSearchEngine` (misnamed in-memory loop — deleted; vault search now uses a cached decrypted corpus in `NoteRepository`). Shape auto-snap is now WIRED (`ShapeRecognitionHelper.trySnapShape` runs on freehand draw-end in `AnnotationCanvas`, gated by the `shapeAutoSnapEnabled` setting; wet tools, LASER, DOTTED and NEON are excluded, and the RECT/ARROW/LINE detectors require real geometry fits so plain handwriting isn't snapped).
+
+## Roadmap state (August 2026)
+
+## Orientation (read these files yourself — do NOT rely on memory)
+- docs/ARCHITECTURE.md = living architecture map (package layout, core
+  subsystem file:line anchors, build/CI essentials, gotchas). READ IT.
+- docs/phase-status.md = phase status truth table. READ IT, then UPDATE
+  your phase's row when you finish.
+- workspace/PHASES.md = full phase table.
+- workspace/SECURITY_FIX_PLAN.md + docs/security-report*.md = security
+  findings status (only if your phase touches security).
+
+## Your task
+Execute the phase described in workspace/phase-170/PROMPT.md. Read that file now and
+complete it fully. The context above is orientation only.
+
+# Phase 170: Base-APK size — language-models corpus out of the base APK, ABI splits [NOT STARTED]
+
+You are working on **InkFlow/Noteflow**. This is a FIX phase generated by the
+phase-161 Kali round-2 triage. It closes the two still-OPEN APK packaging
+findings that the phase-159 release showed are STILL live on the current build
+(evidence in `docs/security-report.md`):
+
+- **Phase-32-NEW-01 (MEDIUM):** base APK bundles the **lingua** `language-models/`
+  n-gram pack (raw 207.6 MB / packed 80.2 MB = 56% of the 142 MB release APK)
+  even though `LanguageDetectionCore.SUPPORTED` only uses **24 of 75 languages**.
+- **Phase-32-NEW-02 (LOW):** no ABI splits — every device downloads all four
+  native ABIs (~55.4 MB packed) on top of the data pack.
+
+These violate the AGENTS.md **base-APK-size hard constraint** and the
+"lightweight pure-JVM plugins stay compile-time" carve-out (lingua's DATA
+payload is anything but lightweight). The fix must keep language detection
+working for the same 24 languages while removing the unused 51 languages from
+the shipped binary.
+
+Read `docs/ARCHITECTURE.md`, `docs/phase-status.md`, `docs/PLUGINS.md`,
+`docs/plugin-architecture.md`, and `AGENTS.md` first. In your REPORT, cite
+`file:line` for every claim.
+
+## Part A — Trim the lingua corpus to the 24 used languages (REAL, no new deps)
+
+`LanguageDetectionCore` (`app/src/main/kotlin/com/authorss81/noteflow/plugins/langdetect/LanguageDetectionCore.kt`)
+is a pure-JVM wrapper over `com.github.pemistahl:lingua:1.2.2`
+(`app/build.gradle.kts:219`, `gradle/libs.versions.toml:26`). It compiles a
+24-language `SUPPORTED` subset (`LanguageDetectionCore.kt`, `object
+LanguageDetectionCore` with `SUPPORTED: Map<String,String>` + a `fromLanguages`
+builder), yet the ENTIRE 75-language `language-models/` corpus ships inside the
+base APK because lingua bundles all model JARs as transitive resources.
+
+Fix approach (pick one that best matches the repo's structure — do NOT invent
+one that bloats the APK more):
+
+- **Preferred:** add AGP `packaging.resources.excludes` / `jniLibs`/resources
+  exclusions in `app/build.gradle.kts` (inside the `android { packaging {
+  resources { excludes += ... } } }` block) so the 51 unused language directories
+  under `language-models/` are stripped from the assembled APK while the 24
+  used ones remain. Verify the exact resource path layout lingua ships
+  (e.g. `language-models/*/` where `*` = ISO-639-1 code) against the artifact
+  in the local Gradle cache before writing the exclude list.
+- **Fallback:** any build-configure-only trim that reproducibly removes unused
+  lingua resources from the base APK (document the mechanism + verify the APK
+  diff). Do NOT switch language detection to a downloadable plugin in this
+  phase (leaner follow-up may come later; trimming is the in-scope fix) and do
+  NOT add new dependencies.
+- **If the payload is NOT reachable by build-config alone** (worst case: the
+  models are path-invariant — merged into a single model JAR that AGP dexes or
+  embeds such that `packaging.resources.excludes` cannot strip only the unused
+  languages), do NOT ship the phase as DONE and do NOT guess a partial exclude
+  that silently breaks detection. Prove the layout with `unzip -l`/`zipinfo` on
+  the built APK, record the evidence in the REPORT, keep the current (correct,
+  if bloated) payload untouched, and mark **Phase-32-NEW-01 STILL OPEN** with
+  the two viable user-facing follow-ups listed for decision: (a) vendor a
+  rebuilt half-size lingua model JAR containing only the 24 `SUPPORTED`
+  languages, or (b) move language detection to a downloadable signature-verified
+  plugin per the AGENTS.md base-APK-size rule. Both require user approval before
+  implementation — flag them, do not implement in this phase.
+
+Definition of done for Part A:
+- `gradle assembleDebug` green; `gradle assembleRelease` green (R8 minify ON).
+- The release APK's `language-models/` payload shrinks from ~80 MB packed to
+  effectively the 24 used languages only. Verify with `unzip -l`/`zipinfo` on
+  the built APK and record before/after byte counts in the REPORT.
+- `LanguageDetectionCore` still detects the same 24 `SUPPORTED` languages —
+  `LanguageDetectionEngineTest`/language-detection unit tests stay green (add
+  a test that pins the 24-language subset if none exists).
+- If an exclude list is added, add a unit test (pure-JVM, no APK needed) that
+  pins the `SUPPORTED` key set so the exclude list and the code cannot drift.
+- HARD DONE GATE: Part A may ONLY self-certify DONE when the assembled release
+  APK's byte count is actually reduced and the 51 unused languages are proven
+  gone (`unzip -l`/`zipinfo` + before/after bytes in REPORT). If the payload is
+  not reachable by build-config (see the third fix approach above), the phase
+  stays NOT-DONE/PARTIAL and Phase-32-NEW-01 stays OPEN — never ship the phase
+  as DONE on a doc-only "attempted, blocked" note.
+
+## Part B — ABI splits (release packaging, Phase-32-NEW-02)
+
+`app/build.gradle.kts` currently emits a single monolithic APK (no
+`splits`/`abiFilters`/`ndk` config exists today). Add ABI-split release APKs
+(`splits { abi { ... } }`) so a device only downloads/native-loads its own ABI
+(`arm64-v8a` / `armeabi-v7a` / `x86` / `x86_64`). Keep `assembleDebug` behavior
+unchanged. Ensure the fail-closed release-signing config
+(`app/build.gradle.kts:133-153`, `B1Plat01ReleaseSigningTest`) still passes —
+the split config must NOT weaken signing (each split APK is signed the same way;
+if your AGP setup signs splits automatically, keep `isSigned` true).
+
+Make an EXPLICIT, documented decision on `universalApk`: either keep one
+full-fat universal APK for sideloading/emulators (state the size in the REPORT
+and that Phase-32-NEW-02 is therefore only PARTIALLY addressed for distribution
+channels that consume it) or `isUniversalApk = false` (list which distribution
+path still needs a universal build). Do not leave it implicit.
+
+Definition of done for Part B (HARD — no self-certifying DONE without split output):
+- `gradle assembleRelease` builds and EVERY produced split APK passes
+  `apksigner verify`.
+- The split output is described in the REPORT (paths, ABI set, size per ABI)
+  INCLUDING the universal-Apk decision above.
+- Deleting the `x86` ABI from the split is acceptable if this repo's native
+  deps/x86 coverage makes it dead weight, but document the ABI set chosen — do
+  NOT silently drop ABIs.
+- If release splitting genuinely fails on this CI environment, the phase must
+  be marked `PARTIAL`/NOT-DONE and Phase-32-NEW-02 left OPEN with the failure
+  evidence in the REPORT — do not convert the fix into a debug-only deliverable
+  or a doc-only "deferred" note (the phase-77 false-completion pattern).
+
+## Constraints (AGENTS.md hard rules)
+- NO `.github/workflows/` edits. NO Room DB schema change. NO new dependencies.
+- Keep the security model intact: signing stays fail-closed (B1-PLAT-1),
+  FLAG_SECURE, allowBackup=false, no logging of decrypted content.
+- Do NOT switch the 24-language detection ONLINE behavior — offline-only.
+- Base-APK size is the goal: record before/after release-APK bytes in REPORT.
+
+Commit as `llops: phase-170 <one-line description>` and push.

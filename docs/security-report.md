@@ -54,15 +54,17 @@ Per area:
 
 ### Top risks (read this first)
 
-> **Post-fix status (2026-08-17, phase-115 sweep).** All CRITICAL/HIGH/MEDIUM
+> **Post-fix status (2026-08-19, phase-170).** All CRITICAL/HIGH/MEDIUM
 > findings are FIXED by the phase-39..114 pipeline unless noted. The remaining
 > OPEN/MEDIUM item is **`B2-DEPS-05`** (the downloadable LLM model is neither
 > hash-pinned nor signature-verified; `AssistantModelDownloader.kt:72` still
 > `instanceFollowRedirects = true`, no pin, `expectedSizeBytes` never compared —
 > the phase-77 `.done` was a false completion, removed in this sweep). The only
 > other OPEN items are INFO triage (B1-PLAT-6 namespace, B2-LOG-06, B2-DEPS-06)
-> and the Phase-32-NEW packaging/signing notes. What each original top risk now
-> means:
+> and the Phase-32-NEW signing/rotation note (NEW-03/04). The base-APK-size
+> findings are now FIXED: **Phase-32-NEW-01 (lingua corpus trim) + Phase-32-NEW-02
+> (ABI splits) closed by phase-170** (`workspace/phase-170/REPORT.md`). What each
+> original top risk now means:
 
 1. **CRITICAL — Downloadable-plugin integrity pins are attacker-defined.** **FIXED**
    (`B1-CRYPTO-01`/phase-39 + `B1-NET-03`/phase-42). The update manifest can no
@@ -1051,7 +1053,7 @@ No DB schema, workflow, or dependency changes were made.
 > **Correction (2026-08-15 review):** the initial run mis-attributed the `language-models/` pack to "ML Kit translation models". Decompilation + gradle-cache comparison proves it is the compile-time **lingua** (language-detection) library's bundled corpus, not ML Kit translate data — ML Kit translate models are NOT shipped in the APK (they download on the user's explicit action, `MlKitTranslatorEngine.kt:22-24`). The size/policy violation is real; only the attribution and the remediation path changed.
 - **Severity:** MEDIUM
 - **Area:** Packaging / base-APK-size policy (AGENTS.md hard constraint)
-- **Status:** `OPEN` — no fix phase (phase-115 sweep confirmed: not in the phase-39..114 fix plan; it is a packaging/size decision, deferred to the round-2 audit phase 116 / a future packaging phase). Remediation options documented in **Fix:** below.
+- **Status:** `FIXED` — phase-170 (2026-08-19, see `workspace/phase-170/REPORT.md`). `app/build.gradle.kts` now adds `packaging.resources.excludes` globs (`language-models/<iso>/**`, `:125-127`) for the 51 lingua languages that `LanguageDetectionCore.SUPPORTED` does not use (24 of 75 compiled) — the base APK's `language-models/` payload drops from ~80 MB packed (327 files / 75 dirs, raw 207,608,234) to ~35 MB packed (104 files / 24 dirs, raw 88,241,733). Release universal APK shrank 142.0 MB → 96,878,100 B; the 24 kept dirs are byte-identical to the lingua JAR so detection is unchanged (pinned by `Phase170LinguaTrimTest`, `LanguageDetectionTest` green).
 - **Agent/tool:** python3 `zipfile` size accounting on both APKs (`unzip -l`) + byte-for-byte comparison against the `com.github.pemistahl:lingua:1.2.2` JAR in the gradle cache
 - **Evidence:**
   - `release APK_size = 142.0 MB, 906 entries`; `language-models/ raw=207.6 MB packed=80.2 MB (56% of APK)`; `native .so raw=128.5 MB packed=55.4 MB`; debug APK 173.5 MB (same LM pack + 4-ABI natives + unminified x23 dex).
@@ -1065,7 +1067,7 @@ No DB schema, workflow, or dependency changes were made.
 ### [Phase-32-NEW-02] No ABI splits: every device downloads all four native ABIs (~55.4 MB packed) on top of the n-gram/data pack
 - **Severity:** LOW
 - **Area:** Packaging / efficiency
-- **Status:** `OPEN` — no fix phase (phase-115 sweep confirmed: not in the phase-39..114 fix plan; ABI splits / app bundle are a release-engineering decision, deferred to the round-2 audit phase 116).
+- **Status:** `FIXED` — phase-170 (2026-08-19, see `workspace/phase-170/REPORT.md`). `app/build.gradle.kts` now emits release-only ABI-split APKs (`splits { abi { } }`, `:140-147`, gated on the requested task list so `assembleDebug` stays monolithic): `app-arm64-v8a` / `app-armeabi-v7a` / `app-x86` / `app-x86_64` (each ~53.3–56.3 MB, single ABI's 6 native libs) plus one full-fat `app-universal-release.apk` (all 4 ABIs, 96.9 MB) for sideloading/emulators — every split passes `apksigner verify` (v2, `CN=InkFlow Release`). The universal APK is the only remaining non-split distribution path (Phase-32-NEW-02 partially addressed for channels that publish it; prefer a per-ABI APK per device).
 - **Agent/tool:** `unzip -l` / `aapt dump badging` / python3 `zipfile`
 - **Evidence:** `native-code: 'arm64-v8a' 'armeabi-v7a' 'x86' 'x86_64'` (aapt badging); `lib/` contains all four ABIs of every `.so` (raw 128.5 MB, packed 55.4 MB). No split-per-ABI / Play bundle output configured.
 - **Exploit scenario:** On a 99% arm64 device the user downloads and stores the same app 3.5x heavier than needed, including x86/x86_64 natives that will never load. Combined with Phase-32-NEW-01 this makes the 142 MB release representative of what every user pays for but never needs.

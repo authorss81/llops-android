@@ -1722,6 +1722,16 @@
     `com.android.tools.build` / `org.jetbrains.kotlin` / `androidx.databinding` so a NEW toolchain artifact
     resolves without failing closed on a missing checksum entry (verification still on). Part B (verify-only)
     re-confirmed all six decryption-failure/data-integrity safeguards with `file:line` evidence — see REPORT.
+  - **Implemented in phase-170** (Phase-32-NEW-01 + NEW-02, see `workspace/phase-170/REPORT.md`): the base APK's
+    lingua `language-models/` corpus is trimmed from 75 to the 24 `LanguageDetectionCore.SUPPORTED` languages —
+    `packaging.resources.excludes` strips `language-models/<iso>/**` for the 51 unused codes
+    (`app/build.gradle.kts:125-127`, globs compiled from the `LINGUA_UNUSED_LANGUAGE_ISOS` list `:13`, which is
+    source-pinned against the code subset by `Phase170LinguaTrimTest`) — and release builds emit ABI-split APKs
+    (`splits { abi { isUniversalApk = true … } }`, `:140-147`, enabled ONLY when a release task is requested so
+    `assembleDebug` stays monolithic). Release outputs: `app-{arm64-v8a,armeabi-v7a,x86,x86_64}-release.apk`
+    (~53.3-56.3 MB each) + `app-universal-release.apk` (~96.9 MB, all 4 ABIs, sideload/emulator channel); every
+    split is signed by `releaseConfig` and passes `apksigner verify` (B1-PLAT-1 fail-closed untouched).
+    `docs/RELEASE.md` Artifacts table updated. `gradle assembleDebug` + `assembleRelease` green.
 - Tests: `app/src/test/java/com/authorss81/noteflow/` (~110 unit tests, pure JVM, no androidTest).
 - **Do NOT run Gradle on the Windows dev machine** (no SDK; CI-only builds).
 - Version: `VERSION_CODE`/`VERSION_NAME` env (default 2 / "1.0.0"). Release signing is FAIL-CLOSED

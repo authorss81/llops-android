@@ -1,5 +1,23 @@
 import java.util.Properties
 
+// Phase 170 (Phase-32-NEW-01 MEDIUM): lingua 1.2.2 ships ALL 75 `language-models/<iso>/**`
+// n-gram dirs as plain JAR resources (loaded via `getResourceAsStream("/language-models/...")`),
+// even though `LanguageDetectionCore.SUPPORTED` only compiles a 24-language subset. The 51
+// unused dirs are stripped at packaging time (see `packaging.resources.excludes` below), which
+// shrinks the base APK's language-models payload from ~80 MB packed to the 24 used languages
+// (~35 MB packed). The codes below = lingua's full 75-language corpus minus SUPPORTED (24),
+// verified byte-for-byte against the `com.github.pemistahl:lingua:1.2.2` JAR in the Gradle cache
+// (each dir holds `{uni,bi,tri,quadri,five}grams.json`; non-Latin scripts ship unigrams only).
+// Source-pinned against `LanguageDetectionCore.SUPPORTED` by `Phase170LinguaTrimTest` so the
+// exclude list and the detection subset cannot drift apart.
+private val LINGUA_UNUSED_LANGUAGE_ISOS = listOf(
+    "af", "az", "be", "bg", "bn", "bs", "ca", "cy", "eo", "et", "eu", "fa",
+    "ga", "gu", "he", "hr", "hy", "id", "is", "ka", "kk", "la", "lg", "lt",
+    "lv", "mi", "mk", "mn", "mr", "ms", "nn", "pa", "sk", "sl", "sn", "so",
+    "sq", "sr", "st", "sw", "ta", "te", "th", "tl", "tn", "ts", "ur", "vi",
+    "xh", "yo", "zu"
+)
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -98,6 +116,33 @@ android {
     packaging {
         jniLibs {
             useLegacyPackaging = true
+        }
+        // Phase 170 (Phase-32-NEW-01): strip the 51 lingua language-model dirs that
+        // LanguageDetectionCore never loads. AGP's java-resource merge honors these
+        // globs in `MergeJavaResourcesDelegate` (`ParsedPackagingOptions.getAction` ->
+        // EXCLUDE), so `language-models/<iso>/**` prunes each unused dir from the
+        // assembled APK while the 24 used languages stay loadable by the detector.
+        resources {
+            excludes += LINGUA_UNUSED_LANGUAGE_ISOS.map { "language-models/$it/**" }
+        }
+    }
+
+    // Phase 170 (Phase-32-NEW-02 LOW): release-only ABI-split APKs, so a device only
+    // downloads/native-loads its own `arm64-v8a` / `armeabi-v7a` / `x86` / `x86_64`
+    // (each ABI = ~6 native libs, ~12-16 MB packed today). The legacy `splits` DSL is
+    // NOT build-type-aware, so ABI splitting is activated ONLY when the requested task
+    // list contains a release-variant task; a plain `gradle assembleDebug` keeps
+    // producing the single monolithic debug APK exactly as before. `isUniversalApk =
+    // true` keeps one full-fat APK (all 4 ABIs, emitted as `app-universal-release.apk`)
+    // for sideloading/emulators — see `docs/RELEASE.md` for the revised artifact list.
+    // Every split APK is signed by the same `releaseConfig` (B1-PLAT-1 fail-closed
+    // signing is untouched).
+    splits {
+        abi {
+            isEnable = gradle.startParameter.taskNames.any { it.substringAfterLast(':').lowercase().contains("release") }
+            reset()
+            include("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
+            isUniversalApk = true
         }
     }
 

@@ -103,8 +103,10 @@ job **before** the `assembleRelease` step, for example:
 ### Verify the signature
 
 ```bash
-# Signing key of a produced APK
-keytool -printcert -jarfile app/build/outputs/apk/release/app-release.apk | grep -E "owner|CN"
+# Signing key of a produced APK (check the universal + every ABI split)
+keytool -printcert -jarfile app/build/outputs/apk/release/app-universal-release.apk | grep -E "owner|CN"
+keytool -printcert -jarfile app/build/outputs/apk/release/app-arm64-v8a-release.apk | grep -E "owner|CN"
+apksigner verify --verbose app/build/outputs/apk/release/*.apk   # all must print "Verifies"
 ```
 
 Expected for a real build: your `CN=InkFlow...` cert. If it says
@@ -113,10 +115,22 @@ before publishing.
 
 ## Artifacts
 
-| Build | Output |
+`assembleRelease` now emits **ABI-split APKs** (phase-170, Phase-32-NEW-02) so a
+device only downloads/native-loads its own ABI. The output directory is
+`app/build/outputs/apk/release/`:
+
+| Build | Output(s) |
 |---|---|
-| `assembleRelease` | `app/build/outputs/apk/release/app-release.apk` |
-| `assembleDebug` | `app/build/outputs/apk/debug/app-debug.apk` |
+| `assembleRelease` | `app-arm64-v8a-release.apk`, `app-armeabi-v7a-release.apk`, `app-x86-release.apk`, `app-x86_64-release.apk` (one per ABI) **and** `app-universal-release.apk` (all 4 ABIs, for sideloading/emulators) — signed with the same `releaseConfig` (fail-closed, B1-PLAT-1) |
+| `assembleDebug` | `app/build/outputs/apk/debug/app-debug.apk` (single monolithic APK, unchanged) |
+
+- The ABI split runs ONLY on release builds (`splits.abi.isEnable` is gated on the
+  requested task list containing a release task); `assembleDebug` output is unchanged.
+- Every produced split APK passes `apksigner verify` (v2), signed `CN=InkFlow Release`.
+- The universal APK is the full-fat fallback for sideloading / emulators / x86
+  test-beds; it keeps ALL four ABIs + the trimmed lingua corpus and is the honest
+  "one build downloads everything" channel (Phase-32-NEW-02 notes it as the only
+  remaining non-split distribution path — prefer an ABI-split APK per device).
 
 A ".aab" (Android App Bundle) is not produced yet — generating one needs
 `bundleRelease`. Do that when actually onboarding to Play.
