@@ -68,4 +68,16 @@ object CanvasPageBudgetPolicy {
         if (!maxY.isFinite() || pageStride <= 0f) return 1
         return (maxY / pageStride).toInt() + 1
     }
+
+    /**
+     * One-time non-alarming notice (phase-150 review fix 4) shown when a note's
+     * OWN stroke content extends past the [MAX_DYNAMIC_PAGES] world ceiling —
+     * distinct from a big `visibleBottomY` from deep panning. The ceiling is
+     * far above any real note (~2000 pages ≈ 3.18M px), so a crafted restore
+     * (or an astronomically long note) is folded; the ink stays in the vault but
+     * is not drawn past the ceiling. Informational tone, never an alarm.
+     */
+    fun pageCountCappedNotice(): String =
+        "This canvas shows at most $MAX_DYNAMIC_PAGES pages. Strokes that extend " +
+            "past that depth stay in the note but aren't displayed — move them up to see them."
 }

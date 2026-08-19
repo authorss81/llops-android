@@ -193,6 +193,69 @@ class Phase150CanvasRenderBudgetTest {
         assertEquals("the most recently drawn pages are retained", (6..11).map { "p$it" }, warmestFirst)
     }
 
+    // ---- Phase-150 review fix 1: protected-page eviction --------------------
+
+    @Test
+    fun `the protected-page eviction keeps a drawn page's whole layer stack`() {
+        val pageBytes = LayerRenderBudgetPolicy.byteSize(1080, 2400)
+        var bytes = 0L
+        var lru = listOf<Pair<String, Long>>() // cold -> warm, the LRU's map order
+        for (i in 0 until LayerRenderBudgetPolicy.MAX_LIVE_LAYER_COUNT) {
+            val key = "pageA_layer_${i}_OFF_v0.0" // mirrors the real AnnotationCanvas cache key
+            lru = lru + (key to pageBytes)
+            bytes += pageBytes
+            val keep = LayerRenderBudgetPolicy.resolveProtectedEviction(
+                lru.map { it.first },
+                lru.map { it.second },
+                protectedPage = LayerRenderBudgetPolicy.pageKeyOf(key),
+                residentBytes = bytes
+            )
+            val removed = lru.map { it.first } - keep
+            lru = lru.filter { it.first in keep }
+            bytes -= removed.size * pageBytes
+        }
+        // Review fix: evicting the ACTIVE page's own stack mid-draw was turning a
+        // legit 16-layer note into per-frame re-rasterization. All 16 survive one
+        // draw pass even though 16 x 10_368_000 = 166 MB > the 64 MB budget.
+        assertEquals("the full top-16 stack of the active page survives one pass", LayerRenderBudgetPolicy.MAX_LIVE_LAYER_COUNT, lru.size)
+        assertEquals("resident holds all 16 (bounded by the layer cap, not per-frame churn)", 16L * pageBytes, bytes)
+        assertEquals("the page token parses out of the cache key", "pageA", LayerRenderBudgetPolicy.pageKeyOf(lru.first().first))
+    }
+
+    @Test
+    fun `cross-page evictions still hold the 64 MB byte budget`() {
+        val pageBytes = LayerRenderBudgetPolicy.byteSize(1080, 2400)
+        val capacity = (LayerRenderBudgetPolicy.MAX_RESIDENT_BITMAP_BYTES / pageBytes).toInt()
+        var bytes = 0L
+        var lru = listOf<Pair<String, Long>>()
+        for (i in 0 until 12) {
+            val key = "p$i"
+            lru = lru + (key to pageBytes)
+            bytes += pageBytes
+            val keep = LayerRenderBudgetPolicy.resolveProtectedEviction(
+                lru.map { it.first },
+                lru.map { it.second },
+                protectedPage = LayerRenderBudgetPolicy.pageKeyOf(key),
+                residentBytes = bytes
+            )
+            val removed = lru.map { it.first } - keep
+            lru = lru.filter { it.first in keep }
+            bytes -= removed.size * pageBytes
+        }
+        assertTrue("resident raster stays within the byte budget across pages", bytes <= LayerRenderBudgetPolicy.MAX_RESIDENT_BITMAP_BYTES)
+        assertEquals("only the recently drawn pages survive", capacity, lru.size)
+        assertEquals("the recently drawn pages survive in order", (6..11).map { "p$it" }, lru.map { it.first })
+    }
+
+    @Test
+    fun `the LRU executes the policy's protected eviction decision and releases to the pool`() {
+        val lru = sourceFile("ui/components/LayerBitmapLruCache.kt")
+        assertTrue("the keep decision is the policy's protected resolver", lru.contains("LayerRenderBudgetPolicy.resolveProtectedEviction("))
+        assertTrue("the active page token comes from the policy", lru.contains("LayerRenderBudgetPolicy.pageKeyOf(activeKey)"))
+        assertTrue("evicted bitmaps go back to the pool", lru.contains("BitmapPool.release("))
+        assertTrue("the read still moves the entry to the warm head", lru.contains("fun get(key: String): LayerBitmapCache? = map[key]"))
+    }
+
     @Test
     fun `byte-size accounting reports overages and the budget reads sane at the edges`() {
         val pageBytes = LayerRenderBudgetPolicy.byteSize(1080, 2400) // 10_368_000
@@ -341,6 +404,19 @@ class Phase150CanvasRenderBudgetTest {
         assertTrue("the read re-sorts ascending for the editor", region.contains(".sortedBy { it.zOrder }"))
         assertTrue("a genuinely empty page still creates the default layer", region.contains("LayerEntity(") && region.contains("insertLayer(defaultLayer)"))
         assertTrue("the count accessor exists", repo.contains("suspend fun getLayerCountForPage(pageId: String): Int"))
+        // Phase-150 review fix 2: capToLiveLimit is LIVE over the bounded read,
+        // not a test-only mirror — a 40-row crafted page still prunes the same way.
+        assertTrue("the pure policy model runs live over the bounded read", region.contains("capToLiveLimit(it)"))
+    }
+
+    @Test
+    fun `the legacy unbounded DAO read is never used by the repository`() {
+        val repo = sourceFile("data/repository/NoteRepository.kt")
+        val loader = repo.substringAfter("suspend fun getLayersForPage").substringBefore("suspend fun getLayerCountForPage")
+        assertTrue("the repo never calls the legacy unbounded DAO method", !loader.contains("getLayersForPage(pageId)"))
+        assertTrue("the repo calls only the bounded top-layer read", loader.contains("getTopLayersForPageBounded("))
+        val daos = sourceFile("data/db/Daos.kt")
+        assertTrue("the legacy unbounded read stays for API compat but has no live caller", daos.contains("suspend fun getLayersForPage(pageId: String): List<LayerEntity>"))
     }
 
     @Test
@@ -365,6 +441,11 @@ class Phase150CanvasRenderBudgetTest {
         assertTrue("the folder count comes from the policy", loader.contains("LayerRenderBudgetPolicy.omittedLayerCount") || loader.contains("LayerRenderBudgetPolicy.omittedLayerCount("))
         assertTrue("the one-time set exists and is keyed per page", vm.contains("layerCappedNotifiedPages = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()"))
         assertTrue("the lock path clears the session gate", vm.contains("layerCappedNotifiedPages.clear()"))
+        // Phase-150 review fix 6: the RAW count is read BEFORE the bounded load
+        // (so a genuinely empty page's post-insert default layer can't skew it).
+        val countIdx = loader.indexOf("repository.getLayerCountForPage(pageId)")
+        val loadIdx = loader.indexOf("repository.getLayersForPage(pageId)")
+        assertTrue("raw count is read before the bounded layer load", countIdx != -1 && loadIdx != -1 && countIdx < loadIdx)
     }
 
     @Test
@@ -375,6 +456,26 @@ class Phase150CanvasRenderBudgetTest {
         assertTrue("put goes through the eviction budget", canvas.contains("layerBitmapCache.put(cacheKey, cache)"))
         assertTrue("the world-Y clamp is wired before the page math", canvas.contains("CanvasPageBudgetPolicy.clampMaxStrokeY(maxStrokeY, pageStride)"))
         assertTrue("the derived count is clamped", canvas.contains("CanvasPageBudgetPolicy.clampCalculatedPages("))
+    }
+
+    @Test
+    fun `the one-time page-count-capped notice is wired through canvas to the editor snackbar`() {
+        // Phase-150 review fix 4: the clamp is never SILENT — a note whose own
+        // strokes stretch past the world ceiling raises a one-time non-alarming
+        // notice, distinct from deep panning (visibleBottomY).
+        val canvas = sourceFile("ui/components/AnnotationCanvas.kt")
+        assertTrue("the canvas exposes the capped callback (default no-op)", canvas.contains("onDynamicPageCountCapped: (() -> Unit)? = null"))
+        assertTrue("the canvas derives the own-content-beyond flag separately", canvas.contains("ownContentBeyondCeiling"))
+        assertTrue("the one-time notify flag is remembered", canvas.contains("pageCountCappedNotified"))
+        assertTrue("the fold is only flagged for OWN content, not pan depth", canvas.contains("maxStrokeY > com.authorss81.noteflow.services.CanvasPageBudgetPolicy.maxStrokeYCeiling(pageStride)"))
+
+        val editor = sourceFile("ui/screens/EditorScreen.kt")
+        assertTrue("the editor wires the notice through the snackbar", editor.contains("CanvasPageBudgetPolicy.pageCountCappedNotice()"))
+        assertTrue("the editor passes the callback to the canvas", editor.contains("onDynamicPageCountCapped = {"))
+
+        val policy = sourceFile("services/CanvasPageBudgetPolicy.kt")
+        assertTrue("the notice text lives in the policy", policy.contains("fun pageCountCappedNotice()"))
+        assertTrue("the notice states the ceiling instead of alarming", policy.contains("at most \$MAX_DYNAMIC_PAGES pages"))
     }
 
     @Test
@@ -390,6 +491,10 @@ class Phase150CanvasRenderBudgetTest {
         assertTrue("the minimap iterates by the budgeted point stride", minimapRegion.contains("step pointStep"))
         assertTrue("the total point count is summed once for the stride", canvas.contains("activeStrokeList.sumOf { it.points.size }"))
         assertFalse("the fixed 1/2/4 point stride is gone", minimapRegion.contains("val pStep = if (pCount > 100) 4"))
+        // Phase-150 review fix 5: a short stroke whose own point count is
+        // overshot by the GLOBAL stride gets a single fallback line instead of
+        // vanishing from the thumbnail.
+        assertTrue("short strokes get a start-to-end fallback line", minimapRegion.contains("if (!drew)"))
     }
 
     @Test
@@ -412,6 +517,10 @@ class Phase150CanvasRenderBudgetTest {
         assertTrue("the staged prune opens only the snapshot copy", staged.contains("stagedDb, passphrase"))
         assertTrue("the staged prune is keyed by the in-memory DEK", staged.contains("VaultKeyHolder.dek"))
         assertTrue("the staged prune never touches the live repository", !staged.contains("repository."))
+        // Phase-150 review fix 3: a crafted/pre-schema archive with no `layers`
+        // table must not abort the whole backup — same tolerance as the restore
+        // sanitizer (real failures still abort).
+        assertTrue("the staged prune tolerates a missing layers table", staged.contains("shouldPropagateRestoreStripFailure"))
     }
 
     // ---------- helpers ----------

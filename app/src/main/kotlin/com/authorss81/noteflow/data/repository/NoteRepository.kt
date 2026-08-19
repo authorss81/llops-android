@@ -1399,6 +1399,14 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
                 pageId,
                 LayerRenderBudgetPolicy.MAX_LIVE_LAYER_COUNT
             )
+            // Phase-150 review fix 2: run the pure policy model over the bounded
+            // read so `capToLiveLimit` is LIVE code (exercised on every page load)
+            // instead of a test-only mirror. The DAO query already limited to the
+            // TOP-MAX_LIVE_LAYER_COUNT by zOrder/rowid, so for any ≤16-row page this
+            // is a pass-through; for a crafted/legacy 40-row page both the model and
+            // the SQL prune to the same deterministic keep-set (never reintroduces a
+            // full-table read into the renderer path).
+            .let { LayerRenderBudgetPolicy.capToLiveLimit(it) }
             .sortedBy { it.zOrder }
         if (layers.isEmpty()) {
             val defaultLayerId = "layer_$pageId"

@@ -131,6 +131,11 @@ fun AnnotationCanvas(
     onZoomScaleChanged: (Float) -> Unit = {},
     onPanOffsetChanged: (Offset) -> Unit = {},
     onVisiblePageWindowChanged: (Set<Int>) -> Unit = {},
+    // Phase-150 review fix 4: raised ONCE per session when the note's own
+    // stroke content extends past the CanvasPageBudgetPolicy.MAX_DYNAMIC_PAGES
+    // world ceiling (the fold is silent otherwise). Default no-op so pre-existing
+    // call sites (tests/previews) keep compiling unchanged.
+    onDynamicPageCountCapped: (() -> Unit)? = null,
     onStrokesChanged: (List<Stroke>) -> Unit,
     onStickyNotesChanged: (List<CanvasStickyNote>) -> Unit = {},
     onMediaEmbedsChanged: (List<CanvasMediaEmbed>) -> Unit = {},
@@ -1001,9 +1006,13 @@ fun AnnotationCanvas(
     ) {
         val viewHeightPx = with(LocalDensity.current) { maxHeight.toPx() }
 
-        val calculatedPageCount = remember(isPdf, pdfTotalPages, isContinuousMode, activeStrokeList.size, layoutPanOffset, layoutZoomScale, viewHeightPx) {
+        // Phase-150 review fix 4: the derived page count carries a flag when the
+        // note's OWN content (not deep panning) extends past the world ceiling —
+        // that case fires the one-time non-alarming notice via
+        // [onDynamicPageCountCapped] instead of silently dropping the tail ink.
+        val calculatedPageCountState = remember(isPdf, pdfTotalPages, isContinuousMode, activeStrokeList.size, layoutPanOffset, layoutZoomScale, viewHeightPx) {
             if (isPdf) {
-                kotlin.math.max(1, pdfTotalPages)
+                kotlin.math.max(1, pdfTotalPages) to false
             } else if (isContinuousMode) {
                 var maxStrokeY = 0f
                 for (stroke in activeStrokeList) {
@@ -1025,15 +1034,30 @@ fun AnnotationCanvas(
                     com.authorss81.noteflow.services.CanvasPageBudgetPolicy.clampMaxStrokeY(maxStrokeY, pageStride),
                     visibleBottomY
                 )
+                // Content BEYOND the ceiling only when the stroke geometry itself
+                // reaches past it — a huge visibleBottomY from panning must not
+                // trip the notice.
+                val ownContentBeyondCeiling = maxStrokeY.isFinite() &&
+                    maxStrokeY > com.authorss81.noteflow.services.CanvasPageBudgetPolicy.maxStrokeYCeiling(pageStride)
                 val calculatedPages = com.authorss81.noteflow.services.CanvasPageBudgetPolicy.calculatedPagesFor(maxY, pageStride)
-                com.authorss81.noteflow.services.CanvasPageBudgetPolicy.clampCalculatedPages(calculatedPages)
+                com.authorss81.noteflow.services.CanvasPageBudgetPolicy.clampCalculatedPages(calculatedPages) to ownContentBeyondCeiling
             } else {
-                1
+                1 to false
             }
         }
+        val calculatedPageCount = calculatedPageCountState.first
+        val canvasContentBeyondCeiling = calculatedPageCountState.second
+        // One-time per session per canvas (like the layer-cap notice): the very
+        // first time the note's own strokes are found past the ceiling, tell the
+        // user once instead of silently hiding the tail ink.
+        var pageCountCappedNotified by remember { mutableStateOf(false) }
         SideEffect {
             if (dynamicPageCount != calculatedPageCount) {
                 dynamicPageCount = calculatedPageCount
+            }
+            if (canvasContentBeyondCeiling && !pageCountCappedNotified) {
+                pageCountCappedNotified = true
+                onDynamicPageCountCapped?.invoke()
             }
         }
 
@@ -1998,6 +2022,7 @@ Stroke(
                                         if (stroke.points.size > 1) {
                                             val pCount = stroke.points.size
                                             var prevPt = stroke.points[0]
+                                            var drew = false
                                             for (i in pointStep until pCount step pointStep) {
                                                 val nextPt = stroke.points[i]
                                                 drawLine(
@@ -2007,6 +2032,26 @@ Stroke(
                                                     strokeWidth = 2f
                                                 )
                                                 prevPt = nextPt
+                                                drew = true
+                                            }
+                                            // Phase-150 review fix 5: when the GLOBAL point
+                                            // stride overshoots this stroke's own point count
+                                            // (huge document ⇒ large stride), the poly-line
+                                            // loop above draws nothing and a short stroke used
+                                            // to vanish from the thumbnail. Draw the stroke as
+                                            // a single start→end line instead so it stays
+                                            // visible, at the cost of ≤1 extra drawLine per
+                                            // sampled stroke (already inside the policy's
+                                            // maxLineDraws bound).
+                                            if (!drew) {
+                                                val startPt = stroke.points[0]
+                                                val endPt = stroke.points[pCount - 1]
+                                                drawLine(
+                                                    color = stroke.color.copy(alpha = 0.7f),
+                                                    start = Offset(startPt.x * mapScale, startPt.y * mapScale),
+                                                    end = Offset(endPt.x * mapScale, endPt.y * mapScale),
+                                                    strokeWidth = 2f
+                                                )
                                             }
                                         } else if (stroke.start != null && stroke.end != null) {
                                             drawLine(

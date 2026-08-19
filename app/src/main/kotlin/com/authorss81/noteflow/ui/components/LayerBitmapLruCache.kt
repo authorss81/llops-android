@@ -17,13 +17,25 @@ import com.authorss81.noteflow.utils.BitmapPool
  * viewport shows 16 layers × 3 pages would similarly hold 48 bitmaps
  * (~500 MB) forever.
  *
- * This holder bounds the resident native bytes to
- * [LayerRenderBudgetPolicy.MAX_RESIDENT_BITMAP_BYTES] with straightforward LRU
- * semantics (Java `LinkedHashMap` access-ordering): acquiring an entry over the
- * budget evicts least-recently-USED bitmaps back to [BitmapPool] BEFORE the map
- * grows further, so acquisition is fail-closed by construction. Byte accounting
- * is O(1) (counter) and the eviction loop is bounded by the entry count (never
- * more than ~one entry per visible layer × page the user actually looks at).
+ * This holder bounds the resident native bytes with a two-tier guarantee
+ * (phase-150 review fix 1):
+ *  - the ACTIVE page's (the page being drawn, i.e. the [put] key just touched)
+ *    own layer stack is NEVER evicted — its resident size is already bounded by
+ *    LayerRenderBudgetPolicy.MAX_LIVE_LAYER_COUNT × one page bitmap, and
+ *    evicting it mid-draw would make a legitimate 16-layer note re-rasterize
+ *    itself every frame (the benchmark regression this review fix removes);
+ *  - every OTHER least-recently-used page's rasters ARE evicted back to
+ *    [BitmapPool] until the resident total fits
+ *    LayerRenderBudgetPolicy.MAX_RESIDENT_BITMAP_BYTES, so a multi-page viewport
+ *    still holds a bounded working set.
+ *
+ * The keep/evict DECISION is the policy's pure
+ * [LayerRenderBudgetPolicy.resolveProtectedEviction] (unit-testable without
+ * Android); this class only executes it against the `LinkedHashMap` and releases
+ * the evicted bitmaps. Unless the protected page alone is over the byte budget
+ * (only possible when a full 16-layer stack exceeds it, which the layer cap
+ * deliberately permits), `resolveProtectedEviction` settles at or under the
+ * budget by construction.
  *
  * Not a synchronous-thread-safety concern: the cache is composition-scoped and
  * mutated only from the draw + invalidation effects on the same thread, exactly
@@ -46,8 +58,10 @@ class LayerBitmapLruCache {
     /**
      * Inserts/replaces [cache] at [key]. Any entry already at [key] is released
      * back to [BitmapPool] (its own LRU slot is overwritten), the byte counter is
-     * kept exact, and if the budget is exceeded the least-recently-USED entries
-     * are evicted (released to [BitmapPool]) until the budget holds.
+     * kept exact, and if the budget is exceeded the decision is delegated to
+     * [LayerRenderBudgetPolicy.resolveProtectedEviction]: least-recently-USED
+     * entries of OTHER pages are released to [BitmapPool] until the budget
+     * holds, while [key]'s own page's stack is never released mid-draw.
      */
     fun put(key: String, cache: LayerBitmapCache): LayerBitmapCache {
         val existing = map[key]
@@ -60,7 +74,7 @@ class LayerBitmapLruCache {
         map[key] = cache
         bytes += LayerRenderBudgetPolicy.byteSize(cache.bitmap.width, cache.bitmap.height)
         if (bytes > LayerRenderBudgetPolicy.MAX_RESIDENT_BITMAP_BYTES) {
-            evictUntilWithinBudget()
+            evictUntilWithinBudget(key)
         }
         return cache
     }
@@ -74,10 +88,21 @@ class LayerBitmapLruCache {
         bytes = 0L
     }
 
-    private fun evictUntilWithinBudget() {
+    private fun evictUntilWithinBudget(activeKey: String) {
+        val coldToWarmKeys = map.keys.toList()
+        val kept = LayerRenderBudgetPolicy.resolveProtectedEviction(
+            coldToWarmKeys = coldToWarmKeys,
+            coldToWarmBytes = coldToWarmKeys.map {
+                LayerRenderBudgetPolicy.byteSize(map[it]!!.bitmap.width, map[it]!!.bitmap.height)
+            },
+            protectedPage = LayerRenderBudgetPolicy.pageKeyOf(activeKey),
+            residentBytes = bytes
+        )
+        val keptSet = kept.toHashSet()
         val iterator = map.entries.iterator()
-        while (iterator.hasNext() && bytes > LayerRenderBudgetPolicy.MAX_RESIDENT_BITMAP_BYTES) {
+        while (iterator.hasNext()) {
             val entry = iterator.next()
+            if (entry.key in keptSet) continue
             bytes -= LayerRenderBudgetPolicy.byteSize(entry.value.bitmap.width, entry.value.bitmap.height)
             iterator.remove()
             BitmapPool.release(entry.value.bitmap.asAndroidBitmap())

@@ -32,7 +32,10 @@ import com.authorss81.noteflow.data.model.LayerEntity
  *     evicts least-recently-used bitmaps back to [com.authorss81.noteflow.utils.BitmapPool]
  *     so total resident raster memory stays bounded regardless of page count.
  *     [byteSize] / [wouldExceedResidentBudget] / [overageBytes] are the byte
- *     accounting.
+ *     accounting. The budget is a CROSS-PAGE bound: [resolveProtectedEviction]
+ *     never evicts the ACTIVE page's own layer stack (bounded by the layer cap)
+ *     so a legit 16-layer note is not re-rasterized every frame — see
+ *     [MAX_RESIDENT_BITMAP_BYTES] for the two-tier guarantee (phase-150 review fix 1).
  *  3. The capacity arithmetic + BOTH non-alarming notices ([layerLimitNotice],
  *    [layersCappedNotice]) — AGENTS.md hardware-reality rule: never silent
  *    degradation, always a one-time non-alarming message.
@@ -55,10 +58,22 @@ object LayerRenderBudgetPolicy {
     const val MAX_LIVE_LAYER_COUNT = 16
 
     /**
-     * Total native bytes the resident layer-bitmap LRU may hold. ~6 full-page
-     * 1080x2400 ARGB_8888 bitmaps (10.4 MB each) — far below the ~416 MB the
-     * uncapped pre-fix state could reach with 40 layers, and comfortably
-     * inside a 1-2 GB device's budget.
+     * Total native bytes the resident layer-bitmap LRU holds ACROSS pages.
+     * ~6 full-page 1080x2400 ARGB_8888 bitmaps (10.4 MB each) — far below the
+     * ~416 MB the uncapped pre-fix state could reach with 40 layers, and
+     * comfortably inside a 1-2 GB device's budget.
+     *
+     * The byte budget is a CROSS-PAGE bound (phase-150 review fix 1): the LRU
+     * never evicts the ACTIVE page's own layer stack (its resident size is
+     * already bounded by the [MAX_LIVE_LAYER_COUNT] cap + one page-bitmap
+     * each), because evicting it mid-draw would turn a legitimate 16-layer note
+     * into per-frame re-rasterization churn. A page being drawn therefore holds
+     * at most `MAX_LIVE_LAYER_COUNT` bitmaps (≈166 MB at 1080x2400 — the same
+     * worst case the pre-fix canvas held for a legit 16-layer note), and every
+     * OTHER least-recently-used page's bitmaps are evicted back to the pool to
+     * hold this budget. Widget order of the two invariants:
+     * 1. single page ≤ MAX_LIVE_LAYER_COUNT bitmaps (never churns its own draw);
+     * 2. everything else ≤ MAX_RESIDENT_BITMAP_BYTES.
      */
     const val MAX_RESIDENT_BITMAP_BYTES = 64L * 1024L * 1024L
 
@@ -110,6 +125,48 @@ object LayerRenderBudgetPolicy {
     /** By how many bytes the resident map busts the budget including the new entry (0 if fine). */
     fun overageBytes(currentBytes: Long, newEntryBytes: Long): Long =
         (currentBytes + newEntryBytes - MAX_RESIDENT_BITMAP_BYTES).coerceAtLeast(0L)
+
+    /**
+     * The page token embedded in a layer-raster cache key
+     * (`"${pageIdx}_${layer.id}_${symmetryMode}_v${vibrancyBoost}"`,
+     * AnnotationCanvas cache keys). The LRU's active-page protection keys off
+     * this token.
+     */
+    fun pageKeyOf(cacheKey: String): String = cacheKey.substringBefore('_')
+
+    /**
+     * The survivor set of the LRU's protected-page eviction decision (phase-150
+     * review fix 1): walk the resident entries in LRU order (coldest first) and
+     * release any whose [pageKeyOf] page differs from [protectedPage] until the
+     * resident byte total ([residentBytes]) fits [MAX_RESIDENT_BITMAP_BYTES].
+     * Entries OF the protected page survive unconditionally — their resident
+     * size is already bounded by [MAX_LIVE_LAYER_COUNT] × one page bitmap, and
+     * evicting them mid-draw would make a legitimate 16-layer page re-rasterize
+     * itself every frame. Once the budget holds, warmer entries are retained too,
+     * so a multi-page viewport still holds only the recently-visited pages.
+     * Pure decision, shared with [com.authorss81.noteflow.ui.components.LayerBitmapLruCache].
+     */
+    fun resolveProtectedEviction(
+        coldToWarmKeys: List<String>,
+        coldToWarmBytes: List<Long>,
+        protectedPage: String,
+        residentBytes: Long
+    ): List<String> {
+        var bytes = residentBytes
+        var budgetHolds = bytes <= MAX_RESIDENT_BITMAP_BYTES
+        val survivors = ArrayList<String>(coldToWarmKeys.size)
+        for (i in coldToWarmKeys.indices) {
+            val key = coldToWarmKeys[i]
+            val keep = budgetHolds || pageKeyOf(key) == protectedPage
+            if (keep) {
+                survivors += key
+            } else {
+                bytes -= coldToWarmBytes[i]
+                if (bytes <= MAX_RESIDENT_BITMAP_BYTES) budgetHolds = true
+            }
+        }
+        return survivors
+    }
 
     /**
      * The live-cap semantics definition (pure JVM mirror of the SQL in

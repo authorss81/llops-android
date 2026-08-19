@@ -2580,7 +2580,15 @@ object ImportExportService {
                 stagedDb, passphrase, null, null, null
             )
             try {
-                pruneLayerPagesToLiveCap(db)
+                // Phase-150 review fix 3: a missing `layers` table (a vault from
+                // before the table existed, or a crafted archive) must not abort
+                // the whole backup — nothing to strip. Mirrors the restore
+                // sanitizer's tolerance; any REAL failure still aborts.
+                try {
+                    pruneLayerPagesToLiveCap(db)
+                } catch (e: Exception) {
+                    if (shouldPropagateRestoreStripFailure(e)) throw e
+                }
             } finally {
                 db.close()
             }

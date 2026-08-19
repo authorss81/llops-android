@@ -174,6 +174,28 @@ Source-change surface: 4 new files (`LayerRenderBudgetPolicy.kt`,
 
 ## Residuals / observations (out of phase scope)
 
+- **Phase-150 review fixes (commit `llops: phase-150 review fixes`, 2026-08-19):**
+  - R1 (perf): the layer-raster LRU no longer evicts the ACTIVE page's own layer stack mid-draw
+    (`LayerRenderBudgetPolicy.resolveProtectedEviction` + `pageKeyOf`, wired into
+    `LayerBitmapLruCache.evictUntilWithinBudget`) — the byte budget is now a CROSS-PAGE bound and a
+    legit 16-layer note is bounded by the layer cap instead of re-rasterizing every frame.
+    Pure-JVM tests for the protected resolver + cross-page bound added (28 total in this class).
+  - R2: `LayerRenderBudgetPolicy.capToLiveLimit` is now LIVE over the bounded DAO read in
+    `NoteRepository.getLayersForPage` (`.let { capToLiveLimit(it) }`) — no longer test-only dead code.
+  - R3: `pruneStagedSnapshotLayers` tolerates a missing `layers` table like the restore sanitizer
+    (`shouldPropagateRestoreStripFailure`), so an old-schema vault can't abort a backup.
+  - R4: the dynamic-page-count fold is no longer silent — `CanvasPageBudgetPolicy.pageCountCappedNotice()`
+    raised ONCE per canvas via the new `AnnotationCanvas.onDynamicPageCountCapped` (bool derived from OWN
+    stroke content past the ceiling, not pan depth) wired to an `EditorScreen` snackbar.
+  - R5: a short minimap stroke whose point count is overshot by the global stride gets a single
+    start→end fallback line instead of vanishing from the thumbnail (`if (!drew)`).
+  - R6: `loadEditorCanvasPage` reads the raw layer COUNT before the bounded load (moot for the
+    empty-page case, accurate for the notice).
+  - R7: source pins added: legacy unbounded `LayerDao.getLayersForPage` has no live caller; VM
+    count-before-load order; staged-prune tolerance; notice wiring.
+  - Verification: `gradle :app:testDebugUnitTest` 2057 total (2056 green; the ONLY failure is the same
+    pre-existing `Phase148UiFailureTextScrubTest` UNC-path baseline) + `gradle assembleDebug` green.
+
 - The parent `EditorScreen.pdfTotalPages` state can still exceed the clamp if a user
   adds 2000+ pages by hand; the CANVAS render path is unaffected because
   `renderPageCount = dynamicPageCount` is the clamped value and `computeCanvasWorld` is

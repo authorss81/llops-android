@@ -77,6 +77,7 @@ import com.authorss81.noteflow.services.DockPosturePolicy
 import com.authorss81.noteflow.services.DockSnapMath
 import com.authorss81.noteflow.services.FloatingWidgetDragPolicy
 import com.authorss81.noteflow.services.MinimapGeometryPolicy
+import com.authorss81.noteflow.services.CanvasPageBudgetPolicy
 import com.authorss81.noteflow.services.HarmonyScheme
 import com.authorss81.noteflow.services.LayerRenderBudgetPolicy
 import com.authorss81.noteflow.services.PaletteCatalog
@@ -1723,6 +1724,12 @@ fun EditorScreen(
                 onPanOffsetChanged = { panOffset = it },
                 onVisiblePageWindowChanged = { newWindow ->
                     visiblePageWindow = newWindow
+                },
+                // Phase-150 review fix 4: once per session, tell the user when the
+                // note's own strokes extend past the world ceiling (their tail ink
+                // is folded by CanvasPageBudgetPolicy, never silently).
+                onDynamicPageCountCapped = {
+                    viewModel.showSnackbar(CanvasPageBudgetPolicy.pageCountCappedNotice(), isLong = true)
                 },
                 onStrokesChanged = { updatedStrokes ->
                     handleStrokesChange(updatedStrokes)
