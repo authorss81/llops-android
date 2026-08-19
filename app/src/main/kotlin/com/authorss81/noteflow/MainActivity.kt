@@ -245,12 +245,32 @@ class MainActivity : FragmentActivity() {
             // 22.9: root SnackbarHost — visibility-critical feedback is Snackbars,
             // not transient Toasts (scratchable, and visible to TalkBack).
             val snackbarHostState = remember { SnackbarHostState() }
-            LaunchedEffect(Unit) {
-                viewModel.snackbarMessages.collect { message ->
-                    snackbarHostState.showSnackbar(
-                        message = message.text,
-                        duration = if (message.isLong) SnackbarDuration.Long else SnackbarDuration.Short
-                    )
+            // R2-b2b1-UI-04 (phase-153): the root collector is GATED on
+            // `authenticated`. The host is composed OUTSIDE the LockScreen branch
+            // (`:670-673`), so the collector is the guard: while locked it is NOT
+            // running (nothing can render over the LockScreen), `lock()` cleared
+            // the pre-lock queue, and `showSnackbar` only ever queues survive-lock
+            // notices (the voice-discard notice) while locked — so restarting on
+            // unlock drains exactly the notice that must surface. Cancelling the
+            // effect mid-display dismisses a snackbar left over from the unlocked
+            // period.
+            LaunchedEffect(authenticated) {
+                if (!authenticated) {
+                    snackbarHostState.currentSnackbarData?.dismiss()
+                    return@LaunchedEffect
+                }
+                viewModel.snackbarMessages.collect {
+                    // Drain from the LIVE FIFO on every wake-up — never a stale
+                    // snapshot (the collector re-wakes after each ack, and a
+                    // message appended while one is showing is still queued).
+                    while (authenticated) {
+                        val message = viewModel.nextSnackbarMessage() ?: break
+                        viewModel.consumeSnackbar(message)
+                        snackbarHostState.showSnackbar(
+                            message = message.text,
+                            duration = if (message.isLong) SnackbarDuration.Long else SnackbarDuration.Short
+                        )
+                    }
                 }
             }
 

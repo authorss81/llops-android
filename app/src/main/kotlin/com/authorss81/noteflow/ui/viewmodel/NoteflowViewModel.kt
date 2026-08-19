@@ -1336,11 +1336,47 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     /** 22.9: root snackbar pipeline — replaces transient, TalkBack-invisible Toasts. */
     data class SnackbarMessage(val text: String, val isLong: Boolean = false)
 
-    private val _snackbarMessages = MutableSharedFlow<SnackbarMessage>(extraBufferCapacity = 16)
-    val snackbarMessages: SharedFlow<SnackbarMessage> = _snackbarMessages.asSharedFlow()
+    // R2-b2b1-UI-04 (phase-153): the root channel is a BOUNDED StateFlow FIFO
+    // so `lock()` can CLEAR it (a MutableSharedFlow has no clear primitive —
+    // pre-fix, messages emitted past a lock kept rendering over the LockScreen)
+    // and the root collector in MainActivity can be gated on `authenticated`.
+    // The `showSnackbar` emission API is unchanged for every caller.
+    private val _snackbarMessages = MutableStateFlow<List<SnackbarMessage>>(emptyList())
+    val snackbarMessages: StateFlow<List<SnackbarMessage>> = _snackbarMessages.asStateFlow()
 
     fun showSnackbar(text: String, isLong: Boolean = false) {
-        _snackbarMessages.tryEmit(SnackbarMessage(text, isLong))
+        // R2-b2b1-UI-04: while the vault is locked (or the pre-unlock LockScreen
+        // is up) ONLY survive-lock notices may queue — every other message
+        // (restore/import outcomes, note titles, plugin results) is dropped at
+        // the boundary, so it can never render over the locked UI nor be
+        // replayed stale after unlock.
+        if (!com.authorss81.noteflow.services.SnackbarLockPolicy.mayBufferWhileLocked(_authenticated.value, text)) {
+            return
+        }
+        val current = _snackbarMessages.value
+        _snackbarMessages.value =
+            (current + SnackbarMessage(text, isLong)).takeLast(com.authorss81.noteflow.services.SnackbarLockPolicy.MAX_PENDING)
+    }
+
+    /** Root-collector ack: remove the exactly-shown instance ([message]) from the FIFO. */
+    fun consumeSnackbar(message: SnackbarMessage) {
+        val current = _snackbarMessages.value
+        if (current.isEmpty()) return
+        _snackbarMessages.value = current.filterNot { it === message }
+    }
+
+    /** Root-collector peek: the head of the pending FIFO, or `null` when empty. */
+    fun nextSnackbarMessage(): SnackbarMessage? = _snackbarMessages.value.firstOrNull()
+
+    /**
+     * R2-b2b1-UI-05: published by the editor teardown when a lock destroyed a
+     * finished recording that could not be encrypted (DEK null). Routes the
+     * honest discard notice through the persistent pipeline — the ONLY message
+     * the emission gate allows while locked — so it surfaces once the vault
+     * unlocks instead of dying with the editor's short-lived collector.
+     */
+    fun notifyVoiceRecordDiscarded() {
+        showSnackbar(com.authorss81.noteflow.services.SnackbarLockPolicy.VOICE_RECORD_DISCARDED_NOTICE, isLong = true)
     }
 
     // -----------------------------------------------------------------------
@@ -4207,6 +4243,13 @@ fun updatePageTags(id: String, tags: String) {
                 _pendingShareConfirm.value = null
                 _pendingShare.value = null
             }
+            // R2-b2b1-UI-04 (phase-153): the lock boundary CLEARS the snackbar
+            // queue — anything pending at lock time (restore/import outcomes,
+            // note titles) must neither render over the LockScreen (the host is
+            // composed outside the lock branch) nor surface stale after unlock.
+            // Survive-lock notices (voice discard) are emitted AFTER this clear
+            // by the editor-teardown hook and pass the emission gate below.
+            _snackbarMessages.value = emptyList()
             // R2-B1D-01 (phase-136): the master-password session end. dispose() is
             // the session-end funnel — it FULL-checkpoints the WAL and re-arms the
             // tamper baseline against the quiescent vault, so ordinary note edits

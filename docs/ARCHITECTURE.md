@@ -1216,6 +1216,23 @@
       (singleTask, no configChanges) cannot re-prompt an answered confirm; the confirm `AlertDialog`
       renders only under `authenticated`; `lock()` drops both states via `PendingSharePolicy.clearOnLock`
       (`NoteflowViewModel.kt:4154-4163`) so a pre-lock "Clip" never auto-applies at the next unlock.
+    - **Implemented in phase-153** (R2-b2b1-UI-04 + R2-b2b1-UI-05, see `workspace/phase-153/REPORT.md`):
+      **post-lock snackbar channel** — the message pipeline is now a bounded
+      `StateFlow<List<SnackbarMessage>>` FIFO (`NoteflowViewModel.kt:1344-1345`, clearable; the
+      `showSnackbar(text, isLong)` emission API is unchanged for its ~140 call sites) gated by the
+      pure-JVM `services/SnackbarLockPolicy.kt` decision table (`mayBufferWhileLocked(isAuthenticated,
+      text)` — unlocked buffers everything, locked DROPS every vault-content message; only
+      `messageSurvivesLock` = the single fixed `VOICE_RECORD_DISCARDED_NOTICE` passes);
+      `lock()` CLEARS the queue inside the hasMasterPassword teardown (`:4252`); the root snackbar
+      collector in `MainActivity.kt` is `LaunchedEffect(authenticated)` (`:257`) — locked = no
+      vault-content snackbar can render over the LockScreen (boundary dismiss via `:259`), unlock =
+      drain only survive-lock notices via `nextSnackbarMessage`/`consumeSnackbar`. The pre-fix
+      channel was a `MutableSharedFlow` the lock could not purge. **Lock-during-voice-recording** —
+      `VoiceNoteManager.release()` returns a one-shot discard flag set only in the DEK-null
+      `finalizeRecording` fail-closed branch (`:268`, plaintext temp still swept); `EditorScreen`'s
+      teardown (`:255`) republishes `VOICE_RECORD_DISCARDED_NOTICE` through the persistent pipeline so
+      a finished-but-discarded recording is honestly announced after unlock instead of dying with the
+      editor's short-lived `recordingError` banner.
   - **Implemented in phase-133** (user-requested UI/UX, see `workspace/phase-133/REPORT.md`): new
     pages (Add Page FAB) and Daily Journal entries now open IMMEDIATELY on click. Root cause: the
     active page was resolved only via `pages.find { it.id == activePageId }` against the

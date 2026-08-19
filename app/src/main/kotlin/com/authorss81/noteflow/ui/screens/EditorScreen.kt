@@ -243,9 +243,19 @@ fun EditorScreen(
     val reduceMotion = com.authorss81.noteflow.theme.LocalReduceMotion.current
     val voiceNoteManager = remember { VoiceNoteManager(context) }
 
-    // Release recorder/player & cancel timer jobs when leaving the editor
+    // Release recorder/player & cancel timer jobs when leaving the editor.
+    // R2-b2b1-UI-05 (phase-153): a lock mid-recording disposes this composition
+    // (recomposition dips to LockScreen) — `release()` fails closed by sweeping
+    // the plaintext temp, but the finished recording's only error surface
+    // (`recordingError`) dies with this collector. When release reports a
+    // discard, the honest notice is re-published over the persistent snackbar
+    // pipeline so it surfaces after unlock.
     DisposableEffect(voiceNoteManager) {
-        onDispose { voiceNoteManager.release() }
+        onDispose {
+            if (voiceNoteManager.release()) {
+                viewModel.notifyVoiceRecordDiscarded()
+            }
+        }
     }
 
     val recordAudioPermissionLauncher = rememberLauncherForActivityResult(

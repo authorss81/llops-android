@@ -62,6 +62,13 @@ class VoiceNoteManager(private val context: Context) {
     private val _completedRecordingResult = MutableStateFlow<VoiceRecordingResult?>(null)
     val completedRecordingResult: StateFlow<VoiceRecordingResult?> = _completedRecordingResult.asStateFlow()
 
+    // R2-b2b1-UI-05 (phase-153): set in the SOLE fail-closed branch of
+    // `finalizeRecording` (DEK null / encryption failure) so `release()` can
+    // report that a finished recording was destroyed — the editor then
+    // republishes the honest notice over the persistent snackbar pipeline
+    // instead of the disposed editor's short-lived error banner.
+    private var discardOnRelease = false
+
     // B2-DOS-03 (phase-79): fixed-budget live waveform accumulator. Appends are
     // O(1) amortized into a preallocated FloatArray and the emitted StateFlow view
     // never exceeds `WaveformPeakMath.recordingLiveBuckets` (160) entries — the
@@ -103,6 +110,7 @@ class VoiceNoteManager(private val context: Context) {
 
         _recordingError.value = null
         _completedRecordingResult.value = null
+        discardOnRelease = false
         waveformBuckets = LiveWaveformBuckets(WaveformPeakMath.recordingLiveBuckets)
         _waveformAmplitudes.value = emptyList()
         _recordingElapsedMs.value = 0L
@@ -253,6 +261,11 @@ class VoiceNoteManager(private val context: Context) {
         if (!encrypted) {
             Log.w("VoiceNoteManager", "Recording could not be encrypted — plaintext temp destroyed")
             _recordingError.value = "The recording could not be saved securely. Please try again."
+            // R2-b2b1-UI-05: this is the DEK-null (locked) / encryption-failure
+            // path — a finished recording was destroyed. Flag it so `release()`
+            // reports the discard and the editor re-surfaces the notice through
+            // the persistent snackbar pipeline.
+            discardOnRelease = true
             return@synchronized null
         }
 
@@ -429,11 +442,23 @@ class VoiceNoteManager(private val context: Context) {
         }
     }
 
-    fun release() {
+    /**
+     * Stops any in-flight recording/playback, cancels the manager scope and
+     * sweeps plaintext temps.
+     *
+     * R2-b2b1-UI-05 (phase-153): returns `true` exactly when a FINISHED
+     * recording was destroyed on this teardown (the DEK-null / lock path), so
+     * the editor can publish the honest discard notice over the persistent
+     * snackbar pipeline — the fail-closed at-rest behavior is unchanged.
+     */
+    fun release(): Boolean {
         stopRecording()
         stopPlayback()
         scope.cancel()
         VoiceNoteCrypto.sweepPlaintextTemps(context.cacheDir)
+        val discarded = discardOnRelease
+        discardOnRelease = false
+        return discarded
     }
 }
 

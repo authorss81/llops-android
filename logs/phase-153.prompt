@@ -1,27 +1,6 @@
-# AGENTS.md — InkFlow (InkFlow)
+# PIPELINE CONTEXT (injected by phase_runner.sh — do not delete)
 
-Guidance for AI agents (opencode, Antigravity, etc.) working on this repo. Read before editing.
-
-## Project
-- Android note-taking app: markdown + ink canvas + knowledge graph (wikilinks/tags/daily notes) + time-synced voice notes + layers + AGSL brushes.
-- Kotlin 2.0.21, Jetpack Compose (BOM 2024.12.01), Room 2.6.1, Material 3, androidx.ink 1.0.0.
-- `applicationId` = `com.aistudio.inkflow.app.bkxjrz` (matches `app/build.gradle.kts:15` + repo-root `metadata.json`); namespace = `com.authorss81.noteflow` (known mismatch, Phase 21.10).
-- Source: `app/src/main/kotlin/com/authorss81/noteflow/` (`data/`, `services/`, `theme/`, `ui/`, `utils/`).
-- Single `NoteflowViewModel` + `MainActivity` with `mutableStateOf` navigation (not Navigation Compose yet).
-
-## Commands
-- **Do NOT build or run Gradle locally on the Windows dev machine** — no Android SDK installed (AMD Athlon 200GE, 7.5 GB RAM). Builds happen in GitHub Actions (`gradle assembleDebug` on main push).
-- Verification commands on Linux/CI (there is NO gradle wrapper jar in this repo — use system `gradle`, not `./gradlew`):
-  - Unit tests: `gradle testDebugUnitTest`
-  - Debug build: `gradle assembleDebug`
-  - Signed Release build: `gradle assembleRelease`
-- Editor formatting: `.editorconfig` configured at project root.
-
-## Git workflow
-- GitHub is the single source of truth. All changes are committed and pushed to `main` (authorss81/Smooth-Notes).
-- Repo was renamed from Noteflow-2; commit history and tags were preserved at rename time.
-- Remote: `https://github.com/authorss81/Smooth-Notes.git`
-
+## Hard rules (AGENTS.md)
 ## Hard rules
 - **MAJOR ARCHITECTURAL CHANGE → ASK THE USER FIRST.** Any change that restructures packages, replaces the navigation model (e.g., migrating away from `mutableStateOf` navigation to Navigation Compose), adds a new DB schema/migration, introduces SQLCipher, adds new dependencies with broad impact, or rewrites a subsystem (canvas renderer, encryption layer) MUST be proposed to the user and get explicit approval BEFORE writing code. Tell the user what's changing, why, and the risk. Do not silently refactor architecture.
   - **USER APPROVED (2026-08-14): hybrid downloadable-plugin architecture** — the plugin model change (base-APK-size constraint, downloadable signature-verified plugins for heavy native features, compile-time for lightweight plugins, user-approved dynamic updates) was proposed to the user with risks and explicitly approved (commit `9292978`). Implementation proceeds per phases 22–26; the approved design doc is `docs/plugin-architecture.md`.
@@ -52,12 +31,81 @@ Guidance for AI agents (opencode, Antigravity, etc.) working on this repo. Read 
   - **Phase 03 (2026-08-13) removed these dead/fake features**: the LibMyPaint C++ stub + whole engine-selector stack (`mypaint_jni.cpp`/`CMakeLists.txt`, `LibMyPaintJni`, `BrushEngine`/`BrushEngineFactory`, `HardwareProfiler`/`RenderingEngineTier`, `BrushEngineSettingsDialog`, `SettingsManager.renderingEngineOverride` — all deleted; the canvas renders via `WetBrushEngine`); `HandwritingRecognitionService` + `HandwritingToTextDialog` (dictionary-hash stub, unreachable — deleted); `FtsSearchEngine` (misnamed in-memory loop — deleted; vault search now uses a cached decrypted corpus in `NoteRepository`). Shape auto-snap is now WIRED (`ShapeRecognitionHelper.trySnapShape` runs on freehand draw-end in `AnnotationCanvas`, gated by the `shapeAutoSnapEnabled` setting; wet tools, LASER, DOTTED and NEON are excluded, and the RECT/ARROW/LINE detectors require real geometry fits so plain handwriting isn't snapped).
 
 ## Roadmap state (August 2026)
-- Phases 1–18 marked done in ROADMAP.md are NOT all true — verified facts in "POST-AUDIT TRUTH TABLE" section.
-- Actual work plan: Phases 19 (security recovery) → 20 (performance) → 21 (false-feature fix/remove) → 22 (UX/platform) → 23 (canvas modes: infinite + page-wise) → 24 (import pipeline: PDF/HTML/images) → 25 (old Phases 8–10 remainder) → 26 (moat features) → 27 (bug-fix queue) → 28 (release engineering).
-- Fix bugs in Phase 27 before building new features; each fix needs `file:line` verification, not vibes.
-- **Authoritative security-fix status: `docs/security-report.md`** (every finding marked with its fixing phase or `resolved at triage`, top-risks section rewritten to the post-fix state on 2026-08-17) + the fix-phase mapping in `workspace/SECURITY_FIX_PLAN.md` + the per-phase verification matrix in `workspace/phase-115/REPORT.md`. All phase-39..114 findings are FIXED except **`B2-DEPS-05` (phase-77, OPEN — the LLM model download is neither hash-pinned nor signature-verified; the phase-77 `.done` was a false completion removed on 2026-08-17, so the pipeline re-selects it for a real fix).** **Phase 149 (2026-08-18) closed `R2-b2b4-DOS-01` (MEDIUM — `note_versions` retention + paged decrypt, see `workspace/phase-149/REPORT.md`): newest-20-per-page cap pruned inside the `createNoteVersion` transaction, paged/lazy history decrypt, capped backup writer + restore sanitizer. `gradle assembleDebug` green; `gradle testDebugUnitTest` 2026 green / 1 pre-existing `Phase148UiFailureTextScrubTest` UNC-path failure (reproduced on a clean stash — untouched by phase-149).** **Phase 153 (2026-08-19) closed `R2-b2b1-UI-04` + `R2-b2b1-UI-05` (LOW×2 — post-lock UI channels, see `workspace/phase-153/REPORT.md`): the snackbar channel is a bounded `StateFlow` FIFO gated by pure-JVM `SnackbarLockPolicy.mayBufferWhileLocked` (locked vaults DROP every vault-content message), `lock()` clears the queue, the `MainActivity` root collector is re-keyed on `authenticated` (boundary dismiss + FIFO drain), and a lock-during-voice-recording now re-surfaces an honest fixed discard notice through the persistent pipeline (`VoiceNoteManager.release(): Boolean` + `EditorScreen` teardown) instead of the dead per-editor error banner. `gradle assembleDebug` green; `gradle testDebugUnitTest` 2117 green / 1 pre-existing `Phase148UiFailureTextScrubTest` UNC-path failure (untouched).**
 
-## Docs
-- `docs/pentest-plan.md` — Kali Linux pentest plan for the built APK (jadx/apktool/frida/objection/MobSF). Run findings into `docs/pentest-report.md`.
-- `README.md` — user-facing overview (may contain stale claims; ROADMAP truth table supersedes).
-- `docs/ARCHITECTURE.md` — **living architecture map** (package layout, core subsystem `file:line` anchors, build/CI essentials, gotchas). It is auto-injected at the start of every pipeline phase by `scripts/phase_runner.sh`. After implementing something, append a short "Implemented in <phase>:" note to the relevant section and update `docs/phase-status.md`.
+## Orientation (read these files yourself — do NOT rely on memory)
+- docs/ARCHITECTURE.md = living architecture map (package layout, core
+  subsystem file:line anchors, build/CI essentials, gotchas). READ IT.
+- docs/phase-status.md = phase status truth table. READ IT, then UPDATE
+  your phase's row when you finish.
+- workspace/PHASES.md = full phase table.
+- workspace/SECURITY_FIX_PLAN.md + docs/security-report*.md = security
+  findings status (only if your phase touches security).
+
+## Your task
+Execute the phase described in workspace/phase-153/PROMPT.md. Read that file now and
+complete it fully. The context above is orientation only.
+
+# Phase 153: Post-lock UI channels — snackbar host gated on auth + voice-discard notice re-surfaced after lock [NOT STARTED]
+
+You are working on **InkFlow/Noteflow**, an offline-first notes + canvas Android
+app with an encrypted SQLCipher vault. **Read `docs/security-report-round2.md`**
+first (findings R2-b2b1-UI-04, R2-b2b1-UI-05) and `docs/phase-status.md` +
+`docs/ARCHITECTURE.md`. This phase stops vault-content-bearing messages from
+rendering over the locked UI and ensures a lock-mid-recording discard is not
+silent.
+
+## Source findings (both OPEN, LOW)
+
+1. **R2-b2b1-UI-04** — The root SnackbarHost is composed OUTSIDE the `LockScreen`
+   conditional, so messages (restore/import `e.message`, note titles) enqueue
+   past `lock()` and render over the locked UI: host at `MainActivity.kt:211-219`
+   collector, `:577-580` (`.align(Alignment.BottomCenter)` inside the nav `Box`
+   `:317-320`, NOT inside the `if (hasMasterPassword && !authenticated)
+   LockScreen(...)` branch `:352-353`). Producers: `HomeScreen.kt:161,202,256,
+   269,290,600`, `EditorScreen.kt:1154,1188`, `NoteflowViewModel.kt:1305-1309`
+   (MutableSharedFlow + tryEmit), `:1452` (persistent decrypt-failure notice).
+2. **R2-b2b1-UI-05** — Locking mid-voice-recording silently destroys the
+   finished recording: `VoiceNoteManager` is per-editor composition
+   (`EditorScreen.kt:183,186-187`), error observed via `EditorScreen.kt:297`.
+   On lock, `lock()` zeroizes the DEK first, recomposition dips to `LockScreen`,
+   disposes the editor → `release()` (`VoiceNoteManager.kt:432-437`:
+   `stopRecording` + `sweepPlaintextTemps`) → `finalizeRecording`
+   (`:248-257`): `dek == null` short-circuits `encryptRecordingFile`
+   (`:249-250`), plaintext temp swept (`:436`), `_recordingError.value =
+   "The recording could not be saved securely…"` (`:255`) set after the
+   editor's collector is gone.
+
+## The fix (where & how)
+
+- **R2-b2b1-UI-04:** Gate the snackbar consumption on `authenticated` (route the
+  host's `snackbarHostState.showSnackbar` through the same `dbGate`/`authenticated`
+  state, or clear the `SharedFlow` in `lock()`), and vet dynamic `e.message`
+  slots so import/restore errors never echo vault content (ties into phase-148's
+  sanitizer — reuse it here).
+- **R2-b2b1-UI-05:** On the lock path, publish the discard notice through the
+  persistent `snackbarMessages` pipeline (or keep the session error in
+  `_recordingError` for re-display after unlock until explicitly cleared) instead
+  of relying on the editor's short-lived collector. The fail-closed at-rest
+  behavior (plaintext swept, no decrypt-without-key) must stay EXACTLY as-is.
+
+## Verification
+
+- New/updated pure-JVM + source-pin unit tests: a locked vault has no snackbar
+  consumption (or the flow is cleared on lock); the voice-discard notice is
+  emitted into the persistent channel on the lock path; the DEK-null sweep path
+  unchanged.
+- `gradle testDebugUnitTest` then `gradle assembleDebug`, report in
+  `workspace/phase-153/REPORT.md`.
+
+## Definition of done
+
+- Both findings closed with `file:line` before/after evidence.
+- No vault-content snackbar renders over LockScreen; a lock-mid-recording
+  surfaces an honest discard notice.
+
+## Constraints
+
+- NO DB schema change. Do NOT edit `.github/workflows/`. No new dependencies.
+- Never log keys, passwords, or decrypted note content. Keep the fail-closed
+  at-rest voice handling (B1-DB-3) byte-intact.
+- Do not fix OTHER findings in this phase — document new bugs in REPORT.md.
