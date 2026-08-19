@@ -795,9 +795,17 @@ class MainActivity : FragmentActivity() {
                             }
                         }
                         }
+                        // Phase 167: this host lives at the ROOT Box, outside any
+                        // Scaffold — without an inset the snackbar is drawn at the
+                        // very bottom edge and hides UNDER the system navigation bar
+                        // (gesture pill / 3-button bar) in edge-to-edge mode. The
+                        // inset is read dynamically so it matches whatever nav mode
+                        // and rotation the device is in — never a fixed pixel.
                         SnackbarHost(
                             hostState = snackbarHostState,
-                            modifier = Modifier.align(Alignment.BottomCenter)
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .navigationBarsPadding()
                         )
 
                         // B1-PLAT-2 (phase-58) + R2-B1P-05 (phase-140): an incoming
@@ -1276,7 +1284,12 @@ private fun RestoreBlockedScreen(viewModel: NoteflowViewModel) {
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(24.dp),
+            .padding(24.dp)
+            // Phase 167: these recovery screens render edge-to-edge WITHOUT a
+            // Scaffold — the scroll container's bottom edge is the window edge,
+            // so without the dynamic navigation-bar inset the last content row
+            // (Buttons / error text) scrolls into the system nav bar area.
+            .navigationBarsPadding(),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Spacer(Modifier.height(48.dp))
@@ -1349,7 +1362,12 @@ private fun CorruptionRecoveryScreen(viewModel: NoteflowViewModel) {
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(24.dp),
+            .padding(24.dp)
+            // Phase 167: these recovery screens render edge-to-edge WITHOUT a
+            // Scaffold — the scroll container's bottom edge is the window edge,
+            // so without the dynamic navigation-bar inset the last content row
+            // (Buttons / error text) scrolls into the system nav bar area.
+            .navigationBarsPadding(),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Spacer(Modifier.height(48.dp))
@@ -1464,7 +1482,12 @@ private fun KeystoreKeyLostScreen(viewModel: NoteflowViewModel) {
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(24.dp),
+            .padding(24.dp)
+            // Phase 167: these recovery screens render edge-to-edge WITHOUT a
+            // Scaffold — the scroll container's bottom edge is the window edge,
+            // so without the dynamic navigation-bar inset the last content row
+            // (Buttons / error text) scrolls into the system nav bar area.
+            .navigationBarsPadding(),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Spacer(Modifier.height(48.dp))

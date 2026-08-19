@@ -38,7 +38,7 @@ painting engine, free features).
 | phase-164 | Tag vault scoped to current notebook only (not all notebooks) | user-reported |
 | phase-165 | Beautify Gallery page thumbnails (Material 3 card design) | user-reported |
 | phase-166 | Buttons/text fit screens & cards — wrap or shorten (paging arrows) | user-reported |
-| phase-167 | Bottom nav bar no longer overlays messages & calendar (dynamic padding/insets) + triage Kali report → generate next phases (no dupes with 167-174) | user-reported |
+| phase-167 | Bottom nav bar no longer overlays messages & calendar (dynamic padding/insets) + triage Kali report → generate next phases (no dupes with 167-174) — `DONE` (see `workspace/phase-167/REPORT.md` + `docs/phase-status.md`) | user-reported |
 | phase-168 | App opens the last-used notebook on cold start | user-reported |
 | phase-169 | Fix post-export "Unreadable (decryption failed)" + keep fail-closed UX | user-reported |
 | phase-170 | **Base-APK size: strip unused lingua `language-models/` (24 of 75 languages) + ABI splits** (Phase-32-NEW-01 MEDIUM + NEW-02 LOW) | phase-161 Kali triage |
@@ -46,6 +46,8 @@ painting engine, free features).
 | phase-172 | Feature: editor & canvas productivity — persistent color/brush recents + favorites, minimap zoom-to-fit & jump-home, layer blend/opacity presets | phase-161 UI/UX bucket |
 | phase-173 | Feature: plugin ecosystem — serve FileTransfer over LocalSend + invocation journal + honest store metadata | phase-161 plugin bucket |
 | phase-174 | Feature: reading & authoring UX — note stats bar, outline quick-jump in reader mode, wiki-link autocomplete + slash-menu insert | phase-161 UI/UX bucket |
+| phase-175 | **Move ML Kit OCR + translation OUT of the base APK into the signature-verified downloadable-plugin runtime** (R2-KS-21 MEDIUM — `mlkit-google-ocr-models/` assets + OCR/translate JNI libs + `translate_models_metadata.json` in payload; base-APK-size hard constraint; 170 covers lingua/ABI only, this is the dedicated ML Kit move-out) | phase-167 Kali triage |
+| phase-176 | **Release packaging hygiene: exclude `DebugProbesKt.bin` / `kotlin-tooling-metadata.json` / `firebase-*.properties` from the release APK + retain R8 `mapping.txt` for forensic back-mapping** (R2-KS-27 LOW + R2-KS-24 INFO; one area; workflow archival deferred — no `.github/workflows/` edits) | phase-167 Kali triage |
 
 ## How phases run
 

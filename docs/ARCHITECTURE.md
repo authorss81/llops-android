@@ -53,6 +53,20 @@
 > `app/src/test/java/com/authorss81/noteflow/Phase166LayoutOverflowTest.kt` (8 source-
 > pinning tests, `class Phase166LayoutOverflowTest` at `:29`).
 
+> **Implemented in phase-167** (2026-08-19, bottom-nav-bar overlay fix — dynamic insets,
+> see `workspace/phase-167/REPORT.md`): the app draws edge-to-edge (`MainActivity.kt:252`),
+> so any bottom-anchored surface outside a Scaffold must consume the system navigation-bar
+> inset itself. The root `SnackbarHost` (`MainActivity.kt:804-810`) and the three
+> Scaffold-less recovery screens (`RestoreBlockedScreen`/`CorruptionRecoveryScreen`/
+> `KeystoreKeyLostScreen`, insets at `MainActivity.kt:1292/1370/1490`) gained
+> `.navigationBarsPadding()` — pure runtime inset, works on small/large screens,
+> portrait/landscape, gesture/3-button nav. The four content screens were audited and
+> already apply the Scaffold `innerPadding` (M3 default `contentWindowInsets` =
+> `systemBarsForVisualComponents`, bytecode-verified), so page lists / Calendar
+> (`CalendarView.kt:229-231` weight-bounded) / canvas / graph end above the bar.
+> Regression guard: `Phase167BottomNavOverlayTest` (8 source-pinning tests).
+> No fixed-pixel heights anywhere.
+
 ## Core subsystem anchors (file:line)
 
 - **Encryption/vault**: `services/EncryptionService.kt:18` (PBKDF2 600k, AES-256-GCM, NFKC-normalized password);
