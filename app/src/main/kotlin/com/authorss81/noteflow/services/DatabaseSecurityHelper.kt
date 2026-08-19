@@ -23,6 +23,17 @@ object DatabaseSecurityHelper {
     private const val PREF_RESTORE_BLOCKED = "restore_hmac_blocked"
     private const val PREF_CORRUPTION_DETECTED = "corruption_detected"
     private const val PREF_CORRUPTION_TIMESTAMP = "corruption_timestamp"
+    // Phase-163: timestamp of the corruption event the user permanently dismissed
+    // ("Don't show again"). 0 = none. Keyed to the event, never a bare boolean,
+    // so a NEW quarantine stamp always re-shows the screen.
+    private const val PREF_CORRUPTION_DISMISSED_TIMESTAMP = "corruption_dismissed_timestamp"
+    // Phase-163: identity of the CURRENT keystore-key-lost event (the non-secret
+    // wrapper alias of the lost DEK wrapper) plus the timestamp recorded on first
+    // detection, and the timestamp the user permanently dismissed. A NEW wrapper
+    // alias (a different lost key) always re-shows the screen.
+    private const val PREF_KEYSTORE_LOST_EVENT_ALIAS = "keystore_lost_event_alias"
+    private const val PREF_KEYSTORE_LOST_EVENT_TIMESTAMP = "keystore_lost_event_timestamp"
+    private const val PREF_KEYSTORE_LOST_DISMISSED_TIMESTAMP = "keystore_lost_dismissed_timestamp"
     private const val KEY_ALIAS = "noteflow_db_hmac_key"
     private const val ANDROID_KEYSTORE = "AndroidKeyStore"
     private const val DB_NAME = "noteflow.sqlite"
@@ -162,6 +173,82 @@ object DatabaseSecurityHelper {
             .edit()
             .putBoolean(PREF_CORRUPTION_DETECTED, false)
             .remove(PREF_CORRUPTION_TIMESTAMP)
+            // Phase-163: the dismissal is keyed to the (now cleared) event
+            // timestamp — drop it with the event so a future NEW corruption can
+            // never be suppressed by a stale dismissal.
+            .remove(PREF_CORRUPTION_DISMISSED_TIMESTAMP)
+            .apply()
+    }
+
+    /**
+     * Phase-163: the timestamp of the corruption event the user permanently
+     * dismissed with "Don't show again" (`RecoveryDismissalPolicy`). Keyed to the
+     * event (`PREF_CORRUPTION_TIMESTAMP`), never a bare boolean.
+     */
+    fun getCorruptionDismissedTimestamp(context: Context): Long =
+        context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+            .getLong(PREF_CORRUPTION_DISMISSED_TIMESTAMP, 0L)
+
+    /** Phase-163: persists the permanent dismissal for the CURRENT corruption event. */
+    fun setCorruptionDismissedTimestamp(context: Context, timestampMs: Long) {
+        // R2-B1D-01-style commit(): the dismissal must outlive a process kill
+        // that lands right after the tap — that is the whole point of the fix.
+        context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putLong(PREF_CORRUPTION_DISMISSED_TIMESTAMP, timestampMs)
+            .commit()
+    }
+
+    fun clearCorruptionDismissal(context: Context) {
+        context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .remove(PREF_CORRUPTION_DISMISSED_TIMESTAMP)
+            .apply()
+    }
+
+    /**
+     * Phase-163: records the CURRENT keystore-key-lost event the FIRST time a
+     * given lost key is detected in-process, and returns the event timestamp.
+     * A NEW lost key (a different wrapper alias) starts a fresh event, so an old
+     * dismissal can never hide it. Alias may be null only for legacy blobs that
+     * carry no marker — those still get a distinct timestamp per detection.
+     */
+    fun recordKeystoreLostEvent(context: Context, alias: String?): Long {
+        val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+        val storedAlias = prefs.getString(PREF_KEYSTORE_LOST_EVENT_ALIAS, null)
+        val storedTs = prefs.getLong(PREF_KEYSTORE_LOST_EVENT_TIMESTAMP, 0L)
+        if (storedAlias == alias && storedTs > 0L) return storedTs
+        val timestamp = System.currentTimeMillis()
+        prefs.edit()
+            .putString(PREF_KEYSTORE_LOST_EVENT_ALIAS, alias)
+            .putLong(PREF_KEYSTORE_LOST_EVENT_TIMESTAMP, timestamp)
+            .commit()
+        return timestamp
+    }
+
+    fun getKeystoreLostEventTimestamp(context: Context): Long =
+        context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+            .getLong(PREF_KEYSTORE_LOST_EVENT_TIMESTAMP, 0L)
+
+    fun getKeystoreLostDismissedTimestamp(context: Context): Long =
+        context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+            .getLong(PREF_KEYSTORE_LOST_DISMISSED_TIMESTAMP, 0L)
+
+    /** Phase-163: persists the permanent dismissal for the CURRENT key-lost event. */
+    fun setKeystoreLostDismissedTimestamp(context: Context, timestampMs: Long) {
+        context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putLong(PREF_KEYSTORE_LOST_DISMISSED_TIMESTAMP, timestampMs)
+            .commit()
+    }
+
+    /** Phase-163: clears the event + dismissal (successful restore / start-fresh). */
+    fun clearKeystoreLostDismissal(context: Context) {
+        context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .remove(PREF_KEYSTORE_LOST_EVENT_ALIAS)
+            .remove(PREF_KEYSTORE_LOST_EVENT_TIMESTAMP)
+            .remove(PREF_KEYSTORE_LOST_DISMISSED_TIMESTAMP)
             .apply()
     }
 

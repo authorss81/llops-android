@@ -1183,8 +1183,16 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
 
     /** H2 (phase-09): the vault DB failed to open (corrupt/wrong-key) and its
      *  files were quarantined, NOT deleted. Show a dedicated recovery screen
-     *  until the user restores from backup or explicitly starts fresh. */
-    private val _corruptionBlocked = MutableStateFlow(DatabaseSecurityHelper.hasCorruptionDetected(appContext))
+     *  until the user restores from backup, explicitly starts fresh, or
+     *  permanently dismisses THIS event (Phase-163 — a new quarantine stamp
+     *  always re-shows the screen; see [RecoveryDismissalPolicy]). */
+    private val _corruptionBlocked = MutableStateFlow(
+        RecoveryDismissalPolicy.mayShow(
+            blocking = DatabaseSecurityHelper.hasCorruptionDetected(appContext),
+            eventTimestamp = DatabaseSecurityHelper.getCorruptionTimestamp(appContext),
+            dismissedTimestamp = DatabaseSecurityHelper.getCorruptionDismissedTimestamp(appContext),
+        )
+    )
     val corruptionBlocked: StateFlow<Boolean> = _corruptionBlocked.asStateFlow()
     val corruptionTimestamp: Long = DatabaseSecurityHelper.getCorruptionTimestamp(appContext)
 
@@ -1262,6 +1270,53 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         // per-session dismissal — it is hidden for the rest of this session,
         // never permanently.
         _databaseIntegrityUnverified.value = false
+    }
+
+    /**
+     * Phase-163: "Don't show again" for the corruption-recovery screen. The
+     * dismissal is keyed to the CURRENT quarantine event (`corruptionTimestamp`),
+     * so it survives process death and cold start for THIS event only — a NEW
+     * corruption event (a fresh `corruption_timestamp` stamp) ALWAYS re-shows the
+     * screen. Without `dontShowAgain` this just hides the screen for the current
+     * session. A successful restore / start-fresh clears the dismissal via
+     * `clearCorruptionDetected` (see [attemptRecoveryFromBackup] /
+     * [startFreshAfterCorruption]).
+     */
+    fun dismissCorruptionRecovery(dontShowAgain: Boolean) {
+        val eventTs = DatabaseSecurityHelper.getCorruptionTimestamp(appContext)
+        if (dontShowAgain && RecoveryDismissalPolicy.isDismissible(true, eventTs)) {
+            DatabaseSecurityHelper.setCorruptionDismissedTimestamp(appContext, eventTs)
+        }
+        _corruptionBlocked.value = false
+    }
+
+    /**
+     * Phase-163: "Don't show again" for the keystore-key-lost recovery screen.
+     * Same rule as [dismissCorruptionRecovery], keyed to the recorded key-lost
+     * event (`recordKeystoreLostEvent`), so a DIFFERENT lost wrapper key
+     * re-shows the screen. A successful restore / start-fresh clears the event +
+     * dismissal via `clearKeystoreLostDismissal`.
+     */
+    fun dismissKeystoreKeyLostRecovery(dontShowAgain: Boolean) {
+        val eventTs = DatabaseSecurityHelper.getKeystoreLostEventTimestamp(appContext)
+        if (dontShowAgain && RecoveryDismissalPolicy.isDismissible(true, eventTs)) {
+            DatabaseSecurityHelper.setKeystoreLostDismissedTimestamp(appContext, eventTs)
+        }
+        _keystoreKeyLost.value = false
+    }
+
+    /**
+     * Phase-163: records the keystore-lost event (per lost wrapper alias) and
+     * gating the screen on the persisted dismissal. Called at EVERY detection
+     * site so the UI can never silently skip a NEW lost key.
+     */
+    private fun keystoreLostBlockedForCurrentEvent(alias: String?): Boolean {
+        val eventTs = DatabaseSecurityHelper.recordKeystoreLostEvent(appContext, alias)
+        return RecoveryDismissalPolicy.mayShow(
+            blocking = true,
+            eventTimestamp = eventTs,
+            dismissedTimestamp = DatabaseSecurityHelper.getKeystoreLostDismissedTimestamp(appContext),
+        )
     }
 
     fun setDatabaseIntegrityCheckEnabled(enabled: Boolean) {
@@ -1672,9 +1727,16 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
                 // boot is blocked before any open). Surface the keystore-key-lost
                 // recovery screen instead of treating survivable data as corrupt.
                 if (DatabaseSecurityHelper.hasCorruptionDetected(appContext)) {
-                    _corruptionBlocked.value = true
+                    // Phase-163: the quarantine flag persists in SharedPreferences, so
+                    // an already-dismissed SAME event must stay suppressed across cold
+                    // starts — a NEW event (fresh timestamp) still re-shows.
+                    _corruptionBlocked.value = RecoveryDismissalPolicy.mayShow(
+                        blocking = true,
+                        eventTimestamp = DatabaseSecurityHelper.getCorruptionTimestamp(appContext),
+                        dismissedTimestamp = DatabaseSecurityHelper.getCorruptionDismissedTimestamp(appContext),
+                    )
                 } else if (runCatching { security.readDekResult() is DekReadResult.KeyLost }.getOrDefault(false)) {
-                    _keystoreKeyLost.value = true
+                    _keystoreKeyLost.value = keystoreLostBlockedForCurrentEvent(security.currentWrapperAlias())
                 } else {
                     // Any other exception is rethrown (data corruption must never
                     // be silently swallowed).
@@ -1706,7 +1768,14 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
                 if (!decryptPersistenceEscalated && repository.decryptFailuresPersistent) {
                     decryptPersistenceEscalated = true
                     DatabaseSecurityHelper.setCorruptionDetected(appContext)
-                    _corruptionBlocked.value = true
+                    // Phase-163: setCorruptionDetected stamped a FRESH quarantine
+                    // timestamp — a genuinely new corruption event — so even a
+                    // previously-dismissed older event must re-show here.
+                    _corruptionBlocked.value = RecoveryDismissalPolicy.mayShow(
+                        blocking = true,
+                        eventTimestamp = DatabaseSecurityHelper.getCorruptionTimestamp(appContext),
+                        dismissedTimestamp = DatabaseSecurityHelper.getCorruptionDismissedTimestamp(appContext),
+                    )
                     showSnackbar(DecryptFailurePolicy.PERSISTENT_DECRYPT_FAILURE_NOTICE, isLong = true)
                 }
             }
@@ -1852,7 +1921,8 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
                     // wrapper (anomalous — biometrics requires a master password).
                     // It cannot be read without the biometric flow; surface the
                     // recovery screen instead of minting over it.
-                    _keystoreKeyLost.value = true
+                    // Phase-163: honor a persisted "Don't show again" for this event.
+                    _keystoreKeyLost.value = keystoreLostBlockedForCurrentEvent(security.currentWrapperAlias())
                     // B1-CRYPTO-06 review (phase-91): no DB open happens here, so
                     // nothing raced the file — release the deferred first
                     // verification so the fail-closed notice can still surface.
@@ -1860,7 +1930,8 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
                 }
                 is DekReadResult.KeyLost -> {
                     // Keystore key lost / stored blob unreadable: explicit recovery.
-                    _keystoreKeyLost.value = true
+                    // Phase-163: honor a persisted "Don't show again" for this event.
+                    _keystoreKeyLost.value = keystoreLostBlockedForCurrentEvent(result.wrapperAlias)
                     // B1-CRYPTO-06 review (phase-91): same as AuthRequired — no DB
                     // open, the at-rest file is untouched; release the gate.
                     firstDataInitDone.complete(Unit)

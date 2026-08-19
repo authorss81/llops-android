@@ -238,6 +238,14 @@ class SecurityService internal constructor(
         is DekReadResult.Unlocked -> r.dek
         else -> null
     }
+
+    /**
+     * Phase-163: non-secret alias marker of the CURRENTLY stored device wrapper
+     * (B1-CRYPTO-05's `wrapperAlias`), or null when no blob is stored / the blob
+     * carries no marker. Used purely as the EVENT identity for the keystore-key
+     * lost recovery screen's keyed "Don't show again" — never itself a secret.
+     */
+    fun currentWrapperAlias(): String? = dekStore.read()?.wrapperAlias
     fun getOrCreateDek(allowPasswordlessMint: Boolean = true): ByteArray? {
         // B1-CRYPTO-05 (phase-64): readDekResult() distinguishes the four states
         // the pre-fix readDek()-then-mint collapse treated as "null ⇒ mint".
