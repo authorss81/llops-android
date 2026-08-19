@@ -4,8 +4,8 @@ import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.hypot
 import kotlin.math.max
+import kotlin.math.PI
 import kotlin.math.sin
-import kotlin.math.TWO_PI
 
 /**
  * Phase 155: pure-JVM layout + hit-testing for the long-press QUICK-COLOR RING.
@@ -25,6 +25,13 @@ import kotlin.math.TWO_PI
  * studio agree on "which side" a swatch sits.
  */
 object QuickColorRingMath {
+
+    /**
+     * Full circle in radians. `kotlin.math` only exposes [PI] (no `TWO_PI`
+     * constant), so 2*PI is derived here instead of importing a symbol that
+     * does not exist in the stdlib (phase-155 review fix).
+     */
+    private val TWO_PI: Double = 2.0 * PI
 
     /** Sentinel returned by [hitIndex] when the ring is closed (nothing selectable). */
     const val NOTHING_HIT = -1
@@ -73,7 +80,7 @@ object QuickColorRingMath {
         val out = ArrayList<Pair<Float, Float>>(n)
         for (i in 0 until n) {
             val angle = (-TWO_PI * i / n) + (TWO_PI / 4f) // 12 o'clock start, clockwise
-            out += (centerX + mid * cos(angle)) to (centerY + mid * sin(angle))
+            out += (centerX + (mid * cos(angle)).toFloat()) to (centerY + (mid * sin(angle)).toFloat())
         }
         return out
     }

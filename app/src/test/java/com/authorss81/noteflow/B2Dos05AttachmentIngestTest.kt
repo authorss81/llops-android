@@ -185,7 +185,7 @@ class B2Dos05AttachmentIngestTest {
         )
         assertEquals(
             "every picker ingest must route through the bounded reader",
-            3,
+            4,
             Regex("AttachmentIngestPolicy\\.boundedReadBytes").findAll(source).count()
         )
     }

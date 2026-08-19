@@ -189,6 +189,14 @@ fun EditorScreen(
     // Phase 13: brush preset selected in Settings → Ready-made Presets (persisted
     // to SharedPreferences via SettingsManager so it survives restarts).
     var activeBrushPresetId by remember { mutableStateOf(viewModel.settings.activeBrushPresetId) }
+    // Phase 155: two-finger undo/redo + long-press quick-color ring on the canvas.
+    // Both OFF by default; toggled in Canvas & Paper Options and persisted so a
+    // crash/rotation keeps the user's choice.
+    var twoFingerGesturesEnabled by remember { mutableStateOf(viewModel.settings.twoFingerUndoRedoEnabled) }
+    var quickColorRingEnabled by remember { mutableStateOf(viewModel.settings.quickColorRingEnabled) }
+    // Phase 155: user's imported .inkbrush presets ("My presets"), persisted as a
+    // JSON list in shared prefs (NO DB schema change).
+    var importedBrushPresets by remember { mutableStateOf(com.authorss81.noteflow.services.BrushPresetFileCodec.decodeList(viewModel.settings.importedBrushPresetsJson)) }
     var showRenameDialog by remember { mutableStateOf(false) }
     var showBacklinks by remember { mutableStateOf(false) }
     var showClearCanvasWarning by remember { mutableStateOf(false) }
@@ -438,6 +446,123 @@ fun EditorScreen(
     // Phase 07 painting features: stabilizer / pressure curve / symmetry mode.
     var stabilizerEnabled by remember { mutableStateOf(viewModel.settings.strokeStabilizerEnabled) }
     var pressureCurve by remember { mutableStateOf(PressureCurve.fromSettingKey(viewModel.settings.pressureCurveKey)) }
+
+
+    // Phase 155: .inkbrush brush-preset IMPORT via the SAF picker. The bytes are
+    // classified by the pure-JVM codec; reject reasons are sanitized (no file
+    // paths or names — R2-b2b3-LOG-03 carried forward). Size-capped up front so a
+    // hostile huge file is never fully slurped into memory.
+    fun applyImportedPreset(preset: com.authorss81.noteflow.services.BrushPreset) {
+        activeBrushPresetId = preset.id
+        viewModel.settings.activeBrushPresetId = preset.id
+        currentTool = preset.tool
+        runCatching { currentColor = Color(android.graphics.Color.parseColor(preset.colorHex)) }.onFailure { }
+        currentWidth = preset.size
+        activePresetId = null
+        activeCustomPresetId = null
+        pressureCurve = com.authorss81.noteflow.services.PressureCurve.fromSettingKey(preset.pressureCurveKey)
+        viewModel.settings.pressureCurveKey = pressureCurve.settingKey
+    }
+
+    fun persistImportedPresets(presets: List<com.authorss81.noteflow.services.BrushPreset>) {
+        importedBrushPresets = presets
+        viewModel.settings.importedBrushPresetsJson = com.authorss81.noteflow.services.BrushPresetFileCodec.encodeList(presets)
+    }
+
+    val brushPresetImportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            val bytes = withContext(Dispatchers.IO) {
+                runCatching {
+                    context.contentResolver.openInputStream(uri)?.let { stream ->
+                        com.authorss81.noteflow.services.AttachmentIngestPolicy.boundedReadBytes(
+                            stream,
+                            com.authorss81.noteflow.services.BrushPresetImportPolicy.MAX_BRUSH_FILE_BYTES.toLong()
+                        )
+                    }
+                }.getOrNull()
+            }
+            if (bytes == null) {
+                viewModel.showSnackbar("Could not read that brush file")
+                return@launch
+            }
+            when (val result = com.authorss81.noteflow.services.BrushPresetFileCodec.decode(bytes)) {
+                is com.authorss81.noteflow.services.BrushPresetFileCodec.DecodeResult.Preset -> {
+                    val preset = result.preset
+                    if (!com.authorss81.noteflow.services.BrushPresetImportPolicy.canImport(
+                            preset, importedBrushPresets.size, bytes.size
+                        )
+                    ) {
+                        viewModel.showSnackbar("Import rejected — too many presets, too large, or not a paint tool")
+                        return@launch
+                    }
+                    val existing = importedBrushPresets.firstOrNull { it.id == preset.id }
+                    val updated = if (existing != null) {
+                        importedBrushPresets.map { if (it.id == preset.id) preset else it }
+                    } else {
+                        importedBrushPresets + preset
+                    }
+                    persistImportedPresets(updated)
+                    applyImportedPreset(preset)
+                    viewModel.showSnackbar(
+                        if (existing != null) "Preset updated from .inkbrush" else "Preset imported from .inkbrush"
+                    )
+                }
+                is com.authorss81.noteflow.services.BrushPresetFileCodec.DecodeResult.RawProtobuf -> {
+                    // A native androidx.ink binary brush (e.g. from Google Ink
+                    // Tooling): hand it to the dormant ProtobufBrushLoader. The
+                    // loader's own logging is already sanitized (class-name token
+                    // only); here we surface a success/failure verdict with no
+                    // file paths or names.
+                    val family = com.authorss81.noteflow.services.ProtobufBrushLoader.loadFromByteArray(result.bytes)
+                    viewModel.showSnackbar(
+                        if (family != null) "Native .inkbrush brush loaded" else "That .inkbrush brush could not be parsed"
+                    )
+                }
+                is com.authorss81.noteflow.services.BrushPresetFileCodec.DecodeResult.Invalid -> {
+                    viewModel.showSnackbar("Import failed: ${result.reason}")
+                }
+            }
+        }
+    }
+
+    // Phase 155: .inkbrush EXPORT of the current brush settings (stage in
+    // app-private cacheDir, then hand to the SAF destination picker).
+    fun exportCurrentBrushPreset() {
+        val currentPreset = activeBrushPresetId
+            ?.let { com.authorss81.noteflow.services.BrushPresetPack.byId(it) }
+            ?: importedBrushPresets.firstOrNull { it.id == activeBrushPresetId }
+        val preset = currentPreset ?: com.authorss81.noteflow.services.BrushPreset(
+            id = "custom",
+            name = "My Brush",
+            tool = currentTool,
+            brushParams = com.authorss81.noteflow.services.BrushStudioParams(),
+            size = currentWidth,
+            colorHex = "#" + Integer.toHexString(currentColor.toArgb() and 0xFFFFFF).uppercase().padStart(6, '0'),
+            pressureCurveKey = pressureCurve.settingKey
+        )
+        val bytes = com.authorss81.noteflow.services.BrushPresetFileCodec.encode(preset)
+        val file = java.io.File(context.cacheDir, "${com.authorss81.noteflow.services.BrushPresetImportPolicy.sanitizeName(preset.name) ?: "brush"}.inkbrush")
+        val staged = runCatching {
+            file.writeBytes(bytes)
+            file
+        }.getOrNull()
+        if (staged == null) {
+            viewModel.showSnackbar("Could not prepare the brush file for export")
+            return
+        }
+        exporter.export(ExportDestinationPolicy.ExportKind.BRUSH_PRESET, staged) { outcome ->
+            viewModel.showSnackbar(
+                when (outcome) {
+                    SaFExportResult.SAVED -> "Brush preset exported as .inkbrush"
+                    SaFExportResult.CANCELLED -> "Brush export cancelled"
+                    SaFExportResult.FAILED -> "Brush export failed — try a different destination"
+                }
+            )
+        }
+    }
     var symmetryMode by remember { mutableStateOf(SymmetryMode.fromSettingKey(viewModel.settings.symmetryModeKey)) }
 
     // Phase 35: minimap HUD visibility, persisted in SettingsManager so the
@@ -1688,6 +1813,21 @@ fun EditorScreen(
                 .fillMaxSize()
                 .padding(padding)
         ) {
+            // Phase 155: quick-color ring swatches — seeded from the user's saved
+            // DesignerPalette swatches (SKAP_WATCH items), falling back to the
+            // current tool color + a small neutral ramp when the vault palette is
+            // empty. Capped to the ring budget so layout and hit-test never drift.
+            val quickColorSwatches = buildList {
+                if (paletteItems.isEmpty()) {
+                    add(currentColor)
+                    add(Color(0xFF000000)); add(Color(0xFFFFFFFF)); add(Color(0xFFE11D48))
+                    add(Color(0xFFF59E0B)); add(Color(0xFF22C55E)); add(Color(0xFF3B82F6))
+                    add(Color(0xFF8B5CF6)); add(Color(0xFFEC4899))
+                } else {
+                    addAll(paletteItems.filter { it.type == "SWATCH" }.map { Color(it.colorInt) })
+                }
+            }.take(com.authorss81.noteflow.services.QuickColorRingMath.MAX_SWATCHES)
+
             // Full screen Canvas surface
             AnnotationCanvas(
                 modifier = Modifier.fillMaxSize(),
@@ -1805,7 +1945,21 @@ fun EditorScreen(
                 vibrancyBoostLevel = vibrancyBoostLevel,
                 currentColorMode = currentColorMode,
                 currentColorSeed = currentColorSeed,
-                currentGradientToColor = currentGradientToColor
+                currentGradientToColor = currentGradientToColor,
+                twoFingerGesturesEnabled = twoFingerGesturesEnabled,
+                onTwoFingerUndo = { handleUndo() },
+                onTwoFingerRedo = { handleRedo() },
+                quickColorRingEnabled = quickColorRingEnabled,
+                quickColorSwatches = quickColorSwatches,
+                onQuickColorPicked = { picked ->
+                    currentColor = picked
+                    viewModel.settings.brushColorArgb = picked.toArgb()
+                    if (currentColorMode.isMultiColor) {
+                        currentColorMode = StrokeColorMode.SOLID
+                        viewModel.settings.brushColorModeKey = StrokeColorMode.SOLID.persistenceKey
+                    }
+                },
+                importedBrushPresets = importedBrushPresets
             )
 
             // Voice note failure banner (real recorder/playback errors — no silent fakes)
@@ -2179,6 +2333,30 @@ fun EditorScreen(
                 activeBrushPresetName = activeBrushPresetId
                     ?.let { com.authorss81.noteflow.services.BrushPresetPack.byId(it)?.name },
                 onOpenBrushPresets = { toolbarState = FloatingToolbarState.BRUSH_PRESETS },
+                twoFingerUndoRedoEnabled = twoFingerGesturesEnabled,
+                onTwoFingerUndoRedoToggle = { enabled ->
+                    twoFingerGesturesEnabled = enabled
+                    viewModel.settings.twoFingerUndoRedoEnabled = enabled
+                    if (enabled && !viewModel.settings.twoFingerHintShown) {
+                        viewModel.settings.twoFingerHintShown = true
+                        viewModel.showSnackbar(
+                            "Two-finger gestures ON — swipe left/right or two-finger double-tap to undo/redo. Pinch-zoom is unchanged.",
+                            isLong = true
+                        )
+                    }
+                },
+                quickColorRingEnabled = quickColorRingEnabled,
+                onQuickColorRingToggle = { enabled ->
+                    quickColorRingEnabled = enabled
+                    viewModel.settings.quickColorRingEnabled = enabled
+                    if (enabled && !viewModel.settings.quickColorRingHintShown) {
+                        viewModel.settings.quickColorRingHintShown = true
+                        viewModel.showSnackbar(
+                            "Quick-color ring ON — long-press the canvas to pick a color.",
+                            isLong = true
+                        )
+                    }
+                },
                 vibrancyEnabled = vibrancyEnabled,
                 onVibrancyToggle = { enabled ->
                     vibrancyEnabled = enabled
@@ -2225,6 +2403,14 @@ fun EditorScreen(
                     activeBrushPresetId = null
                     viewModel.settings.activeBrushPresetId = null
                     viewModel.showSnackbar("Ready-made preset cleared — classic brush settings restored")
+                },
+                // Phase 155: .inkbrush import/export + the user's "My presets".
+                importedPresets = importedBrushPresets,
+                onImportPreset = { brushPresetImportLauncher.launch("application/octet-stream") },
+                onExportPreset = { exportCurrentBrushPreset() },
+                onImportedPresetSelect = { preset ->
+                    applyImportedPreset(preset)
+                    viewModel.showSnackbar("Imported preset applied — start drawing with the brush")
                 },
                 onDismiss = { toolbarState = FloatingToolbarState.COLLAPSED }
             )
@@ -4073,6 +4259,10 @@ private fun CanvasSettingsBottomSheet(
     onInsertPageAfter: () -> Unit,
     activeBrushPresetName: String? = null,
     onOpenBrushPresets: () -> Unit = {},
+    twoFingerUndoRedoEnabled: Boolean = false,
+    onTwoFingerUndoRedoToggle: (Boolean) -> Unit = {},
+    quickColorRingEnabled: Boolean = false,
+    onQuickColorRingToggle: (Boolean) -> Unit = {},
     vibrancyEnabled: Boolean = false,
     onVibrancyToggle: (Boolean) -> Unit = {},
     vibrancyBoostLevel: Float = 0.4f,
@@ -4462,6 +4652,56 @@ private fun CanvasSettingsBottomSheet(
                 Switch(
                     checked = shapeAutoSnapEnabled,
                     onCheckedChange = onShapeAutoSnapToggle
+                )
+            }
+
+            // Phase 155: two-finger undo/redo gesture shortcuts (OFF by default;
+            // the classifier never consumes, so pinch-zoom stays intact).
+            Spacer(modifier = Modifier.height(16.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Icon(Icons.Outlined.SwapHoriz, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    Column {
+                        Text("Two-Finger Undo/Redo", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "Swipe left/right or double-tap with two fingers",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                Switch(
+                    checked = twoFingerUndoRedoEnabled,
+                    onCheckedChange = onTwoFingerUndoRedoToggle
+                )
+            }
+
+            // Phase 155: long-press quick-color ring (OFF by default; instant per
+            // reduce-motion — no animation tween).
+            Spacer(modifier = Modifier.height(16.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Icon(Icons.Outlined.Palette, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    Column {
+                        Text("Quick-Color Ring", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "Long-press the canvas to pick a color from the ring",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                Switch(
+                    checked = quickColorRingEnabled,
+                    onCheckedChange = onQuickColorRingToggle
                 )
             }
 
@@ -5305,7 +5545,12 @@ private fun BrushPresetPickerBottomSheet(
     activePresetId: String?,
     onPresetSelect: (com.authorss81.noteflow.services.BrushPreset) -> Unit,
     onPresetClear: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    // Phase 155: .inkbrush import/export + the user's imported "My presets".
+    importedPresets: List<com.authorss81.noteflow.services.BrushPreset> = emptyList(),
+    onImportPreset: () -> Unit = {},
+    onExportPreset: () -> Unit = {},
+    onImportedPresetSelect: (com.authorss81.noteflow.services.BrushPreset) -> Unit = {}
 ) {
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -5380,6 +5625,93 @@ private fun BrushPresetPickerBottomSheet(
                     Text("Clear preset (restore classic brush)")
                 }
             }
+
+            // Phase 155: .inkbrush import/export via SAF. Ship the dormant
+            // ProtobufBrushLoader path safely from day one (R2-b2b3-LOG-03
+            // sanitized logging carried over): reject reasons and outcomes never
+            // carry file paths or names.
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                OutlinedButton(
+                    onClick = onImportPreset,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(Icons.Outlined.FileOpen, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Import .inkbrush")
+                }
+                Button(
+                    onClick = onExportPreset,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(Icons.Outlined.FileUpload, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Export .inkbrush")
+                }
+            }
+
+            if (importedPresets.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    text = "My presets",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Text(
+                    text = "Imported .inkbrush brushes — tap to apply",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(2),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    items(importedPresets) { preset ->
+                        val selected = preset.id == activePresetId
+                        Surface(
+                            onClick = { onImportedPresetSelect(preset) },
+                            shape = RoundedCornerShape(16.dp),
+                            color = if (selected) MaterialTheme.colorScheme.tertiaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                            border = if (selected) BorderStroke(1.5.dp, MaterialTheme.colorScheme.tertiary) else null,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(vertical = 12.dp, horizontal = 8.dp)
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Icon(
+                                        imageVector = getToolIcon(preset.tool),
+                                        contentDescription = null,
+                                        tint = if (selected) MaterialTheme.colorScheme.onTertiaryContainer else MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Text(
+                                        text = preset.name,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        color = if (selected) MaterialTheme.colorScheme.onTertiaryContainer else MaterialTheme.colorScheme.onSurface,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Text(
+                                    text = preset.tool.label,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
             Spacer(modifier = Modifier.height(16.dp))
         }
     }

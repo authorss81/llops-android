@@ -48,16 +48,16 @@ class GestureRedoUndoClassifier {
     // ---- feel / geometry constants ----------------------------------------
 
     /** Minimum x displacement the centroid must travel for a swipe to fire. */
-    const val SWIPE_DISTANCE_PX = 90f
+    val SWIPE_DISTANCE_PX = 90f
 
     /** Maximum PERPENDICULAR (vertical) centroid travel allowed in a swipe. */
-    const val MAX_SWIPE_VERTICAL_PX = 120f
+    val MAX_SWIPE_VERTICAL_PX = 120f
 
     /**
      * Finger separation at gesture start below which the session is treated as
      * degenerate (two nearly-coincident pointers) and never produces a swipe.
      */
-    const val MIN_START_SEPARATION_PX = 24f
+    val MIN_START_SEPARATION_PX = 24f
 
     /**
      * Separation ratio band. A swipe keeps the two fingers roughly parallel, so
@@ -66,28 +66,27 @@ class GestureRedoUndoClassifier {
      * deliberately generous so a slightly-natural swipe never trips the pinch
      * guard, while a genuine pinch-open (ratio well past 1.65) always does.
      */
-    const val MIN_SEPARATION_RATIO = 0.6f
-    const val MAX_SEPARATION_RATIO = 1.65f
+    val MIN_SEPARATION_RATIO = 0.6f
+    val MAX_SEPARATION_RATIO = 1.65f
 
     /**
      * Radius of the "resting" zone around the gesture-start centroid. A session
      * whose centroid stays inside this radius for its whole lifetime is a TAP
      * (no swipe travelled). Two taps within [DOUBLE_TAP_INTERVAL_MS] fire UNDO.
      */
-    const val TAP_STAY_RADIUS_PX = 48f
+    val TAP_STAY_RADIUS_PX = 48f
 
     /** Two-finger taps closer than this fire one UNDO (double tap). */
-    const val DOUBLE_TAP_INTERVAL_MS = 350L
+    val DOUBLE_TAP_INTERVAL_MS = 350L
 
     /** Absolute cap on accumulated two-finger centroid travel before cancellation. */
-    const val MAX_SESSION_TRAVEL_PX = 600f
+    val MAX_SESSION_TRAVEL_PX = 600f
 
     // ---- session state -----------------------------------------------------
 
     private var sessionActive = false
     private var sceneTimeMs = 0L
     private var startTimeMs = 0L
-    private var lastFrameTimeMs = 0L
 
     private var startCx = 0f
     private var startCy = 0f
@@ -113,6 +112,9 @@ class GestureRedoUndoClassifier {
         lastCy = 0f
         minSeparationRatio = 1f
         maxSeparationRatio = 1f
+        lastTapUpTimeMs = -1L
+        sceneTimeMs = 0L
+        startTimeMs = 0L
     }
 
     /**
@@ -146,7 +148,6 @@ class GestureRedoUndoClassifier {
                 }
                 sessionActive = true
                 startTimeMs = timeMs
-                lastFrameTimeMs = timeMs
                 startCx = cx
                 startCy = cy
                 lastCx = cx
@@ -168,7 +169,6 @@ class GestureRedoUndoClassifier {
             }
             lastCx = cx
             lastCy = cy
-            lastFrameTimeMs = timeMs
             return Action.NONE
         }
 

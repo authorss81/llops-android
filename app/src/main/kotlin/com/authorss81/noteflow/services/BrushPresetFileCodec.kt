@@ -5,7 +5,6 @@ import com.google.gson.Gson
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
-import java.util.Base64
 
 /**
  * Phase 155: the pure-JVM codec for `.inkbrush` brush-preset FILES.
@@ -101,10 +100,14 @@ object BrushPresetFileCodec {
     fun decode(bytes: ByteArray): DecodeResult {
         if (bytes.isEmpty()) return DecodeResult.Invalid("empty file")
         if (bytes.size > MAX_ENCODED_BYTES) return DecodeResult.Invalid("file too large")
-        if (bytes.size >= 4 &&
-            bytes[0] < 0x80.toByte() && // first byte of UTF-8 JSON is ASCII ('{', '[', ...)
-            isPlausibleJsonStart(bytes)
-        ) {
+        // Find the first meaningful byte: skip a UTF-8 BOM and leading ASCII
+        // whitespace so hand-edited or tool-written JSON still routes to the JSON
+        // parser (phase-155 review fix — the pre-fix gate only peeked at byte 0,
+        // so a BOM or leading newline misrouted otherwise-valid JSON to the raw
+        // binary path).
+        val first = firstMeaningfulByteIndex(bytes)
+        if (first < 0) return DecodeResult.Invalid("empty file")
+        if (looksLikeJsonStart(bytes[first])) {
             return decodeJson(bytes)
         }
         // Everything else is treated as an opaque binary family blob — hand it up
@@ -112,17 +115,23 @@ object BrushPresetFileCodec {
         return DecodeResult.RawProtobuf(bytes)
     }
 
-    private fun isPlausibleJsonStart(bytes: ByteArray): Boolean {
-        // Skip a UTF-8 BOM if present.
+    /** Index of the first byte that is not a UTF-8 BOM byte or ASCII whitespace. */
+    private fun firstMeaningfulByteIndex(bytes: ByteArray): Int {
         var i = 0
         if (bytes.size >= 3 && bytes[0] == 0xEF.toByte() && bytes[1] == 0xBB.toByte() && bytes[2] == 0xBF.toByte()) {
             i = 3
         }
-        if (i >= bytes.size) return false
-        return when (bytes[i].toInt() and 0xFF) {
-            '{'.code, '['.code -> true
-            else -> false
+        while (i < bytes.size) {
+            val b = bytes[i].toInt() and 0xFF
+            if (b != ' '.code && b != '\t'.code && b != '\n'.code && b != '\r'.code) return i
+            i++
         }
+        return -1
+    }
+
+    private fun looksLikeJsonStart(b: Byte): Boolean = when (b.toInt() and 0xFF) {
+        '{'.code, '['.code -> true
+        else -> false
     }
 
     private fun decodeJson(bytes: ByteArray): DecodeResult {
@@ -211,6 +220,41 @@ object BrushPresetFileCodec {
             return cleaned.take(BrushPresetImportPolicy.MAX_PRESET_NAME_CHARS)
         }
         return cleaned.takeUnless { it.isEmpty() }
+    }
+
+    /**
+     * Serializes a list of imported presets to a JSON array of encoded bundles
+     * (each element is the [encode] payload as a JSON string). Pure JVM, used to
+     * persist the user's "My presets" in shared prefs — NO DB schema impact.
+     */
+    fun encodeList(presets: List<BrushPreset>): String {
+        val arr = JsonArray()
+        for (preset in presets) {
+            arr.add(String(encode(preset), Charsets.UTF_8))
+        }
+        return arr.toString()
+    }
+
+    /**
+     * Parses the persisted "My presets" JSON back into [BrushPreset]s. Every
+     * element is re-validated through [decode], so a corrupt entry is dropped
+     * instead of crashing or poisoning the list.
+     */
+    fun decodeList(json: String): List<BrushPreset> {
+        if (json.isBlank()) return emptyList()
+        val arr = runCatching {
+            JsonParser.parseString(json)?.takeIf { it.isJsonArray }?.asJsonArray
+        }.getOrNull() ?: return emptyList()
+        val out = mutableListOf<BrushPreset>()
+        for (el in arr) {
+            if (el.isJsonPrimitive && el.asJsonPrimitive.isString) {
+                when (val r = decode(el.asString.toByteArray(Charsets.UTF_8))) {
+                    is DecodeResult.Preset -> out.add(r.preset)
+                    else -> Unit
+                }
+            }
+        }
+        return out
     }
 }
 

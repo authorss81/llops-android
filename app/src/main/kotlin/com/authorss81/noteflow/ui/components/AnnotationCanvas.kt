@@ -181,7 +181,12 @@ fun AnnotationCanvas(
     onTwoFingerRedo: () -> Unit = {},
     quickColorRingEnabled: Boolean = false,
     quickColorSwatches: List<Color> = emptyList(),
-    onQuickColorPicked: (Color) -> Unit = {}
+    onQuickColorPicked: (Color) -> Unit = {},
+    // Phase 155 review fixes: the user's imported `.inkbrush` presets are exposed
+    // here so the active-preset resolver can also resolve imported ids (they are
+    // NOT members of BrushPresetPack). Default empty — pre-existing call sites
+    // compile unchanged.
+    importedBrushPresets: List<com.authorss81.noteflow.services.BrushPreset> = emptyList()
 ) {
     val vibrancyBoost = if (vibrancyEnabled) vibrancyBoostLevel.coerceIn(0f, 1f) else 0f
     var internalZoomScale by remember { mutableFloatStateOf(zoomScale) }
@@ -302,6 +307,11 @@ fun AnnotationCanvas(
         quickColorRingOpen = false
         quickColorRingSelection = com.authorss81.noteflow.services.QuickColorRingMath.NOTHING_HIT
     }
+
+    // Phase 155 review fix: view-config values are read in COMPOSABLE context
+    // and captured, because `LocalViewConfiguration.current` cannot be read
+    // inside a non-@Composable pointerInput lambda (compile error).
+    val quickColorRingLongPressMillis = LocalViewConfiguration.current.longPressTimeoutMillis
 
     var showTextInputDialog by remember { mutableStateOf(false) }
     var textInputOffset by remember { mutableStateOf<Offset?>(null) }
@@ -541,8 +551,11 @@ fun AnnotationCanvas(
     // Phase 13: when a ready-made brush preset is active, pre-fill the wet
     // engine's BrushStudio params. With no preset (null) the engine keeps its
     // default/manual params, so classic brush rendering is unchanged.
-    LaunchedEffect(activeBrushPresetId) {
-        val preset = activeBrushPresetId?.let { com.authorss81.noteflow.services.BrushPresetPack.byId(it) }
+    LaunchedEffect(activeBrushPresetId, importedBrushPresets) {
+        val preset = activeBrushPresetId?.let { id ->
+            com.authorss81.noteflow.services.BrushPresetPack.byId(id)
+                ?: importedBrushPresets.firstOrNull { it.id == id }
+        }
         if (preset != null) {
             wetCanvasEngine.brushParams = preset.brushParams
         }
@@ -764,11 +777,10 @@ fun AnnotationCanvas(
             // can hold a color, so TEXT/SELECT/PAN/EYEDROPPER/sticker/shape tools
             // never trigger it. Reduce-motion is respected: the ring opens and
             // closes instantly (no animation).
-            .pointerInput(quickColorRingEnabled, currentTool, quickColorSwatches) {
+            .pointerInput(quickColorRingEnabled, currentTool, quickColorSwatches, quickColorRingLongPressMillis) {
                 if (!quickColorRingEnabled || !currentTool.isFreehandTool || quickColorSwatches.isEmpty()) {
                     return@pointerInput
                 }
-                val viewConfig = LocalViewConfiguration.current
                 val layout = com.authorss81.noteflow.services.QuickColorRingMath.ringLayout(
                     swatchCount = quickColorSwatches.size,
                     centerX = 0f,
@@ -777,7 +789,10 @@ fun AnnotationCanvas(
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
                     // Long-press = still down after viewConfiguration.longPressTimeoutMillis.
-                    val timedOut = kotlinx.coroutines.withTimeoutOrNull(viewConfig.longPressTimeoutMillis) {
+                    // NOTE: use the scope's OWN withTimeoutOrNull member (restricted
+                    // suspending scope — kotlinx.coroutines.withTimeoutOrNull is NOT
+                    // callable inside awaitEachGesture).
+                    val timedOut = withTimeoutOrNull(quickColorRingLongPressMillis) {
                         waitForUpOrCancellation()
                     }
                     if (timedOut != null) {

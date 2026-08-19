@@ -195,6 +195,35 @@ class SettingsManager(context: Context) {
             }.apply()
         }
 
+    // Phase 155: two-finger undo/redo gesture shortcuts on the canvas. OFF by
+    // default so classic single-finger drawing and pinch-zoom stay untouched;
+    // once enabled the canvas classifier never consumes, so pinch-zoom still works.
+    var twoFingerUndoRedoEnabled: Boolean
+        get() = prefs.getBoolean("two_finger_undo_redo_enabled", false)
+        set(value) = prefs.edit().putBoolean("two_finger_undo_redo_enabled", value).apply()
+
+    /** One-time-only non-alarming hint shown when two-finger gestures are first enabled. */
+    var twoFingerHintShown: Boolean
+        get() = prefs.getBoolean("two_finger_hint_shown", false)
+        set(value) = prefs.edit().putBoolean("two_finger_hint_shown", value).apply()
+
+    // Phase 155: long-press quick-color ring on the canvas. OFF by default.
+    var quickColorRingEnabled: Boolean
+        get() = prefs.getBoolean("quick_color_ring_enabled", false)
+        set(value) = prefs.edit().putBoolean("quick_color_ring_enabled", value).apply()
+
+    /** One-time-only non-alarming hint shown when the quick-color ring is first enabled. */
+    var quickColorRingHintShown: Boolean
+        get() = prefs.getBoolean("quick_color_ring_hint_shown", false)
+        set(value) = prefs.edit().putBoolean("quick_color_ring_hint_shown", value).apply()
+
+    // Phase 155: user-imported `.inkbrush` brush presets persisted as a JSON
+    // array (shared prefs only — NO DB schema impact). Re-importing the same
+    // file dedupes via BrushPresetFileCodec.derivedId.
+    var importedBrushPresetsJson: String
+        get() = prefs.getString("imported_brush_presets_json", "[]") ?: "[]"
+        set(value) = prefs.edit().putString("imported_brush_presets_json", value).apply()
+
     // Phase 19: dual erasers — "STROKE" (classic whole-stroke eraser) is the
     // default so existing behaviour is unchanged; "PARTIAL" trims each touched
     // stroke into surviving segments. SharedPreferences only, no DB schema change.
