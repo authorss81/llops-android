@@ -38,6 +38,21 @@ class SettingsManager(context: Context) {
         get() = prefs.getInt("tutorial_resume_index", 0)
         set(value) = prefs.edit().putInt("tutorial_resume_index", value.coerceAtLeast(0)).apply()
 
+    // Phase 156: first-run triage intro shown/dismissed for passwordless vaults.
+    // One-time — once set it is never auto-shown again (⋮ → "Show help again"
+    // re-opens it on demand regardless of this flag).
+    var onboardingCompleted: Boolean
+        get() = prefs.getBoolean("onboarding_completed", false)
+        set(value) = prefs.edit().putBoolean("onboarding_completed", value).apply()
+
+    // Phase 156: epoch-millis of the last SUCCESSFUL vault backup (0 = never).
+    // Written at the single exportBackup chokepoint so every producer (Home
+    // menu, WebDAV, LocalSend) records it; drives the home "days since backup"
+    // chip + the ⋮-menu "no backup yet" nudge. SharedPreferences, no DB schema.
+    var lastBackupTimestamp: Long
+        get() = prefs.getLong("last_backup_timestamp", 0L)
+        set(value) = prefs.edit().putLong("last_backup_timestamp", value).apply()
+
     // B2-CRYPTO-09 (phase-107): one-time per-record field AAD migration flag.
     // Set after NoteRepository.migrateFieldRecordAad has bound every pre-phase-107
     // ciphertext to its table|recordId|fieldName context, so the (O-rows) pass is

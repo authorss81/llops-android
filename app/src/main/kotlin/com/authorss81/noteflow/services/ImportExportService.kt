@@ -1491,6 +1491,11 @@ object ImportExportService {
             stagingZip.delete()
             stagedDb.delete()
         }
+        // Phase 156: this is the SINGLE success chokepoint for every backup
+        // producer (Home menu, WebDAV, LocalSend) — record the last-backup
+        // timestamp here so the home "days since backup" chip + ⋮ nudge stay
+        // truthful across all paths.
+        SettingsManager(context.applicationContext).lastBackupTimestamp = System.currentTimeMillis()
         tempBackupFile
     }
 

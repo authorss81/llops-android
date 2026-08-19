@@ -118,16 +118,12 @@ fun VersionHistoryBottomSheet(
                     CircularProgressIndicator()
                 }
             } else if (loadedVersions.isEmpty()) {
-                Box(
-                    modifier = Modifier.fillMaxWidth().height(180.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "No prior revision snapshots recorded yet.\nSnapshots are auto-created when saving notes.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = scheme.onSurfaceVariant
-                    )
-                }
+                // Phase 156: decision-driven empty state (SAME guarantees as the
+                // inline copy it replaces: honest, non-alarming, no fake CTA — a
+                // vault lock keeps it empty because getNoteVersions arms-empty).
+                TactileEmptyState(
+                    decision = EmptyStateResolver.decide(EmptyStateKind.VERSION_HISTORY)
+                )
             } else {
                 Row(
                     modifier = Modifier

@@ -3,7 +3,9 @@ package com.authorss81.noteflow.ui.components
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Extension
 import androidx.compose.material.icons.outlined.Refresh
@@ -71,6 +73,18 @@ fun PluginStoreDialog(
     // fits more plugins per screen; remembered ONLY while the dialog is open
     // (a fresh open starts every card collapsed again) — never persisted.
     var expandedDescriptionIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    // Phase 156: client-side store filter — lets the store hit its own
+    // "nothing matches a filter" empty state (honest, one-CTA) instead of a
+    // silent blank list.
+    var storeFilter by remember { mutableStateOf("") }
+    val filteredRows = remember(rows, storeFilter) {
+        if (storeFilter.isBlank()) rows
+        else rows.filter {
+            it.entry.pluginId.contains(storeFilter, ignoreCase = true) ||
+                it.entry.name.contains(storeFilter, ignoreCase = true) ||
+                it.entry.description.contains(storeFilter, ignoreCase = true)
+        }
+    }
 
     val colorScheme = MaterialTheme.colorScheme
     val statusColor: (PluginLifecycleState?) -> Color = { state ->
@@ -141,18 +155,49 @@ fun PluginStoreDialog(
                     }
                 }
                 HorizontalDivider(color = colorScheme.outlineVariant.copy(alpha = 0.5f))
+                // Phase 156: store filter — a match-less filter lands on the
+                // query-aware empty state instead of a silent blank list.
+                OutlinedTextField(
+                    value = storeFilter,
+                    onValueChange = { storeFilter = it },
+                    placeholder = { Text("Filter plugins…") },
+                    leadingIcon = { Icon(Icons.Outlined.Extension, contentDescription = null) },
+                    trailingIcon = if (storeFilter.isNotEmpty()) {
+                        {
+                            IconButton(onClick = { storeFilter = "" }) {
+                                Icon(Icons.Outlined.Close, contentDescription = "Clear filter")
+                            }
+                        }
+                    } else null,
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(10.dp)
+                )
                 LazyColumn(
                     modifier = Modifier.fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    if (rows.isEmpty()) {
+                    if (filteredRows.isEmpty()) {
                         item {
+                            val decision = EmptyStateResolver.decide(
+                                EmptyStateKind.PLUGIN_STORE,
+                                hasQuery = storeFilter.isNotBlank(),
+                                query = storeFilter
+                            )
                             TactileEmptyState(
-                                decision = EmptyStateResolver.decide(EmptyStateKind.PLUGIN_STORE)
+                                decision = decision,
+                                action = if (decision.actionLabel != null) {
+                                    val label = decision.actionLabel
+                                    {
+                                        TextButton(onClick = { storeFilter = "" }) {
+                                            Text(label ?: "Clear filter")
+                                        }
+                                    }
+                                } else null
                             )
                         }
                     }
-                    items(rows, key = { it.entry.pluginId }) { row ->
+                    items(filteredRows, key = { it.entry.pluginId }) { row ->
                                 val entry = row.entry
                         val info = row.state
                         val isBusy = row.entry.pluginId in busy

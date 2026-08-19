@@ -58,6 +58,9 @@ import com.authorss81.noteflow.services.graph.GraphVertex
 import com.authorss81.noteflow.services.graph.KnowledgeGraphEdgePolicy
 import com.authorss81.noteflow.theme.LocalReduceMotion
 import com.authorss81.noteflow.ui.components.BacklinksInspectorBottomSheet
+import com.authorss81.noteflow.ui.components.EmptyStateKind
+import com.authorss81.noteflow.ui.components.EmptyStateResolver
+import com.authorss81.noteflow.ui.components.TactileEmptyState
 import com.authorss81.noteflow.ui.viewmodel.NoteflowViewModel
 import com.authorss81.noteflow.utils.DeviceCompatibilityManager
 import com.authorss81.noteflow.utils.DeviceTier
@@ -131,6 +134,9 @@ fun KnowledgeGraphScreen(
     var edges by remember { mutableStateOf<List<GraphEdge>>(emptyList()) }
     var allTags by remember { mutableStateOf<List<String>>(emptyList()) }
     var selectedNodeId by remember { mutableStateOf<String?>(null) }
+    // Phase 156: distinguishes "still decryption the vault" from "vault loaded,
+    // genuinely empty" so the empty state never flashes before the load lands.
+    var graphLoaded by remember { mutableStateOf(false) }
 
     var zoomScale by remember { mutableFloatStateOf(1f) }
     var panOffset by remember { mutableStateOf(Offset.Zero) }
@@ -228,6 +234,7 @@ fun KnowledgeGraphScreen(
         )
 
         val count = kept.size
+        graphLoaded = true
         if (count == 0) return@LaunchedEffect
 
         // Starting positions: deterministic orbital ring.
@@ -673,6 +680,28 @@ fun KnowledgeGraphScreen(
                         }
                     }
                 }
+            }
+
+            // Phase 156: honest empty state for a vault with no graph material
+            // (no notes yet). Never shown before the decrypt pass finishes.
+            if (graphLoaded && nodes.isEmpty()) {
+                val emptyDecision = EmptyStateResolver.decide(EmptyStateKind.KNOWLEDGE_GRAPH)
+                TactileEmptyState(
+                    decision = emptyDecision,
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .padding(24.dp),
+                    action = if (emptyDecision.actionLabel != null) {
+                        val label = emptyDecision.actionLabel
+                        {
+                            Button(onClick = {
+                                viewModel.addPage("New Page", onCreated = onOpenPage)
+                            }) {
+                                Text(label ?: "Create a note")
+                            }
+                        }
+                    } else null
+                )
             }
         }
     }

@@ -35,8 +35,10 @@ import com.authorss81.noteflow.plugins.webcapture.WebPageFetchPolicy
 import com.authorss81.noteflow.services.BackupPasswordPolicy
 import com.authorss81.noteflow.services.DocumentTextExtractor
 import com.authorss81.noteflow.services.ExportDestinationPolicy
+import com.authorss81.noteflow.services.HomeStatsMath
 import com.authorss81.noteflow.services.ImportArchivePolicy
 import com.authorss81.noteflow.services.ImportExportService
+import com.authorss81.noteflow.services.OnboardingPolicy
 import com.authorss81.noteflow.services.OrphanImportCleanupPolicy
 import com.authorss81.noteflow.services.isPlainPkBackupFile
 import com.authorss81.noteflow.services.isNflbBackupFile
@@ -89,6 +91,10 @@ fun HomeScreen(
     val isFirstRun by viewModel.isFirstRun.collectAsState()
     val tutorialCompleted by viewModel.tutorialCompleted.collectAsState()
     val confettiTrigger by viewModel.confettiTrigger.collectAsState()
+    // Phase 156: passwordless first-run triage + home stats.
+    val hasMasterPassword by viewModel.hasMasterPassword.collectAsState()
+    val onboardingCompleted by viewModel.onboardingCompleted.collectAsState()
+    val lastBackupTimestamp by viewModel.lastBackupTimestamp.collectAsState()
 
     var isInitializingLoading by remember { mutableStateOf(true) }
     LaunchedEffect(Unit) {
@@ -112,7 +118,14 @@ fun HomeScreen(
     val isRestoring by viewModel.isRestoring.collectAsState()
     // Phase 125: the interactive tutorial is the first-run experience (armed once,
     // never auto-reopens once tutorialCompleted); reopen anytime via ⋮ → Tutorial.
-    var showTutorial by remember { mutableStateOf(isFirstRun && !tutorialCompleted) }
+    // Phase 156: on a PASSWORDLESS first run the quick triage intro takes the
+    // auto-armed first-run slot instead — the tutorial stays reachable via ⋮ and
+    // never stacks on top of the intro (no competing overlays).
+    val shouldAutoShowOnboarding = remember(isFirstRun, hasMasterPassword, onboardingCompleted) {
+        OnboardingPolicy.shouldAutoShow(isFirstRun, hasMasterPassword, onboardingCompleted)
+    }
+    var showOnboarding by remember { mutableStateOf(shouldAutoShowOnboarding) }
+    var showTutorial by remember { mutableStateOf(isFirstRun && !tutorialCompleted && !shouldAutoShowOnboarding) }
     var searchQuery by remember { mutableStateOf("") }
     var selectedTab by remember { mutableIntStateOf(0) } // 0 = Pages, 1 = Recent, 2 = Tag Vault, 3 = Trash
     var pageViewMode by remember { mutableIntStateOf(0) } // 0 = List, 1 = Gallery, 2 = Kanban, 3 = Calendar, 4 = Table
@@ -278,6 +291,16 @@ fun HomeScreen(
 
     // Global Vault Search state
     var globalSearchResults by remember { mutableStateOf<List<NotePageEntity>?>(null) }
+
+    // Phase 156: home glanceable stats (n notes · n links · days since backup).
+    // noteCount comes from the already-collected decrypted vault list (no new DB
+    // read); linkCount re-derives from the cached search corpus, keyed on the
+    // corpus generation so it refreshes exactly when the vault changes.
+    val homeNoteCount = allActivePages.size
+    var homeLinkCount by remember { mutableIntStateOf(0) }
+    LaunchedEffect(viewModel.repository.currentSearchCorpusGeneration) {
+        homeLinkCount = viewModel.countCachedWikiLinks()
+    }
 
     // B2-DOS-02 (phase-78): the capped-window "search all pages" refine notice is
     // ONE-TIME per query session — shown when the cached search window was capped
@@ -633,6 +656,7 @@ fun HomeScreen(
                             onToggleDatabaseIntegrityCheck = { viewModel.setDatabaseIntegrityCheckEnabled(it) },
                             onOpenTagManager = { showTagManagerDialog = true },
                             onOpenTutorial = { showTutorial = true },
+                            onOpenHelp = { showOnboarding = true },
                             onOpenSecurity = { showSecurityDialog = true },
                             onOpenUpdate = { showUpdateDialog = true },
                             onOpenPlugins = { showPluginsDialog = true },
@@ -640,6 +664,7 @@ fun HomeScreen(
                             onOpenLocalSend = { showLocalSendDialog = true },
                             onOpenWebCapture = { showWebCaptureDialog = true },
                             onOpenWebDavSync = { showWebDavDialog = true },
+                            hasNoBackup = lastBackupTimestamp == 0L,
                             onBackup = {
                                 if (viewModel.hasMasterPassword.value) {
                                     backupPasswordInput = ""
@@ -665,7 +690,10 @@ fun HomeScreen(
                                                 cacheFile
                                             ) { result ->
                                                 when (result) {
-                                                    SaFExportResult.SAVED -> viewModel.showSnackbar("Backup created and saved.")
+                                                    SaFExportResult.SAVED -> {
+                                                        viewModel.refreshBackupTimestamp()
+                                                        viewModel.showSnackbar("Backup created and saved.")
+                                                    }
                                                     SaFExportResult.CANCELLED -> viewModel.showSnackbar("Backup cancelled")
                                                     SaFExportResult.FAILED -> viewModel.showSnackbar("Backup could not be written to the chosen destination")
                                                 }
@@ -1046,6 +1074,34 @@ fun HomeScreen(
                         }
                     }
 
+                    // Phase 156: glanceable home stats — never a DB read, all from
+                    // the already-cached corpus / collected vault list / settings.
+                    val statChips = remember(homeNoteCount, homeLinkCount, lastBackupTimestamp) {
+                        HomeStatsMath.chips(homeNoteCount, homeLinkCount, lastBackupTimestamp, System.currentTimeMillis())
+                    }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState())
+                            .padding(top = 10.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        statChips.forEach { chip ->
+                            Surface(
+                                shape = RoundedCornerShape(16.dp),
+                                color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.7f)
+                            ) {
+                                Text(
+                                    chip,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                                )
+                            }
+                        }
+                    }
+
                     Spacer(modifier = Modifier.height(16.dp))
 
                     // Navigation Tabs: Current Section, Recent, Tag Vault, Trash
@@ -1215,25 +1271,37 @@ fun HomeScreen(
 
                         if (activePageList.isEmpty()) {
                             val emptyDecision = EmptyStateResolver.decide(
-                                kind = if (selectedTab == 3) {
-                                    EmptyStateKind.TRASH
-                                } else if (searchQuery.isNotBlank()) {
-                                    EmptyStateKind.HOME_GRID
-                                } else {
-                                    EmptyStateKind.HOME_GRID
+                                kind = when {
+                                    selectedTab == 3 -> EmptyStateKind.TRASH
+                                    selectedTab == 1 && searchQuery.isBlank() -> EmptyStateKind.RECENT
+                                    else -> EmptyStateKind.HOME_GRID
                                 },
                                 hasQuery = searchQuery.isNotBlank(),
                                 isFirstRun = isFirstRun,
                                 query = searchQuery
                             )
-                            Box(
+                            TactileEmptyState(
+                                decision = emptyDecision,
                                 modifier = Modifier
                                     .fillMaxSize()
                                     .padding(32.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                TactileEmptyState(decision = emptyDecision)
-                            }
+                                action = if (emptyDecision.actionLabel != null) {
+                                    val label = emptyDecision.actionLabel
+                                    {
+                                        Button(
+                                            onClick = {
+                                                if (label == "Clear search") {
+                                                    searchQuery = ""
+                                                } else {
+                                                    viewModel.addPage("New Page", onCreated = onOpenPage)
+                                                }
+                                            }
+                                        ) {
+                                            Text(label ?: "Create a note")
+                                        }
+                                    }
+                                } else null
+                            )
                         } else {
                             if (selectedTab == 0) {
                                 when (pageViewMode) {
@@ -1488,7 +1556,10 @@ fun HomeScreen(
                                                 cacheFile
                                             ) { result ->
                                                 when (result) {
-                                                    SaFExportResult.SAVED -> viewModel.showSnackbar("Backup created and saved.")
+                                                    SaFExportResult.SAVED -> {
+                                                        viewModel.refreshBackupTimestamp()
+                                                        viewModel.showSnackbar("Backup created and saved.")
+                                                    }
                                                     SaFExportResult.CANCELLED -> viewModel.showSnackbar("Backup cancelled")
                                                     SaFExportResult.FAILED -> viewModel.showSnackbar("Backup could not be written to the chosen destination")
                                                 }
@@ -1683,6 +1754,21 @@ fun HomeScreen(
                     }) {
                         Text("Cancel")
                     }
+                }
+            )
+        }
+
+        if (showOnboarding) {
+            // Phase 156: one-time, non-blocking passwordless first-run triage.
+            // Dismiss (swipe / Skip / Close / Get started) persists the flag so
+            // it never auto-shows again; ⋮ → "Show help again" re-opens it.
+            FirstRunOnboardingSheet(
+                onCreateNote = { viewModel.addPage("New Page", onCreated = onOpenPage) },
+                onOpenPluginStore = { showPluginStoreDialog = true },
+                onOpenWebDav = { showWebDavDialog = true },
+                onDismiss = {
+                    showOnboarding = false
+                    viewModel.completeOnboarding()
                 }
             )
         }
@@ -2586,6 +2672,7 @@ private fun MaintenanceMenu(
     onToggleDatabaseIntegrityCheck: (Boolean) -> Unit = {},
     onOpenTagManager: () -> Unit,
     onOpenTutorial: () -> Unit,
+    onOpenHelp: () -> Unit = {},
     onOpenSecurity: () -> Unit,
     onOpenUpdate: () -> Unit,
     onOpenPlugins: () -> Unit = {},
@@ -2596,7 +2683,8 @@ private fun MaintenanceMenu(
     onExportHtmlVault: () -> Unit = {},
     onOpenLocalSend: () -> Unit = {},
     onOpenWebCapture: () -> Unit = {},
-    onOpenWebDavSync: () -> Unit = {}
+    onOpenWebDavSync: () -> Unit = {},
+    hasNoBackup: Boolean = false
 ) {
     var expanded by remember { mutableStateOf(false) }
 
@@ -2654,6 +2742,11 @@ private fun MaintenanceMenu(
                 leadingIcon = { Icon(Icons.Outlined.HelpOutline, contentDescription = null) },
                 onClick = { expanded = false; onOpenTutorial() }
             )
+            DropdownMenuItem(
+                text = { Text("Show help again") },
+                leadingIcon = { Icon(Icons.Outlined.Lightbulb, contentDescription = null) },
+                onClick = { expanded = false; onOpenHelp() }
+            )
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
             DropdownMenuItem(
                 text = { Text("Security Settings") },
@@ -2700,6 +2793,17 @@ private fun MaintenanceMenu(
                 leadingIcon = { Icon(Icons.Outlined.CloudSync, contentDescription = null) },
                 onClick = { expanded = false; onOpenWebDavSync() }
             )
+            if (hasNoBackup) {
+                // Phase 156: non-alarming, non-blocking nudge for a never-backed-up vault.
+                Text(
+                    "No backup yet — keep your vault safe with an encrypted backup.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier
+                        .padding(horizontal = 16.dp, vertical = 6.dp)
+                        .fillMaxWidth()
+                )
+            }
             DropdownMenuItem(
                 text = { Text("Backup to File") },
                 leadingIcon = { Icon(Icons.Outlined.Backup, contentDescription = null) },

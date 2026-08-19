@@ -45,6 +45,7 @@ private sealed interface SearchStage {
     data object Idle : SearchStage
     data object Loading : SearchStage
     data class Results(val results: List<WebSearchResult>) : SearchStage
+    data class NoResults(val query: String) : SearchStage
     data class Error(val message: String) : SearchStage
 }
 
@@ -82,7 +83,7 @@ fun WebSearchDialog(
                     is PluginResult.Success -> when (val outcome = result.value) {
                         is WebSearchOutcome.Success ->
                             if (outcome.results.isEmpty()) {
-                                SearchStage.Error("No results found for \"$trimmed\".")
+                                SearchStage.NoResults(trimmed)
                             } else {
                                 SearchStage.Results(outcome.results)
                             }
@@ -136,6 +137,26 @@ fun WebSearchDialog(
                     SearchStage.Loading -> {
                         LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                         Text("Searching…", style = MaterialTheme.typography.bodySmall)
+                    }
+                    is SearchStage.NoResults -> {
+                        // Phase 156: decision-driven empty state with one CTA —
+                        // "New search" clears the query and refocuses the field.
+                        val d = EmptyStateResolver.decide(
+                            EmptyStateKind.WEB_SEARCH,
+                            hasQuery = true,
+                            query = s.query
+                        )
+                        TactileEmptyState(
+                            decision = d,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            TextButton(onClick = {
+                                query = ""
+                                stage = SearchStage.Idle
+                            }) {
+                                Text(d.actionLabel ?: "New search")
+                            }
+                        }
                     }
                     is SearchStage.Error -> Text(
                         s.message,

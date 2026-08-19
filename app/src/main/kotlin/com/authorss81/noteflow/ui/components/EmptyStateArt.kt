@@ -54,6 +54,7 @@ fun EmptyStateIllustration(
             IllustrationKind.TRASH -> drawTrash(primary, muted)
             IllustrationKind.STACK -> drawBookStack(primary, secondary, muted)
             IllustrationKind.PUZZLE -> drawPuzzle(primary, secondary)
+            IllustrationKind.HISTORY -> drawHistory(primary, secondary, muted)
         }
     }
 }
@@ -389,4 +390,57 @@ private fun DrawScope.drawPuzzle(
         strokeWidth = 2.2f,
         cap = StrokeCap.Round
     )
+}
+
+private fun DrawScope.drawHistory(
+    primary: Color,
+    secondary: Color,
+    muted: Color
+) {
+    val w = size.width
+    val h = size.height
+    val cx = w * 0.50f
+    val cy = h * 0.52f
+    val r = w * 0.30f
+    // Clock face ring.
+    drawCircle(
+        color = primary.copy(alpha = 0.85f),
+        radius = r,
+        center = Offset(cx, cy),
+        style = Stroke(width = 6f)
+    )
+    // Restore arc (circular arrow sweeping back toward the clock).
+    drawArc(
+        color = secondary,
+        startAngle = 60f,
+        sweepAngle = 160f,
+        useCenter = false,
+        topLeft = Offset(cx - r * 1.18f, cy - r * 1.18f),
+        size = androidx.compose.ui.geometry.Size(r * 2.36f, r * 2.36f),
+        style = Stroke(width = 5f, cap = StrokeCap.Round)
+    )
+    // Arrow head.
+    val head = Path().apply {
+        moveTo(cx + r * 1.18f, cy - r * 0.78f)
+        lineTo(cx + r * 1.28f, cy - r * 0.96f)
+        lineTo(cx + r * 0.98f, cy - r * 0.86f)
+        close()
+    }
+    drawPath(head, color = secondary)
+    // Hour + minute hands.
+    drawLine(
+        color = muted,
+        start = Offset(cx, cy),
+        end = Offset(cx, cy - r * 0.55f),
+        strokeWidth = 3.4f,
+        cap = StrokeCap.Round
+    )
+    drawLine(
+        color = muted,
+        start = Offset(cx, cy),
+        end = Offset(cx + r * 0.40f, cy + r * 0.28f),
+        strokeWidth = 3.4f,
+        cap = StrokeCap.Round
+    )
+    drawCircle(color = primary, radius = 2.6f, center = Offset(cx, cy))
 }

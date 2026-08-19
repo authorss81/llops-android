@@ -1455,6 +1455,21 @@
     UNTRUSTED installs behind explicit user confirmation. The old scan of `getExternalFilesDir` + `/sdcard/Download`
     + `/storage/emulated/0/Download` and the "New update detected in local storage" conditioning wording are gone.
     Tests: `B1Plat07UpdateTrustTest` (11 test methods; review fix 2026-08-15 — see `workspace/phase-61/REPORT.md` "Addendum").
+- **Onboarding / empty states / home glanceable stats** (Phase 156, see `workspace/phase-156/REPORT.md`):
+  pure-JVM `services/OnboardingPolicy.kt` (first-run gate `shouldAutoShow(isFirstRun, hasMasterPassword,
+  onboardingCompleted)` + 3 `OnboardingStep`s + privacy-stance copy), `services/HomeStatsMath.kt`
+  (`countDistinctWikiLinks` bounded by `WikiLinkParser.MAX_LINKS_PER_PAGE`, `daysSinceBackup`,
+  `backupChip`, `chips`); `ui/components/FirstRunOnboarding.kt` `FirstRunOnboardingSheet` (non-blocking
+  `ModalBottomSheet`, 3 instant steps, no animated transitions — reduce-motion by construction);
+  `ui/components/EmptyStateKit.kt` (`EmptyStateKind` incl. RECENT/KNOWLEDGE_GRAPH/VERSION_HISTORY/
+  WEB_SEARCH, nullable `actionLabel` on `EmptyStateDecision`, query-aware PLUGIN_STORE/HOME_GRID);
+  `ui/components/EmptyStateArt.kt` `IllustrationKind.HISTORY` + `drawHistory`. Wired: `HomeScreen.kt`
+  (auto-show + stats chips + "Show help again" + no-backup nudge + RECENT/TRASH empty states),
+  `KnowledgeGraphScreen.kt` (zero-node empty overlay behind a `graphLoaded` flag),
+  `VersionHistoryBottomSheet.kt`, `WebSearchDialog.kt` (`SearchStage.NoResults`), `PluginStoreDialog.kt`
+  (filter + "Clear filter"). `ImportExportService.exportBackup` records `SettingsManager.lastBackupTimestamp`
+  at its single success chokepoint; `NoteflowViewModel` exposes `onboardingCompleted`/`lastBackupTimestamp`
+  StateFlows + `countCachedWikiLinks()`. No DB schema change, no new dependencies.
 
 ## Build / CI essentials
 

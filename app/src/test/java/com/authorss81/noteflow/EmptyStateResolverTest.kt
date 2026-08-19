@@ -5,6 +5,7 @@ import com.authorss81.noteflow.ui.components.EmptyStateResolver
 import com.authorss81.noteflow.ui.components.IllustrationKind
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -111,5 +112,69 @@ class EmptyStateResolverTest {
         val trash = EmptyStateResolver.decide(EmptyStateKind.TRASH, hasQuery = true, query = "q")
         assertTrue(home.suggestion.contains("q"))
         assertFalse(trash.suggestion.contains("q"))
+    }
+
+    // ---------- Phase 156: new empty kinds ----------
+
+    @Test
+    fun `recent empty state names the tab and offers a create-note CTA`() {
+        val d = EmptyStateResolver.decide(EmptyStateKind.RECENT)
+        assertEquals("No recently viewed notes yet", d.title)
+        assertEquals(IllustrationKind.STACK, d.illustration)
+        assertEquals("Create a note", d.actionLabel)
+        assertFalse(d.isOnboarding)
+    }
+
+    @Test
+    fun `knowledge graph empty state teaches wikilinks and offers a CTA`() {
+        val d = EmptyStateResolver.decide(EmptyStateKind.KNOWLEDGE_GRAPH)
+        assertEquals("No knowledge graph yet", d.title)
+        assertEquals(IllustrationKind.GRAPH, d.illustration)
+        assertTrue("must teach a wikilink", d.suggestion.contains("wikilink", ignoreCase = true))
+        assertTrue("must show the [[..]] shape", d.suggestion.contains("[["))
+        assertEquals("Create a note", d.actionLabel)
+    }
+
+    @Test
+    fun `version history empty state is informational with no fake CTA`() {
+        val d = EmptyStateResolver.decide(EmptyStateKind.VERSION_HISTORY)
+        assertEquals("No revision snapshots yet", d.title)
+        assertEquals(IllustrationKind.HISTORY, d.illustration)
+        assertNull(d.actionLabel)
+    }
+
+    @Test
+    fun `web search empty state echoes the query and offers a new search CTA`() {
+        val d = EmptyStateResolver.decide(EmptyStateKind.WEB_SEARCH, hasQuery = true, query = "kittens")
+        assertEquals("No results found", d.title)
+        assertEquals(IllustrationKind.SEARCH, d.illustration)
+        assertTrue(d.suggestion.contains("kittens"))
+        assertEquals("New search", d.actionLabel)
+    }
+
+    @Test
+    fun `plugin store filter miss echoes the query and offers to clear it`() {
+        val d = EmptyStateResolver.decide(EmptyStateKind.PLUGIN_STORE, hasQuery = true, query = "ocr")
+        assertEquals("No plugin matches", d.title)
+        assertTrue(d.suggestion.contains("ocr"))
+        assertEquals("Clear filter", d.actionLabel)
+    }
+
+    @Test
+    fun `plugin store without a filter keeps the bundled-plugin invite and no CTA`() {
+        val d = EmptyStateResolver.decide(EmptyStateKind.PLUGIN_STORE)
+        assertEquals("Nothing in the store", d.title)
+        assertEquals(IllustrationKind.PUZZLE, d.illustration)
+        assertNull(d.actionLabel)
+    }
+
+    @Test
+    fun `home search miss and first-run welcome carry their own CTAs`() {
+        val search = EmptyStateResolver.decide(EmptyStateKind.HOME_GRID, hasQuery = true, query = "x")
+        assertEquals("Clear search", search.actionLabel)
+        val welcome = EmptyStateResolver.decide(EmptyStateKind.HOME_GRID, isFirstRun = true)
+        assertEquals("Create your first note", welcome.actionLabel)
+        val quiet = EmptyStateResolver.decide(EmptyStateKind.HOME_GRID)
+        assertEquals("Create a note", quiet.actionLabel)
     }
 }

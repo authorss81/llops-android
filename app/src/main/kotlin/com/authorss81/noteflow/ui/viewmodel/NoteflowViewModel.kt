@@ -75,6 +75,7 @@ import com.authorss81.noteflow.services.DekAtRestPolicy
 import com.authorss81.noteflow.services.DekReadResult
 import com.authorss81.noteflow.services.EditorFlushPolicy
 import com.authorss81.noteflow.services.EncryptionService
+import com.authorss81.noteflow.services.HomeStatsMath
 import com.authorss81.noteflow.services.ImportExportService
 import com.authorss81.noteflow.services.EmptyVaultRestoreDecisionException
 import com.authorss81.noteflow.services.RestoreInflightGate
@@ -1330,6 +1331,28 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     // tutorial resets it to 0. Resumed runs never restart from the top.
     private val _tutorialResumeIndex = MutableStateFlow(settings.tutorialResumeIndex)
     val tutorialResumeIndex: StateFlow<Int> = _tutorialResumeIndex.asStateFlow()
+
+    // Phase 156: first-run triage intro (passwordless vaults). Once completed it
+    // is never auto-shown again; the ⋮ menu's "Show help again" entry re-opens
+    // it on demand regardless of password state.
+    private val _onboardingCompleted = MutableStateFlow(settings.onboardingCompleted)
+    val onboardingCompleted: StateFlow<Boolean> = _onboardingCompleted.asStateFlow()
+
+    fun completeOnboarding() {
+        settings.onboardingCompleted = true
+        _onboardingCompleted.value = true
+    }
+
+    // Phase 156: epoch-millis of the last successful backup (0 = never). Written
+    // at the single exportBackup chokepoint; the UI refreshes via
+    // refreshBackupTimestamp() at the few completion touchpoints so the home
+    // "days since backup" chip + ⋮ nudge update without a process restart.
+    private val _lastBackupTimestamp = MutableStateFlow(settings.lastBackupTimestamp)
+    val lastBackupTimestamp: StateFlow<Long> = _lastBackupTimestamp.asStateFlow()
+
+    fun refreshBackupTimestamp() {
+        _lastBackupTimestamp.value = settings.lastBackupTimestamp
+    }
 
     private val _confettiTrigger = MutableStateFlow(0L)
     val confettiTrigger: StateFlow<Long> = _confettiTrigger.asStateFlow()
@@ -3911,6 +3934,10 @@ fun updatePageTags(id: String, tags: String) {
                     repository = repository
                 )
                 backupFile.copyTo(targetZip, overwrite = true)
+                // Phase 156: WebDAV sync produced a backup — refresh the home
+                // "days since backup" chip (exportBackup already recorded the
+                // timestamp at its success chokepoint).
+                refreshBackupTimestamp()
                 onComplete(true)
             } catch (e: Exception) {
                 onComplete(false)
@@ -4057,6 +4084,18 @@ fun updatePageTags(id: String, tags: String) {
      */
     fun invalidatePaletteIndex() {
         paletteIndex = null
+    }
+
+    /**
+     * Phase 156: distinct wikilink-target count across the already-cached
+     * decrypted search corpus — feeds the home "n links" chip. No new DB read
+     * beyond the cached corpus; the regex scan is bounded per page.
+     */
+    suspend fun countCachedWikiLinks(): Int {
+        val corpus = repository.cachedCorpus()
+        return withContext(Dispatchers.Default) {
+            HomeStatsMath.countDistinctWikiLinks(corpus)
+        }
     }
 
     /**
