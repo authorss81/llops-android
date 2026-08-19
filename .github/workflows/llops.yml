@@ -121,23 +121,23 @@ jobs:
       done: ${{ steps.commit.outputs.done }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Setup Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "21"
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
+        uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: "8.13"
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
         with:
           cmdline-tools-version: latest
           sdk: platforms;android-36,build-tools;36.0.0,ndk;27.0.12077973,cmake;3.22.1
@@ -239,7 +239,7 @@ jobs:
       - name: Upload release APK artifact (phase-117/159 build phase)
         if: needs.select-phase.outputs.phase == 'phase-117' || needs.select-phase.outputs.phase == 'phase-159'
         continue-on-error: true   # artifact quota failures must never fail the run
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: noteflow-release-apk
           path: app/build/outputs/apk/release/app-release.apk
@@ -248,7 +248,7 @@ jobs:
       - name: Upload recovery patch (if push failed)
         if: always()
         continue-on-error: true   # artifact quota failures must never fail the run
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: llops-recovery-${{ needs.select-phase.outputs.phase }}
           path: |
@@ -296,23 +296,23 @@ jobs:
     timeout-minutes: 90
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Setup Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "21"
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
+        uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: "8.13"
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
         with:
           cmdline-tools-version: latest
           sdk: platforms;android-36,build-tools;36.0.0,ndk;27.0.12077973,cmake;3.22.1
@@ -362,7 +362,7 @@ jobs:
       - name: Upload recovery patch (review fixes)
         if: always()
         continue-on-error: true   # artifact quota failures must never fail the run
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: llops-recovery-${{ needs.select-phase.outputs.phase }}-review
           path: |
