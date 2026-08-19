@@ -22,24 +22,34 @@ Read `docs/ARCHITECTURE.md`, `docs/phase-status.md`, `docs/RELEASE.md`,
 `docs/PLUGINS.md`, `docs/plugin-architecture.md`, and `AGENTS.md` first.
 Evidence you should re-verify (cite `file:line` in REPORT):
 `docs/RELEASE.md`, the signing config in `app/build.gradle.kts`
-(`v1SigningEnabled`/`v2SigningEnabled`, the B1-PLAT-1 fail-closed block at
-`app/build.gradle.kts:133-153`), the release-signing test
+(`v1SigningEnabled`/`v2SigningEnabled` / `enableV3Signing` inside
+`signingConfigs.create("releaseConfig")` at `:36-60`, the B1-PLAT-1 fail-closed
+gate at `app/build.gradle.kts:133-153`), the release-signing test
 `B1Plat01ReleaseSigningTest`, and the plugin-update runtime:
 `app/src/main/kotlin/com/authorss81/noteflow/plugins/runtime/HostedPluginManifest.kt`
-(`PLUGIN_MANIFEST_CERT_PIN` ≈ `:220`), `CompileTimePluginPinStore.kt`,
+(`PLUGIN_MANIFEST_CERT_PIN` at `:242-243`), `CompileTimePluginPinStore.kt`,
 `PinnedCertHash.kt`, `HttpsManifestTransport`/`PluginManifestFetcher.kt`, and
 the allow-list host `plugin-updates.inkflow.app`.
 
 ## Part A — Enable APK Signature Scheme v3 (NEW-03) without weakening security
 
-AGP signs with v3 automatically when minSdk ≥ 28 AND the release signing config
-is real (which B1-PLAT-1 now guarantees). If the release build still emits v2-only
-(verify with `apksigner verify --print-certs -v` on the phase-159 APK or a fresh
-`assembleRelease`), the cause is usually that the signing config disables v3.
-Enable v3 (and keep v2 for older-device fallback) so the future signing-key can
-be rotated in place. If the build ALREADY emits v3 with the real keystore,
-document that (with the exact `apksigner` line) and mark Part A resolved at
-triage.
+Root cause is KNOWN and is NOT a config flag disabling v3: this app's
+`minSdk = 26` (`app/build.gradle.kts:16`) is BELOW the AGP 8.7.3 threshold
+(`minSdk ≥ 28`) at which AGP enables v3 automatically — so every release build
+with the current SDK floor emits v2-only. The fix is therefore to force-enable
+v3 in `signingConfigs.create("releaseConfig")` (`app/build.gradle.kts:36-60`):
+set `enableV3Signing = true` there (keep `v2SigningEnabled` true for
+older-device fallback; `enableV4Signing`/`v1SigningEnabled` stay at their
+current values — v4 only helps Android 11+ incremental installs and is NOT
+required). The B1-PLAT-1 fail-closed gate (`app/build.gradle.kts:133-153`) must
+stay untouched. Do NOT bump `minSdk` to 28 (a user-approval-level change, out
+of scope here).
+
+Verify with `apksigner verify --print-certs -v` on a fresh `assembleRelease`
+output and record the scheme lines in the REPORT. If the build ALREADY emits
+v3 with the real keystore despite `minSdk = 26` (e.g. a future AGP default
+change), document that (with the exact `apksigner` line) and mark Part A
+resolved at triage — but re-confirm the phase-159 APK was v2-only first.
 
 Definition of done for Part A:
 - `gradle assembleRelease` → `apksigner verify --print-certs -v` on the release
@@ -55,7 +65,8 @@ action real and actionable:
 
 - **Write the runbook** in `docs/RELEASE.md` (or a new `docs/PLUGIN_CHANNEL.md`
   referenced from it): exact file/line to change
-  (`HostedPluginManifest.kt` `PLUGIN_MANIFEST_CERT_PIN`), how to compute the
+  (`HostedPluginManifest.kt` `PLUGIN_MANIFEST_CERT_PIN`, currently at
+  `:242-243`), how to compute the
   real SHA-256 pin for `plugin-updates.inkflow.app` (e.g.
   `openssl x509 -pubkey | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | base64`),
   the requirement that the pin is the LEAF cert hash, and a "go-live checklist"

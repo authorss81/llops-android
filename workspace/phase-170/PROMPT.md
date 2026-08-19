@@ -46,6 +46,18 @@ one that bloats the APK more):
   diff). Do NOT switch language detection to a downloadable plugin in this
   phase (leaner follow-up may come later; trimming is the in-scope fix) and do
   NOT add new dependencies.
+- **If the payload is NOT reachable by build-config alone** (worst case: the
+  models are path-invariant — merged into a single model JAR that AGP dexes or
+  embeds such that `packaging.resources.excludes` cannot strip only the unused
+  languages), do NOT ship the phase as DONE and do NOT guess a partial exclude
+  that silently breaks detection. Prove the layout with `unzip -l`/`zipinfo` on
+  the built APK, record the evidence in the REPORT, keep the current (correct,
+  if bloated) payload untouched, and mark **Phase-32-NEW-01 STILL OPEN** with
+  the two viable user-facing follow-ups listed for decision: (a) vendor a
+  rebuilt half-size lingua model JAR containing only the 24 `SUPPORTED`
+  languages, or (b) move language detection to a downloadable signature-verified
+  plugin per the AGENTS.md base-APK-size rule. Both require user approval before
+  implementation — flag them, do not implement in this phase.
 
 Definition of done for Part A:
 - `gradle assembleDebug` green; `gradle assembleRelease` green (R8 minify ON).
@@ -57,25 +69,42 @@ Definition of done for Part A:
   a test that pins the 24-language subset if none exists).
 - If an exclude list is added, add a unit test (pure-JVM, no APK needed) that
   pins the `SUPPORTED` key set so the exclude list and the code cannot drift.
+- HARD DONE GATE: Part A may ONLY self-certify DONE when the assembled release
+  APK's byte count is actually reduced and the 51 unused languages are proven
+  gone (`unzip -l`/`zipinfo` + before/after bytes in REPORT). If the payload is
+  not reachable by build-config (see the third fix approach above), the phase
+  stays NOT-DONE/PARTIAL and Phase-32-NEW-01 stays OPEN — never ship the phase
+  as DONE on a doc-only "attempted, blocked" note.
 
 ## Part B — ABI splits (release packaging, Phase-32-NEW-02)
 
-`app/build.gradle.kts` currently emits a single monolithic APK. Add ABI-split
-release APKs (`splits { abi { ... } }`) so a device only downloads/native-loads
-its own ABI (`arm64-v8a` / `armeabi-v7a` / `x86` / `x86_64`). Keep `assembleDebug`
-behavior unchanged. Ensure the fail-closed release-signing config
+`app/build.gradle.kts` currently emits a single monolithic APK (no
+`splits`/`abiFilters`/`ndk` config exists today). Add ABI-split release APKs
+(`splits { abi { ... } }`) so a device only downloads/native-loads its own ABI
+(`arm64-v8a` / `armeabi-v7a` / `x86` / `x86_64`). Keep `assembleDebug` behavior
+unchanged. Ensure the fail-closed release-signing config
 (`app/build.gradle.kts:133-153`, `B1Plat01ReleaseSigningTest`) still passes —
 the split config must NOT weaken signing (each split APK is signed the same way;
-if your AGP setup signs splits automatically, keep `isSigned` true). If
-splitting breaks `assembleRelease` on this environment, you may scope Part B to
-`assembleDebug` + document why release splits are deferred — do not silently
-drop it.
+if your AGP setup signs splits automatically, keep `isSigned` true).
 
-Definition of done for Part B:
-- `gradle assembleRelease` still builds and every output APK passes
+Make an EXPLICIT, documented decision on `universalApk`: either keep one
+full-fat universal APK for sideloading/emulators (state the size in the REPORT
+and that Phase-32-NEW-02 is therefore only PARTIALLY addressed for distribution
+channels that consume it) or `isUniversalApk = false` (list which distribution
+path still needs a universal build). Do not leave it implicit.
+
+Definition of done for Part B (HARD — no self-certifying DONE without split output):
+- `gradle assembleRelease` builds and EVERY produced split APK passes
   `apksigner verify`.
-- The split output is described in the REPORT (paths, ABI set, size per ABI), or
-  an explicit reason why release splits are deferred on this env.
+- The split output is described in the REPORT (paths, ABI set, size per ABI)
+  INCLUDING the universal-Apk decision above.
+- Deleting the `x86` ABI from the split is acceptable if this repo's native
+  deps/x86 coverage makes it dead weight, but document the ABI set chosen — do
+  NOT silently drop ABIs.
+- If release splitting genuinely fails on this CI environment, the phase must
+  be marked `PARTIAL`/NOT-DONE and Phase-32-NEW-02 left OPEN with the failure
+  evidence in the REPORT — do not convert the fix into a debug-only deliverable
+  or a doc-only "deferred" note (the phase-77 false-completion pattern).
 
 ## Constraints (AGENTS.md hard rules)
 - NO `.github/workflows/` edits. NO Room DB schema change. NO new dependencies.

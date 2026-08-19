@@ -3,6 +3,11 @@
 > Target prepared by **phase-159** (release-APK build & verification, 2026-08-19).
 > Security findings from the Kali dynamic/instrumented pass (phase-160) go here.
 > The pentest plan lives in `docs/pentest-plan.md`; the summary report is `docs/pentest-report.md`.
+>
+> **Scope note:** this file carries ONLY dynamic/instrumented Kali findings. The
+> round-2 *source-audit* findings (43: 0 CRITICAL · 0 HIGH · 12 MEDIUM · 26 LOW ·
+> 5 INFO) live in `docs/security-report-round2.md` and were triaged by phase-119
+> into phases 129-158.
 
 ## APK target (verified by phase-159)
 
