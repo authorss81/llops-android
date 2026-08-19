@@ -13,6 +13,7 @@ import androidx.compose.material.icons.outlined.FormatListBulleted
 import androidx.compose.material.icons.outlined.FormatQuote
 import androidx.compose.material.icons.outlined.Functions
 import androidx.compose.material.icons.outlined.HorizontalRule
+import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.TableChart
 import androidx.compose.material.icons.outlined.Title
 import androidx.compose.material.icons.outlined.UnfoldMore
@@ -35,7 +36,10 @@ data class SlashCommand(
 fun SlashCommandMenuPopup(
     onSelectCommand: (SlashCommand) -> Unit,
     onDismiss: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    // Phase 174: optional "Insert wiki-link" entry that opens the wiki-link
+    // suggestion flow instead of appending a static snippet.
+    onInsertWikiLink: (() -> Unit)? = null
 ) {
     val scheme = MaterialTheme.colorScheme
 
@@ -77,6 +81,28 @@ fun SlashCommandMenuPopup(
             HorizontalDivider(color = scheme.outline.copy(alpha = 0.2f))
 
             LazyColumn(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                if (onInsertWikiLink != null) {
+                    item(key = "wikilink") {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    onInsertWikiLink()
+                                    onDismiss()
+                                }
+                                .padding(horizontal = 8.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.Outlined.Link, contentDescription = null, tint = scheme.primary, modifier = Modifier.size(20.dp))
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column {
+                                Text("Insert Wiki Link", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                                Text("[[note title]] — pick from your notes", style = MaterialTheme.typography.labelSmall, color = scheme.outline)
+                            }
+                        }
+                        HorizontalDivider(color = scheme.outline.copy(alpha = 0.2f))
+                    }
+                }
                 items(commands) { cmd ->
                     Row(
                         modifier = Modifier

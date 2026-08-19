@@ -1,5 +1,6 @@
 package com.authorss81.noteflow.ui.screens
 
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -10,9 +11,12 @@ import androidx.compose.foundation.text.ClickableText
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.ListAlt
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Hub
+import androidx.compose.material.icons.outlined.KeyboardArrowDown
+import androidx.compose.material.icons.outlined.KeyboardArrowUp
 import androidx.compose.material.icons.outlined.Save
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.*
@@ -65,13 +69,22 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.authorss81.noteflow.data.model.NotePageEntity
 import com.authorss81.noteflow.services.ImportExportService
+import com.authorss81.noteflow.services.HeadingScrollIndex
+import com.authorss81.noteflow.services.NoteStatsFormatPolicy
 import com.authorss81.noteflow.services.ReaderModePolicy
 import com.authorss81.noteflow.services.WikiLinkParser
+import com.authorss81.noteflow.services.WikiSuggestionPolicy
+import com.authorss81.noteflow.theme.LocalReduceMotion
 import com.authorss81.noteflow.theme.serifBodyStyle
 import com.authorss81.noteflow.ui.components.BacklinksInspectorBottomSheet
+import com.authorss81.noteflow.ui.components.WikiLinkPickerDialog
 import com.authorss81.noteflow.ui.components.markdown.HybridMarkdownEditor
 import com.authorss81.noteflow.ui.viewmodel.NoteflowViewModel
 import java.io.File
+import kotlinx.coroutines.flow.debounce
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import org.commonmark.ext.gfm.tables.TableBlock
 import org.commonmark.ext.gfm.tables.TableBody
 import org.commonmark.ext.gfm.tables.TableCell
@@ -145,6 +158,163 @@ enum class SplitOrientation {
 // threading a boolean through every recursive RenderBlocks/RenderInline
 // signature while keeping the decision local to this file.
 private val LocalReaderMode = androidx.compose.runtime.compositionLocalOf { false }
+
+// Phase 174 (outline quick-jump): layout-time heading measurement for the
+// reader-mode rail. Holds the precomputed HeadingScrollIndex plus its
+// node→position map, and turns each heading's on-screen root coordinates into a
+// scroll-content offset (root top − viewport top + current scroll), independent
+// of where the user has already scrolled. Visible only inside the reader branch.
+private class HeadingMeasureScope(
+    val index: HeadingScrollIndex,
+    val nodePositions: Map<Node, Int>,
+    val scrollState: ScrollState
+) {
+    @Volatile
+    private var columnTopRoot = 0f
+    private val coordinatesByPosition = java.util.concurrent.ConcurrentHashMap<Int, LayoutCoordinates>()
+
+    /** The scroll viewport's root-coordinate top (updated once it settles). */
+    fun onColumnPlaced(topRoot: Float) {
+        columnTopRoot = topRoot
+        recomputeAll()
+    }
+
+    /** A heading was (re)measured — remember its coordinates and re-register. */
+    fun onHeadingPlaced(position: Int, coords: LayoutCoordinates) {
+        coordinatesByPosition[position] = coords
+        register(position)
+    }
+
+    private fun register(position: Int) {
+        val coords = coordinatesByPosition[position] ?: return
+        val raw = coords.boundsInRoot().top - columnTopRoot + scrollState.value
+        index.register(position, raw.toInt().coerceAtLeast(0))
+    }
+
+    private fun recomputeAll() {
+        coordinatesByPosition.keys.forEach { register(it) }
+    }
+}
+
+private val LocalHeadingMeasure = androidx.compose.runtime.compositionLocalOf<HeadingMeasureScope?> { null }
+
+/**
+ * Phase 174 (Feature 2): DFS over the ALREADY-parsed markdown [Node] tree,
+ * collecting every [Heading] in document order — the exact order [HeadingScrollIndex]
+ * builds from, and the exact order RenderBlocks renders, so node⇄position
+ * identity stays stable across recompositions (Node hash/equals are identity).
+ */
+private fun collectHeadingNodes(nodes: Iterable<Node>): List<Heading> {
+    val out = mutableListOf<Heading>()
+    fun walk(list: Iterable<Node>) {
+        for (node in list) {
+            when (node) {
+                is Heading -> out.add(node)
+                is BulletList, is OrderedList, is ListItem, is BlockQuote -> walk(node.childrenList())
+                else -> Unit
+            }
+        }
+    }
+    walk(nodes)
+    return out
+}
+
+/**
+ * Phase 174 (Feature 2): the anchored, collapsible outline rail shown on the
+ * reader/focus surface. Collapsed by default; expands to a scrollable heading
+ * list. Tapping a heading scrolls the preview via the precomputed
+ * [HeadingScrollIndex] offset — instant when reduce-motion is on, animated
+ * otherwise.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ReaderOutlineRail(
+    index: HeadingScrollIndex,
+    scrollState: ScrollState,
+    modifier: Modifier = Modifier
+) {
+    val scheme = MaterialTheme.colorScheme
+    var collapsed by rememberSaveable { mutableStateOf(true) }
+    val reduceMotion = LocalReduceMotion.current
+    val scope = rememberCoroutineScope()
+    Surface(
+        modifier = modifier.padding(end = 2.dp, top = 4.dp),
+        shape = RoundedCornerShape(10.dp),
+        color = scheme.surfaceVariant.copy(alpha = 0.92f),
+        tonalElevation = 4.dp,
+        shadowElevation = 4.dp
+    ) {
+        Column(
+            modifier = Modifier.width(168.dp)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { collapsed = !collapsed }
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    Icons.AutoMirrored.Outlined.ListAlt,
+                    contentDescription = null,
+                    tint = scheme.primary,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = if (collapsed) "Outline (${index.size})" else "Outline",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = scheme.primary,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+                Icon(
+                    if (collapsed) Icons.Outlined.KeyboardArrowDown else Icons.Outlined.KeyboardArrowUp,
+                    contentDescription = if (collapsed) "Expand outline" else "Collapse outline",
+                    tint = scheme.onSurfaceVariant,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+            if (!collapsed) {
+                HorizontalDivider(color = scheme.outline.copy(alpha = 0.2f))
+                Column(
+                    modifier = Modifier
+                        .heightIn(max = 300.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    index.labels().forEach { label ->
+                        val level = index.labels().indexOf(label)
+                        val indent = if (level > 0) {
+                            (index.levelAt(level) - 1).coerceIn(0, 3) * 8
+                        } else 0
+                        Text(
+                            text = label,
+                            style = MaterialTheme.typography.labelSmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    scope.launch {
+                                        val offset = index.offsetForLabel(label)
+                                        if (offset != null) {
+                                            if (reduceMotion) {
+                                                scrollState.scrollTo(offset)
+                                            } else {
+                                                scrollState.animateScrollTo(offset)
+                                            }
+                                        }
+                                    }
+                                }
+                                .padding(start = (indent + 10).dp, end = 10.dp, top = 3.dp, bottom = 3.dp),
+                            color = scheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -260,6 +430,58 @@ fun MarkdownPreviewScreen(
         SplitOrientation.HORIZONTAL -> false
         SplitOrientation.AUTO -> isPortrait
     }
+
+    // ---- Phase 174 (Feature 1): note-stats footer --------------------------
+    // Debounced off the document length; recomputes only when the length changed
+    // materially (NoteStatsFormatPolicy.shouldRecomputeStats) — never a
+    // full re-tokenize per keystroke. The pure-JVM analyzer (TextToolsAnalyzer)
+    // is O(n) on a single pass, so a debounced sample is cheap.
+    val reduceMotion = LocalReduceMotion.current
+    val statsLocale = java.util.Locale.getDefault()
+    var statsText by remember { mutableStateOf<String?>(null) }
+    @OptIn(kotlinx.coroutines.FlowPreview::class)
+    LaunchedEffect(page.id) {
+        var lastComputedLength = -1
+        snapshotFlow { contentText }
+            .debounce(NoteStatsFormatPolicy.STATS_DEBOUNCE_MILLIS)
+            .collect { text ->
+                if (!NoteStatsFormatPolicy.shouldRecomputeStats(lastComputedLength, text.length)) return@collect
+                lastComputedLength = text.length
+                val analysis = com.authorss81.noteflow.plugins.texttools.TextToolsAnalyzer.analyze(text)
+                statsText = NoteStatsFormatPolicy.statsLabel(
+                    wordCount = analysis.wordCount,
+                    readingTimeSeconds = analysis.readingTimeSeconds,
+                    characterCount = analysis.characterCount,
+                    locale = statsLocale
+                )
+            }
+    }
+
+    // ---- Phase 174 (Feature 3): wiki-link suggestions ----------------------
+    // Candidate titles come from the single cached bounded search corpus (no new
+    // DB reads per keystroke). Loaded lazily the first time a `[[` or the
+    // slash-menu picker engages, cleared on lock (fail closed: no suggestions).
+    val authenticated by viewModel.authenticated.collectAsState()
+    var wikiTitles by remember { mutableStateOf<List<String>?>(null) }
+    var loadingWikiTitles by remember { mutableStateOf(false) }
+    val wikiScope = rememberCoroutineScope()
+    fun ensureWikiLinkTitles() {
+        if (wikiTitles != null || loadingWikiTitles || !authenticated) return
+        loadingWikiTitles = true
+        wikiScope.launch {
+            val loaded = viewModel.cachedWikiLinkTitles()
+            wikiTitles = loaded
+            loadingWikiTitles = false
+        }
+    }
+    LaunchedEffect(authenticated) {
+        if (!authenticated) {
+            wikiTitles = null
+            loadingWikiTitles = false
+        }
+    }
+    val lockedWikiTitles = if (authenticated) (wikiTitles ?: emptyList()) else emptyList()
+    var showWikiLinkPicker by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -674,7 +896,9 @@ fun MarkdownPreviewScreen(
                                     primaryColor = primaryColor,
                                     baseDir = baseDir,
                                     onOpenWikiLink = onOpenWikiLink,
-                                    serif = serifReadingMode
+                                    serif = serifReadingMode,
+                                    wikiLinkTitles = lockedWikiTitles,
+                                    onWikiLinkQueryEngaged = ::ensureWikiLinkTitles
                                 )
                             }
                         }
@@ -717,7 +941,9 @@ fun MarkdownPreviewScreen(
                                             primaryColor = primaryColor,
                                             baseDir = baseDir,
                                             onOpenWikiLink = onOpenWikiLink,
-                                            serif = serifReadingMode
+                                            serif = serifReadingMode,
+                                            wikiLinkTitles = lockedWikiTitles,
+                                            onWikiLinkQueryEngaged = ::ensureWikiLinkTitles
                                         )
                                     }
         
@@ -768,7 +994,9 @@ fun MarkdownPreviewScreen(
                                             primaryColor = primaryColor,
                                             baseDir = baseDir,
                                             onOpenWikiLink = onOpenWikiLink,
-                                            serif = serifReadingMode
+                                            serif = serifReadingMode,
+                                            wikiLinkTitles = lockedWikiTitles,
+                                            onWikiLinkQueryEngaged = ::ensureWikiLinkTitles
                                         )
                                     }
         
@@ -797,6 +1025,22 @@ fun MarkdownPreviewScreen(
                         }
                     }
                 }
+
+                // Phase 174 (Feature 1): unobtrusive note-stats footer. Shown in
+                // every mode (edit/split/preview/reader); hidden for blank notes
+                // and under reduce-motion (non-essential chrome — the directive
+                // lists it as a "hidden on reduced-motion" affordance). Static
+                // text, no motion added.
+                if (!reduceMotion && statsText != null) {
+                    Text(
+                        text = statsText!!,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 8.dp)
+                    )
+                }
             }
 
             if (showSlashCommands) {
@@ -804,7 +1048,14 @@ fun MarkdownPreviewScreen(
                     onSelectCommand = { cmd ->
                         contentText += "\n" + cmd.snippet
                     },
-                    onDismiss = { showSlashCommands = false }
+                    onDismiss = { showSlashCommands = false },
+                    // Phase 174: slash-menu entry into the same wiki-link
+                    // suggestion flow (picker dialog instead of a static snippet).
+                    onInsertWikiLink = {
+                        showSlashCommands = false
+                        ensureWikiLinkTitles()
+                        showWikiLinkPicker = true
+                    }
                 )
             }
 
@@ -1051,6 +1302,24 @@ fun MarkdownPreviewScreen(
                     onDismiss = { showCitation = false }
                 )
             }
+
+            if (showWikiLinkPicker) {
+                WikiLinkPickerDialog(
+                    titleTitles = lockedWikiTitles,
+                    onSelect = { title ->
+                        val snippet = WikiSuggestionPolicy.wikilinkSnippet(title)
+                        contentText = if (contentText.isBlank()) {
+                            snippet
+                        } else {
+                            contentText.trimEnd() + "\n\n$snippet\n"
+                        }
+                        showWikiLinkPicker = false
+                        flushSave()
+                        viewModel.showSnackbar("Wiki-link inserted into note")
+                    },
+                    onDismiss = { showWikiLinkPicker = false }
+                )
+            }
         }
     }
 }
@@ -1073,6 +1342,22 @@ private fun MarkdownRenderedContent(
 ) {
     val document = remember(content) { markdownParser.parse(content) }
     val scroll = rememberScrollState()
+
+    // ---- Phase 174 (Feature 2): precomputed heading index for quick-jump. The
+    // heading refs come from the ALREADY-parsed CommonMark document (never a
+    // re-parse); the composable registers each heading's measured content offset
+    // during layout, and the rail maps labels back to those offsets.
+    val headingNodes = remember(content) { collectHeadingNodes(document.childrenList()) }
+    val headingIndex = remember(headingNodes) {
+        HeadingScrollIndex().build(headingNodes.map { it.collectLiteral().trim() to it.level })
+    }
+    val headingNodePositions = remember(headingNodes) {
+        HashMap<Node, Int>().also { map ->
+            headingNodes.forEachIndexed { i, heading -> map[heading] = i }
+        }
+    }
+    val measureScope = remember(headingNodes) { HeadingMeasureScope(headingIndex, headingNodePositions, scroll) }
+
     if (readerMode) {
         // Reader/focus layout: centered, capped to an article measure, widened
         // leading. Read-only by construction — no editor is ever composed inside.
@@ -1081,13 +1366,17 @@ private fun MarkdownRenderedContent(
                 .fillMaxSize(),
             contentAlignment = Alignment.TopCenter
         ) {
-            CompositionLocalProvider(LocalReaderMode provides true) {
+            CompositionLocalProvider(
+                LocalReaderMode provides true,
+                LocalHeadingMeasure provides measureScope
+            ) {
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
                         .verticalScroll(scroll)
                         .widthIn(max = ReaderModePolicy.MAX_COLUMN_WIDTH_DP.dp)
                         .padding(vertical = 4.dp)
+                        .onGloballyPositioned { coords -> measureScope.onColumnPlaced(coords.boundsInRoot().top) }
                 ) {
                     RenderBlocks(
                         children = document.childrenList(),
@@ -1097,6 +1386,14 @@ private fun MarkdownRenderedContent(
                         serif = serif
                     )
                 }
+            }
+            // Anchored, collapsible outline rail on the reading surface.
+            if (!headingIndex.isEmpty) {
+                ReaderOutlineRail(
+                    index = headingIndex,
+                    scrollState = scroll,
+                    modifier = Modifier.align(Alignment.TopEnd)
+                )
             }
         }
     } else {
@@ -1145,12 +1442,23 @@ private fun RenderBlocks(
                 } else {
                     baseStyle
                 }
+                // Phase 174 (Feature 2): register this heading's measured offset
+                // into the precomputed index so the outline rail can jump here.
+                val measure = LocalHeadingMeasure.current
+                val headingPosition = measure?.nodePositions?.get(node)
                 Text(
                     text = node.collectLiteral(),
                     style = readerStyle.copy(
                         fontWeight = FontWeight.Bold,
                         color = if (node.level <= 3) scheme.primary else scheme.onBackground
-                    )
+                    ),
+                    modifier = if (measure != null && headingPosition != null) {
+                        Modifier.onGloballyPositioned { coords ->
+                            measure.onHeadingPlaced(headingPosition, coords)
+                        }
+                    } else {
+                        Modifier
+                    }
                 )
             }
             is Paragraph -> MarkdownParagraph(node, primaryColor, onOpenWikiLink, baseDir, serif)

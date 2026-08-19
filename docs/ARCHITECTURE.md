@@ -988,6 +988,29 @@
     is reachable from the reading surface.
     Captured notes open in reader mode by default (`MainActivity.kt` `readerModeRequestedFor`,
     `rememberSaveable`); `.txt`/`sourceFileType=="text"` pages route to this screen too.
+  - **Implemented in phase-174** (reading & authoring UX, see `workspace/phase-174/REPORT.md`):
+    (1) **note-stats footer** — `services/NoteStatsFormatPolicy.kt` (pure-JVM: locale-safe
+    `NumberFormat` counts, `~N min read` ceil-to-minute, blank-note null, `MIN_MATERIAL_LENGTH_DELTA=8`
+    recompute guard + `STATS_DEBOUNCE_MILLIS=250`); the screen runs `snapshotFlow{contentText}` →
+    `debounce` → `TextToolsAnalyzer.analyze` (single O(n) pass, never per-keystroke re-tokenize) →
+    `NoteStatsFormatPolicy.statsLabel`, rendered as a static non-animated `Text` hidden under
+    reduce-motion / blank notes. (2) **outline quick-jump rail** — `services/HeadingScrollIndex.kt`
+    (pure-JVM: stable occurrence-suffixed labels, registered px offsets); reader mode collects the
+    ALREADY-parsed CommonMark `Heading` nodes via DFS (`collectHeadingNodes`, same order RenderBlocks
+    renders), builds the index ONCE, and a file-local `HeadingMeasureScope` (`LocalHeadingMeasure`
+    CompositionLocal) turns each heading's `boundsInRoot().top − viewport top + scroll` into a
+    content offset; the anchored collapsible `ReaderOutlineRail` (phase-166-safe fixed 168dp width,
+    nested-scroll list ≤300dp) jumps via `scrollState.scrollTo`/`animateScrollTo` (reduce-motion
+    instant). (3) **wiki-link `[[` autocomplete** — `services/WikiSuggestionPolicy.kt` (pure-JVM:
+    prefix-then-substring ranking, case-insensitive dedup, cap 6, syntax-breaking `[`/`]`/`|` titles
+    never offered, `[[Raw.md|Clean]]` alias snippet, `locateQuery` bounds) — candidates are the cached
+    bounded search corpus `repository.cachedCorpus()` TITLES ONLY (no per-keystroke DB reads, fail
+    closed when locked, surfaced via `NoteflowViewModel.cachedWikiLinkTitles`); `RawBlockEditor`
+    (`HybridMarkdownEditor.kt`) shows an in-field popup over the cursor for an unterminated `[[` and
+    replaces the whole region; the slash menu (`SlashCommandMenu.kt` `onInsertWikiLink` first entry,
+    `Icons.AutoMirrored.Outlined.ListAlt`) opens the FLAG_SECURE `WikiLinkPickerDialog`
+    (`ui/components/WikiLinkSuggestions.kt`). Tests: `Phase174NoteStatsFormatPolicyTest` (10),
+    `Phase174HeadingScrollIndexTest` (7), `Phase174WikiSuggestionPolicyTest` (13).
   - **Implemented in phase-151** (R2-b2b5-FEA-02 + R2-b2b5-FEA-03, see
     `workspace/phase-151/REPORT.md`): the markdown main-thread performance holes
     are gone. `services/MarkdownInlineMath.kt` pre-computes every maximal backtick

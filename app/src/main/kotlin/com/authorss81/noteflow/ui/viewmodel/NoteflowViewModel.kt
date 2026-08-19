@@ -852,6 +852,29 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         }
 
     /**
+     * Phase 174: cached note TITLES for wiki-link autocomplete. Reads the SAME
+     * bounded, epoch-cached decrypted search corpus the palette/search reuse — a
+     * `[[` keystroke therefore performs NO new DB read (the corpus is loaded once
+     * per unlock epoch and invalidated on mutation/lock). Returns empty when the
+     * vault is locked or the corpus cannot be read, so the suggestion popup fails
+     * cleanly (no titles, no crash). TITLES ONLY — never note body text; callers
+     * must not surface/log them outside the suggestion UI.
+     */
+    suspend fun cachedWikiLinkTitles(): List<String> {
+        if (!_authenticated.value) return emptyList()
+        return try {
+            repository.cachedCorpus()
+                .asSequence()
+                .map { it.title.trim() }
+                .filter { it.isNotEmpty() }
+                .distinct()
+                .toList()
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    /**
      * Phase 15 (Language Detection): merge a freshly-detected `lang:<iso>` tag
      * into [existingTags], honouring any `lang:*`/`language:*` override. PURE JVM.
      */

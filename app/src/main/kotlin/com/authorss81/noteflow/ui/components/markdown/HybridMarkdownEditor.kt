@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -52,6 +53,13 @@ import java.io.File
  *  - external replaces (slash commands, plugins, version restore) reset the block
  *    layout via a dirty-guard.
  *
+ * Phase 174 (wiki-link autocomplete): when [wikiLinkTitles] is non-empty, the
+ * raw editor watches for an unterminated `[[` in progress and shows a suggestion
+ * popup over the field. Selecting one page calls [onWikiLinkQueryEngaged] (once
+ * titles actually load) and replaces the `[[…` region with `[[title|display]]`.
+ * An empty/absent title list (vault locked, or no cached corpus yet) shows no
+ * popup at all — fails cleanly, never crashes.
+ *
  * A full WYSIWYG cursor-within-rich-text model is documented as deferred in
  * REPORT.md — this is the honest first slice.
  */
@@ -63,7 +71,11 @@ fun HybridMarkdownEditor(
     primaryColor: Color,
     baseDir: File?,
     onOpenWikiLink: (String) -> Unit,
-    serif: Boolean = false
+    serif: Boolean = false,
+    // Phase 174 — candidate note titles for [[ wiki-link autocomplete (empty while
+    // locked / not yet loaded). Titles only; never body text.
+    wikiLinkTitles: List<String> = emptyList(),
+    onWikiLinkQueryEngaged: () -> Unit = {}
 ) {
     // The whole document is held as ONE one-pass-tokenized [MarkdownDocument]:
     // blocks, checkbox candidates and the candidates-by-block index are computed
@@ -120,7 +132,9 @@ fun HybridMarkdownEditor(
                         editingBlock = -1
                         editingText = ""
                     },
-                    primaryColor = primaryColor
+                    primaryColor = primaryColor,
+                    wikiLinkTitles = wikiLinkTitles,
+                    onWikiLinkQueryEngaged = onWikiLinkQueryEngaged
                 )
             } else {
                 RenderedBlockRow(
@@ -195,8 +209,38 @@ private fun RawBlockEditor(
     value: String,
     onValueChange: (String) -> Unit,
     onDone: () -> Unit,
-    primaryColor: Color
+    primaryColor: Color,
+    // Phase 174 — wiki-link autocomplete. Empty titles (locked vault / nothing
+    // cached yet) simply show no popup.
+    wikiLinkTitles: List<String> = emptyList(),
+    onWikiLinkQueryEngaged: () -> Unit = {}
 ) {
+    // ---- Phase 174: detect an in-progress `[[` and drive the suggestion popup.
+    var queryBounds by remember { mutableStateOf<com.authorss81.noteflow.services.WikiSuggestionPolicy.QueryBounds?>(null) }
+    LaunchedEffect(value, wikiLinkTitles) {
+        val bounds = com.authorss81.noteflow.services.WikiSuggestionPolicy.locateQuery(value)
+        if (bounds != null && wikiLinkTitles.isNotEmpty()) {
+            queryBounds = bounds
+            // Titles present — no load needed, but the hook stays harmless.
+        } else if (bounds != null && wikiLinkTitles.isEmpty()) {
+            // `[[` typed but no cached titles yet: ask the host to load the corpus
+            // once. Popup stays hidden until titles arrive.
+            queryBounds = bounds
+            onWikiLinkQueryEngaged()
+        } else {
+            queryBounds = null
+        }
+    }
+    val currentBounds = queryBounds
+    val query = currentBounds?.let { value.substring(it.queryStart + 2, it.queryEnd) } ?: ""
+    val suggestions = remember(query, wikiLinkTitles, currentBounds) {
+        if (currentBounds != null && wikiLinkTitles.isNotEmpty()) {
+            com.authorss81.noteflow.services.WikiSuggestionPolicy.suggest(wikiLinkTitles, query)
+        } else {
+            emptyList()
+        }
+    }
+
     Surface(
         color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.12f),
         shape = RoundedCornerShape(10.dp),
@@ -218,24 +262,44 @@ private fun RawBlockEditor(
                     Text("Done", style = MaterialTheme.typography.labelSmall)
                 }
             }
-            OutlinedTextField(
-                value = value,
-                onValueChange = onValueChange,
-                modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp),
-                textStyle = MaterialTheme.typography.bodyMedium.copy(
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 13.sp
-                ),
-                minLines = 1,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default),
-                keyboardActions = KeyboardActions(),
-                trailingIcon = {
-                    // Esc-like affordance: clear the edit session without writing.
-                    IconButton(onClick = onDone) {
-                        Icon(Icons.Outlined.Close, contentDescription = "Close editor", modifier = Modifier.size(16.dp))
+            Box {
+                OutlinedTextField(
+                    value = value,
+                    onValueChange = onValueChange,
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp),
+                    textStyle = MaterialTheme.typography.bodyMedium.copy(
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 13.sp
+                    ),
+                    minLines = 1,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default),
+                    keyboardActions = KeyboardActions(),
+                    trailingIcon = {
+                        // Esc-like affordance: clear the edit session without writing.
+                        IconButton(onClick = onDone) {
+                            Icon(Icons.Outlined.Close, contentDescription = "Close editor", modifier = Modifier.size(16.dp))
+                        }
                     }
+                )
+                // Phase 174 — anchored suggestion popup over the field. Selecting a
+                // title replaces the whole `[[…` region (never a mid-keystroke jump).
+                if (currentBounds != null && suggestions.isNotEmpty()) {
+                    com.authorss81.noteflow.ui.components.WikiLinkSuggestionPopup(
+                        suggestions = suggestions,
+                        onSelect = { title ->
+                            val snippet = com.authorss81.noteflow.services.WikiSuggestionPolicy.wikilinkSnippet(title)
+                            val replaced = value.substring(0, currentBounds.queryStart) +
+                                snippet + value.substring(currentBounds.queryEnd)
+                            onValueChange(replaced)
+                            queryBounds = null
+                        },
+                        onDismiss = { queryBounds = null },
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .offset(y = 72.dp)
+                    )
                 }
-            )
+            }
         }
     }
 }
