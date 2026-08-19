@@ -65,7 +65,10 @@ fun HybridMarkdownEditor(
     onOpenWikiLink: (String) -> Unit,
     serif: Boolean = false
 ) {
-    var text by remember { mutableStateOf(value) }
+    // The whole document is held as ONE one-pass-tokenized [MarkdownDocument]:
+    // blocks, checkbox candidates and the candidates-by-block index are computed
+    // together, so a keystroke never runs two full passes (R2-b2b5-FEA-03).
+    var doc by remember { mutableStateOf(MarkdownBlockTokenizer.tokenize(value)) }
     var editingBlock by remember { mutableStateOf(-1) }
     var editingText by remember { mutableStateOf("") }
     var dirty by remember { mutableStateOf(false) }
@@ -74,8 +77,8 @@ fun HybridMarkdownEditor(
     // collapse any open raw editor. Our own lived-through edits set `dirty` so
     // the echo does not reset state.
     LaunchedEffect(value) {
-        if (!dirty && value != text) {
-            text = value
+        if (!dirty && value != doc.content) {
+            doc = MarkdownBlockTokenizer.tokenize(value)
             editingBlock = -1
             editingText = ""
         } else if (dirty) {
@@ -83,13 +86,10 @@ fun HybridMarkdownEditor(
         }
     }
 
-    val blocks = remember(text) { MarkdownBlockTokenizer.blocks(text) }
-    val candidates = remember(text) { MarkdownBlockTokenizer.checkboxCandidates(text) }
-
-    fun emit(newText: String) {
+    fun emitBlockEdit(blockIndex: Int, newRaw: String) {
         dirty = true
-        text = newText
-        onValueChange(newText)
+        doc = MarkdownBlockTokenizer.replaceBlock(doc, blockIndex, newRaw)
+        onValueChange(doc.content)
     }
 
     Column(
@@ -99,7 +99,7 @@ fun HybridMarkdownEditor(
             .padding(vertical = 2.dp)
             .padding(horizontal = 4.dp)
     ) {
-        if (blocks.isEmpty()) {
+        if (doc.blocks.isEmpty()) {
             Text(
                 text = "Empty note — type or use / Commands to start.",
                 style = MaterialTheme.typography.bodyMedium,
@@ -107,14 +107,14 @@ fun HybridMarkdownEditor(
             )
             return@Column
         }
-        blocks.forEachIndexed { index, block ->
+        doc.blocks.forEachIndexed { index, block ->
             if (index == editingBlock) {
                 RawBlockEditor(
                     label = blockLabel(block),
                     value = editingText,
                     onValueChange = { newRaw ->
                         editingText = newRaw
-                        emit(MarkdownBlockTokenizer.replaceBlockSource(text, blocks, index, newRaw))
+                        emitBlockEdit(index, newRaw)
                     },
                     onDone = {
                         editingBlock = -1
@@ -125,16 +125,18 @@ fun HybridMarkdownEditor(
             } else {
                 RenderedBlockRow(
                     block = block,
-                    source = MarkdownBlockTokenizer.blockSource(text, block),
+                    source = doc.blockSource(block),
                     primaryColor = primaryColor,
                     baseDir = baseDir,
                     onOpenWikiLink = onOpenWikiLink,
                     serif = serif,
-                    cursorOrder = remember(index) { candidates.filter { it.blockIndex == index }.map { it.index } },
+                    cursorOrder = doc.candidatesByBlock[index] ?: emptyList(),
                     onToggleCheckbox = { candidateIndex ->
-                        emit(MarkdownBlockTokenizer.toggleCheckbox(text, candidateIndex))
+                        dirty = true
+                        doc = MarkdownBlockTokenizer.toggleCheckbox(doc, candidateIndex)
+                        onValueChange(doc.content)
                     },
-                    onEdit = { editingBlock = index; editingText = MarkdownBlockTokenizer.blockSource(text, block) }
+                    onEdit = { editingBlock = index; editingText = doc.blockSource(block) }
                 )
             }
         }

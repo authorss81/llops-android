@@ -19,6 +19,11 @@ package com.authorss81.noteflow.services
  * This is deliberately a *slice*: lazy list continuations and blank-line-separated
  * "loose" lists are tokenized as separate paragraph/list blocks. Rendering is still
  * pixel-identical to the preview because every block is re-parsed by CommonMark.
+ *
+ * Phase 151 (R2-b2b5-FEA-03): [tokenize] computes blocks, checkbox candidates and
+ * the candidates-by-block index in ONE pass ([MarkdownDocument]), and
+ * [replaceBlock] re-tokenizes only the edited block's window on top of the cached
+ * lines instead of a full-document `lines()` + re-tokenize per keystroke.
  */
 enum class MarkdownBlockType {
     HEADING,
@@ -70,6 +75,35 @@ object MarkdownBlockTokenizer {
     private val checkboxItemRe =
         Regex("""^\s{0,3}([-*+]|\d{1,9}[.)])\s+\[([ xX])\]\s*(.*)$""")
 
+    /**
+     * One-pass tokenization result: the [blocks], the checkbox [candidates] and
+     * the candidates pre-indexed by block index — computed together so a keystroke
+     * in the hybrid editor never runs two full passes (R2-b2b5-FEA-03).
+     */
+    data class MarkdownDocument(
+        val content: String,
+        val lines: List<String>,
+        val blocks: List<MarkdownBlock>,
+        val candidates: List<CheckboxCandidate>,
+        val candidatesByBlock: Map<Int, List<Int>>
+    ) {
+        /** Source text of [block] straight from the cached lines (no re-split). */
+        fun blockSource(block: MarkdownBlock): String {
+            if (block.startLine < 0 || block.endLine >= lines.size || block.endLine < block.startLine) {
+                return ""
+            }
+            return lines.subList(block.startLine, block.endLine + 1).joinToString("\n")
+        }
+    }
+
+    /** One-pass tokenization: lines + blocks + checkbox candidates + block index. */
+    fun tokenize(content: String): MarkdownDocument {
+        val lines = content.lines()
+        val blocks = blocksFromLines(lines)
+        val candidates = candidatesFrom(lines, blocks)
+        return MarkdownDocument(content, lines, blocks, candidates, candidatesByBlock(candidates))
+    }
+
     /** Source text of a single block (its `startLine..endLine` range). */
     fun blockSource(content: String, block: MarkdownBlock): String {
         val lines = content.lines()
@@ -83,8 +117,9 @@ object MarkdownBlockTokenizer {
     fun joinBlockSources(content: String, blocks: List<MarkdownBlock>): String =
         blocks.joinToString("\n") { blockSource(content, it) }
 
-    fun blocks(content: String): List<MarkdownBlock> {
-        val lines = content.lines()
+    fun blocks(content: String): List<MarkdownBlock> = blocksFromLines(content.lines())
+
+    private fun blocksFromLines(lines: List<String>): List<MarkdownBlock> {
         val n = lines.size
         if (n == 0) return emptyList()
 
@@ -233,10 +268,11 @@ object MarkdownBlockTokenizer {
     /**
      * Every checkbox list item in document order. Indexes are stable and match
      * the traversal order of the shared renderer (verified in unit tests).
+     * Computed in ONE pass with [tokenize] — never a second full [blocks] call.
      */
-    fun checkboxCandidates(content: String): List<CheckboxCandidate> {
-        val lines = content.lines()
-        val blocks = blocks(content)
+    fun checkboxCandidates(content: String): List<CheckboxCandidate> = tokenize(content).candidates
+
+    private fun candidatesFrom(lines: List<String>, blocks: List<MarkdownBlock>): List<CheckboxCandidate> {
         val out = mutableListOf<CheckboxCandidate>()
         var global = 0
         for ((blockIndex, block) in blocks.withIndex()) {
@@ -257,24 +293,38 @@ object MarkdownBlockTokenizer {
         return out
     }
 
+    private fun candidatesByBlock(candidates: List<CheckboxCandidate>): Map<Int, List<Int>> =
+        candidates.groupBy { it.blockIndex }.mapValues { e -> e.value.map { it.index } }
+
     /**
      * Flip the `[ ]` / `[x]` marker of the [candidateIndex]-th checkbox. Returns
      * the input unchanged when the candidate does not exist (safe no-op).
      */
-    fun toggleCheckbox(content: String, candidateIndex: Int): String {
-        val lines = content.lines()
-        val candidate = checkboxCandidates(content).getOrNull(candidateIndex) ?: return content
-        if (candidate.lineIndex >= lines.size) return content
-        val line = lines[candidate.lineIndex]
-        val match = checkboxItemRe.find(line) ?: return content
+    fun toggleCheckbox(content: String, candidateIndex: Int): String =
+        toggleCheckbox(tokenize(content), candidateIndex).content
+
+    /**
+     * Doc-based toggle used by the editor: flips the marker line in the cached
+     * lines and mirrors the [checked] flag on the matching candidate — the block
+     * structure is unchanged, so nothing is re-tokenized.
+     */
+    fun toggleCheckbox(doc: MarkdownDocument, candidateIndex: Int): MarkdownDocument {
+        val candidate = doc.candidates.getOrNull(candidateIndex) ?: return doc
+        if (candidate.lineIndex < 0 || candidate.lineIndex >= doc.lines.size) return doc
+        val line = doc.lines[candidate.lineIndex]
+        val match = checkboxItemRe.find(line) ?: return doc
         val newState = if (match.groupValues[2].trim() in setOf("x", "X")) " " else "x"
         val prefix = line.substring(0, match.range.first)
         val marker = match.groupValues[1]
         val tail = match.groupValues[3]
         val replaced = "$prefix$marker [$newState] $tail"
-        val out = ArrayList(lines)
-        out[candidate.lineIndex] = replaced
-        return out.joinToString("\n")
+        val newLines = ArrayList(doc.lines)
+        newLines[candidate.lineIndex] = replaced
+        val content = newLines.joinToString("\n")
+        val newCandidates = doc.candidates.map {
+            if (it.index == candidateIndex) it.copy(checked = newState == "x") else it
+        }
+        return MarkdownDocument(content, newLines, doc.blocks, newCandidates, doc.candidatesByBlock)
     }
 
     /**
@@ -291,6 +341,135 @@ object MarkdownBlockTokenizer {
         out.subList(start, end + 1).clear()
         out.addAll(start, newSource.lines())
         return out.joinToString("\n")
+    }
+
+    /**
+     * Incremental block-source replacement (R2-b2b5-FEA-03): reuses the cached
+     * [MarkdownDocument.lines] (no full-document `content.lines()`), re-tokenizes
+     * ONLY the edited block's affected window, shifts the untouched later blocks by
+     * the line-count delta and recomputes the checkbox candidates in a single pass.
+     * The produced [MarkdownDocument.content] is byte-identical to what
+     * [replaceBlockSource] + a fresh [tokenize] would yield.
+     */
+    fun replaceBlock(doc: MarkdownDocument, blockIndex: Int, newSource: String): MarkdownDocument {
+        val block = doc.blocks.getOrNull(blockIndex) ?: return doc
+        val srcLines = doc.lines
+        val n = srcLines.size
+        if (n == 0) return doc
+        val start = block.startLine.coerceIn(0, n - 1)
+        val end = block.endLine.coerceIn(start, n - 1)
+        val newLines = newSource.lines()
+        val out = ArrayList<String>(n - (end - start + 1) + newLines.size)
+        out.addAll(srcLines.subList(0, start))
+        out.addAll(newLines)
+        out.addAll(srcLines.subList(end + 1, n))
+        val content = out.joinToString("\n")
+        if (out.isEmpty()) {
+            return MarkdownDocument(content, out, emptyList(), emptyList(), emptyMap())
+        }
+        if (out.all { it.isBlank() }) {
+            // Entirely blank output — mirrors [blocksFromLines]'s all-blank document
+            // block (a full re-tokenize would emit exactly this single block).
+            return MarkdownDocument(
+                content, out,
+                listOf(MarkdownBlock(MarkdownBlockType.PARAGRAPH, 0, out.size - 1)),
+                emptyList(), emptyMap()
+            )
+        }
+        val delta = newLines.size - (end - start + 1)
+
+        // Affected window: the edited region plus the region that follows it
+        // (its first block's grown start can move with a trailing blank run), and
+        // — when no blank separates the edit from the preceding region — the whole
+        // shared region, so a merge is re-classified too.
+        val windowStart = if (start < out.size && !out[start].isBlank()) {
+            var w = start
+            while (w > 0 && !out[w - 1].isBlank()) w--
+            w
+        } else {
+            start
+        }
+        val afterContent = firstNonBlankAtOrAfter(out, start + newLines.size)
+        val windowEnd = if (afterContent < 0) out.size - 1 else {
+            val nextBlank = firstBlankAfter(out, afterContent)
+            if (nextBlank < 0) out.size - 1 else nextBlank - 1
+        }
+        val prevRegionEnd = lastNonBlankBefore(out, windowStart)
+        val windowBlocks = classifyWindow(out, windowStart, windowEnd, prevRegionEnd)
+
+        val before = doc.blocks.take(blockIndex).filter { it.endLine < windowStart }
+        val afterShifted = doc.blocks.drop(blockIndex + 1).map { b ->
+            MarkdownBlock(b.type, b.startLine + delta, b.endLine + delta)
+        }
+        val beyond = afterShifted.filter { it.startLine > windowEnd }
+        val newBlocks = before + windowBlocks + beyond
+        val candidates = candidatesFrom(out, newBlocks)
+        return MarkdownDocument(content, out, newBlocks, candidates, candidatesByBlock(candidates))
+    }
+
+    /**
+     * Region-split + classify + grow-backward restricted to [from]..[to], with the
+     * first region's grow-back anchored at [prevRegionEnd] (the last non-blank
+     * line before the window). Mirrors the full [blocksFromLines] logic so the
+     * window's blocks are identical to a full re-tokenize.
+     */
+    private fun classifyWindow(
+        lines: List<String>,
+        from: Int,
+        to: Int,
+        prevRegionEnd: Int
+    ): List<MarkdownBlock> {
+        if (from > to || from < 0 || to >= lines.size) return emptyList()
+        val regions = mutableListOf<Pair<Int, Int>>()
+        var start = -1
+        for (i in from..to) {
+            if (lines[i].isBlank()) {
+                if (start >= 0) {
+                    regions.add(start to (i - 1))
+                    start = -1
+                }
+            } else if (start < 0) {
+                start = i
+            }
+        }
+        if (start >= 0) regions.add(start to to)
+        if (regions.isEmpty()) return emptyList()
+
+        val blocks = mutableListOf<MarkdownBlock>()
+        var previousEnd = prevRegionEnd
+        for (region in regions) {
+            val regionBlocks = classifyRegion(lines, region.first, region.second)
+            if (regionBlocks.isEmpty()) continue
+            val growStart = previousEnd + 1
+            val first = regionBlocks.first()
+            regionBlocks[0] = first.copy(startLine = first.startLine.coerceAtMost(growStart))
+            blocks.addAll(regionBlocks)
+            previousEnd = region.second
+        }
+        return blocks
+    }
+
+    private fun firstNonBlankAtOrAfter(lines: List<String>, from: Int): Int {
+        for (i in from until lines.size) {
+            if (!lines[i].isBlank()) return i
+        }
+        return -1
+    }
+
+    private fun firstBlankAfter(lines: List<String>, from: Int): Int {
+        for (i in from until lines.size) {
+            if (lines[i].isBlank()) return i
+        }
+        return -1
+    }
+
+    private fun lastNonBlankBefore(lines: List<String>, before: Int): Int {
+        var i = before - 1
+        while (i >= 0) {
+            if (!lines[i].isBlank()) return i
+            i--
+        }
+        return -1
     }
 
     /** Classify a block-quote's collected literal into a typed callout, if any. */
