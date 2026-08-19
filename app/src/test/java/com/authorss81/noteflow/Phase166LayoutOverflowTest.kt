@@ -13,8 +13,9 @@ import org.junit.Test
  * CANNOT render side-by-side wide controls — it clips whichever child does not
  * fit. The fixed surfaces are pinned here so a future edit cannot silently
  * re-introduce the bug:
- *   - WebDavSyncDialog: the two primary actions live in the body as full-width
- *     buttons; the alert-dialog confirm slot holds exactly ONE control ("Close").
+ *   - WebDavSyncDialog: the two primary actions live in the dialog BODY as full-width
+ *     buttons (the confirm slot holds only "Close"). A reversion to a two-button
+ *     confirm row fails the suite.
  *   - CalendarView: the date summary + "New Note for Date" stack in a Column
  *     instead of a SpaceBetween row.
  *   - HomeScreen import dialog: the Orientation chips row is horizontalScroll.
@@ -28,7 +29,7 @@ import org.junit.Test
  */
 class Phase166LayoutOverflowTest {
 
-private fun mainSource(rel: String): String {
+    private fun mainSource(rel: String): String {
         val start = File(System.getProperty("user.dir") ?: ".").absoluteFile
         var dir: File? = start
         while (dir != null) {
@@ -44,26 +45,37 @@ private fun mainSource(rel: String): String {
     // --- WebDavSyncDialog -------------------------------------------
 
     @Test
-    fun `WebDavSyncDialog has exactly one confirm slot and both actions are full-width`() {
+    fun `WebDavSyncDialog actions are full-width body buttons, confirm holds only Close`() {
         val src = mainSource("ui/components/WebDavSyncDialog.kt")
-        assertEquals(
-            "the two primary actions must not be side-by-side confirm buttons",
-            1,
-            Regex("confirmButton\\s*=?\\s*\\{").findAll(src).count()
-        )
-        assertTrue("Upload Backup must be a full-width body button", src.contains("Text(\"Upload Backup\")"))
-        assertTrue("Download & Restore must be a full-width body button", src.contains("Text(\"Download & Restore\")"))
-        // Both action Buttons (the same ones that carry the two labels) are
-        // width-flexible, so a 360dp dialog can never clip them.
+        // The two primary actions must live in the dialog BODY (the AlertDialog text
+        // slot), not the compact right-aligned confirm row that clipped them on 360dp.
+        val body = src.substring(src.indexOf("text = {"), src.indexOf("confirmButton = {"))
         assertTrue(
-            "no variant may return to a fixed-width two-button row",
-            !src.substring(
-                src.indexOf("Upload Backup"),
-                src.indexOf("Text(\"Download & Restore\")")
-            ).contains(
-                "horizontalArrangement = Arrangement.SpaceBetween"
-            )
+            "Upload Backup action must live in the dialog body",
+            body.contains("Text(\"Upload Backup\")")
         )
+        assertTrue(
+            "Download & Restore action must live in the dialog body",
+            body.contains("Text(\"Download & Restore\")")
+        )
+        // Each action button must be full-width so no supported width can clip it.
+        // \b ensures the anchor is the Button/OutlinedButton, not TextButton or the
+        // "Button(" substring inside OutlinedButton.
+        val uploadStart = Regex("\\bButton\\(").find(body)!!.range.first
+        assertTrue(
+            "Upload Backup must be a full-width button",
+            body.substring(uploadStart, body.indexOf("Text(\"Upload Backup\")")).contains("Modifier.fillMaxWidth()")
+        )
+        val downloadStart = Regex("\\bOutlinedButton\\(").findAll(body).last().range.first
+        assertTrue(
+            "Download & Restore must be a full-width button",
+            body.substring(downloadStart, body.indexOf("Text(\"Download & Restore\")")).contains("Modifier.fillMaxWidth()")
+        )
+        // The confirm slot may hold only Close — a reversion to a two-button
+        // confirm row (the phase-166 bug) fails this suite.
+        val confirm = src.substring(src.indexOf("confirmButton = {"))
+        assertTrue("confirm slot must hold Close", confirm.contains("Text(\"Close\")"))
+        assertFalse("confirm slot must not re-hold the primary actions", confirm.contains("Icons.Outlined.CloudUpload"))
     }
 
     // --- CalendarView ------------------------------------------------

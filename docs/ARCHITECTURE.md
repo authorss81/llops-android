@@ -49,7 +49,7 @@
 > filtered-by-tag banner text wraps/ellipsizes (`HomeScreen.kt:1233-1245`).
 > (6) `InteractiveTutorial` puts "Skip Tutorial" on its own line and end-aligns the
 > Back/Skip-step/Next row (`InteractiveTutorial.kt:338-402`). (7) KnowledgeGraph card title
-> wraps (`KnowledgeGraphScreen.kt:670`). Regression guard:
+> wraps (`KnowledgeGraphScreen.kt:674-680`). Regression guard:
 > `app/src/test/java/com/authorss81/noteflow/Phase166LayoutOverflowTest.kt` (8 source-
 > pinning tests, `class Phase166LayoutOverflowTest` at `:29`).
 

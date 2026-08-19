@@ -96,7 +96,7 @@ side-by-side wide controls with no shrink path:
 | `EditorScreen.kt` template/pressure chips | equally-weighted `weight(1f)` labels | safe (verified); remaining chip rows already `horizontalScroll` |
 | `ColorModeChipsRow.kt` | `horizontalScroll` + `LazyRow` swatches | safe (verified) |
 | `InteractiveTutorial.kt:…` action row | Skip Tutorial + Back + Skip step + Next in one row | skip line + end-aligned action row (`:338-402`) |
-| `KnowledgeGraphScreen.kt` selected-node card | long title overflowed the card | weight + `maxLines` + ellipsis (`:670`) |
+| `KnowledgeGraphScreen.kt` selected-node card | long title overflowed the card | weight + `maxLines` + ellipsis (`:674-680`) |
 | `MarkdownPreviewScreen.kt` app bar | title row = title + 3 chips (~330dp); actions had icons + chip | title + Reader chip only; chips → scrollable sub-bar (`:564-635`) |
 | `TutorialDemos.kt` swatches | 6 × 30dp + spacing ≈ 220dp | fits 360dp (verified) |
 | Paging: version history / gallery / backups | scrollable sheets / adaptive grid — no fixed-width text pager | none needed (verified) |
@@ -105,12 +105,25 @@ side-by-side wide controls with no shrink path:
 
 - New `app/src/test/java/com/authorss81/noteflow/Phase166LayoutOverflowTest.kt` (8
   tests, `class Phase166LayoutOverflowTest` at `:29`). Following the repo's
-  `Phase148UiFailureTextScrubTest` style, it source-pins every fixed surface: exactly one
-  confirm slot in WebDavSyncDialog, no `SpaceBetween` in the Calendar/date header or the
-  tutorial action area, `horizontalScroll` on both fixed chip rows, `weight`+ellipsis on
+  `Phase148UiFailureTextScrubTest` style, it source-pins every fixed surface: the
+  WebDav actions live in the dialog BODY as full-width buttons with the confirm slot
+  holding only Close, no `SpaceBetween` in the Calendar/date header or the tutorial
+  action area, `horizontalScroll` on both fixed chip rows, `weight`+ellipsis on
   the two flexible texts, and the preview app bar's title containing exactly one
   FilterChip. A future edit that re-introduces any of the six overflow patterns fails
   the suite.
+
+## Review fixes (2026-08-19)
+
+- The WebDav regression pin was strengthened: the phase-166-authored assertions (one
+  `confirmButton`, the two labels present, no `Arrangement.SpaceBetween`) all PASSED on
+  the pre-fix code, so a reversion to the two-button confirm row would not have failed
+  the suite. It now asserts the actions are in the dialog body (the `text` slot), each
+  is `Modifier.fillMaxWidth()`, and the confirm slot holds only Close.
+- The Serif toggle in the preview sub-bar keeps its phase-158 gate
+  (`readerMode || viewMode != MarkdownViewMode.EDIT`) — reachable in reader/preview/
+  split modes, hidden in the plain editor (the initial phase-166 layout left it always
+  visible). Sub-bar indentation was aligned to the new wrapper depth.
 
 ## Manual check matrix (device / emulator, 360dp portrait)
 

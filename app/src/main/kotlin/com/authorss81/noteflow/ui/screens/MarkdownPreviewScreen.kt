@@ -573,21 +573,26 @@ fun MarkdownPreviewScreen(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    FilterChip(
-                        selected = serifReadingMode,
-                        onClick = {
-                            serifReadingMode = !serifReadingMode
-                            viewModel.settings.serifReadingEnabled = serifReadingMode
-                        },
-                        label = { Text("Serif", style = MaterialTheme.typography.labelSmall) },
-                        leadingIcon = {
-                            Icon(
-                                Icons.Outlined.Book,
-                                contentDescription = null,
-                                modifier = Modifier.size(14.dp)
-                            )
-                        }
-                    )
+                    // Phase 166 review-fix: the Serif chip moved out of the app bar
+                    // but keeps its phase-158 gate — reachable in reader/preview/split
+                    // modes, hidden in the plain editor, exactly as before.
+                    if (readerMode || viewMode != MarkdownViewMode.EDIT) {
+                        FilterChip(
+                            selected = serifReadingMode,
+                            onClick = {
+                                serifReadingMode = !serifReadingMode
+                                viewModel.settings.serifReadingEnabled = serifReadingMode
+                            },
+                            label = { Text("Serif", style = MaterialTheme.typography.labelSmall) },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Outlined.Book,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                            }
+                        )
+                    }
                     if (!readerMode) {
                         FilterChip(
                             selected = viewMode == MarkdownViewMode.SPLIT,
@@ -635,163 +640,163 @@ fun MarkdownPreviewScreen(
                 Spacer(modifier = Modifier.height(6.dp))
                 Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                     if (readerMode) {
-                // Phase 158 (22.5): reader/focus mode is read-only by construction —
-                // the hybrid editor is never composed here, so long-press can never
-                // open an edit surface. Instant swap, no transition animation
-                // (reduce-motion honored by adding no motion).
-                MarkdownRenderedContent(
-                    content = contentText,
-                    primaryColor = primaryColor,
-                    baseDir = baseDir,
-                    onOpenWikiLink = onOpenWikiLink,
-                    serif = serifReadingMode,
-                    readerMode = true
-                )
-            } else when (viewMode) {
-                MarkdownViewMode.EDIT -> {
-                    Column(modifier = Modifier.fillMaxSize()) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Button(
-                                onClick = { showSlashCommands = true },
-                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
-                            ) {
-                                Text("/ Slash Commands")
-                            }
-                        }
-
-                        HybridMarkdownEditor(
-                            value = contentText,
-                            onValueChange = { contentText = it },
-                            modifier = Modifier.weight(1f).fillMaxWidth().imePadding(),
+                        // Phase 158 (22.5): reader/focus mode is read-only by construction —
+                        // the hybrid editor is never composed here, so long-press can never
+                        // open an edit surface. Instant swap, no transition animation
+                        // (reduce-motion honored by adding no motion).
+                        MarkdownRenderedContent(
+                            content = contentText,
                             primaryColor = primaryColor,
                             baseDir = baseDir,
                             onOpenWikiLink = onOpenWikiLink,
-                            serif = serifReadingMode
+                            serif = serifReadingMode,
+                            readerMode = true
                         )
-                    }
-                }
-
-                MarkdownViewMode.PREVIEW -> {
-                    MarkdownRenderedContent(
-                        content = contentText,
-                        primaryColor = primaryColor,
-                        baseDir = baseDir,
-                        onOpenWikiLink = onOpenWikiLink,
-                        serif = serifReadingMode,
-                        readerMode = readerMode
-                    )
-                }
-
-                MarkdownViewMode.SPLIT -> {
-                    if (isTopBottomSplit) {
-                        Column(
-                            modifier = Modifier.fillMaxSize(),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Column(modifier = Modifier.weight(splitRatio).fillMaxWidth()) {
+                    } else when (viewMode) {
+                        MarkdownViewMode.EDIT -> {
+                            Column(modifier = Modifier.fillMaxSize()) {
                                 Row(
-                                    modifier = Modifier.fillMaxWidth().padding(bottom = 2.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
+                                    modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
-                                    Text("Markdown Editor", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
                                     Button(
                                         onClick = { showSlashCommands = true },
-                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
                                     ) {
-                                        Text("/ Commands", style = MaterialTheme.typography.labelSmall)
+                                        Text("/ Slash Commands")
                                     }
                                 }
+        
                                 HybridMarkdownEditor(
                                     value = contentText,
                                     onValueChange = { contentText = it },
-                                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                                    modifier = Modifier.weight(1f).fillMaxWidth().imePadding(),
                                     primaryColor = primaryColor,
                                     baseDir = baseDir,
                                     onOpenWikiLink = onOpenWikiLink,
                                     serif = serifReadingMode
                                 )
                             }
-
-                            HorizontalDivider()
-
-                            Column(modifier = Modifier.weight(1f - splitRatio).fillMaxWidth()) {
-                                Text("Live Preview", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, modifier = Modifier.padding(bottom = 2.dp))
-                                Surface(
-                                    modifier = Modifier.weight(1f).fillMaxWidth(),
-                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
-                                    shape = RoundedCornerShape(8.dp)
-                                ) {
-                                    Box(modifier = Modifier.padding(8.dp)) {
-                                        MarkdownRenderedContent(
-                                            content = contentText,
-                                            primaryColor = primaryColor,
-                                            baseDir = baseDir,
-                                            onOpenWikiLink = onOpenWikiLink,
-                                            serif = serifReadingMode
-                                        )
-                                    }
-                                }
-                            }
                         }
-                    } else {
-                        Row(
-                            modifier = Modifier.fillMaxSize(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Column(modifier = Modifier.weight(splitRatio).fillMaxHeight()) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
+        
+                        MarkdownViewMode.PREVIEW -> {
+                            MarkdownRenderedContent(
+                                content = contentText,
+                                primaryColor = primaryColor,
+                                baseDir = baseDir,
+                                onOpenWikiLink = onOpenWikiLink,
+                                serif = serifReadingMode,
+                                readerMode = readerMode
+                            )
+                        }
+        
+                        MarkdownViewMode.SPLIT -> {
+                            if (isTopBottomSplit) {
+                                Column(
+                                    modifier = Modifier.fillMaxSize(),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
-                                    Text("Markdown Editor", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
-                                    Button(
-                                        onClick = { showSlashCommands = true },
-                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
-                                    ) {
-                                        Text("/ Commands", style = MaterialTheme.typography.labelSmall)
-                                    }
-                                }
-                                HybridMarkdownEditor(
-                                    value = contentText,
-                                    onValueChange = { contentText = it },
-                                    modifier = Modifier.weight(1f).fillMaxWidth(),
-                                    primaryColor = primaryColor,
-                                    baseDir = baseDir,
-                                    onOpenWikiLink = onOpenWikiLink,
-                                    serif = serifReadingMode
-                                )
-                            }
-
-                            VerticalDivider()
-
-                            Column(modifier = Modifier.weight(1f - splitRatio).fillMaxHeight()) {
-                                Text("Live Preview", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, modifier = Modifier.padding(bottom = 4.dp))
-                                Surface(
-                                    modifier = Modifier.weight(1f).fillMaxWidth(),
-                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
-                                    shape = RoundedCornerShape(8.dp)
-                                ) {
-                                    Box(modifier = Modifier.padding(8.dp)) {
-                                        MarkdownRenderedContent(
-                                            content = contentText,
+                                    Column(modifier = Modifier.weight(splitRatio).fillMaxWidth()) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth().padding(bottom = 2.dp),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text("Markdown Editor", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                                            Button(
+                                                onClick = { showSlashCommands = true },
+                                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                                            ) {
+                                                Text("/ Commands", style = MaterialTheme.typography.labelSmall)
+                                            }
+                                        }
+                                        HybridMarkdownEditor(
+                                            value = contentText,
+                                            onValueChange = { contentText = it },
+                                            modifier = Modifier.weight(1f).fillMaxWidth(),
                                             primaryColor = primaryColor,
                                             baseDir = baseDir,
                                             onOpenWikiLink = onOpenWikiLink,
                                             serif = serifReadingMode
                                         )
+                                    }
+        
+                                    HorizontalDivider()
+        
+                                    Column(modifier = Modifier.weight(1f - splitRatio).fillMaxWidth()) {
+                                        Text("Live Preview", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, modifier = Modifier.padding(bottom = 2.dp))
+                                        Surface(
+                                            modifier = Modifier.weight(1f).fillMaxWidth(),
+                                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+                                            shape = RoundedCornerShape(8.dp)
+                                        ) {
+                                            Box(modifier = Modifier.padding(8.dp)) {
+                                                MarkdownRenderedContent(
+                                                    content = contentText,
+                                                    primaryColor = primaryColor,
+                                                    baseDir = baseDir,
+                                                    onOpenWikiLink = onOpenWikiLink,
+                                                    serif = serifReadingMode
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            } else {
+                                Row(
+                                    modifier = Modifier.fillMaxSize(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Column(modifier = Modifier.weight(splitRatio).fillMaxHeight()) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text("Markdown Editor", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                                            Button(
+                                                onClick = { showSlashCommands = true },
+                                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                                            ) {
+                                                Text("/ Commands", style = MaterialTheme.typography.labelSmall)
+                                            }
+                                        }
+                                        HybridMarkdownEditor(
+                                            value = contentText,
+                                            onValueChange = { contentText = it },
+                                            modifier = Modifier.weight(1f).fillMaxWidth(),
+                                            primaryColor = primaryColor,
+                                            baseDir = baseDir,
+                                            onOpenWikiLink = onOpenWikiLink,
+                                            serif = serifReadingMode
+                                        )
+                                    }
+        
+                                    VerticalDivider()
+        
+                                    Column(modifier = Modifier.weight(1f - splitRatio).fillMaxHeight()) {
+                                        Text("Live Preview", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, modifier = Modifier.padding(bottom = 4.dp))
+                                        Surface(
+                                            modifier = Modifier.weight(1f).fillMaxWidth(),
+                                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+                                            shape = RoundedCornerShape(8.dp)
+                                        ) {
+                                            Box(modifier = Modifier.padding(8.dp)) {
+                                                MarkdownRenderedContent(
+                                                    content = contentText,
+                                                    primaryColor = primaryColor,
+                                                    baseDir = baseDir,
+                                                    onOpenWikiLink = onOpenWikiLink,
+                                                    serif = serifReadingMode
+                                                )
+                                            }
+                                        }
                                     }
                                 }
                             }
                         }
                     }
                 }
-                }
-            }
             }
 
             if (showSlashCommands) {
