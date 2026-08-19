@@ -1,0 +1,47 @@
+# Phase-170 review fix — CI upload path for the ABI-split release APKs
+# Status: NOT APPLIED (PENDING USER APPROVAL) — the agent token has no
+# `workflows` permission, so a push touching .github/workflows/ is hard-blocked
+# by GitHub. An operator with `workflows` permission can apply with:
+#   git apply workspace/phase-170/workflow-upload-path-fix.patch
+# (or re-apply the two edits manually — see workspace/phase-170/REPORT.md §5a).
+# Background: phase-170 (Phase-32-NEW-02 ABI splits) replaced app-release.apk
+# with app-{arm64-v8a,armeabi-v7a,x86,x86_64}-release.apk + a universal APK.
+# The workflows below still pointed at the removed file, so the next tag/release
+# would have silently published NO release APK (release.yml used warn).
+
+diff --git a/.github/workflows/llops.yml b/.github/workflows/llops.yml
+index c865e69..493afb4 100644
+--- a/.github/workflows/llops.yml
++++ b/.github/workflows/llops.yml
+@@ -242,7 +242,7 @@ jobs:
+         uses: actions/upload-artifact@v7
+         with:
+           name: noteflow-release-apk
+-          path: app/build/outputs/apk/release/app-release.apk
++          path: app/build/outputs/apk/release/*.apk
+           if-no-files-found: error
+ 
+       - name: Upload recovery patch (if push failed)
+diff --git a/.github/workflows/release.yml b/.github/workflows/release.yml
+index 34ef67b..1f339ee 100644
+--- a/.github/workflows/release.yml
++++ b/.github/workflows/release.yml
+@@ -47,12 +47,15 @@ jobs:
+           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+         run: gradle assembleRelease
+ 
+-      - name: Upload Release APK
++      - name: Upload Release APKs (ABI splits + universal, phase-170)
+         uses: actions/upload-artifact@v7
+         with:
+           name: noteflow-release-apk
+-          path: app/build/outputs/apk/release/app-release.apk
+-          if-no-files-found: warn
++          # phase-170: assembleRelease now emits app-{arm64-v8a,armeabi-v7a,x86,x86_64}-release.apk
++          # + app-universal-release.apk (no more app-release.apk). Globbing *.apk keeps this
++          # robust to future ABI-set changes.
++          path: app/build/outputs/apk/release/*.apk
++          if-no-files-found: error
+ 
+       - name: Build Debug APK (as fallback downloadable APK)
+         run: gradle assembleDebug

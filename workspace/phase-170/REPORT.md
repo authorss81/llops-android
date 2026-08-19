@@ -219,6 +219,37 @@ gradle testDebugUnitTest# app suite green except:
 No `.github/workflows/` change. No Room/migration. No new dependency. No behavior
 change to debug builds or to the runtime of the 24-language detector.
 
+## 5a. Review fix (post-commit) — CI artifact path updated for the ABI-split outputs
+
+Review finding: the phase-170 ABI split removed `app-release.apk`, but both
+workflow consumers still referenced that exact path, so the next tag/release would
+**silently publish no release APK** (`release.yml` used `if-no-files-found: warn`);
+`llops.yml` (phase-117/159 upload step) had the same stale path with `error`.
+
+Fix (applies cleanly, never pushed to main — see "PUSH BLOCKED" below):
+- `.github/workflows/release.yml` — upload path changed from
+  `app/build/outputs/apk/release/app-release.apk` to the glob
+  `app/build/outputs/apk/release/*.apk` (covers all 4 ABI splits + universal) and
+  `if-no-files-found: warn` → `error` so a broken split config fails the release
+  loudly instead of dropping the artifact (consistent with the debug step's `error`).
+- `.github/workflows/llops.yml` — same glob fix for the phase-117/159 gated
+  upload step (keeps the `noteflow-release-apk` artifact contract valid if re-run).
+- Both edits re-validated with a YAML parser; no other live consumer of
+  `app-release.apk` remains (remaining references are historical evidence in docs,
+  not executed code paths).
+
+**PUSH BLOCKED — PENDING USER APPROVAL.** A push of any commit touching
+`.github/workflows/` is hard-rejected by GitHub for the bot token (no `workflows`
+permission: `refusing to allow a GitHub App to create or update workflow
+.github/workflows/llops.yml without workflows permission`). The workflow edits
+were therefore REVERTED out of `main` and preserved byte-for-byte in
+`workspace/phase-170/workflow-upload-path-fix.patch` (36-line diff, apply with
+`git apply`). Until an operator with `workflows` permission applies it, the next
+tag/release build still runs `gradle assembleRelease` fine but the upload step
+targets the removed `app-release.apk` — **a release currently cannot ship an APK
+artifact without this patch**. No Kotlin/build-config/test changes; the
+`Phase170LinguaTrimTest` pins are unaffected.
+
 ## 6. Out of scope / documented follow-ups (for user decision, NOT implemented)
 
 - A leaner future step could rebuild a half-size lingua model JAR (24 languages
