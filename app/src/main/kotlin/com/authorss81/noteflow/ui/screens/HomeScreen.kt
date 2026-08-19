@@ -1183,10 +1183,18 @@ fun HomeScreen(
                             viewModel = viewModel,
                             activeTagFilter = activeTagFilterPath,
                             onSelectTagFilter = { tagPath, pageIds ->
-                                activeTagFilterPath = tagPath
-                                activeTagMatchingIds = pageIds
-                                if (tagPath != null) {
-                                    selectedTab = 0 // Switch to Pages tab to show filtered notes!
+                                // Phase 164 review (finding 4): a tag node with NO page
+                                // members (e.g. a tag on the NOTEBOOK itself that no page
+                                // bears yet) would set an empty filter — an empty Pages list
+                                // under a "#tag" banner indistinguishable from a real result.
+                                // Treat it as a no-op; only tag nodes that actually match
+                                // pages (plus the explicit clear) touch the filter state.
+                                if (tagPath == null || !pageIds.isNullOrEmpty()) {
+                                    activeTagFilterPath = tagPath
+                                    activeTagMatchingIds = pageIds
+                                    if (tagPath != null) {
+                                        selectedTab = 0 // Switch to Pages tab to show filtered notes!
+                                    }
                                 }
                             }
                         )
@@ -1195,7 +1203,13 @@ fun HomeScreen(
                             globalSearchResults ?: emptyList()
                         } else if (activeTagMatchingIds != null) {
                             val matching = activeTagMatchingIds!!
-                            pages.filter { it.id in matching }
+                            // Phase 164 review (finding 7): the tag vault is NOTEBOOK-scoped,
+                            // so the filter must surface every matching page of the current
+                            // notebook — not just the currently selected section's pages.
+                            // `allActivePages` (already collected/live here) filtered by the
+                            // scoped id-set can only ever contain this notebook's pages,
+                            // because the matching ids came from the scoped vault build.
+                            allActivePages.filter { it.id in matching }
                         } else {
                             when (selectedTab) {
                                 1 -> recentPages

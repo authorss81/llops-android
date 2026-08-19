@@ -516,6 +516,9 @@ object WikiLinkParser {
      *  - the notebook's OWN CSV tag list ([notebookTags]).
      * Every tag a page of this notebook bears, or the notebook itself bears, shows
      * in the vault; NO tag from pages or notebooks OUTSIDE this scope ever appears.
+     * (Review-fix: every source — text `#tag`, page CSV tag, notebook tag — is run
+     * through the same lowercase/`/`-trim normalization first, so mixed-case inputs
+     * to the three representations merge into one vault node instead of two.)
      * Cached per unlock epoch + input fingerprint exactly like the whole-vault
      * build (a different page list / notebook-tag list is never served a result
      * built for another scope). Bounded: the same [MAX_SCAN_PAGES]/[MAX_TAGS]/
@@ -527,17 +530,30 @@ object WikiLinkParser {
         importsRoot: File? = null
     ): List<TagNode> {
         val epoch = synchronized(cacheLock) { cacheEpoch }
-        val fingerprint = scopeFingerprint(notebookPages, notebookTags)
+        // Phase 164 review (finding 2): the notebook's OWN tag list goes through the
+        // SAME normalization as page `#tag`s and page CSV tags (lower-cased, trailing
+        // slashes stripped), so a notebook tag "Status" and a page tag "status" merge
+        // into ONE vault node (with the page members) instead of two sibling branches
+        // where the notebook-only branch silently has zero members.
+        val normalizedNotebookTags =
+            notebookTags.map { it.trim().lowercase().trim('/') }.filter { it.isNotEmpty() }
+        val fingerprint = scopeFingerprint(notebookPages, normalizedNotebookTags)
         val cached = synchronized(cacheLock) { scopedTagHierarchyEntry }
         if (cached != null && cached.epoch == epoch && cached.fingerprint == fingerprint) {
             return cached.value
         }
         val result = withContext(Dispatchers.Default) {
-            val tagToPagesMap = collectTextTags(notebookPages.take(MAX_SCAN_PAGES), importsRoot)
+            // Phase 164 review (finding 3): ONE bounded scan set is shared by the
+            // text-`#tag` scan and the CSV-tags pass, so both tag sources have exactly
+            // the same reach (the first MAX_SCAN_PAGES pages of the notebook) — a page
+            // beyond the cap can no longer contribute a CSV tag while its text tags are
+            // skipped by the cap.
+            val scanSet = notebookPages.take(MAX_SCAN_PAGES)
+            val tagToPagesMap = collectTextTags(scanSet, importsRoot)
 
             // Explicit CSV tags on the notebook's own pages (the page is a member of
             // this notebook's scope, so its tags belong in this vault).
-            for (page in notebookPages) {
+            for (page in scanSet) {
                 currentCoroutineContext().ensureActive()
                 for (tag in parseCsvTags(page.tags)) {
                     if (tagToPagesMap.size >= MAX_TAGS) break
@@ -545,9 +561,9 @@ object WikiLinkParser {
                 }
             }
 
-            // The notebook's own tag list — tags the user attached to the notebook
-            // itself (no page member yet).
-            for (tag in notebookTags) {
+            // The notebook's own normalized tag list — tags the user attached to the
+            // notebook itself (no page member yet).
+            for (tag in normalizedNotebookTags) {
                 if (tagToPagesMap.size >= MAX_TAGS) break
                 tagToPagesMap.getOrPut(tag) { mutableSetOf() }
             }

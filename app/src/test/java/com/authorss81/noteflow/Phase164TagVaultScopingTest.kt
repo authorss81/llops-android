@@ -168,6 +168,29 @@ class Phase164TagVaultScopingTest {
         )
     }
 
+    // --- (phase-164 review finding 2): tag identity is normalized across the
+    // three tag sources (text #tag, page CSV tags, notebook tag list), so mixed
+    // casing/spacing merges into one node instead of two sibling branches ---
+
+    @Test
+    fun `page and notebook tag identity is case-insensitively merged`() = runBlocking {
+        // A notebook tag written as " Status " and a page that bears the same tag
+        // via BOTH representations with different casing (`#STATUS` mention in the
+        // body + `Status` CSV field) must resolve to ONE vault node carrying the page.
+        val pages = listOf(page("p1", "P1", text = "#STATUS", tagsCsv = "Status"))
+        val vault = WikiLinkParser.buildScopedTagHierarchy(pages, listOf(" Status "))
+
+        val status = vault.firstOrNull { it.name == "status" }
+        assertNotNull("the normalized 'status' node must exist", status)
+        assertEquals(setOf("status"), allFullTags(vault))
+        assertEquals(
+            "the merged node must carry the page for filtering",
+            setOf("p1"),
+            status!!.matchingPageIds
+        )
+        assertEquals("the merged node must count the page", 1, status.noteCount)
+    }
+
     // --- 5. empty state ---
 
     @Test
@@ -186,8 +209,12 @@ class Phase164TagVaultScopingTest {
 
         val vm = File(repoRoot(), "app/src/main/kotlin/com/authorss81/noteflow/ui/viewmodel/NoteflowViewModel.kt").readText()
         val scopedFun = snipFunction(vm, "suspend fun loadScopedTagHierarchy")
+        // Review-fix (finding 5): the scope is the CALLER's captured notebook id
+        // (the LaunchedEffect key), never re-read from the mutable selection — so a
+        // notebook switch racing the read can't leak the new notebook's pages in.
+        assertTrue("the scoped accessor must take the captured notebook id", scopedFun.contains("loadScopedTagHierarchy(notebookId: String"))
+        assertTrue("the scoped accessor must fetch the notebook by the captured id", scopedFun.contains("getNotebookById"))
         assertTrue("the scoped accessor must query pages by notebookId", scopedFun.contains("getPagesForNotebookOnce"))
-        assertTrue("the scoped accessor must guard on the selected notebook", scopedFun.contains("selectedNotebook.value"))
         assertFalse(
             "the scoped accessor must never CALL the whole-vault read",
             scopedFun.contains("repository.getAllActivePages")

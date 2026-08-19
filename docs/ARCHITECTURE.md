@@ -960,13 +960,21 @@
     `buildTagTree` (the whole-vault `buildTagHierarchy` behavior is byte-identical);
     cached per unlock epoch + scope fingerprint (pages + notebook tags), new
     `scopedTagRecomputes` metric. `NoteflowViewModel.loadScopedTagHierarchy`
-    (`:4058`) queries only that notebook via
-    `getPagesForNotebookOnce` (page→section→notebookId, no schema change) inside
-    `withLockedPoolGuard`. `TagExplorerView` keys its LaunchedEffect on
-    `(notebookId, notebook tags)` and runs the build in-effect (stale notebook's
-    scan is cancelled on switch); `HomeScreen` clears a stale tag filter on
-    notebook switch. Tests: `Phase164TagVaultScopingTest` (8) + updated
-    `Phase134LockVaultInflightTest` pin.
+    (`:4064`) queries only that notebook via `getPagesForNotebookOnce`
+    (page→section→notebookId, no schema change) inside `withLockedPoolGuard`.
+    `TagExplorerView` keys its LaunchedEffect on `(notebookId, notebook tags)` and
+    runs the build in-effect (stale notebook's scan is cancelled on switch);
+    `HomeScreen` clears a stale tag filter on notebook switch. Tests:
+    `Phase164TagVaultScopingTest` (8) + updated `Phase134LockVaultInflightTest` pin.
+    **Review fixes (2026-08-19):** tag identity is normalized identically across all
+    three sources (notebook tag list lowercased like text `#tag`s + CSV tags — mixed-case
+    inputs merge into one node, `:550`); the CSV-tags pass uses the same
+    `MAX_SCAN_PAGES`-bounded scan set as the text scan; `loadScopedTagHierarchy` now takes
+    the caller's captured `notebookId` (the effect key) instead of re-reading
+    `selectedNotebook.value`, `getNotebookById` for the notebook's own tags; `TagExplorerView`
+    clears stale tag state when the post-read auth re-check fails; `HomeScreen` ignores
+    empty `matchingPageIds` tag pickups (no dead-end filter) and filters the active tag
+    across the whole notebook's pages (`allActivePages`) rather than the current section.
 - **Command Palette (Phase 38 HUD)**: `ui/components/CommandPaletteOverlay.kt`
   (global quick-switcher; two-finger swipe down in `MainActivity.kt`
   `detectTwoFingerSwipeDown`, keyboard icon in `HomeScreen.kt`), ranking/tag

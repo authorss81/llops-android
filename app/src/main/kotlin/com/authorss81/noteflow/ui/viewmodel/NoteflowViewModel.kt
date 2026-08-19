@@ -4051,13 +4051,20 @@ fun updatePageTags(id: String, tags: String) {
      * fetches ONLY that notebook's active pages (page → section → notebookId via
      * `getPagesForNotebookOnce`) and builds the tag hierarchy from those pages'
      * #tags + CSV tags PLUS the notebook's own tag list — a page in another
-     * notebook can never contribute a tag to this vault. No selected notebook ⇒
-     * empty scope. Guarded exactly like [loadAllActivePages] (armed-empty on a
-     * lock race) so a `lock()` disposing the pool mid-scope is a notice, not a crash.
+     * notebook can never contribute a tag to this vault.
+     *
+     * Phase 164 review (finding 5): the scope is taken from the CALLER's captured
+     * [notebookId] (the TagExplorerView LaunchedEffect key), never re-read from the
+     * mutable selection — a notebook switch racing the read can no longer read the
+     * NEW notebook's pages inside an effect keyed for the OLD notebook. A missing
+     * notebook id ⇒ empty scope. Guarded exactly like [loadAllActivePages]
+     * (armed-empty on a lock race) so a `lock()` disposing the pool mid-scope is a
+     * notice, not a crash.
      */
-    suspend fun loadScopedTagHierarchy(importsRoot: File?): List<TagNode> {
-        val notebook = selectedNotebook.value ?: return emptyList()
+    suspend fun loadScopedTagHierarchy(notebookId: String, importsRoot: File?): List<TagNode> {
         return withLockedPoolGuard("tag vault", emptyList()) {
+            val notebook = repository.getNotebookById(notebookId)
+                ?: return@withLockedPoolGuard emptyList()
             val pages = repository.getPagesForNotebookOnce(notebook.id)
             val notebookTags = notebook.tags.split(",").map { it.trim() }.filter { it.isNotEmpty() }
             WikiLinkParser.buildScopedTagHierarchy(pages, notebookTags, importsRoot)

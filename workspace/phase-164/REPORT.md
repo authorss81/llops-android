@@ -39,10 +39,11 @@ DAOs and entities are untouched.
      (`MAX_SCAN_PAGES` / `MAX_TAGS` per map / `MAX_TAG_TREE_DEPTH`) and the build
      is cancellable mid-scan.
 
-2. **New guarded VM accessor** — `NoteflowViewModel.loadScopedTagHierarchy(importsRoot)`
-   (`NoteflowViewModel.kt:4058-4069`):
-   - reads the SELECTED notebook (`selectedNotebook.value`) and returns empty when
-     none is selected;
+2. **New guarded VM accessor** — `NoteflowViewModel.loadScopedTagHierarchy(notebookId, importsRoot)`
+   (`NoteflowViewModel.kt:4064`, review-fix: the caller's captured notebook id is the
+   scope, never re-read from the mutable selection):
+   - fetches the notebook by the captured id (`repository.getNotebookById`) and
+     returns empty when it no longer exists;
    - queries ONLY that notebook's pages via `repository.getPagesForNotebookOnce(notebookId)`
      (existing DAO: `pages WHERE sectionId IN (SELECT id FROM sections WHERE notebookId = :notebookId) AND deleted = 0`,
      `Daos.kt:122-123`) and parses the notebook's own CSV tag list;
@@ -69,14 +70,47 @@ A notebook's vault = tags on that notebook's active pages (both `#tag` full-text
 mentions AND the pages' CSV `tags` field) + the notebook's own tag list. Tags from
 any page/notebook outside the selected notebook can never appear.
 
+## Review fixes (post-review commit `llops: phase-164 review fixes`)
+
+Applied the phase-164 review findings:
+
+- **Finding 2 — tag identity normalized across all three sources**: `buildScopedTagHierarchy`
+  now runs the notebook's OWN tag list through the SAME normalization as text `#tag`s
+  and page CSV tags (`.trim().lowercase().trim('/')`) BEFORE both the tree build and
+  the scope fingerprint, so a notebook tag written `"Status"` and a page bearing
+  `status`/`STATUS` merge into ONE vault node (carrying the page) instead of two
+  sibling branches where the notebook-only branch has zero members. Covered by a new
+  case-insensitive-merge test, so the suite is now genuinely 8 tests.
+- **Finding 3 — CSV-tag reach bounded**: the CSV-`tags` pass iterates the SAME
+  `notebookPages.take(MAX_SCAN_PAGES)` scan set as the text-`#tag` scan — a page
+  beyond the cap can no longer contribute a CSV tag when its text tags are skipped.
+- **Finding 5 — deterministic scope**: `NoteflowViewModel.loadScopedTagHierarchy`
+  now takes the caller's captured `notebookId` (the `TagExplorerView` LaunchedEffect
+  key) instead of re-reading `selectedNotebook.value` at execution time, so a notebook
+  switch racing the read can no longer read the NEW notebook's pages inside an effect
+  keyed for the OLD one. The notebook's own tag list is fetched via
+  `repository.getNotebookById(notebookId)` (missing notebook ⇒ empty scope).
+- **Finding 6 — no stale decrypted tags post-lock**: `TagExplorerView` now CLEARS
+  `tagHierarchy` when the post-read auth re-check fails, instead of retaining the
+  previous notebook's tag list in composition state.
+- **Finding 4 — no dead-end zero-member filter**: `HomeScreen`'s tag pickup ignores a
+  tag whose `matchingPageIds` is null/empty (a notebook-only tag) instead of setting an
+  empty filter under a `#tag` banner that looks like a real result.
+- **Finding 7 — notebook-wide filter**: the active tag filter now filters
+  `allActivePages` (a flow already collected live on the screen) by the scoped id-set
+  instead of only the current SECTION's `pages` — the current notebook's every matching
+  page surfaces across all its sections.
+- **Finding 1 — doc accuracy**: count claims validated; the 8-test count is now real.
+
 ## Tests
 New `app/src/test/java/com/authorss81/noteflow/Phase164TagVaultScopingTest.kt` (8 tests):
 - notebook-A tags never surface in notebook B vault (text tags + notebook tags cross-checked both directions);
 - switching notebooks changes the vault and re-scopes the cache (`scopedTagRecomputes`);
 - a page moved to another notebook carries its tags into that notebook's vault (and out of the old one);
 - page CSV tags + the notebook's own tag list show in the vault; a notebook tag borne by a page maps to that page;
+- review fix: mixed-case tag identity (`#STATUS` + `Status` CSV + ` Status ` notebook tag) merges into ONE node;
 - an empty notebook yields the empty vault;
-- source pins: `TagExplorerView` loads via `viewModel.loadScopedTagHierarchy` (not the whole-vault list) and the VM accessor queries `getPagesForNotebookOnce` on `selectedNotebook` (never `repository.getAllActivePages`).
+- source pins: `TagExplorerView` loads via `viewModel.loadScopedTagHierarchy` (not the whole-vault list) and the VM accessor queries `getPagesForNotebookOnce` on the captured `notebookId` (never `repository.getAllActivePages`).
 
 Updated `Phase134LockVaultInflightTest.kt` pin: the tag-explorer guard pin now points
 at the new guarded scoped accessor.

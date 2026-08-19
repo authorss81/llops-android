@@ -54,9 +54,15 @@ fun TagExplorerView(
         // race) + auth re-check before assigning decrypted tags into state.
         // Phase 164: scoped aggregation — only this notebook's pages' tags +
         // this notebook's own tag list; no other notebook can contribute.
-        val hierarchy = viewModel.loadScopedTagHierarchy(ImportExportService.getImportsDir(context))
+        // Phase 164 review (finding 5): the captured notebookId (the effect KEY)
+        // is passed down, so the read can never race over to the new notebook.
+        val hierarchy = viewModel.loadScopedTagHierarchy(notebookId, ImportExportService.getImportsDir(context))
         if (viewModel.authenticated.value) {
             tagHierarchy = hierarchy
+        } else {
+            // Phase 164 review (finding 6): a lock that raced the guarded read must
+            // never leave the previous notebook's (decrypted) tag list in state.
+            tagHierarchy = emptyList()
         }
         isLoading = false
     }
