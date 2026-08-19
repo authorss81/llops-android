@@ -74,6 +74,22 @@ class Phase174HeadingScrollIndexTest {
     }
 
     @Test
+    fun `generated occurrence suffixes never collide with a literal (N) heading`() {
+        val index = HeadingScrollIndex().build(listOf("Goals (2)" to 1, "Goals" to 1, "Goals" to 2))
+        // The literal "Goals (2)" heading keeps its label; the SECOND duplicate
+        // "Goals" is pushed past the collision to "(3)" — labels stay unique.
+        assertEquals(listOf("Goals (2)", "Goals", "Goals (3)"), index.labels())
+        index.register(0, 100)
+        index.register(1, 400)
+        index.register(2, 900)
+        // Tapping "Goals (3)" must resolve to ITS OWN offset, never the literal
+        // "Goals (2)" heading's.
+        assertEquals(100, index.offsetForLabel("Goals (2)")!!)
+        assertEquals(400, index.offsetForLabel("Goals")!!)
+        assertEquals(900, index.offsetForLabel("Goals (3)")!!)
+    }
+
+    @Test
     fun `empty document produces an empty index`() {
         val index = HeadingScrollIndex().build(emptyList())
         assertTrue(index.isEmpty)

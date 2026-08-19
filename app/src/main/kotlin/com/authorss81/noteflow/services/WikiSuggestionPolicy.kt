@@ -98,12 +98,21 @@ object WikiSuggestionPolicy {
      * Locate the LAST `[[` run that has no closing `]]` after it — the region a
      * keystroke is extending. [queryEnd] is the text end, so parents replace
      * `value.substring(queryStart, queryEnd)` with the inserted wikilink.
+     *
+     * Phase 174 review-fix: an open `[[` whose region spans a line break is NOT
+     * treated as a live query. The suggestion popup replaces the whole
+     * `[[…end-of-block` region on select, and multi-line blocks (paragraph/code
+     * raw source) legitimately hold text after the `[[` that the user is NOT
+     * typing as query ink — bounding to the current line keeps the popup out of
+     * unrelated block content (no deletion of text the user didn't intend as a
+     * title).
      */
     fun locateQuery(text: String): QueryBounds? {
         if (text.isBlank()) return null
         val lastOpen = text.lastIndexOf("[[")
         if (lastOpen < 0) return null
         if (text.indexOf("]]", lastOpen + 2) >= 0) return null
+        if (text.indexOf('\n', lastOpen) >= 0) return null
         return QueryBounds(lastOpen, text.length)
     }
 }

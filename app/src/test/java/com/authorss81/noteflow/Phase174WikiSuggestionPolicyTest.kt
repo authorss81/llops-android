@@ -107,6 +107,17 @@ class Phase174WikiSuggestionPolicyTest {
     }
 
     @Test
+    fun `locateQuery returns null when an open query spans a line break`() {
+        // Multi-line block content after the `[[` is NOT query ink — the popup
+        // must stay out so selecting a suggestion can't delete unrelated lines.
+        assertNull(WikiSuggestionPolicy.locateQuery("note: [[Meeting\nmore prose on the next line"))
+        assertNull(WikiSuggestionPolicy.locateQuery("[[unclosed\n\n\n"))
+        // A single-line query stays live.
+        val bounds = WikiSuggestionPolicy.locateQuery("plain [[Me")
+        assertEquals(6, bounds!!.queryStart)
+    }
+
+    @Test
     fun `locateQuery picks the last run when multiple opens exist`() {
         val bounds = WikiSuggestionPolicy.locateQuery("[[Done]] and [[WIP")
         assertEquals("[[Done]] and [[WIP".indexOf("[[WIP"), bounds!!.queryStart)

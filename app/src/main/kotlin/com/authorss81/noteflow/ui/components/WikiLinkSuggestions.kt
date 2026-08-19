@@ -48,7 +48,9 @@ fun WikiLinkSuggestionPopup(
             .fillMaxWidth(0.9f)
             .heightIn(max = 240.dp),
         shape = RoundedCornerShape(10.dp),
-        color = scheme.surface,
+        // Review-fix (Finding 6): translucent so the `[[query` being typed under
+        // the anchored popup stays readable while the suggestions are visible.
+        color = scheme.surface.copy(alpha = 0.92f),
         tonalElevation = 6.dp,
         shadowElevation = 8.dp,
         border = androidx.compose.foundation.BorderStroke(1.dp, scheme.outline.copy(alpha = 0.2f))

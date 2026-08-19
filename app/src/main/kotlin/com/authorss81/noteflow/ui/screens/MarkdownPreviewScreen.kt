@@ -199,6 +199,16 @@ private class HeadingMeasureScope(
 private val LocalHeadingMeasure = androidx.compose.runtime.compositionLocalOf<HeadingMeasureScope?> { null }
 
 /**
+ * Phase 174 (Feature 2): the reader-mode heading index + its layout-time
+ * measure scope, built together once per parsed document. Null (never built)
+ * on the preview/split surfaces where the quick-jump rail isn't composed.
+ */
+private class ReaderHeadingModel(
+    val index: HeadingScrollIndex,
+    val measureScope: HeadingMeasureScope
+)
+
+/**
  * Phase 174 (Feature 2): DFS over the ALREADY-parsed markdown [Node] tree,
  * collecting every [Heading] in document order — the exact order [HeadingScrollIndex]
  * builds from, and the exact order RenderBlocks renders, so node⇄position
@@ -441,13 +451,34 @@ fun MarkdownPreviewScreen(
     var statsText by remember { mutableStateOf<String?>(null) }
     @OptIn(kotlinx.coroutines.FlowPreview::class)
     LaunchedEffect(page.id) {
-        var lastComputedLength = -1
+        // Review-fix (Finding 3): clear the footer instantly on a note switch so
+        // the PREVIOUS note's "N words · ~M min read" never flashes while the new
+        // document's debounced sample is still warming up.
+        statsText = null
+        var lastRecomputedLength = -1
+        var skippedSamplesSinceRecompute = 0
         snapshotFlow { contentText }
             .debounce(NoteStatsFormatPolicy.STATS_DEBOUNCE_MILLIS)
             .collect { text ->
-                if (!NoteStatsFormatPolicy.shouldRecomputeStats(lastComputedLength, text.length)) return@collect
-                lastComputedLength = text.length
-                val analysis = com.authorss81.noteflow.plugins.texttools.TextToolsAnalyzer.analyze(text)
+                skippedSamplesSinceRecompute++
+                // Review-fix (Finding 7): staleness is bounded BOTH by literal
+                // drift (< MIN_MATERIAL_LENGTH_DELTA since the last recompute —
+                // the design intent, punctuation-only edits don't re-tokenize) AND
+                // by real time (a cap of 12 consecutive sub-threshold samples, i.e.
+                // ~3s, forces convergence). The old code only ever compared to the
+                // last recomputed length, so a slow typist landing <8 net chars
+                // per sample could lag forever; now the footer always converges.
+                val driftExceeded = NoteStatsFormatPolicy.shouldRecomputeStats(lastRecomputedLength, text.length)
+                val staleForTooLong = skippedSamplesSinceRecompute >= 12
+                if (lastRecomputedLength >= 0 && !driftExceeded && !staleForTooLong) return@collect
+                // Review-fix (Finding 8): count words/chars/reading-time against the
+                // markdown VISIBLE TEXT (the same parse the preview renders, its
+                // literal concatenation strips `#`/`-`/`|`/`**` markers), so a
+                // heading-only or table-heavy note isn't inflated by syntax tokens.
+                lastRecomputedLength = text.length
+                skippedSamplesSinceRecompute = 0
+                val visibleText = markdownParser.parse(text).collectLiteral()
+                val analysis = com.authorss81.noteflow.plugins.texttools.TextToolsAnalyzer.analyze(visibleText)
                 statsText = NoteStatsFormatPolicy.statsLabel(
                     wordCount = analysis.wordCount,
                     readingTimeSeconds = analysis.readingTimeSeconds,
@@ -476,6 +507,18 @@ fun MarkdownPreviewScreen(
     }
     LaunchedEffect(authenticated) {
         if (!authenticated) {
+            wikiTitles = null
+            loadingWikiTitles = false
+        }
+    }
+    // Review-fix (Finding 4): the candidate-title snapshot is invalidated after
+    // every REAL save so notes created/mutated later in the same unlocked session
+    // show up in the next `[[`/picker engagement (the corpus cache itself is
+    // epoch-based; this just drops the stale copy lazily). Reload happens only on
+    // the next engagement — never per keystroke. `wikiTitles == null` (never
+    // loaded) and `== emptyList` (genuinely loaded-empty) are both respected.
+    LaunchedEffect(savedContent) {
+        if (savedContent != initialContent) {
             wikiTitles = null
             loadingWikiTitles = false
         }
@@ -1347,16 +1390,19 @@ private fun MarkdownRenderedContent(
     // heading refs come from the ALREADY-parsed CommonMark document (never a
     // re-parse); the composable registers each heading's measured content offset
     // during layout, and the rail maps labels back to those offsets.
-    val headingNodes = remember(content) { collectHeadingNodes(document.childrenList()) }
-    val headingIndex = remember(headingNodes) {
-        HeadingScrollIndex().build(headingNodes.map { it.collectLiteral().trim() to it.level })
-    }
-    val headingNodePositions = remember(headingNodes) {
-        HashMap<Node, Int>().also { map ->
-            headingNodes.forEachIndexed { i, heading -> map[heading] = i }
+    // Review-fix (Finding 5): built ONLY for the reader surface where the rail
+    // is shown — the preview/split-preview paths never compose the rail, so they
+    // skip the heading-index + measure-scope construction entirely.
+    val readerHeadingModel = if (readerMode) {
+        val headingNodes = remember(content) { collectHeadingNodes(document.childrenList()) }
+        remember(headingNodes) {
+            val index = HeadingScrollIndex().build(headingNodes.map { it.collectLiteral().trim() to it.level })
+            val positions = HashMap<Node, Int>().also { map ->
+                headingNodes.forEachIndexed { i, heading -> map[heading] = i }
+            }
+            ReaderHeadingModel(index, HeadingMeasureScope(index, positions, scroll))
         }
-    }
-    val measureScope = remember(headingNodes) { HeadingMeasureScope(headingIndex, headingNodePositions, scroll) }
+    } else remember { null }
 
     if (readerMode) {
         // Reader/focus layout: centered, capped to an article measure, widened
@@ -1368,7 +1414,7 @@ private fun MarkdownRenderedContent(
         ) {
             CompositionLocalProvider(
                 LocalReaderMode provides true,
-                LocalHeadingMeasure provides measureScope
+                LocalHeadingMeasure provides readerHeadingModel?.measureScope
             ) {
                 Column(
                     modifier = Modifier
@@ -1376,7 +1422,7 @@ private fun MarkdownRenderedContent(
                         .verticalScroll(scroll)
                         .widthIn(max = ReaderModePolicy.MAX_COLUMN_WIDTH_DP.dp)
                         .padding(vertical = 4.dp)
-                        .onGloballyPositioned { coords -> measureScope.onColumnPlaced(coords.boundsInRoot().top) }
+                        .onGloballyPositioned { coords -> readerHeadingModel?.measureScope?.onColumnPlaced(coords.boundsInRoot().top) }
                 ) {
                     RenderBlocks(
                         children = document.childrenList(),
@@ -1388,9 +1434,10 @@ private fun MarkdownRenderedContent(
                 }
             }
             // Anchored, collapsible outline rail on the reading surface.
-            if (!headingIndex.isEmpty) {
+            val outlineIndex = readerHeadingModel?.index
+            if (outlineIndex != null && !outlineIndex.isEmpty) {
                 ReaderOutlineRail(
-                    index = headingIndex,
+                    index = outlineIndex,
                     scrollState = scroll,
                     modifier = Modifier.align(Alignment.TopEnd)
                 )

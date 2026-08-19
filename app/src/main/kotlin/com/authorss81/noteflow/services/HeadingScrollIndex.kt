@@ -9,21 +9,22 @@ package com.authorss81.noteflow.services
  * it is laid out. Tapping a heading's label in the rail looks up the precomputed
  * offset here and scrolls the preview's scroll state to it.
  *
- * Duplicate heading texts are disambiguated with a stable, occurrence-based
+* Duplicate heading texts are disambiguated with a stable, unique occurrence
  * suffix ("Notes" then "Notes (2)") so both the rail labels AND the offset
- * lookups address the exact heading the user tapped.
+ * lookups address the exact heading the user tapped. Unique labels are
+ * GUARANTEED: a heading whose own text already ends in " (N)" (e.g. a literal
+ * "Goals (2)") never collides with a generated suffix — the later duplicate is
+ * pushed to the next free occurrence ("Goals (3)").
  */
 class HeadingScrollIndex {
 
-    /** A heading's identity: visible text, level and 1-based occurrence. */
+    /** A heading's identity: visible text, level and final occurrence counter. */
     data class Heading(
         val text: String,
         val level: Int,
-        val occurrence: Int
-    ) {
-        /** Stable unique label; duplicates carry a suffix ("Notes (2)"). */
-        val label: String = if (occurrence <= 1) text else "$text (${occurrence})"
-    }
+        val occurrence: Int,
+        val label: String
+    )
 
     private val headings = mutableListOf<Heading>()
     private val offsets = mutableMapOf<Int, Int>()
@@ -43,17 +44,27 @@ class HeadingScrollIndex {
     /**
      * Build the index from document-order `(text, level)` pairs, skipping blank
      * texts and clearing any earlier state (offsets are re-registered by the
-     * next layout pass).
+     * next layout pass). Duplicate labels are disambiguated to be globally
+     * unique using the occurrence counter; any collision with a source heading
+     * that already ends in " (N)" bumps the counter until a free label is found.
      */
     fun build(rawHeadings: List<Pair<String, Int>>): HeadingScrollIndex {
         headings.clear()
         offsets.clear()
         val occurrences = HashMap<String, Int>()
+        val usedLabels = HashSet<String>()
         for ((text, level) in rawHeadings) {
             if (text.isBlank()) continue
             val next = (occurrences[text] ?: 0) + 1
             occurrences[text] = next
-            headings.add(Heading(text = text, level = level, occurrence = next))
+            var occurrence = next
+            var label = if (occurrence <= 1) text else "$text ($occurrence)"
+            while (usedLabels.contains(label)) {
+                occurrence += 1
+                label = "$text ($occurrence)"
+            }
+            usedLabels.add(label)
+            headings.add(Heading(text = text, level = level, occurrence = occurrence, label = label))
         }
         return this
     }
