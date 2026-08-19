@@ -1,0 +1,132 @@
+# PIPELINE CONTEXT (injected by phase_runner.sh — do not delete)
+
+## Hard rules (AGENTS.md)
+## Hard rules
+- **MAJOR ARCHITECTURAL CHANGE → ASK THE USER FIRST.** Any change that restructures packages, replaces the navigation model (e.g., migrating away from `mutableStateOf` navigation to Navigation Compose), adds a new DB schema/migration, introduces SQLCipher, adds new dependencies with broad impact, or rewrites a subsystem (canvas renderer, encryption layer) MUST be proposed to the user and get explicit approval BEFORE writing code. Tell the user what's changing, why, and the risk. Do not silently refactor architecture.
+  - **USER APPROVED (2026-08-14): hybrid downloadable-plugin architecture** — the plugin model change (base-APK-size constraint, downloadable signature-verified plugins for heavy native features, compile-time for lightweight plugins, user-approved dynamic updates) was proposed to the user with risks and explicitly approved (commit `9292978`). Implementation proceeds per phases 22–26; the approved design doc is `docs/plugin-architecture.md`.
+- **Android hardware reality**: this is a native Kotlin app targeting API 26+. Every feature must ship with a fallback for older/lower-end devices (API 33- for AGSL, API 31- for dynamic color, low-RAM behavior for 2-core devices). Never silent degradation — one-time non-alarming message + settings re-enable. See ROADMAP Phase 33 + `docs/COMPATIBILITY.md` (to be created).
+- **Kali Linux pentest findings → write to a FILE immediately, not just the agent reply.** Security/pentest agents (running in opencode on the Kali VM) MUST append findings incrementally to `docs/pentest-findings-<YYYY-MM-DD>.md` as they work (one block per finding: severity, evidence, file/line or command output, reproducer), and commit/push after each agent batch. This prevents detail loss when a report grows long or context is truncated. The pentest plan lives in `docs/pentest-plan.md`; the summary report goes to `docs/pentest-report.md`.
+- `allowBackup="false"` + `data_extraction_rules.xml` — never re-enable backup.
+- **Base-APK size is a hard constraint.** Heavy/native features (ML Kit OCR, ML Kit
+  barcode/QR, the MediaPipe `tasks-genai` LLM) MUST NOT be baked into the base APK.
+  They ship as **downloadable, signature-verified plugins** (Phase 23 runtime:
+  HTTPS download → pinned-cert-hash verify → `DexClassLoader` load → capability
+  facade, never direct DB/keystore handles). Lightweight pure-JVM plugins stay
+  compile-time. Do NOT add large native deps to the base app; use a separate
+  plugin module instead. Plan: Phase 22 = architecture skeleton, Phase 23 =
+  downloadable runtime, Phase 24 = user-approved updates, Phase 25 = ink→shape,
+  Phase 26 = lightweight ecosystem, Phase 29 = move the LLM out of the base APK
+  into a downloadable plugin.
+- PBKDF2WithHmacSHA256 600k iterations, AES-256-GCM (12-byte IV, 128-bit tag), AndroidKeyStore-wrapped DEK, in-memory zeroization on lock (`NoteRepository.kt`, `EncryptionService.kt`, `SecurityService.kt`).
+- Never log keys, passwords, or decrypted note content. Never add `INTERNET` usage without a real feature.
+- Known broken things (do NOT trust ROADMAP [x] claims — see ROADMAP.md "POST-AUDIT TRUTH TABLE" @ commit ac781de):
+  - ~~Checksum hashes `noteflow.db`~~ — FIXED: `DatabaseSecurityHelper` HMACs the real `noteflow.sqlite` (`DatabaseSecurityHelper.kt:26`) and the result is surfaced as the `databaseTampered` banner in MainActivity (`NoteflowViewModel.kt:35-55`). This stale claim was corrected in Phase 09.
+  - `pointsJson` (stroke geometry) is FIELD-ENCRYPTED at rest now — title/extractedText/textContent/pointsJson are all encrypted fields (`saveStrokesForPage`, NoteRepository.kt); the Phase 02 restore re-key gap is closed.
+  - "Sync" = WebDAV upload/download of ENCRYPTED backup archives to/from the user's own server (`WebDavSyncService.kt`, HTTPS enforced, HTTP only with explicit opt-in for local-network hosts), reachable from HomeScreen's ⋮ menu via `WebDavSyncDialog` — Phase 14 FIXED the previously-dead menu trigger; AGSL wet-mixing is WIRED through `WetBrushEngine` in `AnnotationCanvas` (gated by `ShaderCapabilityHelper.isAgslSupported` + the `gpuWetBrushesEnabled` setting, verified in the Phase 14 audit); pressure/tilt/timestamp are captured via the official raw-MotionEvent bridge (`pointerInteropFilter`, no reflection); FLAG_SECURE is applied in non-debug builds; R8 minify is ON in release; baseline profiles are NOT wired (deferred — the dead `baseline-prof.txt` was deleted in the Phase 03 honesty audit).
+  - WAL checkpoint DOES execute — `checkpointWal()` fully steps the cursor (`NoteRepository.kt:136-144`).
+  - **Phase 14 (2026-08-13) production readiness + LocalSend**: full per-phase audit lives in `workspace/phase-14/AUDIT_REPORT.md`. LocalSend sender (Protocol v2.2, sender-only, local-network only, no new permissions) is implemented in `services/localsend/` (`LocalSendProtocol.kt` pure-JVM + `LocalSendSender.kt` network) and reachable from HomeScreen's ⋮ menu → "Send to Nearby Device (LocalSend)". It sends a single note as HTML, the encrypted vault backup, or the Obsidian/HTML vault archives; the receiving device must human-accept before bytes move. Unit tests: `LocalSendProtocolTest` (18 tests, no network). **Release signing (updated 2026-08-17, phase-57/B1-PLAT-1): the release build FAILS CLOSED when `RELEASE_KEYSTORE_B64` (or `KEYSTORE_FILE`) is unset — the old debug-keystore fallback is gone; see `docs/RELEASE.md` + `B1Plat01ReleaseSigningTest`.**
+  - **Phase 21 (2026-08-14) added the Plugin Store + verified the execution path** (see `docs/PLUGINS.md` "Plugin Store — install/uninstall lifecycle"): `PluginStoreCatalog` (bundled catalog, no network) + `PluginStoreController` (pure-JVM download/delete) + `PluginRegistry.installPlugin/uninstallPlugin` (install-aware registry; `compiledPlugins` = full shipped set, `allPlugins` = installed set) + `SettingsPluginInstallStore`/`SettingsManager.plugin_uninstalled_<id>` (default installed = backward compatible). Delete wipes opt-in + ever-enabled + all `plugins.<id>.*` settings and deletes downloaded assets (`NoteflowPlugin.deleteDownloadedAssets`); Disable keeps data. `CaseChangePlugin` is the store's OPTIONAL plugin (not in `defaultPlugins()`). UI: `PluginStoreDialog` reachable from HomeScreen ⋮ menu → "Plugin Store". Tests: `PluginStoreLifecycleTest` (8), `PluginExecutionSimulationTest` (4). Also fixed a pre-existing `PaletteCatalog.familyFor` hue-band bug (curated swatches misclassified) — `PaletteCatalogTest` is green again.
+  - **Phase 10 (2026-08-13) added a REAL plugin framework** (`app/src/main/kotlin/com/authorss81/noteflow/plugins/`): `NoteflowPlugin` + `PluginCapability` sealed type (`TextTransform`, `OCR`, `WebSearch`, `FileTransfer`, `Assistant`, `Export`), compile-time `PluginRegistry` (no dynamic APK loading), `PluginManager` routing that fails loudly via `PluginResult.Failure`, per-plugin opt-in persisted in `SettingsManager` (`plugin_enabled_<id>`, off by default), a Settings → Plugins dialog (`PluginSettingsDialog`, reachable from HomeScreen's ⋮ menu), and `Rot13TransformPlugin` served through the `TextTransformPlugin` interface and wired into the Markdown editor's Plugins menu (`MarkdownPreviewScreen`). Covered by `PluginFrameworkTest` (10 tests). **Phase 12 made OCR + Web Search real**: `OnDeviceOcrPlugin` (ML Kit text-recognition, offline, no API key) and `DuckDuckGoWebSearchPlugin` (HTTPS, keyless) are registered (`PluginRegistry.kt`) and wired into `EditorScreen` (OCR result dialog) and `MarkdownPreviewScreen` (web-search dialog). The still-unserved capabilities are `FileTransfer`, `Assistant`, `Export` — requests for those fail loudly with `NO_PLUGIN_INSTALLED`. See `docs/PLUGINS.md`.
+  - **Phase 09 (2026-08-13) fixed the two Phase-02 data-loss defects that were still live** (see workspace/phase-09/REPORT.md): (1) H2 — a corrupt/wrong-key DB open no longer DELETES the vault files; `SafeSupportSQLiteOpenHelper` now quarantines them as `*.corrupt-<timestamp>` (bytes preserved), sets a persistent corruption flag, and MainActivity shows `CorruptionRecoveryScreen` (restore-from-backup or explicit start-fresh) before any normal vault UI (`NoteflowDatabase.kt` `quarantineCorruptDatabase`, `DatabaseSecurityHelper.kt` corruption flags, `MainActivity.kt` `CorruptionRecoveryScreen`). (2) H1 — a failed restore no longer bricks the app: the backup password is validated BEFORE `closeDatabase()` (`ImportExportService.validateBackupPassword` now called from `HomeScreen.performRestore` and `NoteflowViewModel.attemptRecoveryFromBackup`), and on any post-close failure the Room instance is reopened (`NoteflowDatabase.dispose()` + `NoteRepository.reopenDatabase`) and the process restarts via the existing restart dialog. (3) C1 — `reencryptPlaintextFields` now also re-encrypts `note_versions.{title,extractedText}`, matching the cross-device migrate map.
+  - **Phase 03 (2026-08-13) removed these dead/fake features**: the LibMyPaint C++ stub + whole engine-selector stack (`mypaint_jni.cpp`/`CMakeLists.txt`, `LibMyPaintJni`, `BrushEngine`/`BrushEngineFactory`, `HardwareProfiler`/`RenderingEngineTier`, `BrushEngineSettingsDialog`, `SettingsManager.renderingEngineOverride` — all deleted; the canvas renders via `WetBrushEngine`); `HandwritingRecognitionService` + `HandwritingToTextDialog` (dictionary-hash stub, unreachable — deleted); `FtsSearchEngine` (misnamed in-memory loop — deleted; vault search now uses a cached decrypted corpus in `NoteRepository`). Shape auto-snap is now WIRED (`ShapeRecognitionHelper.trySnapShape` runs on freehand draw-end in `AnnotationCanvas`, gated by the `shapeAutoSnapEnabled` setting; wet tools, LASER, DOTTED and NEON are excluded, and the RECT/ARROW/LINE detectors require real geometry fits so plain handwriting isn't snapped).
+
+## Roadmap state (August 2026)
+
+## Orientation (read these files yourself — do NOT rely on memory)
+- docs/ARCHITECTURE.md = living architecture map (package layout, core
+  subsystem file:line anchors, build/CI essentials, gotchas). READ IT.
+- docs/phase-status.md = phase status truth table. READ IT, then UPDATE
+  your phase's row when you finish.
+- workspace/PHASES.md = full phase table.
+- workspace/SECURITY_FIX_PLAN.md + docs/security-report*.md = security
+  findings status (only if your phase touches security).
+
+## Your task
+Execute the phase described in workspace/phase-171/PROMPT.md. Read that file now and
+complete it fully. The context above is orientation only.
+
+# Phase 171: Release signing v3 + plugin-update channel operator readiness [NOT STARTED]
+
+You are working on **InkFlow/Noteflow**. This is a FIX phase generated by the
+phase-161 Kali round-2 triage. It addresses the two remaining INFO packaging
+findings still live on the phase-159 release build (evidence in
+`docs/security-report.md`):
+
+- **Phase-32-NEW-03 (INFO):** release APK signed with APK Signature Scheme v2
+  only — no v3 (no in-place signing-key rotation capability).
+- **Phase-32-NEW-04 (INFO/availability):** the compiled-in plugin-manifest cert
+  pin is still the placeholder (`sha256/AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=`),
+  so the hosted plugin-update channel fails closed for every shipped build
+  until the operator substitutes the real `plugin-updates.inkflow.app` leaf
+  cert hash.
+
+Both are release-engineering/operator items, NOT security regressions — the
+current posture is fail-closed and safe. This phase makes the state honest and
+small, real, verifiable improvements, then documents the operator substitution
+runbook.
+
+Read `docs/ARCHITECTURE.md`, `docs/phase-status.md`, `docs/RELEASE.md`,
+`docs/PLUGINS.md`, `docs/plugin-architecture.md`, and `AGENTS.md` first.
+Evidence you should re-verify (cite `file:line` in REPORT):
+`docs/RELEASE.md`, the signing config in `app/build.gradle.kts`
+(`v1SigningEnabled`/`v2SigningEnabled` / `enableV3Signing` inside
+`signingConfigs.create("releaseConfig")` at `:36-60`, the B1-PLAT-1 fail-closed
+gate at `app/build.gradle.kts:133-153`), the release-signing test
+`B1Plat01ReleaseSigningTest`, and the plugin-update runtime:
+`app/src/main/kotlin/com/authorss81/noteflow/plugins/runtime/HostedPluginManifest.kt`
+(`PLUGIN_MANIFEST_CERT_PIN` at `:242-243`), `CompileTimePluginPinStore.kt`,
+`PinnedCertHash.kt`, `HttpsManifestTransport`/`PluginManifestFetcher.kt`, and
+the allow-list host `plugin-updates.inkflow.app`.
+
+## Part A — Enable APK Signature Scheme v3 (NEW-03) without weakening security
+
+Root cause is KNOWN and is NOT a config flag disabling v3: this app's
+`minSdk = 26` (`app/build.gradle.kts:16`) is BELOW the AGP 8.7.3 threshold
+(`minSdk ≥ 28`) at which AGP enables v3 automatically — so every release build
+with the current SDK floor emits v2-only. The fix is therefore to force-enable
+v3 in `signingConfigs.create("releaseConfig")` (`app/build.gradle.kts:36-60`):
+set `enableV3Signing = true` there (keep `v2SigningEnabled` true for
+older-device fallback; `enableV4Signing`/`v1SigningEnabled` stay at their
+current values — v4 only helps Android 11+ incremental installs and is NOT
+required). The B1-PLAT-1 fail-closed gate (`app/build.gradle.kts:133-153`) must
+stay untouched. Do NOT bump `minSdk` to 28 (a user-approval-level change, out
+of scope here).
+
+Verify with `apksigner verify --print-certs -v` on a fresh `assembleRelease`
+output and record the scheme lines in the REPORT. If the build ALREADY emits
+v3 with the real keystore despite `minSdk = 26` (e.g. a future AGP default
+change), document that (with the exact `apksigner` line) and mark Part A
+resolved at triage — but re-confirm the phase-159 APK was v2-only first.
+
+Definition of done for Part A:
+- `gradle assembleRelease` → `apksigner verify --print-certs -v` on the release
+  APK shows at least `v2 scheme: true` AND `v3 scheme: true` (v1/v4 irrelevant).
+- `B1Plat01ReleaseSigningTest` still green; fail-closed behavior unchanged
+  (unset keystore env still fails the build).
+- Recorded cert/scheme output in REPORT.
+
+## Part B — Plugin-update channel operator runbook (NEW-04)
+
+The placeholder pin is intentional and safe (fail-closed). Make the operator
+action real and actionable:
+
+- **Write the runbook** in `docs/RELEASE.md` (or a new `docs/PLUGIN_CHANNEL.md`
+  referenced from it): exact file/line to change
+  (`HostedPluginManifest.kt` `PLUGIN_MANIFEST_CERT_PIN`, currently at
+  `:242-243`), how to compute the
+  real SHA-256 pin for `plugin-updates.inkflow.app` (e.g.
+  `openssl x509 -pubkey | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | base64`),
+  the requirement that the pin is the LEAF cert hash, and a "go-live checklist"
+  (substitute pin → re-ship → verify one hosted fetch succeeds).
+- Add a **test** (pure-JVM) asserting the failure mode: `PinnedCertHash.matches`
+  must return false for the placeholder/any wrong pin and true for a known-good
+  pin (extend `PinnedCertHashTest` if it exists). This pins the fail-closed
+  contract so no future edit silently accepts a bad pin.
+- Do NOT change the placeholder itself in this phase (no real channel certs to
+  pin — a changed-but-still-wrong constant is worse than the documented
+  placeholder).
+
+Constraint: do NOT substitute a fake/guess pin. NO `.github/workflows/` edits;
+NO new dependencies; NO schema change. Keep the base-APK-size rule intact.
+
+Commit as `llops: phase-171 <one-line description>` and push.
