@@ -272,10 +272,15 @@ object MarkdownBlockTokenizer {
      */
     fun checkboxCandidates(content: String): List<CheckboxCandidate> = tokenize(content).candidates
 
-    private fun candidatesFrom(lines: List<String>, blocks: List<MarkdownBlock>): List<CheckboxCandidate> {
+    private fun candidatesFrom(
+        lines: List<String>,
+        blocks: List<MarkdownBlock>,
+        blockOffset: Int = 0,
+        globalStart: Int = 0
+    ): List<CheckboxCandidate> {
         val out = mutableListOf<CheckboxCandidate>()
-        var global = 0
-        for ((blockIndex, block) in blocks.withIndex()) {
+        var global = globalStart
+        for ((position, block) in blocks.withIndex()) {
             if (block.type != MarkdownBlockType.BULLET_LIST && block.type != MarkdownBlockType.ORDERED_LIST) continue
             for (lineIndex in block.startLine..block.endLine) {
                 if (lineIndex < 0 || lineIndex >= lines.size) continue
@@ -283,13 +288,64 @@ object MarkdownBlockTokenizer {
                 out.add(
                     CheckboxCandidate(
                         index = global++,
-                        blockIndex = blockIndex,
+                        blockIndex = blockOffset + position,
                         lineIndex = lineIndex,
                         checked = match.groupValues[2].trim() in setOf("x", "X")
                     )
                 )
             }
         }
+        return out
+    }
+
+    /**
+     * Incremental candidate update for [replaceBlock]: candidates for the blocks
+     * that stay before the edited window are reused verbatim (their lines are
+     * byte-unchanged), the window's candidates are recomputed in isolation, and
+     * the unchanged blocks after the window reuse their previous candidates with
+     * the line numbers shifted by [delta] and the block index renumbered to the
+     * post-edit position. Global candidate order — and therefore the `index`
+     * sequence — is preserved, so the result is provably identical to a fresh
+     * full [candidatesFrom] pass while touching only the window (verified against
+     * [tokenize] by unit tests). This is what keeps the hybrid editor's keystroke
+     * path from doing a full-document candidate rescan (R2-b2b5-FEA-03).
+     */
+    private fun incrementalCandidates(
+        prev: MarkdownDocument,
+        lines: List<String>,
+        editedBlockIndex: Int,
+        beforeCount: Int,
+        windowBlocks: List<MarkdownBlock>,
+        windowEnd: Int,
+        delta: Int
+    ): List<CheckboxCandidate> {
+        // Old block indexes that survive unchanged AFTER the window — their
+        // content lines only shift by `delta`. The kept blocks before the window
+        // always form a prefix of the old block list (blocks are line-ordered and
+        // non-overlapping), so every candidate with blockIndex < beforeCount is a
+        // byte-unchanged "before" candidate.
+        val beyondOld = HashMap<Int, Int>()
+        var nextBeyondIdx = beforeCount + windowBlocks.size
+        for ((idx, b) in prev.blocks.withIndex()) {
+            if (idx <= editedBlockIndex) continue
+            if (b.startLine + delta > windowEnd) beyondOld[idx] = nextBeyondIdx++
+        }
+        val before = ArrayList<CheckboxCandidate>()
+        val beyond = ArrayList<CheckboxCandidate>()
+        for (c in prev.candidates) {
+            when {
+                c.blockIndex < beforeCount -> before.add(c)
+                beyondOld.containsKey(c.blockIndex) ->
+                    beyond.add(c.copy(lineIndex = c.lineIndex + delta))
+                // Anything in the window is recomputed below.
+            }
+        }
+        val window = candidatesFrom(lines, windowBlocks, blockOffset = beforeCount, globalStart = before.size)
+        val out = ArrayList<CheckboxCandidate>(before.size + window.size + beyond.size)
+        var next = 0
+        for (c in before) out.add(c.copy(index = next++))
+        for (c in window) out.add(c.copy(index = next++))
+        for (c in beyond) out.add(c.copy(index = next++, blockIndex = beyondOld.getValue(c.blockIndex)))
         return out
     }
 
@@ -347,7 +403,9 @@ object MarkdownBlockTokenizer {
      * Incremental block-source replacement (R2-b2b5-FEA-03): reuses the cached
      * [MarkdownDocument.lines] (no full-document `content.lines()`), re-tokenizes
      * ONLY the edited block's affected window, shifts the untouched later blocks by
-     * the line-count delta and recomputes the checkbox candidates in a single pass.
+     * the line-count delta and recomputes the checkbox candidates around the window
+     * in one pass ([incrementalCandidates] — the unchanged before/after candidates
+     * are reused, only the window's are re-scanned).
      * The produced [MarkdownDocument.content] is byte-identical to what
      * [replaceBlockSource] + a fresh [tokenize] would yield.
      */
@@ -403,7 +461,9 @@ object MarkdownBlockTokenizer {
         }
         val beyond = afterShifted.filter { it.startLine > windowEnd }
         val newBlocks = before + windowBlocks + beyond
-        val candidates = candidatesFrom(out, newBlocks)
+        val candidates = incrementalCandidates(
+            doc, out, blockIndex, before.size, windowBlocks, windowEnd, delta
+        )
         return MarkdownDocument(content, out, newBlocks, candidates, candidatesByBlock(candidates))
     }
 

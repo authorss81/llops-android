@@ -814,6 +814,25 @@
   `ui/components/markdown/MarkdownRenderer.kt` + `HybridMarkdownEditor.kt`
   (replaces the raw text field in EDIT/SPLIT panes; typed callouts + interactive
   checkboxes; `AnimatedCheckmark.kt` respects reduce-motion).
+  - **Implemented in phase-151** (R2-b2b5-FEA-02 + R2-b2b5-FEA-03, see
+    `workspace/phase-151/REPORT.md`): the markdown main-thread performance holes
+    are gone. `services/MarkdownInlineMath.kt` pre-computes every maximal backtick
+    run in ONE left-to-right pass and answers each closer lookup with a binary
+    search over per-length position buckets (`closingPositionIndex`,
+    `findClosingBacktick`), and every code-span membership test goes through the
+    interval index `CodeRangeIndex` (O(log R)) instead of
+    `codeRanges.any { index in it }`. The hybrid editor holds the document as ONE
+    one-pass tokenized `MarkdownDocument` (blocks + checkbox candidates +
+    candidates-by-block preindex; `MarkdownBlockTokenizer.tokenize`), and the
+    keystroke path is `replaceBlock` — it reuses the cached lines (no
+    full-document `content.lines()`), re-classifies ONLY the edited window
+    (`classifyWindow`), shifts the untouched later blocks by the line delta, and
+    recomputes checkbox candidates only around the window
+    (`incrementalCandidates` reuses the unchanged before/after candidates);
+    `toggleCheckbox(doc, …)` flips a marker without any re-tokenization.
+    Tests: `Phase151MarkdownMainThreadPerfTest` (18) — reference-equivalence vs
+    the old scanner, length-scaling linearity, and source pins proving the editor
+    never calls the full-document paths on the keystroke path.
   - **Implemented in phase-68** (B1-AUTH-04, see `workspace/phase-68/REPORT.md`):
     markdown inline-image destinations resolve ONLY inside an allowlisted
     app-private subtree. New pure-JVM `services/InlineImagePathPolicy.kt` is the
