@@ -679,6 +679,31 @@
     non-finite → 0) to a `MAX_DYNAMIC_PAGES` = 2000 world ceiling and `clampCalculatedPages` bounds
     `dynamicPageCount`; the per-page `filter` is hoisted to one `groupBy` per frame
     (`strokesByPage[pageIdx] ?: emptyList()`). Tests: `Phase150CanvasRenderBudgetTest` (23).
+  - **Implemented in phase-157** (plugin ecosystem & store UX, see `workspace/phase-157/REPORT.md`):
+    (1) **Capability browser + store filter** — pure-JVM `services/PluginCapabilityDirectory.kt`
+    maps every `PluginCapability` to its serving catalog plugins with an honest
+    `Coverage` verdict (`INSTALLED` / `AVAILABLE_ON_STORE` / `UNSERVED`), so the still-unserved
+    capabilities (FileTransfer today; Assistant until the downloadable LLM is installed) are
+    surfaced in the store BEFORE a request fails loudly. `PluginStoreDialog` gains a
+    "Plugins | What can plugins do?" view-mode toggle (`showCapabilities`) + `StoreCapabilityRow`
+    per capability (installed vs store-available plugin lists; "No plugin yet" copy for unserved),
+    plus a compact horizontal per-capability `FilterChip` row ("All" + offered capabilities) that
+    composes with the phase-156 text filter — the match-less empty state is query-aware and its
+    ONE "Clear filter" CTA resets both. (2) **Update UX with notes + "Update all"** — pure-JVM
+    `services/PluginUpdatePromptPolicy.kt`: `notesForDisplay` collapses control chars, bounds to
+    240 chars, then runs `UiFailureTextPolicy.scrubForUi` (R2-b2b3-LOG-03 — hosted release notes
+    never reach the approval dialog raw), `versionDeltaText`, `updateAllPlan` (deterministic,
+    deduped per-download `UpdateAllItem`s) and `batchSummary`. The approval dialog renders
+    scrubbed "What changed: …" notes; the store's "Update all" button →
+    `NoteflowViewModel.updateAll()` checks then walks each offered update through ITS OWN approval
+    dialog (`openNextPendingUpdate`); declining any approval ends the batch and nothing updates
+    without per-download "Approve & install" (compile-time pins + TLS pinning intact). (3)
+    **Per-plugin diagnostics** — pure-JVM `services/PluginDiagnosticsRowPolicy.kt`
+    (`servedCapabilitiesLabel`, `optInLabel`, `lifecycleLabel`, `scrub`, `reasonLine`,
+    `lastInvocationLine`, `footer`); `PluginSettingsDialog` rows now show the capabilities /
+    opt-in / lifecycle footer and `state.reason` + last-invocation summaries are scrubbed
+    (phase-148 rule) before rendering. Tests: `PluginCapabilityDirectoryTest` (9),
+    `PluginUpdatePromptPolicyTest` (10), `PluginDiagnosticsRowPolicyTest` (9).
 - **Downloadable runtime**: `plugins/runtime/RuntimePluginLoader.kt:68`; `services/AppClassLoaderFactory.kt:23`
   (`DexClassLoader`); `services/AppFacadeHost.kt:27` (deny-by-default facade, NO direct DB/keystore handles);
   `plugins/runtime/PinnedCertHash.kt:25`; `plugins/runtime/ArtifactSignatureVerifier.kt:52`.

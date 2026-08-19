@@ -1,8 +1,10 @@
 package com.authorss81.noteflow.ui.components
 
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Close
@@ -18,9 +20,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.authorss81.noteflow.plugins.PluginCapability
 import com.authorss81.noteflow.plugins.PluginEnableResult
 import com.authorss81.noteflow.plugins.PluginLifecycleState
 import com.authorss81.noteflow.plugins.store.PluginStoreController
+import com.authorss81.noteflow.services.PluginCapabilityDirectory
+import com.authorss81.noteflow.services.PluginUpdatePromptPolicy
 import com.authorss81.noteflow.ui.viewmodel.NoteflowViewModel
 
 /**
@@ -65,6 +70,7 @@ fun PluginStoreDialog(
     val updateProgress by viewModel.updateProgress.collectAsState()
     val pendingUpdateId by viewModel.pendingUpdatePluginId.collectAsState()
     val generalMessage by viewModel.storeGeneralMessage.collectAsState()
+    val updateAllInProgress by viewModel.updateAllInProgress.collectAsState()
     // pluginId pending a destructive-delete confirmation.
     var pendingDeleteId by remember { mutableStateOf<String?>(null) }
     // pluginId → inline message (e.g. an enable refusal with its reason).
@@ -77,12 +83,28 @@ fun PluginStoreDialog(
     // "nothing matches a filter" empty state (honest, one-CTA) instead of a
     // silent blank list.
     var storeFilter by remember { mutableStateOf("") }
-    val filteredRows = remember(rows, storeFilter) {
-        if (storeFilter.isBlank()) rows
+    // Phase 157: the store's second view ("What can plugins do?") + the
+    // per-capability chip filter. Both are session-only (never persisted).
+    var showCapabilities by remember { mutableStateOf(false) }
+    var selectedCapability by remember { mutableStateOf<PluginCapability?>(null) }
+    val capabilityRows = remember(rows) {
+        PluginCapabilityDirectory.rows(rows.map { it.entry }) { id ->
+            rows.any { it.entry.pluginId == id && it.installed }
+        }
+    }
+    val capabilityFilters = remember(rows) {
+        PluginCapabilityDirectory.capabilitiesInStore(rows.map { it.entry })
+    }
+    val filteredRows = remember(rows, storeFilter, selectedCapability) {
+        if (storeFilter.isBlank() && selectedCapability == null) rows
         else rows.filter {
-            it.entry.pluginId.contains(storeFilter, ignoreCase = true) ||
+            val matchesQuery = storeFilter.isBlank() ||
+                it.entry.pluginId.contains(storeFilter, ignoreCase = true) ||
                 it.entry.name.contains(storeFilter, ignoreCase = true) ||
                 it.entry.description.contains(storeFilter, ignoreCase = true)
+            val matchesCapability = selectedCapability == null ||
+                selectedCapability in it.entry.capabilities
+            matchesQuery && matchesCapability
         }
     }
 
@@ -114,17 +136,50 @@ fun PluginStoreDialog(
                     style = MaterialTheme.typography.bodySmall,
                     color = colorScheme.onSurfaceVariant
                 )
+                // Phase 157: view-mode toggle — the plugin list vs the "What
+                // can plugins do?" capability browser (session-only).
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilterChip(
+                        selected = !showCapabilities,
+                        onClick = { showCapabilities = false },
+                        label = { Text("Plugins", style = MaterialTheme.typography.labelMedium) }
+                    )
+                    FilterChip(
+                        selected = showCapabilities,
+                        onClick = { showCapabilities = true },
+                        label = { Text("What can plugins do?", style = MaterialTheme.typography.labelMedium) }
+                    )
+                }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     OutlinedButton(
                         onClick = { viewModel.checkPluginUpdates() },
+                        enabled = updateBusy.isEmpty() && busy.isEmpty() && !updateAllInProgress,
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
                     ) {
                         Icon(Icons.Outlined.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(6.dp))
                         Text("Check for updates", style = MaterialTheme.typography.labelMedium)
+                    }
+                    // Phase 157: "Update all" — checks, then walks each offered
+                    // update through ITS OWN approval dialog. Nothing applies
+                    // without a per-download "Approve & install".
+                    OutlinedButton(
+                        onClick = { viewModel.updateAll() },
+                        enabled = updateBusy.isEmpty() && busy.isEmpty() && !updateAllInProgress,
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                    ) {
+                        Icon(Icons.Outlined.SystemUpdate, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            if (updateAllInProgress) "Updating…" else "Update all",
+                            style = MaterialTheme.typography.labelMedium
+                        )
                     }
                     if (updates.isNotEmpty()) {
                         Text(
@@ -155,6 +210,23 @@ fun PluginStoreDialog(
                     }
                 }
                 HorizontalDivider(color = colorScheme.outlineVariant.copy(alpha = 0.5f))
+                if (showCapabilities) {
+                    // Phase 157 feature 1: "What can plugins do?" — one compact
+                    // row per known capability: who serves it (installed vs
+                    // available in the store) and an honest "No plugin yet" for
+                    // capabilities nothing serves (surfaced BEFORE a request).
+                    LazyColumn(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(capabilityRows, key = { it.capability.key }) { capRow ->
+                            StoreCapabilityRow(
+                                row = capRow,
+                                colorScheme = colorScheme
+                            )
+                        }
+                    }
+                } else {
                 // Phase 156: store filter — a match-less filter lands on the
                 // query-aware empty state instead of a silent blank list.
                 OutlinedTextField(
@@ -173,6 +245,26 @@ fun PluginStoreDialog(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(10.dp)
                 )
+                // Phase 157: per-capability filter chips (compact, horizontal).
+                if (capabilityFilters.isNotEmpty()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        FilterChip(
+                            selected = selectedCapability == null,
+                            onClick = { selectedCapability = null },
+                            label = { Text("All", style = MaterialTheme.typography.labelSmall) }
+                        )
+                        capabilityFilters.forEach { capability ->
+                            FilterChip(
+                                selected = selectedCapability == capability,
+                                onClick = { selectedCapability = capability },
+                                label = { Text(capability.label, style = MaterialTheme.typography.labelSmall) }
+                            )
+                        }
+                    }
+                }
                 LazyColumn(
                     modifier = Modifier.fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -181,7 +273,7 @@ fun PluginStoreDialog(
                         item {
                             val decision = EmptyStateResolver.decide(
                                 EmptyStateKind.PLUGIN_STORE,
-                                hasQuery = storeFilter.isNotBlank(),
+                                hasQuery = storeFilter.isNotBlank() || selectedCapability != null,
                                 query = storeFilter
                             )
                             TactileEmptyState(
@@ -189,7 +281,10 @@ fun PluginStoreDialog(
                                 action = if (decision.actionLabel != null) {
                                     val label = decision.actionLabel
                                     {
-                                        TextButton(onClick = { storeFilter = "" }) {
+                                        TextButton(onClick = {
+                                            storeFilter = ""
+                                            selectedCapability = null
+                                        }) {
                                             Text(label ?: "Clear filter")
                                         }
                                     }
@@ -428,6 +523,7 @@ fun PluginStoreDialog(
                         }
                     }
                 }
+                }
             }
         },
         confirmButton = {
@@ -513,11 +609,17 @@ fun PluginStoreDialog(
                         style = MaterialTheme.typography.bodyMedium
                     )
                     update?.updateNotes?.let { notes ->
-                        Text(
-                            "What changed: $notes",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = colorScheme.onSurfaceVariant
-                        )
+                        // Phase 157 (R2-b2b3-LOG-03): update notes are hosted
+                        // (attacker-influenceable) — never render them raw. The
+                        // policy scrubs control chars / credential tokens / paths
+                        // and bounds the length before the text reaches the dialog.
+                        PluginUpdatePromptPolicy.notesForDisplay(notes)?.let { display ->
+                            Text(
+                                "What changed: $display",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                     update?.installSizeBytes?.let { size ->
                         Text(
@@ -555,4 +657,66 @@ private fun statusLabel(state: PluginLifecycleState?): String = when (state) {
     PluginLifecycleState.REGISTERED -> "Available — off"
     PluginLifecycleState.REJECTED -> "Rejected"
     else -> "Not downloaded"
+}
+
+/**
+ * Phase 157 feature 1: one compact "What can plugins do?" row — capability name,
+ * coverage verdict and the (installed vs store-available) serving plugin list.
+ * An UNSERVED row is shown honestly ("No plugin yet") instead of a silent hole:
+ * the capability is surfaced BEFORE a request would fail loudly.
+ */
+@Composable
+private fun StoreCapabilityRow(
+    row: PluginCapabilityDirectory.CapabilityRow,
+    colorScheme: ColorScheme
+) {
+    val coverageColor = when (row.coverage) {
+        PluginCapabilityDirectory.Coverage.INSTALLED -> colorScheme.primary
+        PluginCapabilityDirectory.Coverage.AVAILABLE_ON_STORE -> colorScheme.tertiary
+        PluginCapabilityDirectory.Coverage.UNSERVED -> colorScheme.outline
+    }
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = colorScheme.surfaceVariant.copy(alpha = 0.4f)
+        )
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    row.label,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    PluginCapabilityDirectory.coverageLabel(row.coverage),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = coverageColor
+                )
+            }
+            val serving = PluginCapabilityDirectory.servingSummary(row)
+            if (serving != null) {
+                Text(
+                    serving,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colorScheme.onSurfaceVariant
+                )
+            } else {
+                Text(
+                    "No plugin offers this yet. Requests for it fail loudly today — " +
+                        "it becomes available the day a plugin declares it.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colorScheme.outline
+                )
+            }
+        }
+    }
 }

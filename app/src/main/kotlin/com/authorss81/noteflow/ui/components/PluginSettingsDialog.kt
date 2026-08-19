@@ -15,6 +15,7 @@ import com.authorss81.noteflow.plugins.PluginDiagnostics
 import com.authorss81.noteflow.plugins.PluginEnableResult
 import com.authorss81.noteflow.plugins.PluginLifecycleState
 import com.authorss81.noteflow.plugins.PluginStateInfo
+import com.authorss81.noteflow.services.PluginDiagnosticsRowPolicy
 import com.authorss81.noteflow.ui.viewmodel.NoteflowViewModel
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -121,9 +122,24 @@ fun PluginSettingsDialog(
                         val state = info?.state
                         Text(
                             "${stateLabel(state ?: PluginLifecycleState.REGISTERED)}" +
-                                (info?.reason?.let { " — $it" } ?: ""),
+                                // Phase 157 (phase-148 rule): the state reason can
+                                // be plugin-influenceable (availability gate) —
+                                // scrubbed before it may reach the row.
+                                (PluginDiagnosticsRowPolicy.scrub(info?.reason)?.let { " — $it" } ?: ""),
                             style = MaterialTheme.typography.labelMedium,
                             color = stateColor(state ?: PluginLifecycleState.REGISTERED)
+                        )
+                        // Phase 157 feature 3: the compact diagnostics footer —
+                        // served capabilities, opt-in and lifecycle, all fixed
+                        // labels from the tested policy table.
+                        Text(
+                            PluginDiagnosticsRowPolicy.footer(
+                                capabilities = plugin.capabilities,
+                                enabled = enabledIds[plugin.id] == true,
+                                state = state
+                            ),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = colorScheme.onSurfaceVariant
                         )
                         if (localMessage != null) {
                             Text(
@@ -132,9 +148,9 @@ fun PluginSettingsDialog(
                                 color = MaterialTheme.colorScheme.error
                             )
                         }
-                        entry?.lastInvocation?.let { last ->
+                        PluginDiagnosticsRowPolicy.lastInvocationLine(entry?.lastInvocation)?.let { last ->
                             Text(
-                                "Last: ${if (last.ok) "OK" else "failed"} — ${last.summary}",
+                                last,
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.outline
                             )

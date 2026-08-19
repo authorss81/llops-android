@@ -87,6 +87,7 @@ import com.authorss81.noteflow.services.LayerRenderBudgetPolicy
 import com.authorss81.noteflow.services.MarkdownBodySaveCoordinator
 import com.authorss81.noteflow.services.NoteBodyVaultPolicy
 import com.authorss81.noteflow.services.PasswordStrengthPolicy
+import com.authorss81.noteflow.services.PluginUpdatePromptPolicy
 import com.authorss81.noteflow.services.PendingShareConfirmState
 import com.authorss81.noteflow.services.PendingSharePolicy
 import com.authorss81.noteflow.services.PendingShareState
@@ -426,6 +427,14 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     private val _storeGeneralMessage = MutableStateFlow<String?>(null)
     val storeGeneralMessage: StateFlow<String?> = _storeGeneralMessage.asStateFlow()
 
+    // Phase 157 ("Update all"): set while a batch check-then-approve flow is
+    // active. The batch is ALWAYS explicit per download — this flag only tells
+    // the update completion path to keep offering the next approval instead of
+    // stopping after the first. The user answers each dialog; declining any
+    // approval cancels the remainder of the batch.
+    private val _updateAllInProgress = MutableStateFlow(false)
+    val updateAllInProgress: StateFlow<Boolean> = _updateAllInProgress.asStateFlow()
+
     /** Respond to the pending remote-download consent dialog. */
     fun respondStoreConsent(grant: Boolean) {
         val pluginId = _pendingConsentPluginId.value ?: return
@@ -618,11 +627,63 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         _pendingUpdatePluginId.value = pluginId
     }
 
+    /**
+     * Phase 157: "Update all". Checks for updates and then walks the offered
+     * updates ONE AT A TIME through the approval dialog — no update ever runs
+     * without its own explicit "Approve & install". Declining any approval
+     * reports the update as skipped and cancels the rest of the batch; approving
+     * runs the verified update and moves on to the next offer.
+     */
+    fun updateAll() {
+        if (_updateAllInProgress.value) return
+        if (_updateBusy.value.isNotEmpty() || _storeBusy.value.isNotEmpty()) return
+        viewModelScope.launch {
+            _updateAllInProgress.value = true
+            _storeGeneralMessage.value = null
+            when (val outcome = pluginStoreController.checkForUpdates(appContext)) {
+                is PluginStoreController.UpdateCheckOutcome.UpdatesAvailable -> {
+                    _storeUpdates.value = outcome.updates.associateBy { it.pluginId }
+                    _storeGeneralMessage.value = PluginUpdatePromptPolicy.batchSummary(
+                        outcome.updates,
+                        nameOf = { pluginStoreCatalog.entryFor(it)?.name ?: it }
+                    ) ?: "${outcome.updates.size} update(s) ready — approve each one."
+                    openNextPendingUpdate()
+                }
+                is PluginStoreController.UpdateCheckOutcome.UpToDate -> {
+                    _storeUpdates.value = emptyMap()
+                    _updateAllInProgress.value = false
+                    _storeGeneralMessage.value = "All installed plugins are up to date."
+                }
+                is PluginStoreController.UpdateCheckOutcome.Failed -> {
+                    _updateAllInProgress.value = false
+                    _storeGeneralMessage.value = outcome.message
+                }
+            }
+            refreshPluginStates()
+        }
+    }
+
+    /** Offer the next pending update's approval dialog, or end the batch. */
+    private fun openNextPendingUpdate() {
+        val next = _storeUpdates.value.keys.sorted().firstOrNull()
+        if (next != null) {
+            _pendingUpdatePluginId.value = next
+        } else {
+            _updateAllInProgress.value = false
+        }
+    }
+
     /** The user's answer to the pending update-approval dialog. */
     fun respondUpdateApproval(grant: Boolean) {
         val pluginId = _pendingUpdatePluginId.value ?: return
         _pendingUpdatePluginId.value = null
-        if (grant) storePluginUpdate(pluginId)
+        if (grant) {
+            storePluginUpdate(pluginId)
+        } else if (_updateAllInProgress.value) {
+            // A declined approval ends the "Update all" batch — remaining offers
+            // stay listed but are not auto-offered.
+            _updateAllInProgress.value = false
+        }
     }
 
     /**
@@ -657,6 +718,11 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
             _storeUpdates.update { it - pluginId }
             _updateProgress.update { it - pluginId }
             refreshPluginStates()
+            // Phase 157: in an "Update all" batch, keep walking to the next
+            // offered update (each still needs its OWN approval). A declining or
+            // failed step ends the walk here via openNextPendingUpdate's empty
+            // map fallback — remaining offers stay listed but not auto-offered.
+            if (_updateAllInProgress.value) openNextPendingUpdate()
         }
     }
 
