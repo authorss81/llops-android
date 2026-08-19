@@ -1725,3 +1725,9 @@ re-triaged.
 ## Phase status truth table
 See `docs/phase-status.md` — per-phase `DONE`/`PARTIAL`/`NOT STARTED` with verified commit evidence.
 `docs/phase-status-gaps.md` lists deferred sub-items.
+
+### Implemented in phase-160 (Kali STATIC pass)
+Release-APK static security audit now has a complete deliverable + file-path anchors:
+`docs/kali-report-round2.md` (29 rows `R2-KS-01..29`) + `workspace/phase-160/REPORT.md` +
+`docs/pentest-findings-2026-08-19.md`. Key verified anchors: DB quarantine +
+FULL WAL checkpoint + HMAC recompute (`com/authorss81/noteflow/data/db/NoteflowDatabase.java:230-301,420-426`, `w2/C3697c.java:153,249-255,581-585`); AndroidKeyStore DEK `noteflow_dek_key[_auth]` + biometric invalidation (`w2/C3694b0.java`); plugin sandbox loader (`n2/G.java`) + static scan (`n2/C2548g`) + constant-time pin compare (`o3/J3`); plugin cert-pin placeholder still default → updates FAIL CLOSED (`m0/C2256b.java:772-773`); WebDAV HTTP opt-in allowlist + cross-host auth-strip (`w2/J2.java`, `X5/a.java:347`); MediaKit-baked-in base-APK **MEDIUM** findings (lingua 207.6 MB/75 langs `X2/g.java:77`; ML Kit OCR+translation) — fix-phase candidates pending phase-167 triage; 12 dynamic checks D1–D12 declared deferred with operator reproducers.
