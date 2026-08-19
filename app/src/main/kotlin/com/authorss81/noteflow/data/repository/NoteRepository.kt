@@ -18,6 +18,7 @@ import com.authorss81.noteflow.services.VaultKeyHolder
 import com.authorss81.noteflow.services.VaultWriteGate
 import com.authorss81.noteflow.services.VoiceNoteCrypto
 import com.authorss81.noteflow.services.VoiceRecordingPolicy
+import com.authorss81.noteflow.services.WaveformPeakMath
 import com.authorss81.noteflow.services.WikiLinkParser
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -1219,14 +1220,21 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
         // an arbitrarily long `waveformJson`; never materialize more than the
         // stored-waveform ceiling into a List. Downstream (CanvasMediaEmbed,
         // render) therefore stays bounded regardless of the column length.
+        //
+        // R2-b2b5-FEA-06 (phase-152): org.json's getDouble() accepts `NaN`/
+        // `Infinity` literals from a crafted stored `waveformJson`, and
+        // {Float}toFloatOrNull also parses them — every non-finite sample is
+        // replaced with 0.0f at PARSE time so it can never propagate into
+        // geometry (`barHeight = canvasHeight * NaN` fed to drawRoundRect).
         return try {
             val arr = org.json.JSONArray(json)
             val n = minOf(arr.length(), VoiceRecordingPolicy.MAX_STORED_WAVEFORM_ENTRIES)
-            List(n) { index -> arr.getDouble(index).toFloat() }
+            List(n) { index -> WaveformPeakMath.finiteOrZero(arr.getDouble(index).toFloat()) }
         } catch (e: Exception) {
             json.removePrefix("[").removeSuffix("]").split(",")
                 .take(VoiceRecordingPolicy.MAX_STORED_WAVEFORM_ENTRIES)
                 .mapNotNull { it.trim().toFloatOrNull() }
+                .map { WaveformPeakMath.finiteOrZero(it) }
         }
     }
 

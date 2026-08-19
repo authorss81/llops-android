@@ -47,6 +47,7 @@ import com.authorss81.noteflow.services.graph.GraphLayoutMath
 import com.authorss81.noteflow.services.graph.GraphPhysicsConfig
 import com.authorss81.noteflow.services.graph.GraphTierSelector
 import com.authorss81.noteflow.services.graph.GraphVertex
+import com.authorss81.noteflow.services.graph.KnowledgeGraphEdgePolicy
 import com.authorss81.noteflow.theme.LocalReduceMotion
 import com.authorss81.noteflow.ui.viewmodel.NoteflowViewModel
 import com.authorss81.noteflow.utils.DeviceCompatibilityManager
@@ -162,24 +163,6 @@ fun KnowledgeGraphScreen(
         if (!viewModel.authenticated.value) return@LaunchedEffect
         allPages = active
 
-        val wikiEdges = WikiLinkParser.buildWikiLinkEdges(
-            active,
-            // B1-AUTH-05 (phase-69): legacy source-file reads are confined to the
-            // app-private imports root.
-            ImportExportService.getImportsDir(context)
-        )
-        val graphEdges = wikiEdges.map { GraphEdge(it.sourcePageId, it.targetPageId) }
-        edges = graphEdges
-        val edgeRefs = graphEdges.map { GraphEdgeRef(it.sourceId, it.targetId) }
-
-        // Aggregate tag chips from the indexed tags column only — never a fresh
-        // full-text scan.
-        val tags = active
-            .flatMap { it.tags.split(',').map(String::trim).filter(String::isNotEmpty) }
-            .distinct()
-            .sorted()
-        allTags = tags
-
         // Device tier → physics workload. This is the phase-38 low-end lever.
         val tier = DeviceCompatibilityManager.getDeviceTier(context, viewModel.settings)
         val lowEnd = tier == DeviceTier.LOW_END
@@ -195,6 +178,37 @@ fun KnowledgeGraphScreen(
         lowEndNotice = lowEndFallback || lowEnd
 
         val kept = active.filter { it.id in keptIds }
+        val pageUpdatedAt = kept.associate { it.id to it.updatedAt }
+
+        // R2-b2b5-FEA-01 (phase-152): the rendered edge set is built ONLY over
+        // pairs whose BOTH endpoints survived the node cull, deduped, then
+        // capped to a tiered top-K by recency — never the whole-vault edge set
+        // (~10⁶ edges for a ~2k-page interlinked vault → frozen UI per frame).
+        // The culled list feeds BOTH the draw loops and the physics layout.
+        val edgeBudget = KnowledgeGraphEdgePolicy.edgeCapFor(lowEnd, kept.size)
+        val wikiEdges = WikiLinkParser.buildWikiLinkEdges(
+            active,
+            // B1-AUTH-05 (phase-69): legacy source-file reads are confined to the
+            // app-private imports root.
+            ImportExportService.getImportsDir(context)
+        )
+        val culledEdges = KnowledgeGraphEdgePolicy.cullEdgesToSurvivors(
+            wikiEdges.map { GraphEdgeRef(it.sourcePageId, it.targetPageId) },
+            keptIds,
+            pageUpdatedAt,
+            edgeBudget
+        )
+        val graphEdges = culledEdges.map { GraphEdge(it.sourceId, it.targetId) }
+        edges = graphEdges
+        val edgeRefs = culledEdges
+
+        // Aggregate tag chips from the indexed tags column only — never a fresh
+        // full-text scan.
+        val tags = active
+            .flatMap { it.tags.split(',').map(String::trim).filter(String::isNotEmpty) }
+            .distinct()
+            .sorted()
+        allTags = tags
 
         // Cluster communities (tags + wikilinks) for the KEPT page set.
         val clusterMap = GraphLayoutMath.assignClusters(
@@ -483,12 +497,19 @@ fun KnowledgeGraphScreen(
                         }
 
                         // Edges — dimmed when either endpoint is filtered out.
+                        // R2-b2b5-FEA-01 (phase-152): the tag-filter verdict is
+                        // memoized per page so the per-frame edge loop (and the
+                        // pulse loop below) never re-splits a page's tag string
+                        // for every incident edge.
                         val selectedId = selectedNodeId
+                        val filteredById = HashMap<String, Boolean>(nodes.size)
+                        fun pageFiltered(id: String, node: GraphNode): Boolean =
+                            filteredById.getOrPut(id) { isFilteredOut(node.page) }
                         for (edge in edges) {
                             val src = nodeById[edge.sourceId] ?: continue
                             val tgt = nodeById[edge.targetId] ?: continue
-                            val srcFiltered = isFilteredOut(src.page)
-                            val tgtFiltered = isFilteredOut(tgt.page)
+                            val srcFiltered = pageFiltered(edge.sourceId, src)
+                            val tgtFiltered = pageFiltered(edge.targetId, tgt)
                             val isHighlighted = searchQuery.isNotBlank() && (
                                 src.page.title.contains(searchQuery, ignoreCase = true) ||
                                     tgt.page.title.contains(searchQuery, ignoreCase = true)
@@ -529,7 +550,7 @@ fun KnowledgeGraphScreen(
                             val matched = searchQuery.isNotBlank() &&
                                 n.page.title.contains(searchQuery, ignoreCase = true)
                             val isSelected = selectedId == n.page.id
-                            val filteredOut = isFilteredOut(n.page)
+                            val filteredOut = pageFiltered(n.page.id, n)
                             val fade = if (filteredOut) 0.12f else 1f
                             val finalColor = when {
                                 isSelected -> errorColor

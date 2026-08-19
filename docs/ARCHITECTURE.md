@@ -880,6 +880,24 @@
   collision `GraphLayoutMath`, clusters `assignClusters`, tiers
   `GraphTierSelector`) and `services/WikiLinkParser.kt:66` `buildWikiLinkEdges`
   + `:373` `buildTagHierarchy`. Serverless tier detection: `utils/DeviceCompatibilityManager.kt`.
+  - **Implemented in phase-152** (R2-b2b5-FEA-01, see
+    `workspace/phase-152/REPORT.md`): the per-frame edge iteration is bounded.
+    Edge culling lives in the new pure-JVM `services/graph/KnowledgeGraphEdgePolicy.kt`
+    (`edgeCapFor` = 300 low-end / 600 mid / 1000 >240 nodes).
+    `KnowledgeGraphScreen` culls nodes first (`GraphTierSelector.cullToCap`),
+    then `KnowledgeGraphEdgePolicy.cullEdgesToSurvivors` keeps only edges whose
+    BOTH endpoints survived (drops self-edges), dedups deterministically, and
+    keeps top-K by max(endpoint `updatedAt`) with a sourceId→targetId tie-break
+    (fails closed). The SAME culled list feeds both `graphEdges` (draw) and
+    physics `edgeRefs`, so drawn edges ≤ physics edges and both ≤ 1000; the
+    Canvas tag-filter verdict is memoized in `filteredById`/`pageFiltered` (no
+    per-edge tag re-split per frame). Discovery is bounded too:
+    `WikiLinkParser.kt` `MAX_LINKS_PER_PAGE` = 200 (`extractWikiLinks` caps the
+    regex scan) and `MAX_TOTAL_EDGES` = 100_000 (inline HashSet dedup +
+    break-on-cap in `buildWikiLinkEdges`); the whole-edge-set
+    `edgeList.distinct()` materialization is gone. Tests:
+    `KnowledgeGraphEdgePolicyTest` (15) + source pins in
+    `Phase152FeatureDataBoundsWiringTest`.
 - **Command Palette (Phase 38 HUD)**: `ui/components/CommandPaletteOverlay.kt`
   (global quick-switcher; two-finger swipe down in `MainActivity.kt`
   `detectTwoFingerSwipeDown`, keyboard icon in `HomeScreen.kt`), ranking/tag
@@ -928,6 +946,27 @@
     initial `shortcutHint`/`truncate` char-budget decision table was dead
     production code and was removed in the Phase 132 review fixes). Tests:
     `Phase132CommandPaletteHeaderTest` (3).
+  - **Implemented in phase-152** (R2-b2b5-FEA-05, see
+    `workspace/phase-152/REPORT.md`): the palette no longer lowercases the
+    corpus per keystroke. `services/graph/CommandPaletteMath.kt` `PaletteDoc`
+    precomputes `lowerTitle`/`lowerBody`/`lowerTags` ONCE at construction (i.e.
+    at index build — once per corpus generation), `score()`/`rank()`/
+    `matchesTagFilter` consume the cached lowercase and the query is lowercased
+    once per `rank()`, the per-keystroke `lowerLog` HashMap is deleted, and
+    `makeSnippet(body, lowerBody, lq)` locates the hit via `lowerBody` but slices
+    the original-case body (highlight keeps the user's casing). The ~75 MB of
+    per-keystroke lowercase allocations at the corpus cap are gone.
+- **Waveform / audio**: `services/WaveformPeakMath.kt` (recording live buckets +
+  render-buffer decimation), `services/VoiceRecordingPolicy.kt`, and
+  `ui/components/AudioPlaybackCard.kt`.
+  - **Implemented in phase-152** (R2-b2b5-FEA-06, see
+    `workspace/phase-152/REPORT.md`): non-finite samples can no longer reach bar
+    geometry. `WaveformPeakMath.finiteOrZero` replaces NaN/±Inf with `0f` at
+    BOTH `NoteRepository.parseWaveformJson` paths (JSONArray + split fallback),
+    inside `downsample` (identity pass and min/max decimation), and
+    `WaveformPeakMath.renderAmp` clamps to `0.1f..1f` then refuses non-finite
+    values (`NaN`/`-Inf` → `0.1f`) in `AudioPlaybackCard` — defense in depth so
+    a crafted stored `waveformJson` cannot feed NaN into `drawRoundRect`.
 - **WebDAV sync**: `services/WebDavSyncService.kt:28` (encrypted vault archives, HTTPS enforced).
   - **Implemented in phase-40**: server-supplied PROPFIND hrefs are re-resolved against the
     configured server origin by the new pure-JVM `services/WebDavHrefResolver.kt`

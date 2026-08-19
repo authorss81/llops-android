@@ -21,10 +21,28 @@ object WaveformPeakMath {
     /** Downsampled view the UI draws for a stored waveform (bounded). */
     const val uiMaxBars = 220
 
+    /**
+     * R2-b2b5-FEA-06 (phase-152): replaces a non-finite sample (NaN/±Infinity)
+     * with 0.0f so a crafted stored `waveformJson` can never propagate a NaN into
+     * bar geometry. Applied at parse time ([NoteRepository.parseWaveformJson]) and
+     * inside [downsample], where the pre-fix min/max comparisons were all false
+     * for NaN, so NaN survived every decimation level untouched.
+     */
+    fun finiteOrZero(v: Float): Float = v.takeIf { it.isFinite() } ?: 0f
+
+    /**
+     * R2-b2b5-FEA-06 (phase-152): render-side amplitude clamp used by
+     * `AudioPlaybackCard` — `coerceIn(0.1f, 1.0f)` alone does NOT remove NaN, so
+     * `barHeight = canvasHeight * NaN` reached `drawRoundRect`. Returns a finite
+     * value in [0.1f, 1.0f] for any input.
+     */
+    fun renderAmp(amp: Float): Float =
+        amp.coerceIn(0.1f, 1.0f).takeIf { it.isFinite() } ?: 0.1f
+
     fun downsample(amplitudes: List<Float>, maxBuckets: Int = uiMaxBars): List<Float> {
         if (amplitudes.isEmpty()) return emptyList()
         if (maxBuckets <= 0) return emptyList()
-        if (amplitudes.size <= maxBuckets) return amplitudes.toList()
+        if (amplitudes.size <= maxBuckets) return amplitudes.map(::finiteOrZero)
 
         val out = ArrayList<Float>(maxBuckets)
         val bucketSize = amplitudes.size.toDouble() / maxBuckets.toDouble()
@@ -32,10 +50,10 @@ object WaveformPeakMath {
             val start = (b * bucketSize).toInt()
             val end = kotlin.math.min(((b + 1) * bucketSize).toInt(), amplitudes.size)
             if (end <= start) continue
-            var max = amplitudes[start]
-            var min = amplitudes[start]
+            var max = finiteOrZero(amplitudes[start])
+            var min = finiteOrZero(amplitudes[start])
             for (i in start until end) {
-                val v = amplitudes[i]
+                val v = finiteOrZero(amplitudes[i])
                 if (v > max) max = v
                 if (v < min) min = v
             }

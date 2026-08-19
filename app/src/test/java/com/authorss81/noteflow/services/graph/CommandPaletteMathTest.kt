@@ -1,6 +1,7 @@
 package com.authorss81.noteflow.services.graph
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -75,6 +76,82 @@ class CommandPaletteMathTest {
         )
         val ranked = CommandPaletteMath.rank("zzz", docs)
         assertTrue(ranked.isEmpty())
+    }
+
+    // ---- R2-b2b5-FEA-05 (phase-152): lowercasing happens ONCE at index build ----
+
+    @Test
+    fun `PaletteDoc precomputes the lowercased corpus at construction`() {
+        val d = CommandPaletteMath.PaletteDoc(
+            "a", "My Groceries", "The QUICK brown Fox.", setOf("Shopping", "Home"), 1L
+        )
+        assertEquals("my groceries", d.lowerTitle)
+        assertEquals("the quick brown fox.", d.lowerBody)
+        assertEquals(setOf("shopping", "home"), d.lowerTags)
+    }
+
+    @Test
+    fun `score stays case-insensitive against pre-lowercased docs`() {
+        val d = doc("a", "My GROCERIES List", body = "contains MILK and eggs", tags = setOf("Shopping"))
+        assertTrue(CommandPaletteMath.score("groceries", d) != null)
+        assertTrue(CommandPaletteMath.score("GROC", d) != null)
+        assertTrue(CommandPaletteMath.score("milk", d) != null)
+        assertEquals(CommandPaletteMath.MatchKind.TAG_MATCH,
+            CommandPaletteMath.score("shopping", d)?.second)
+    }
+
+    @Test
+    fun `rank across repeated keystrokes keeps case-insensitive matching from the cached lowercase`() {
+        val docs = listOf(
+            doc("a", "Groceries", body = "buy MILK today", updatedAt = 1),
+            doc("b", "Notes", body = "no mention", updatedAt = 2)
+        )
+        repeat(5) { CommandPaletteMath.rank("milK", docs) }
+        val ranked = CommandPaletteMath.rank("milk", docs)
+        assertEquals(listOf("a"), ranked.map { it.doc.id })
+        // The snippet is cut from the ORIGINAL-case body (lowerBody is only used
+        // for locating the hit), so it preserves "MILK".
+        assertTrue(ranked[0].snippet.contains("MILK"))
+    }
+
+    @Test
+    fun `rank with a tag filter uses the precomputed lowercase tags`() {
+        val red = doc("a", "One", tags = setOf("RED"), updatedAt = 1)
+        val both = doc("b", "Both", tags = setOf("Red", "blue"), updatedAt = 2)
+        val ranked = CommandPaletteMath.rank("", listOf(red, both), setOf("red", "blue"), requireAllTags = true)
+        assertEquals(listOf("b"), ranked.map { it.doc.id })
+    }
+
+    /**
+     * R2-b2b5-FEA-05 (phase-152) corpus-lowercase count source pin: the ONLY
+     * place the corpus title/body/tags are lowercased is the `PaletteDoc`
+     * constructor defaults (index build); [rank]/[score]/[makeSnippet] consume
+     * the precomputed `lowerTitle`/`lowerBody`/`lowerTags` and never re-lowercase
+     * per keystroke. The per-keystroke `lowerLog` cache is gone too.
+     */
+    @Test
+    fun `the corpus is lowercased once at index build, never per keystroke`() {
+        val source = java.io.File(
+            repoRoot(), "app/src/main/kotlin/com/authorss81/noteflow/services/graph/CommandPaletteMath.kt"
+        ).readText()
+        assertTrue("PaletteDoc must carry the precomputed lowerTitle", source.contains("val lowerTitle: String = title.lowercase()"))
+        assertTrue("PaletteDoc must carry the precomputed lowerBody", source.contains("val lowerBody: String = body.lowercase()"))
+        assertTrue("PaletteDoc must carry the precomputed lowerTags", source.contains("lowerTags"))
+        assertTrue("score must consume lowerTitle", source.contains("val lt = doc.lowerTitle"))
+        assertTrue("score must consume lowerBody", source.contains("doc.lowerBody.contains(lq)"))
+        assertTrue("rank must consume lowerBody for the snippet", source.contains("makeSnippet(doc.body, doc.lowerBody, q.lowercase())"))
+        assertFalse(
+            "rank() must never re-lowercase the corpus body per keystroke",
+            source.contains("doc.body.lowercase()")
+        )
+        assertFalse(
+            "score() must never re-lowercase the corpus title per keystroke",
+            source.contains("doc.title.lowercase()")
+        )
+        assertFalse(
+            "the per-keystroke lowerLog cache must be gone",
+            source.contains("lowerLog")
+        )
     }
 
     @Test
@@ -230,5 +307,19 @@ class CommandPaletteMathTest {
         sb.append("rank_1500_docs_per_keystroke_plus_250ms_debounce_ms=${250 + rankAvgMs}\n")
         java.io.File("build/phase38-bench.txt").writeText(sb.toString())
         println("PHASE38_BENCH " + sb.toString().trim().replace('\n', ' '))
+    }
+
+    private fun repoRoot(): java.io.File {
+        val cwd = java.io.File(System.getProperty("user.dir") ?: ".")
+        var dir = cwd
+        repeat(8) {
+            if (java.io.File(dir, "gradle/libs.versions.toml").isFile &&
+                java.io.File(dir, "app").isDirectory
+            ) {
+                return dir
+            }
+            dir = dir.parentFile ?: return cwd
+        }
+        return cwd
     }
 }

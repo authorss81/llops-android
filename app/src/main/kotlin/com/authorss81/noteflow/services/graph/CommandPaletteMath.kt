@@ -20,13 +20,24 @@ package com.authorss81.noteflow.services.graph
  */
 object CommandPaletteMath {
 
-    /** A searchable document from the cached decrypted corpus. */
+    /**
+     * A searchable document from the cached decrypted corpus.
+     *
+     * R2-b2b5-FEA-05 (phase-152): the title/body/tags are lowercased EXACTLY
+     * ONCE, here at index-build time (the defaults below run at construction),
+     * so [rank] / [score] / [makeSnippet] never re-lowercase the whole corpus
+     * per keystroke — a ~1500-page × 50 KB corpus cost ~75 MB of allocations on
+     * every debounced keystroke before this fix.
+     */
     data class PaletteDoc(
         val id: String,
         val title: String,
         val body: String,
         val tags: Set<String>,
-        val updatedAt: Long
+        val updatedAt: Long,
+        val lowerTitle: String = title.lowercase(),
+        val lowerBody: String = body.lowercase(),
+        val lowerTags: Set<String> = tags.mapTo(LinkedHashSet()) { it.lowercase() }
     )
 
     enum class MatchKind { TITLE_PREFIX, TITLE_CONTAINS, TAG_MATCH, BODY_CONTAINS }
@@ -86,15 +97,15 @@ object CommandPaletteMath {
         val q = query.trim()
         if (q.isEmpty()) return null
         val lq = q.lowercase()
-        val lt = doc.title.lowercase()
+        val lt = doc.lowerTitle
 
         if (lt == lq || lt.startsWith(lq)) {
             return 100f - minF(doc.title.length / 50f, 10f) to MatchKind.TITLE_PREFIX
         }
         if (lt.contains(lq)) return 85f to MatchKind.TITLE_CONTAINS
-        val tagHit = doc.tags.firstOrNull { it.lowercase().contains(lq) }
+        val tagHit = doc.lowerTags.firstOrNull { it.contains(lq) }
         if (tagHit != null) return 65f to MatchKind.TAG_MATCH
-        if (doc.body.lowercase().contains(lq)) return 40f to MatchKind.BODY_CONTAINS
+        if (doc.lowerBody.contains(lq)) return 40f to MatchKind.BODY_CONTAINS
         return null
     }
 
@@ -123,9 +134,12 @@ object CommandPaletteMath {
         maxResults: Int = 12
     ): List<RankedNote> {
         val q = query.trim()
+        // R2-b2b5-FEA-05: selected tags are lowercased once per rank() call and
+        // the docs' per-index lowercase is already in `lowerTags` — neither the
+        // corpus nor the selection is re-lowercased per doc.
+        val lowerSelected = selectedTags.mapTo(HashSet(selectedTags.size)) { it.lowercase() }
         val filtered = if (selectedTags.isEmpty()) docs else
-            docs.filter { matchesTagFilter(it.tags, selectedTags, requireAllTags) }
-        val lowerLog = HashMap<String, String>(filtered.size)
+            docs.filter { matchesTagFilter(it.lowerTags, lowerSelected, requireAllTags) }
         return filtered
             .mapNotNull { doc ->
                 if (q.isEmpty()) {
@@ -138,12 +152,10 @@ object CommandPaletteMath {
                     )
                 }
                 val score = score(q, doc) ?: return@mapNotNull null
-                val body = doc.body
-                val lowerBody = lowerLog.getOrPut(doc.id) { body.lowercase() }
                 RankedNote(
                     doc = doc,
                     score = score.first,
-                    snippet = makeSnippet(body, lowerBody, q.lowercase()),
+                    snippet = makeSnippet(doc.body, doc.lowerBody, q.lowercase()),
                     matchKind = score.second
                 )
             }

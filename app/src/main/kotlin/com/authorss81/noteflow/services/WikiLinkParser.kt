@@ -75,6 +75,15 @@ object WikiLinkParser {
     private const val MAX_TEXT_CACHE_ENTRIES = 200
     private const val MAX_BACKLINK_CACHE_ENTRIES = 200
 
+    // ---- R2-b2b5-FEA-01 (phase-152) per-page / total edge bounds ----
+    /** Per-page wikilink cap: a single crafted page with thousands of `[[x]]`
+     *  references can no longer contribute an unbounded edge fan-out. */
+    internal const val MAX_LINKS_PER_PAGE = 200
+    /** Hard total-edge budget while building the cached edge index — the whole
+     *  `edgeList.distinct()` materialization is gone; dedup + cap happen as the
+     *  edges are discovered. */
+    internal const val MAX_TOTAL_EDGES = 100_000
+
     private val cacheLock = Any()
     @Volatile
     private var cacheEpoch = 0L
@@ -185,18 +194,26 @@ object WikiLinkParser {
 
     fun extractWikiLinks(text: String): List<WikiLink> {
         if (text.isBlank()) return emptyList()
-        return wikiLinkRegex.findAll(text).map { match ->
+        // R2-b2b5-FEA-01 (phase-152): cap at construction, not after — a page
+        // body that repeats `[[x]]` thousands of times contributes at most
+        // MAX_LINKS_PER_PAGE links to any single scan.
+        val out = ArrayList<WikiLink>(minOf(16, MAX_LINKS_PER_PAGE))
+        for (match in wikiLinkRegex.findAll(text)) {
+            if (out.size >= MAX_LINKS_PER_PAGE) break
             val rawText = match.value
             val targetTitle = match.groupValues[1].trim()
             val alias = match.groupValues[2].takeIf { it.isNotBlank() }?.trim()
-            WikiLink(
-                rawText = rawText,
-                targetTitle = targetTitle,
-                alias = alias,
-                startIndex = match.range.first,
-                endIndex = match.range.last + 1
+            out.add(
+                WikiLink(
+                    rawText = rawText,
+                    targetTitle = targetTitle,
+                    alias = alias,
+                    startIndex = match.range.first,
+                    endIndex = match.range.last + 1
+                )
             )
-        }.toList()
+        }
+        return out
     }
 
     fun extractTags(text: String): List<String> = extractTagsBounded(text, Int.MAX_VALUE)
@@ -472,6 +489,12 @@ object WikiLinkParser {
         }
         val result = withContext(Dispatchers.Default) {
             val edgeList = mutableListOf<WikiLinkEdge>()
+            // R2-b2b5-FEA-01 (phase-152): dedup moves INLINE (a HashSet) and the
+            // total budget is capped DURING discovery, so a crafted ~2k-page
+            // interlinked vault can never materialize the full (per-page-capped)
+            // edge set into a list — the old trailing `edgeList.distinct()`
+            // whole-set materialization is gone.
+            val edgeSet = HashSet<WikiLinkEdge>()
             // Prebuilt title->page lookup (first-in-list wins) so resolving each
             // link target is O(1) instead of the old per-link O(N) full-list scan.
             val pagesByTitle = HashMap<String, NotePageEntity>()
@@ -481,19 +504,22 @@ object WikiLinkParser {
             }
             for (page in allPages.take(MAX_SCAN_PAGES)) {
                 currentCoroutineContext().ensureActive()
+                if (edgeSet.size >= MAX_TOTAL_EDGES) break
                 val text = getFullTextForPage(page, importsRoot)
                 val wikiLinks = extractWikiLinks(text)
                 for (link in wikiLinks) {
                     val targetPage = pagesByTitle[link.targetTitle.lowercase()]
                     if (targetPage != null && targetPage.id != page.id) {
-                        edgeList.add(WikiLinkEdge(page.id, targetPage.id))
+                        val edge = WikiLinkEdge(page.id, targetPage.id)
+                        if (edgeSet.size >= MAX_TOTAL_EDGES) break
+                        if (edgeSet.add(edge)) edgeList.add(edge)
                     }
                 }
             }
             if (synchronized(cacheLock) { cacheEpoch } != epoch) {
                 emptyList()
             } else {
-                edgeList.distinct()
+                edgeList
             }
         }
         synchronized(cacheLock) {

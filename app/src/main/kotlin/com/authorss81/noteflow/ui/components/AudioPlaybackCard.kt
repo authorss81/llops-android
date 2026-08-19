@@ -250,7 +250,10 @@ fun AudioPlaybackCard(
                 for (i in 0 until totalBars) {
                     val barRatio = i.toFloat() / totalBars.toFloat()
                     val isPlayed = barRatio <= progress
-                    val amp = amplitudes[i].coerceIn(0.1f, 1.0f)
+                    // R2-b2b5-FEA-06 (phase-152): `coerceIn(0.1f, 1.0f)` alone does
+                    // NOT remove NaN from a crafted waveform — `renderAmp` also
+                    // refuses non-finite inputs so `barHeight` is always finite.
+                    val amp = WaveformPeakMath.renderAmp(amplitudes[i])
                     val barHeight = canvasHeight * amp * 0.85f
 
                     val x = i * barWidth
