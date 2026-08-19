@@ -28,7 +28,9 @@
 
 ## Step 3 — Artifact verification
 - APK path exists: `app/build/outputs/apk/release/app-release.apk` (142,339,635 bytes, 1981-01-01 01:01 stamps).
-- `apksigner verify --verbose --print-certs` (build-tools 36.1.0):
+- `apksigner verify --verbose --print-certs` (SDK build-tools — the workflow requests
+  `build-tools;36.0.0` at `.github/workflows/llops.yml:143`; AGP may auto-provision a
+  different build-tools version for apksigner):
   - `Verifies` — **v2 scheme: true**; v1/v3/v3.1/v4: false. Number of signers: 1.
   - Signer #1 DN: `CN=InkFlow Release, OU=Dev, O=Authorss81, L=Unknown, ST=Unknown, C=US`
   - Signer #1 certificate SHA-256: `69636edb9ee2487762e98f855f250ea1ec66233de13b61a4c014026b82c50196`
@@ -59,6 +61,6 @@
 - [x] Commit + push (per Git workflow).
 
 ## READY FOR KALI
-`app/build/outputs/apk/release/app-release.apk` (commit `a9d8918c`, v2.1.0.0, signed v2,
+`app/build/outputs/apk/release/app-release.apk` (commit `a9d8918c`, v2 / 1.0.0, signed v2,
 SHA-256 `54feb16c…455a`) is ready for the phase-160 Kali dynamic-pentest pass. No app
 feature code was changed; no build-config changes were needed.
