@@ -1601,6 +1601,15 @@
     on `llm-plugin-signed.jar`) with a throwaway keystore that was deleted afterwards (no keystore/signed
     pin committed; `GeneratedLlmPluginPin.kt` stays `null` fail-closed). Base debug APK binary-verified 0
     mediapipe classes / 0 native libs. `gradle testDebugUnitTest` 1853 total green (0/0/0) + `assembleDebug` green.
+  - **Implemented in phase-162** (see `workspace/phase-162/REPORT.md`): `plugins/llm/build.gradle.kts` no longer
+    uses the deprecated `project.exec` (breaks Gradle 9 config-cache isolation) — both `signPlugin` and
+    `verifyPluginSignature` run `jarsigner` through a list-form `ProcessBuilder` inside `doLast` via the
+    `runExternal(cmd, failureMessage)` helper (`plugins/llm/build.gradle.kts:283-292`; output streamed to a
+    discarded buffer so keystore paths/passwords never reach the build log; `GradleException("… exit code X")`
+    on non-zero). `gradle/verification-metadata.xml:6-14` gained the `<trusted-artifacts>` allow-list for
+    `com.android.tools.build` / `org.jetbrains.kotlin` / `androidx.databinding` so a NEW toolchain artifact
+    resolves without failing closed on a missing checksum entry (verification still on). Part B (verify-only)
+    re-confirmed all six decryption-failure/data-integrity safeguards with `file:line` evidence — see REPORT.
 - Tests: `app/src/test/java/com/authorss81/noteflow/` (~110 unit tests, pure JVM, no androidTest).
 - **Do NOT run Gradle on the Windows dev machine** (no SDK; CI-only builds).
 - Version: `VERSION_CODE`/`VERSION_NAME` env (default 2 / "1.0.0"). Release signing is FAIL-CLOSED

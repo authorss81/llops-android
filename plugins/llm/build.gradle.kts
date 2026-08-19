@@ -1,3 +1,4 @@
+import java.io.ByteArrayOutputStream
 import java.security.KeyStore
 import java.security.MessageDigest
 import java.security.cert.X509Certificate
@@ -247,8 +248,12 @@ tasks.register("signPlugin") {
         val keyPass = pluginSigningKeyPass()
         val jar = layout.buildDirectory.file("plugin-artifact/llm-plugin.jar").get().asFile
         val signed = layout.buildDirectory.file("plugin-artifact/llm-plugin-signed.jar").get().asFile
-        project.exec {
-            commandLine(
+        // project.exec is deprecated and breaks Gradle 9 config-cache isolation;
+        // run jarsigner directly via ProcessBuilder (no shell: args kept exact,
+        // paths with spaces safe). stdout/stderr are consumed and discarded so
+        // keystore paths/passwords never reach the build log (B2-DEPS-04).
+        runExternal(
+            listOf(
                 "jarsigner",
                 "-keystore", pluginSigningKeystore.get().asFile.absolutePath,
                 "-storepass", storePass,
@@ -258,8 +263,9 @@ tasks.register("signPlugin") {
                 "-signedjar", signed.absolutePath,
                 jar.absolutePath,
                 KEYSTORE_ALIAS
-            )
-        }.rethrowFailure()
+            ),
+            "LLM plugin signing failed (jarsigner)"
+        )
         println("LLM plugin artifact signed: ${signed.absolutePath}")
     }
 }
@@ -270,10 +276,23 @@ tasks.register("verifyPluginSignature") {
     dependsOn("signPlugin")
     doLast {
         val signed = layout.buildDirectory.file("plugin-artifact/llm-plugin-signed.jar").get().asFile
-        project.exec {
-            commandLine("jarsigner", "-verify", signed.absolutePath)
-        }.rethrowFailure()
+        runExternal(
+            listOf("jarsigner", "-verify", signed.absolutePath),
+            "LLM plugin signature verification failed (jarsigner -verify)"
+        )
         println("LLM plugin artifact signature verified: ${signed.absolutePath}")
+    }
+}
+
+/** Runs an external command without a shell, consumes (and discards) its
+ *  stdout/stderr so secrets/paths never reach the build log, and throws a
+ *  `GradleException` on a non-zero exit. */
+private fun runExternal(cmd: List<String>, failureMessage: String) {
+    val process = ProcessBuilder(cmd).redirectErrorStream(true).start()
+    process.inputStream.use { it.copyTo(ByteArrayOutputStream()) }
+    val exitCode = process.waitFor()
+    if (exitCode != 0) {
+        throw GradleException("$failureMessage (exit code $exitCode)")
     }
 }
 

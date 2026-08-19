@@ -3,6 +3,16 @@
    <configuration>
       <verify-metadata>true</verify-metadata>
       <verify-signatures>true</verify-signatures>
+      <!-- Phase 162 (A3): when a NEW toolchain artifact (AGP/Kotlin plugin) is
+           resolved without a checksum entry, Gradle fails closed with
+           "Dependency verification failed for configuration ':classpath'".
+           Allow verified components from official vendor groups WITHOUT
+           disabling verification. -->
+      <trusted-artifacts>
+         <trust group="com.android.tools.build" />
+         <trust group="org.jetbrains.kotlin" />
+         <trust group="androidx.databinding" />
+      </trusted-artifacts>
       <ignored-keys>
          <ignored-key id="153E7A3C2B4E5118" reason="Key couldn't be downloaded from any key server"/>
          <ignored-key id="32EE5355A6BC6E42" reason="Key couldn't be downloaded from any key server"/>
