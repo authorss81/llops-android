@@ -115,3 +115,24 @@ Verification commands: `sha256sum`, `apksigner verify --verbose --print-certs` (
     plugin over LocalSend, reading & authoring UX).
 - Re-running the dynamic pass requires operator-provided rooted hardware/AVD;
   the pipeline cannot supply it on this runner.
+
+## Phase-160 STATIC run — Dynamic-only checks (Step 3: DECLARED, not attempted)
+
+> No rooted device/emulator on this runner — every row below is
+> `DYNAMIC-DEFERRED` per the phase spec (no fake "tested OK" claims). An operator
+> can run the reproducers on hardware.
+
+| DYNAMIC-DEFERRED | Check | Not testable here | Operator reproducer steps |
+|------------------|-------|-------------------|---------------------------|
+| D1 | PBKDF2 iteration count / KDF params | no device (runtime timing) | frida: hook `PBKDF2WithHmacSHA256` usage (or `sqlcipher` `PRAGMA cipher_kdf_iter`), record `iterations` arg; assert ≥ 600000, salt ≥ 16 B random per vault. |
+| D2 | DEK protection: raw DEK never leaves AndroidKeyStore | no device (keystore) | frida: hook `KeyStore.getKey` for aliases `noteflow_dek_key`/`_auth`; assert only wrapped-blob handled; objection memory-dump before/after vault open, grep for wrapped-DEK base64 and for `Noteflow-Vault-Field-Encryption-v1` AAD usage. |
+| D3 | Zeroization on lock | no device (memory) | objection: capture heap dumps pre-lock (vault open, 3 notes) and 30 s post-lock; grep for decrypted note text (e.g. a unique sentinel word) and DEK; assert no decrypted vault content remains addressable. |
+| D4 | `run-as` DB forensics (at-rest encryption) | no rooted device | `adb shell run-as com.aistudio.inkflow.app.bkxjrz cat files/databases/noteflow.sqlite` (rooted/`run-as` on debug-build or device with run-as); verify `title`/`extractedText`/`textContent`/`pointsJson` columns hold only ciphertext (no `BEGIN`/plaintext strings); confirm `noteflow.sqlite` ≠ its HMAC (`db_hmac_checksum` recompute) when a single byte flips. |
+| D5 | Quarantine + restore attacks (H1/H2) | no emulator | install emulator ≥ API 30; corrupt `noteflow.sqlite` (or wrong backup password), assert `CorruptionRecoveryScreen` + `*.corrupt-<ts>` copy preserved; trigger restore-failure-mid-close and assert `NoteflowDatabase.dispose()` re-open path works (app not bricked). |
+| D6 | FLAG_SECURE visual test | no device | install on device, open a note, screenshot via `adb exec-out screencap` + check Recents thumbnail is blank/black; verify no content leaks in recents while biometric locked. |
+| D7 | Biometric unlock + enrollment invalidation | no device | enroll/remove a fingerprint, launch BIOMETRIC_PROMPT, assert DEK-bound key requires re-auth after enrollment change (API 30+ `invalidatedByBiometricEnrollment`). |
+| D8 | Plugin cert-pin FAIL-CLOSED on device | no device + no real pin shipped | with placeholder pin, attempt a plugin-store "update" fetch; assert failure (no install), even under MITM with a CA the device trusts; then rotate to the read pin and assert the same cert works. Verifies R2-KS-17 end-to-end. |
+| D9 | WebDAV MITM (self-signed CA) | no device + no server | run local WebDAV over TLS with a self-signed CA; point sync at it; assert the client rejects unless the user explicitly opts-in + host is in the local-network allowlist (R2-KS-14 runtime proof). |
+| D10 | LocalSend LAN discovery / TOFU pairing | no device + no LAN | two devices on a LAN; assert receiver must human-accept before bytes move; disable pairing-store persistence and confirm re-pair required. |
+| D11 | Voice-note encryption at rest | no rooted device | `adb shell run-as ... ls files/voice_notes`; assert names `voice_<pageId>_<ts>.enc` and `head -c 32` are ciphertext (no WAV/RIFF header, no raw PCM). Cross-check R2-KS-10. |
+| D12 | WebDAV credential blob AEAD | no device | after saving remember-me creds, `run-as` pull `shared_prefs/noteflow_webdav_credentials.xml`; assert `webdav_encrypted_blob` value has no plaintext username/password and is GCM-authenticated (tamper → decrypt failure). |
