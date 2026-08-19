@@ -19,11 +19,22 @@
 | `plugins/runtime/` | `RuntimePluginLoader.kt`, `SignatureVerifiedPluginRuntime.kt`, `ArtifactSignatureVerifier.kt`, `PinnedCertHash.kt`, `PinnedTlsConnector.kt`, `PluginManifestFetcher.kt`, `HttpsPluginDownloadTransport.kt`, `PluginDownloader.kt`, `PluginUpdateEngine.kt`, `CompileTimePluginPinStore.kt`, `PluginFrameworkClassLoader.kt`, `ArtifactStaticScan.kt` | Downloadable-plugin runtime: pinned-cert verify (manifest + artifact transports, no redirects), DexClassLoader (scoped `plugins.*`-only parent), verify-time static content scan (B1-AUTH-01), updates |
 | `plugins/store/` | `PluginStoreCatalog.kt`, `PluginStoreController.kt`, `RemotePluginInstaller.kt`, `PluginInstallStore.kt` | Plugin Store lifecycle (bundled catalog + remote install) |
 | `plugins/<capability>/` | `ocr/MlKitOcrEngine.kt`, `websearch/DuckDuckGoWebSearchPlugin.kt`, `translation/MlKitTranslatorEngine.kt`, `inktos/InkToShapePlugin.kt`, `weather/`, `dictation/`, `readaloud/`, `citation/`, ... | One impl per capability, registered in `PluginRegistry` |
-| `ui/components/` | `AnnotationCanvas.kt` (4535 lines), `AgslShaders.kt`, `ShaderCapabilityHelper.kt`, `PenNibVisualPreview.kt`, `LayerBitmapCache.kt`, `BrushStudioDialog.kt`, `PluginStoreDialog.kt` | Compose components: canvas, AGSL shaders, dialogs |
+| `ui/components/` | `AnnotationCanvas.kt` (4535 lines), `AgslShaders.kt`, `ShaderCapabilityHelper.kt`, `PenNibVisualPreview.kt`, `LayerBitmapCache.kt`, `BrushStudioDialog.kt`, `PluginStoreDialog.kt`, `GalleryView.kt` | Compose components: canvas, AGSL shaders, dialogs; gallery grid (`GalleryCardItem` redesigned in phase-165) |
 | `ui/screens/` | `EditorScreen.kt` (4805), `MarkdownPreviewScreen.kt`, `HomeScreen.kt`, `KnowledgeGraphScreen.kt`, `LockScreen.kt` | Top-level screens |
 | `ui/viewmodel/` | `NoteflowViewModel.kt` (~1500) | God-ViewModel: DB, security, plugins, all state flows |
 | `theme/` | `Theme.kt`, `GlassSurfaces.kt`, `GlassThemeMath.kt`, `Motion.kt`, `Type.kt`, `Color.kt` | Material3 + frosted-glass design system |
 | `utils/` | `ConstantTime.kt`, `BitmapPool.kt`, `DeviceCompatibilityManager.kt`, `WikiLinkParser.kt` (dup, see notes) | Pure helpers |
+
+> **Implemented in phase-165** (`ui/components/GalleryView.kt`): the gallery page cards
+> were redesigned from the old flat square box to tasteful Material 3 cards — 20 dp
+> rounded corners, tonal `surfaceVariant` container with a subtle `primaryContainer`
+> wash fading from the top edge, 3 dp elevation, fixed portrait 10:16 aspect ratio so
+> `GridCells.Adaptive(168.dp)` keeps balanced proportions on phones AND tablets, and a
+> rich preview (type badge, ellipsized title, first ~2-3 preview lines, pinned
+> indicator, ≤3 tag chips + "+N", updated date). No canvas rasterization, no heavy
+> shadow/blur (AGENTS.md low-end rule); ripple from the clickable `Card`; the app has
+> no multi-select yet, so no separate selection state. Public `GalleryView(pages,
+> viewModel, onOpenPage, modifier)` API unchanged — `HomeScreen.kt:1333` keeps working.
 
 ## Core subsystem anchors (file:line)
 
