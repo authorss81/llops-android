@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Phase 158 (22.5b): home-widget provider info. The widget is a FLAT launcher
+     shortcut with zero content and zero cadence: updatePeriodMillis = 0 (the
+     launcher only asks on host change / user add), resizeable 1x1..2x1,
+     home_screen category only. No widget process ever touches the vault. -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="40dp"
+    android:minHeight="40dp"
+    android:maxResizeWidth="250dp"
+    android:maxResizeHeight="110dp"
+    android:targetCellWidth="2"
+    android:targetCellHeight="1"
+    android:updatePeriodMillis="0"
+    android:initialLayout="@layout/widget_quick_capture"
+    android:previewLayout="@layout/widget_quick_capture"
+    android:widgetCategory="home_screen"
+    android:resizeMode="horizontal|vertical"
+    android:description="@string/widget_quick_capture_desc" />

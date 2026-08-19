@@ -320,6 +320,19 @@ class SettingsManager(context: Context) {
         get() = prefs.getBoolean("serif_reading_enabled", false)
         set(value) = prefs.edit().putBoolean("serif_reading_enabled", value).apply()
 
+    // Phase 158 (22.5a): NON-SECRET "a shared clip is pending capture" marker.
+    // A boolean + a wall-clock stamp ONLY — never the clip content (that would
+    // be plaintext at rest, which every encryption finding forbids). Used to
+    // know "the user had a capture in flight" across a process kill; the clip
+    // itself is never persisted and either applies (bytes move) or is dropped.
+    var capturedSharePending: Boolean
+        get() = prefs.getBoolean(PendingSharePolicy.CAPTURED_MARKER_KEY, false)
+        set(value) = prefs.edit().putBoolean(PendingSharePolicy.CAPTURED_MARKER_KEY, value).apply()
+
+    var capturedSharePendingAtMs: Long
+        get() = prefs.getLong(PendingSharePolicy.CAPTURED_MARKER_AT_MS_KEY, 0L)
+        set(value) = prefs.edit().putLong(PendingSharePolicy.CAPTURED_MARKER_AT_MS_KEY, value).apply()
+
     // 22.1 + B1-PLAT-4 (phase-60): auto-lock after this many seconds of inactivity
     // while foregrounded (0 = off). Ships ENABLED (5 min) by default so a
     // foregrounded, unattended vault cannot stay readable indefinitely on a

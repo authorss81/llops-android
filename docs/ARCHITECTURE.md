@@ -839,6 +839,18 @@
   `ui/components/markdown/MarkdownRenderer.kt` + `HybridMarkdownEditor.kt`
   (replaces the raw text field in EDIT/SPLIT panes; typed callouts + interactive
   checkboxes; `AnimatedCheckmark.kt` respects reduce-motion).
+  - **Implemented in phase-158** (reader/focus mode, see `workspace/phase-158/REPORT.md`):
+    `MarkdownPreviewScreen` gains an instant (no-animation, reduce-motion-safe) reader
+    `FilterChip` toggle + `initialReaderMode`/`onConsumeReaderMode` (one-shot, consumed per page).
+    Reader mode renders a read-only, centered `widthIn(max=680.dp)` capped column with widened
+    leading — `HybridMarkdownEditor` is NEVER composed in reader mode (long-press-safe) and the
+    editing chrome (Save / Smart-Assistant / Plugins) is hidden. All numbers/decisions live in the
+    pure-JVM `services/ReaderModePolicy.kt` (`MAX_COLUMN_WIDTH_DP`=680f,
+    `BODY_LINE_HEIGHT_MULTIPLIER`=1.35f, `readerLineHeightSp` proportional to the ALREADY-SCALED
+    theme font — no absolute `.sp`, `defaultReaderForCapturedNote`, `READER_TOGGLE_LABEL`); the
+    leading flows into headings/paragraphs via a file-local `LocalReaderMode` CompositionLocal.
+    Captured notes open in reader mode by default (`MainActivity.kt` `readerModeRequestedFor`,
+    `rememberSaveable`); `.txt`/`sourceFileType=="text"` pages route to this screen too.
   - **Implemented in phase-151** (R2-b2b5-FEA-02 + R2-b2b5-FEA-03, see
     `workspace/phase-151/REPORT.md`): the markdown main-thread performance holes
     are gone. `services/MarkdownInlineMath.kt` pre-computes every maximal backtick
@@ -1259,6 +1271,24 @@
       teardown (`:255`) republishes `VOICE_RECORD_DISCARDED_NOTICE` through the persistent pipeline so
       a finished-but-discarded recording is honestly announced after unlock instead of dying with the
       editor's short-lived `recordingError` banner.
+    - **Implemented in phase-158** (deferred ROADMAP 22.5, see `workspace/phase-158/REPORT.md`):
+      **share-capture polish** on top of phase-140 — `services/PendingShareState.kt` gains
+      `ShareCaptureMode` (`NEW_NOTE`/`APPEND_TO_ACTIVE`, `fromToken` fails closed),
+      `PendingShareConfirmState.stagedAtMs`, `PendingShareState.captureMode`, and
+      `PendingSharePolicy` additions: `CONFIRM_HOLD_EXPIRY_MS`=10min + `isExpired` (per-session
+      expiry for an UN-confirmed hold), `resolveAppendTarget(hasActivePage, clipHasImages, mode)`
+      (append ONLY for a text-only clip with an active page; images / no active page degrade
+      honestly to `CREATE_NEW_NOTE`), `deferredAppliesNow(authenticated)`, and the NON-SECRET
+      captured marker (`capturedMarkerPayload` = flag + wall-clock stamp, NEVER clip content,
+      persisted via `SettingsManager.capturedSharePending/AtMs`). The confirm `AlertDialog`
+      (`MainActivity.kt`) now carries the new-vs-append radio choice (append disabled + explained
+      when unusable), auto-cancels a stale hold at the expiry deadline (re-checked so an
+      answered confirm survives), and keeps its `rememberSaveable` choice; the apply effect routes
+      through `resolveAppendTarget` → `appendSharedContentToPage` (`NoteflowViewModel.kt:2241`, reads
+      the LATEST committed body via `readMarkdownNoteBody`, writes via `saveMarkdownNoteBody` —
+      B2-UI-1 lock-gated) or `createNoteFromSharedContent`. Honest defer/drop: applies only on an
+      authenticated frame, password-vault `lock()` drops both states + clears the marker (no content
+      survives a lock, no stale flag), and only the non-secret marker ever touches disk.
   - **Implemented in phase-133** (user-requested UI/UX, see `workspace/phase-133/REPORT.md`): new
     pages (Add Page FAB) and Daily Journal entries now open IMMEDIATELY on click. Root cause: the
     active page was resolved only via `pages.find { it.id == activePageId }` against the
@@ -1495,6 +1525,21 @@
   (filter + "Clear filter"). `ImportExportService.exportBackup` records `SettingsManager.lastBackupTimestamp`
   at its single success chokepoint; `NoteflowViewModel` exposes `onboardingCompleted`/`lastBackupTimestamp`
   StateFlows + `countCachedWikiLinks()`. No DB schema change, no new dependencies.
+
+- **Home widget "New note" quick-capture** (implemented in phase-158, deferred ROADMAP 22.5b — see
+  `workspace/phase-158/REPORT.md`): a LIGHTWEIGHT in-base AppWidget that is a launcher shortcut ONLY.
+  `ui/widget/QuickCaptureWidget.kt` (`AppWidgetProvider`) builds a RemoteViews (icon + fixed label,
+  `res/layout/widget_quick_capture.xml`) whose single click is a `PendingIntent` to `MainActivity`
+  carrying the explicit boolean `WidgetLaunchPolicy.EXTRA_QUICK_CAPTURE`
+  (`services/WidgetLaunchPolicy.kt` — pure-JVM intent contract incl. `WIDGET_PENDING_INTENT_REQUEST_CODE`,
+  `hasQuickCaptureExtra(Map<String, Boolean?>)` true-only parse, geometry constants). Hard constraints:
+  NO note content on the widget, NO vault/Room/keystore code in the widget process, NO periodic refresh
+  (`res/xml/quick_capture_widget_info.xml` `updatePeriodMillis="0"`, 1x1/2x1, `home_screen`, resizeable),
+  NO new permission, receiver `android:exported="false"` (`AndroidManifest.xml:37-47`). `MainActivity`
+  reads the extra in both `onCreate` and `onNewIntent` (`handleQuickCaptureIntent`, typed extras map) and a
+  `LaunchedEffect(authenticated, quickCaptureRequested)` fires `addPage("New Page", onCreated = setActivePage)`
+  ONLY once the vault is authenticated — a locked-vault tap creates nothing (no DEK) and the flag is
+  consumed so a later unlock never re-creates.
 
 ## Build / CI essentials
 

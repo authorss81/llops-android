@@ -91,6 +91,7 @@ import com.authorss81.noteflow.services.PluginUpdatePromptPolicy
 import com.authorss81.noteflow.services.PendingShareConfirmState
 import com.authorss81.noteflow.services.PendingSharePolicy
 import com.authorss81.noteflow.services.PendingShareState
+import com.authorss81.noteflow.services.ShareCaptureMode
 import com.authorss81.noteflow.services.SecurityService
 import com.authorss81.noteflow.services.SettingsManager
 import com.authorss81.noteflow.services.SettingsPluginEnableStore
@@ -1532,19 +1533,25 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         // R2-B1P-05: a re-parsed SEND intent on a rotated-recreated activity must
         // not clobber a confirm the user already answered.
         if (!PendingSharePolicy.shouldStage(_pendingShareConfirm.value, _pendingShare.value)) return
-        _pendingShareConfirm.value = PendingShareConfirmState(clip, uriStrings)
+        val stagedAtMs = System.currentTimeMillis()
+        _pendingShareConfirm.value = PendingShareConfirmState(clip, uriStrings, stagedAtMs)
+        // Phase 158 (22.5a): NON-SECRET captured marker — a flag + the wall-clock
+        // stamp ONLY, never the clip content (that would be plaintext at rest).
+        settings.capturedSharePending = true
+        settings.capturedSharePendingAtMs = stagedAtMs
     }
 
     fun cancelPendingShareConfirm() {
         _pendingShareConfirm.value = null
+        clearCapturedShareMarker()
     }
 
     /** B1-PLAT-2: user tapped "Clip" — stage the POST-UNLOCK bounded copy. */
-    fun confirmPendingShare() {
+    fun confirmPendingShare(captureMode: ShareCaptureMode = ShareCaptureMode.NEW_NOTE) {
         val request = _pendingShareConfirm.value ?: return
         _pendingShareConfirm.value = null
         if (_pendingShare.value != null) return
-        _pendingShare.value = PendingSharePolicy.toPendingShare(request)
+        _pendingShare.value = PendingSharePolicy.toPendingShare(request, captureMode)
         if (!_authenticated.value) {
             showSnackbar("Clip confirmed — it will be added once you unlock.", isLong = true)
         }
@@ -1554,7 +1561,13 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     fun consumePendingShare(): PendingShareState? {
         val share = _pendingShare.value ?: return null
         _pendingShare.value = null
+        clearCapturedShareMarker()
         return share
+    }
+
+    private fun clearCapturedShareMarker() {
+        settings.capturedSharePending = false
+        settings.capturedSharePendingAtMs = 0L
     }
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
@@ -2180,6 +2193,36 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
             } ?: return@launch
             selectPage(newPage)
             onCreated(newPage)
+        }
+    }
+
+    /**
+     * Phase 158 (22.5a): "capture as append to current" — append the shared text
+     * to the open note's body. Reads the LATEST committed body first (so a
+     * concurrent edit is never clobbered — [readMarkdownNoteBody] awaits the
+     * in-flight save and re-reads fresh), then writes the combined body through
+     * [saveMarkdownNoteBody] (B2-UI-1 lock-gated: a lock racing the append
+     * defers the write encrypted, never drops it, never plaintext). Images are
+     * intentionally not append-handled — [PendingSharePolicy.resolveAppendTarget]
+     * routes image clips to a new note; see that decision table.
+     */
+    fun appendSharedContentToPage(page: NotePageEntity, sharedText: String?, onDone: (() -> Unit)? = null) {
+        val text = sharedText?.trim() ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val current = readMarkdownNoteBody(page.id, page.extractedText, page.sourceFilePath, page.sourceFileType)
+                val body = if (current.isBlank()) text else current.trimEnd() + "\n\n" + text
+                if (body != current) {
+                    saveMarkdownNoteBody(page, body)
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // A lock zeroized the DEK mid-read: never plaintext, never crash.
+                // saveMarkdownNoteBody itself would defer; this is the read side.
+                showSnackbar("Shared text could not be added", isLong = true)
+            }
+            onDone?.invoke()
         }
     }
 
@@ -4398,6 +4441,9 @@ fun updatePageTags(id: String, tags: String) {
             if (PendingSharePolicy.clearOnLock(settings.hasMasterPassword)) {
                 _pendingShareConfirm.value = null
                 _pendingShare.value = null
+                // Phase 158 (22.5a): the NON-SECRET captured marker dies with the
+                // dropped clip — a stale "you had a capture" flag must not lie.
+                clearCapturedShareMarker()
             }
             // R2-b2b1-UI-04 (phase-153): the lock boundary CLEARS the snackbar
             // queue — anything pending at lock time (restore/import outcomes,

@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Phase 158 (22.5b): quick-capture widget glyph — a simple "document with a
+     plus" so the 1x1 tile reads as "new note". Pure vector, no raster. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="?attr/colorControlNormal">
+
+    <!-- Document body -->
+    <path
+        android:pathData="M6,2 L14,2 L18,6 L18,22 L6,22 Z"
+        android:fillColor="#FFFFFF"
+        android:fillAlpha="0.92" />
+
+    <!-- Folded corner -->
+    <path
+        android:pathData="M14,2 L18,6 L14,6 Z"
+        android:fillColor="#FFFFFF"
+        android:fillAlpha="0.6" />
+
+    <!-- Plus sign -->
+    <path
+        android:pathData="M12,9 L12,17 M8,13 L16,13"
+        android:strokeWidth="2"
+        android:strokeColor="#000000"
+        android:strokeLineCap="round" />
+</vector>

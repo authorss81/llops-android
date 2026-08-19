@@ -62,6 +62,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.authorss81.noteflow.data.model.NotePageEntity
 import com.authorss81.noteflow.services.ImportExportService
+import com.authorss81.noteflow.services.ReaderModePolicy
 import com.authorss81.noteflow.services.WikiLinkParser
 import com.authorss81.noteflow.theme.serifBodyStyle
 import com.authorss81.noteflow.ui.components.BacklinksInspectorBottomSheet
@@ -137,12 +138,23 @@ enum class SplitOrientation {
     AUTO, VERTICAL, HORIZONTAL
 }
 
+// Phase 158 (22.5): reader/focus layout signal for the markdown renderers. Avoids
+// threading a boolean through every recursive RenderBlocks/RenderInline
+// signature while keeping the decision local to this file.
+private val LocalReaderMode = androidx.compose.runtime.compositionLocalOf { false }
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MarkdownPreviewScreen(
     page: NotePageEntity,
     initialContent: String,
     viewModel: NoteflowViewModel,
+    // Phase 158 (22.5): reader/focus mode. The screen starts in reader mode
+    // when it was opened FROM a share-sheet capture (one-shot request — the
+    // parent consumes it via onConsumeReaderMode so a later unlock never
+    // re-applies it); the user can toggle reader mode on/off any time after.
+    initialReaderMode: Boolean = false,
+    onConsumeReaderMode: () -> Unit = {},
     onBack: () -> Unit,
     onOpenWikiLink: (String) -> Unit,
     onOpenPage: (NotePageEntity) -> Unit,
@@ -150,6 +162,13 @@ fun MarkdownPreviewScreen(
 ) {
     var viewMode by remember { mutableStateOf(MarkdownViewMode.SPLIT) }
     var splitOrientation by remember { mutableStateOf(SplitOrientation.AUTO) }
+    // Phase 158 (22.5): focus/reading mode. Read-only by construction — the
+    // hybrid editor is never composed while reader mode is active, so a
+    // long-press can never open an edit surface.
+    var readerMode by remember(page.id) { mutableStateOf(initialReaderMode) }
+    LaunchedEffect(page.id) {
+        if (initialReaderMode) onConsumeReaderMode()
+    }
     // Phase 34: long-form reading toggle — editorial serif for the body only;
     // UI chrome stays sans. Persisted per device via SettingsManager.
     var serifReadingMode by remember(page.id) {
@@ -226,6 +245,18 @@ fun MarkdownPreviewScreen(
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text(page.title, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                        // Phase 158 (22.5): instant reader/focus toggle — no
+                        // transition animation (respects reduce-motion). Selecting it
+                        // strips the editing chrome and renders a read-only, capped
+                        // reading column; the hybrid editor is never composed in this
+                        // mode so long-press can never open an edit surface.
+                        FilterChip(
+                            selected = readerMode,
+                            onClick = { readerMode = !readerMode },
+                            label = { Text(com.authorss81.noteflow.services.ReaderModePolicy.READER_TOGGLE_LABEL, style = MaterialTheme.typography.labelSmall) },
+                            leadingIcon = { Icon(Icons.Outlined.Book, contentDescription = null, modifier = Modifier.size(14.dp)) }
+                        )
+                        if (!readerMode) {
                         FilterChip(
                             selected = viewMode == MarkdownViewMode.SPLIT,
                             onClick = {
@@ -268,6 +299,7 @@ fun MarkdownPreviewScreen(
                             )
                         }
                     }
+                    }
                 },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
@@ -278,21 +310,28 @@ fun MarkdownPreviewScreen(
                     IconButton(onClick = { showVersionHistory = true }) {
                         Icon(Icons.Outlined.History, contentDescription = "Version History", tint = primaryColor)
                     }
-                    IconButton(onClick = { showSmartAssistant = true }) {
-                        Icon(Icons.Outlined.AutoAwesome, contentDescription = "On-Device Smart Assistant", tint = primaryColor)
+                    // Phase 158 (22.5): reader/focus mode strips the EDITING chrome
+                    // (save, smart-assistant, plugins). History + backlinks stay —
+                    // they are strictly read-only.
+                    if (!readerMode) {
+                        IconButton(onClick = { showSmartAssistant = true }) {
+                            Icon(Icons.Outlined.AutoAwesome, contentDescription = "On-Device Smart Assistant", tint = primaryColor)
+                        }
                     }
                     IconButton(onClick = { showBacklinks = true }) {
                         Icon(Icons.Outlined.Hub, contentDescription = "Backlinks & Knowledge Connections", tint = primaryColor)
                     }
-                    IconButton(
-                        onClick = {
-                            flushSave()
-                            viewModel.createNoteVersion(page.id, page.title, contentText, "Manual save in Live Editor")
+                    if (!readerMode) {
+                        IconButton(
+                            onClick = {
+                                flushSave()
+                                viewModel.createNoteVersion(page.id, page.title, contentText, "Manual save in Live Editor")
+                            }
+                        ) {
+                            Icon(Icons.Outlined.Save, contentDescription = "Save Content")
                         }
-                    ) {
-                        Icon(Icons.Outlined.Save, contentDescription = "Save Content")
                     }
-                    if (viewMode != MarkdownViewMode.EDIT) {
+                    if (readerMode || viewMode != MarkdownViewMode.EDIT) {
                         FilterChip(
                             selected = serifReadingMode,
                             onClick = {
@@ -309,7 +348,10 @@ fun MarkdownPreviewScreen(
                             }
                         )
                     }
-                    Box {
+                    // Phase 158 (22.5): the plugin menu is editing chrome (text
+                    // transforms insert/rewrite content) — hidden in reader mode.
+                    if (!readerMode) {
+                        Box {
                         IconButton(onClick = { showPluginMenu = true }) {
                             Icon(Icons.Outlined.Extension, contentDescription = "Plugins", tint = primaryColor)
                         }
@@ -534,6 +576,7 @@ fun MarkdownPreviewScreen(
                                 }
                             }
                         }
+                        }
                     }
                 }
             )
@@ -546,7 +589,20 @@ fun MarkdownPreviewScreen(
                 .padding(12.dp)
                 .imePadding()
         ) {
-            when (viewMode) {
+            if (readerMode) {
+                // Phase 158 (22.5): reader/focus mode is read-only by construction —
+                // the hybrid editor is never composed here, so long-press can never
+                // open an edit surface. Instant swap, no transition animation
+                // (reduce-motion honored by adding no motion).
+                MarkdownRenderedContent(
+                    content = contentText,
+                    primaryColor = primaryColor,
+                    baseDir = baseDir,
+                    onOpenWikiLink = onOpenWikiLink,
+                    serif = serifReadingMode,
+                    readerMode = true
+                )
+            } else when (viewMode) {
                 MarkdownViewMode.EDIT -> {
                     Column(modifier = Modifier.fillMaxSize()) {
                         Row(
@@ -579,7 +635,8 @@ fun MarkdownPreviewScreen(
                         primaryColor = primaryColor,
                         baseDir = baseDir,
                         onOpenWikiLink = onOpenWikiLink,
-                        serif = serifReadingMode
+                        serif = serifReadingMode,
+                        readerMode = readerMode
                     )
                 }
 
@@ -952,22 +1009,55 @@ private fun MarkdownRenderedContent(
     primaryColor: Color,
     baseDir: File?,
     onOpenWikiLink: (String) -> Unit,
-    serif: Boolean = false
+    serif: Boolean = false,
+    // Phase 158 (22.5): reader/focus layout. ALSO provided via LocalReaderMode so
+    // the body/heading renderers can widen their leading without threading the
+    // flag through every recursive-style signature in this file.
+    readerMode: Boolean = false
 ) {
     val document = remember(content) { markdownParser.parse(content) }
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(vertical = 4.dp)
-    ) {
-        RenderBlocks(
-            children = document.childrenList(),
-            primaryColor = primaryColor,
-            baseDir = baseDir,
-            onOpenWikiLink = onOpenWikiLink,
-            serif = serif
-        )
+    val scroll = rememberScrollState()
+    if (readerMode) {
+        // Reader/focus layout: centered, capped to an article measure, widened
+        // leading. Read-only by construction — no editor is ever composed inside.
+        Box(
+            modifier = Modifier
+                .fillMaxSize(),
+            contentAlignment = Alignment.TopCenter
+        ) {
+            CompositionLocalProvider(LocalReaderMode provides true) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .verticalScroll(scroll)
+                        .widthIn(max = ReaderModePolicy.MAX_COLUMN_WIDTH_DP.dp)
+                        .padding(vertical = 4.dp)
+                ) {
+                    RenderBlocks(
+                        children = document.childrenList(),
+                        primaryColor = primaryColor,
+                        baseDir = baseDir,
+                        onOpenWikiLink = onOpenWikiLink,
+                        serif = serif
+                    )
+                }
+            }
+        }
+    } else {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(scroll)
+                .padding(vertical = 4.dp)
+        ) {
+            RenderBlocks(
+                children = document.childrenList(),
+                primaryColor = primaryColor,
+                baseDir = baseDir,
+                onOpenWikiLink = onOpenWikiLink,
+                serif = serif
+            )
+        }
     }
 }
 
@@ -989,9 +1079,18 @@ private fun RenderBlocks(
                     3 -> MaterialTheme.typography.titleMedium
                     else -> MaterialTheme.typography.titleSmall
                 }
+                // Phase 158 (22.5): reader mode widens leading proportionally to the
+                // ALREADY-SCALED theme font size (never an absolute sp override), so
+                // system font-scale accessibility is preserved.
+                val baseStyle = serifBodyStyle(style, serif)
+                val readerStyle = if (LocalReaderMode.current) {
+                    baseStyle.copy(lineHeight = ReaderModePolicy.readerLineHeightSp(baseStyle.fontSize.value).sp)
+                } else {
+                    baseStyle
+                }
                 Text(
                     text = node.collectLiteral(),
-                    style = serifBodyStyle(style, serif).copy(
+                    style = readerStyle.copy(
                         fontWeight = FontWeight.Bold,
                         color = if (node.level <= 3) scheme.primary else scheme.onBackground
                     )
@@ -1286,9 +1385,17 @@ private fun MarkdownParagraph(
         }
     }
     Column {
+        // Phase 158 (22.5): reader mode widens leading proportionally to the
+        // already-scaled body font (see ReaderModePolicy).
+        val baseBodyStyle = serifBodyStyle(MaterialTheme.typography.bodyLarge, serif)
+        val bodyStyle = if (LocalReaderMode.current) {
+            baseBodyStyle.copy(lineHeight = ReaderModePolicy.readerLineHeightSp(baseBodyStyle.fontSize.value).sp)
+        } else {
+            baseBodyStyle
+        }
         ClickableText(
             text = annotated,
-            style = serifBodyStyle(MaterialTheme.typography.bodyLarge, serif).copy(color = MaterialTheme.colorScheme.onBackground),
+            style = bodyStyle.copy(color = MaterialTheme.colorScheme.onBackground),
             onClick = { offset ->
                 val wikiLink = annotated.getStringAnnotations(tag = "WIKILINK", start = offset, end = offset)
                     .firstOrNull()

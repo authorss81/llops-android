@@ -133,8 +133,8 @@ class Phase140ShareStateLockTest {
             main.contains("if (authenticated) {") && main.contains("pendingShareConfirm?.let { request ->")
         )
         assertTrue(
-            "the confirm/dismiss must route through the ViewModel holding the state",
-            main.contains("viewModel.confirmPendingShare()") &&
+            "the confirm/dismiss must route through the ViewModel holding the state (22.5: + mode)",
+            main.contains("viewModel.confirmPendingShare(clipMode)") &&
                 main.contains("viewModel.cancelPendingShareConfirm()")
         )
     }

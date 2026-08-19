@@ -1,27 +1,6 @@
-# AGENTS.md — InkFlow (InkFlow)
+# PIPELINE CONTEXT (injected by phase_runner.sh — do not delete)
 
-Guidance for AI agents (opencode, Antigravity, etc.) working on this repo. Read before editing.
-
-## Project
-- Android note-taking app: markdown + ink canvas + knowledge graph (wikilinks/tags/daily notes) + time-synced voice notes + layers + AGSL brushes.
-- Kotlin 2.0.21, Jetpack Compose (BOM 2024.12.01), Room 2.6.1, Material 3, androidx.ink 1.0.0.
-- `applicationId` = `com.aistudio.inkflow.app.bkxjrz` (matches `app/build.gradle.kts:15` + repo-root `metadata.json`); namespace = `com.authorss81.noteflow` (known mismatch, Phase 21.10).
-- Source: `app/src/main/kotlin/com/authorss81/noteflow/` (`data/`, `services/`, `theme/`, `ui/`, `utils/`).
-- Single `NoteflowViewModel` + `MainActivity` with `mutableStateOf` navigation (not Navigation Compose yet).
-
-## Commands
-- **Do NOT build or run Gradle locally on the Windows dev machine** — no Android SDK installed (AMD Athlon 200GE, 7.5 GB RAM). Builds happen in GitHub Actions (`gradle assembleDebug` on main push).
-- Verification commands on Linux/CI (there is NO gradle wrapper jar in this repo — use system `gradle`, not `./gradlew`):
-  - Unit tests: `gradle testDebugUnitTest`
-  - Debug build: `gradle assembleDebug`
-  - Signed Release build: `gradle assembleRelease`
-- Editor formatting: `.editorconfig` configured at project root.
-
-## Git workflow
-- GitHub is the single source of truth. All changes are committed and pushed to `main` (authorss81/Smooth-Notes).
-- Repo was renamed from Noteflow-2; commit history and tags were preserved at rename time.
-- Remote: `https://github.com/authorss81/Smooth-Notes.git`
-
+## Hard rules (AGENTS.md)
 ## Hard rules
 - **MAJOR ARCHITECTURAL CHANGE → ASK THE USER FIRST.** Any change that restructures packages, replaces the navigation model (e.g., migrating away from `mutableStateOf` navigation to Navigation Compose), adds a new DB schema/migration, introduces SQLCipher, adds new dependencies with broad impact, or rewrites a subsystem (canvas renderer, encryption layer) MUST be proposed to the user and get explicit approval BEFORE writing code. Tell the user what's changing, why, and the risk. Do not silently refactor architecture.
   - **USER APPROVED (2026-08-14): hybrid downloadable-plugin architecture** — the plugin model change (base-APK-size constraint, downloadable signature-verified plugins for heavy native features, compile-time for lightweight plugins, user-approved dynamic updates) was proposed to the user with risks and explicitly approved (commit `9292978`). Implementation proceeds per phases 22–26; the approved design doc is `docs/plugin-architecture.md`.
@@ -52,13 +31,17 @@ Guidance for AI agents (opencode, Antigravity, etc.) working on this repo. Read 
   - **Phase 03 (2026-08-13) removed these dead/fake features**: the LibMyPaint C++ stub + whole engine-selector stack (`mypaint_jni.cpp`/`CMakeLists.txt`, `LibMyPaintJni`, `BrushEngine`/`BrushEngineFactory`, `HardwareProfiler`/`RenderingEngineTier`, `BrushEngineSettingsDialog`, `SettingsManager.renderingEngineOverride` — all deleted; the canvas renders via `WetBrushEngine`); `HandwritingRecognitionService` + `HandwritingToTextDialog` (dictionary-hash stub, unreachable — deleted); `FtsSearchEngine` (misnamed in-memory loop — deleted; vault search now uses a cached decrypted corpus in `NoteRepository`). Shape auto-snap is now WIRED (`ShapeRecognitionHelper.trySnapShape` runs on freehand draw-end in `AnnotationCanvas`, gated by the `shapeAutoSnapEnabled` setting; wet tools, LASER, DOTTED and NEON are excluded, and the RECT/ARROW/LINE detectors require real geometry fits so plain handwriting isn't snapped).
 
 ## Roadmap state (August 2026)
-- Phases 1–18 marked done in ROADMAP.md are NOT all true — verified facts in "POST-AUDIT TRUTH TABLE" section.
-- Actual work plan: Phases 19 (security recovery) → 20 (performance) → 21 (false-feature fix/remove) → 22 (UX/platform) → 23 (canvas modes: infinite + page-wise) → 24 (import pipeline: PDF/HTML/images) → 25 (old Phases 8–10 remainder) → 26 (moat features) → 27 (bug-fix queue) → 28 (release engineering).
-- Fix bugs in Phase 27 before building new features; each fix needs `file:line` verification, not vibes.
-- **Authoritative security-fix status: `docs/security-report.md`** (every finding marked with its fixing phase or `resolved at triage`, top-risks section rewritten to the post-fix state on 2026-08-17) + the fix-phase mapping in `workspace/SECURITY_FIX_PLAN.md` + the per-phase verification matrix in `workspace/phase-115/REPORT.md`. All phase-39..114 findings are FIXED except **`B2-DEPS-05` (phase-77, OPEN — the LLM model download is neither hash-pinned nor signature-verified; the phase-77 `.done` was a false completion removed on 2026-08-17, so the pipeline re-selects it for a real fix).** **Phase 149 (2026-08-18) closed `R2-b2b4-DOS-01` (MEDIUM — `note_versions` retention + paged decrypt, see `workspace/phase-149/REPORT.md`): newest-20-per-page cap pruned inside the `createNoteVersion` transaction, paged/lazy history decrypt, capped backup writer + restore sanitizer. `gradle assembleDebug` green; `gradle testDebugUnitTest` 2026 green / 1 pre-existing `Phase148UiFailureTextScrubTest` UNC-path failure (reproduced on a clean stash — untouched by phase-149).** **Phase 153 (2026-08-19) closed `R2-b2b1-UI-04` + `R2-b2b1-UI-05` (LOW×2 — post-lock UI channels, see `workspace/phase-153/REPORT.md`): the snackbar channel is a bounded `StateFlow` FIFO gated by pure-JVM `SnackbarLockPolicy.mayBufferWhileLocked` (locked vaults DROP every vault-content message), `lock()` clears the queue, the `MainActivity` root collector is re-keyed on `authenticated` (boundary dismiss + FIFO drain), and a lock-during-voice-recording now re-surfaces an honest fixed discard notice through the persistent pipeline (`VoiceNoteManager.release(): Boolean` + `EditorScreen` teardown) instead of the dead per-editor error banner. `gradle assembleDebug` green; `gradle testDebugUnitTest` 2117 green / 1 pre-existing `Phase148UiFailureTextScrubTest` UNC-path failure (untouched).**
-- **Phase 158 (2026-08-19) shipped deferred ROADMAP 22.5** (see `workspace/phase-158/REPORT.md`): (1) **reader/focus mode** for `MarkdownPreviewScreen` — pure-JVM `services/ReaderModePolicy.kt` (680dp cap, 1.35× leading proportional to the ALREADY-SCALED theme font — no absolute `.sp`), instant no-animation toggle, read-only path that never composes the hybrid editor (long-press-safe), editing chrome stripped, captured notes open in reader mode by default. (2) **share-sheet capture polish** — `ShareCaptureMode` new-vs-append radio choice in the confirm dialog (append disabled when no active note / image clip), 10-min hold expiry, honest defer/drop (applies only on authenticated frame; password-vault `lock()` drops states + clears the marker), NON-SECRET captured marker (`capturedSharePending`/`AtMs` — flag + stamp, never content). (3) **home widget quick-capture** — LIGHTWEIGHT in-base launcher-only AppWidget (`ui/widget/QuickCaptureWidget.kt` + `services/WidgetLaunchPolicy.kt`), `updatePeriodMillis=0`, no vault in the widget process, no permission, `exported="false"`; `MainActivity` fires `addPage` only once authenticated. `gradle assembleDebug` green; `gradle testDebugUnitTest` 2240 green / 1 pre-existing `Phase148UiFailureTextScrubTest` UNC-path failure (untouched). No schema change, no new base-APK deps.
 
-## Docs
-- `docs/pentest-plan.md` — Kali Linux pentest plan for the built APK (jadx/apktool/frida/objection/MobSF). Run findings into `docs/pentest-report.md`.
-- `README.md` — user-facing overview (may contain stale claims; ROADMAP truth table supersedes).
-- `docs/ARCHITECTURE.md` — **living architecture map** (package layout, core subsystem `file:line` anchors, build/CI essentials, gotchas). It is auto-injected at the start of every pipeline phase by `scripts/phase_runner.sh`. After implementing something, append a short "Implemented in <phase>:" note to the relevant section and update `docs/phase-status.md`.
+## Orientation (read these files yourself — do NOT rely on memory)
+- docs/ARCHITECTURE.md = living architecture map (package layout, core
+  subsystem file:line anchors, build/CI essentials, gotchas). READ IT.
+- docs/phase-status.md = phase status truth table. READ IT, then UPDATE
+  your phase's row when you finish.
+- workspace/PHASES.md = full phase table.
+- workspace/SECURITY_FIX_PLAN.md + docs/security-report*.md = security
+  findings status (only if your phase touches security).
+
+## Your task
+Execute the phase described in workspace/phase-158/PROMPT.md. Read that file now and
+complete it fully. The context above is orientation only.
+

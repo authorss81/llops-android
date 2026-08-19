@@ -79,8 +79,8 @@ class B1Plat02ShareConfirmationTest {
         assertTrue("the dialog title must state it clips into InkFlow", source.contains("\"Clip into InkFlow?\""))
         assertTrue("the dialog must summarize the held share", source.contains("ClipShareConfirmNotice.summary(request.clip)"))
         assertTrue(
-            "confirm must route through the ViewModel state (R2-B1P-05)",
-            source.contains("TextButton(onClick = { viewModel.confirmPendingShare() })")
+            "confirm must route through the ViewModel state (R2-B1P-05) and carry the 22.5 capture mode",
+            source.contains("viewModel.confirmPendingShare(clipMode)")
         )
         assertTrue(
             "dismiss must clear the ViewModel-held confirm",
@@ -91,11 +91,11 @@ class B1Plat02ShareConfirmationTest {
             "the dialog render must be gated under authenticated",
             source.contains("if (authenticated) {") && source.contains("pendingShareConfirm?.let { request ->")
         )
-        val confirm = viewModelSource.substringAfter("fun confirmPendingShare()")
-            .substringBefore("fun consumePendingShare()")
+        val confirm = viewModelSource.substringAfter("fun confirmPendingShare(captureMode: ShareCaptureMode")
+            .substringBefore("fun consumePendingShare")
         assertTrue(
-            "confirm must transition the hold into the pending share WITHOUT copying",
-            confirm.contains("PendingSharePolicy.toPendingShare(request)")
+            "confirm must transition the hold into the pending share WITHOUT copying (22.5: + capture mode)",
+            confirm.contains("PendingSharePolicy.toPendingShare(request")
         )
         assertFalse("confirm itself must not copy bytes", confirm.contains("copySharedUris("))
     }

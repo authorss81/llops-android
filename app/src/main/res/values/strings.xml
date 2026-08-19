@@ -1,3 +1,5 @@
 <resources>
     <string name="app_name">InkFlow</string>
+    <string name="widget_quick_capture_label">New note</string>
+    <string name="widget_quick_capture_desc">Open a new note in InkFlow</string>
 </resources>

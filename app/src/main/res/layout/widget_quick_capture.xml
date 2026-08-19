@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Phase 158 (22.5b): 1x1/2x1 home-widget tile. LAUNCHER SHORTCUT ONLY —
+     icon + fixed label, never any note content, never any vault data. The
+     whole tile is one PendingIntent to MainActivity carrying the
+     WidgetLaunchPolicy.EXTRA_QUICK_CAPTURE boolean. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_quick_capture_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@android:drawable/dialog_holo_light_frame"
+    android:gravity="center"
+    android:orientation="vertical"
+    android:padding="6dp">
+
+    <ImageView
+        android:id="@+id/widget_quick_capture_icon"
+        android:layout_width="24dp"
+        android:layout_height="24dp"
+        android:contentDescription="@string/widget_quick_capture_desc"
+        android:importantForAccessibility="no"
+        android:src="@drawable/widget_quick_capture_icon" />
+
+    <TextView
+        android:id="@+id/widget_quick_capture_label"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="2dp"
+        android:ellipsize="end"
+        android:maxLines="1"
+        android:text="@string/widget_quick_capture_label"
+        android:textColor="?android:attr/textColorPrimary"
+        android:textSize="11sp" />
+</LinearLayout>

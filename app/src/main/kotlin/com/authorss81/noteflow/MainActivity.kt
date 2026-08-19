@@ -45,6 +45,9 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.authorss81.noteflow.data.model.NotePageEntity
 import com.authorss81.noteflow.services.DatabaseIntegrityPolicy
+import com.authorss81.noteflow.services.PendingSharePolicy
+import com.authorss81.noteflow.services.ShareCaptureMode
+import com.authorss81.noteflow.services.WidgetLaunchPolicy
 import com.authorss81.noteflow.theme.NoteflowTheme
 import com.authorss81.noteflow.ui.screens.EditorScreen
 import com.authorss81.noteflow.ui.screens.HomeScreen
@@ -111,6 +114,12 @@ class MainActivity : FragmentActivity() {
     // anti-theft app is exactly the exposure this closes.
     private var pauseCoverActive by mutableStateOf(false)
 
+    // Phase 158 (22.5b): a home-widget "New note" tap while the vault is LOCKED
+    // must not create anything (no DEK). We remember the launcher request and
+    // fire the quick-capture the moment `authenticated` turns true — the app
+    // opens straight to a fresh note exactly as the widget promised.
+    private var quickCaptureRequested by mutableStateOf(false)
+
     // Phase 38: the global Command Palette HUD is activity-level state so the
     // ON_PAUSE cover can also dismiss its window (it is a separate Dialog window
     // and spans above the activity content).
@@ -149,6 +158,10 @@ class MainActivity : FragmentActivity() {
         }
 
         readShareIntent(intent)
+        // Phase 158 (22.5b): the home widget is a launcher shortcut carrying the
+        // explicit EXTRA_QUICK_CAPTURE boolean — remember it and fire the new-note
+        // flow once the vault is authenticated (see the LaunchedEffect below).
+        handleQuickCaptureIntent(intent)
 
         lifecycle.addObserver(LifecycleEventObserver { _, event ->
             when (event) {
@@ -289,6 +302,10 @@ class MainActivity : FragmentActivity() {
             // of creation; see ActivePageTracker.
             var activeTracker by remember { mutableStateOf(com.authorss81.noteflow.services.ActivePageTrackerState()) }
             var showGraphView by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
+            // Phase 158 (22.5): a note opened FROM a share-sheet capture should
+            // start in reader/focus mode — the clip is for reading. Holds the
+            // captured page's id until MarkdownPreviewScreen consumes it.
+            var readerModeRequestedFor by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf<String?>(null) }
             // R2-B1P-05 (phase-140): share-flow state + the command-palette HUD
             // open/close live at activity level (ViewModel-scoped / activity
             // field) so rotation can neither re-prompt an answered confirm nor
@@ -400,9 +417,38 @@ class MainActivity : FragmentActivity() {
                     viewModel.showSnackbar("Nothing readable to clip.", isLong = true)
                     return@LaunchedEffect
                 }
+                // Phase 158 (22.5a): "capture as new note vs append to current".
+                // The honest decision table (PendingSharePolicy.resolveAppendTarget)
+                // routes APPEND_TO_ACTIVE to the open note ONLY for a text-only
+                // clip with an active page; everything else lands as a new note.
+                val target = activePage
+                val resolution = com.authorss81.noteflow.services.PendingSharePolicy.resolveAppendTarget(
+                    hasActivePage = target != null,
+                    clipHasImages = paths.isNotEmpty(),
+                    mode = share.captureMode
+                )
+                if (resolution == com.authorss81.noteflow.services.AppendResolution.APPEND_TO_ACTIVE && target != null) {
+                    viewModel.appendSharedContentToPage(target, share.text)
+                    viewModel.showSnackbar("Shared text added to this note")
+                    return@LaunchedEffect
+                }
                 viewModel.createNoteFromSharedContent(share.text, paths) { page ->
+                    // Phase 158 (22.5): reader mode is the default post-capture
+                    // destination — the fresh note opens in focus/reading mode.
+                    readerModeRequestedFor = page.id
                     setActivePage(page)
                 }
+            }
+
+            // Phase 158 (22.5b): the home-widget quick-capture fires the same
+            // new-note flow the Add FAB uses, but ONLY once the vault is
+            // authenticated (a locked vault has no DEK and B2-UI-1 rejects any
+            // write). The flag is consumed so a later unlock never re-creates.
+            LaunchedEffect(authenticated, quickCaptureRequested) {
+                if (!authenticated) return@LaunchedEffect
+                if (!quickCaptureRequested) return@LaunchedEffect
+                quickCaptureRequested = false
+                viewModel.addPage("New Page", onCreated = setActivePage)
             }
 
             NoteflowTheme(themeMode = themeMode) {
@@ -510,7 +556,7 @@ class MainActivity : FragmentActivity() {
                                         )
                                     } else {
                                         com.authorss81.noteflow.ui.components.FluidPageReveal(pageKey = page.id) {
-                                        if (page.title.endsWith(".md") || page.title.endsWith(".txt")) {
+                                        if (page.title.endsWith(".md") || page.title.endsWith(".txt") || page.sourceFileType == "text") {
                                             val contentText by produceState(initialValue = "", page.id) {
                                                 // B2-UI-5 (phase-74): the body read awaits any in-flight body
                                                 // save for the page and re-reads the freshly-committed body from
@@ -521,10 +567,20 @@ class MainActivity : FragmentActivity() {
                                                     viewModel.readMarkdownNoteBody(page.id, page.extractedText, page.sourceFilePath, page.sourceFileType)
                                                 }
                                             }
+                                            // Phase 158 (22.5): a note opened from a share-sheet
+                                            // capture starts in reader/focus mode (see the apply
+                                            // LaunchedEffect). The request is one-shot — consumed
+                                            // by this screen and cleared so a later unlock never
+                                            // re-applies it.
+                                            val initialReaderMode = readerModeRequestedFor == page.id
                                             MarkdownPreviewScreen(
                                                 page = page,
                                                 initialContent = contentText,
                                                 viewModel = viewModel,
+                                                initialReaderMode = initialReaderMode,
+                                                onConsumeReaderMode = {
+                                                    if (readerModeRequestedFor == page.id) readerModeRequestedFor = null
+                                                },
                                                 onBack = { setActivePage(null) },
                                                 onOpenWikiLink = { targetTitle ->
                                                     viewModel.openPageByTitle(targetTitle, this@MainActivity) { openedPage ->
@@ -608,7 +664,7 @@ class MainActivity : FragmentActivity() {
                                                 Box(modifier = Modifier.weight(1.6f).fillMaxHeight()) {
                                                     val page = activePage
                                                     if (page != null) {
-                                                        if (page.title.endsWith(".md") || page.title.endsWith(".txt")) {
+                                                        if (page.title.endsWith(".md") || page.title.endsWith(".txt") || page.sourceFileType == "text") {
                                                             val contentText by produceState(initialValue = "", page.id) {
                                                                 // B2-UI-5 (phase-74): the body read awaits any in-flight body
                                                                 // save for the page and re-reads the freshly-committed body
@@ -619,10 +675,16 @@ class MainActivity : FragmentActivity() {
                                                                     viewModel.readMarkdownNoteBody(page.id, page.extractedText, page.sourceFilePath, page.sourceFileType)
                                                                 }
                                                             }
+                                                            // Phase 158 (22.5): one-shot reader-mode request consumed here.
+                                                            val initialReaderMode = readerModeRequestedFor == page.id
                                                             MarkdownPreviewScreen(
                                                                 page = page,
                                                                 initialContent = contentText,
                                                                 viewModel = viewModel,
+                                                                initialReaderMode = initialReaderMode,
+                                                                onConsumeReaderMode = {
+                                                                    if (readerModeRequestedFor == page.id) readerModeRequestedFor = null
+                                                                },
                                                                 onBack = { setActivePage(null) },
                                                                 onOpenWikiLink = { targetTitle ->
                                                                     viewModel.openPageByTitle(targetTitle, this@MainActivity) { openedPage ->
@@ -700,8 +762,45 @@ class MainActivity : FragmentActivity() {
                         // rotation), and the dialog is rendered ONLY while authenticated
                         // — it must never float above the LockScreen after a screen-off
                         // lock.
+                        //
+                        // Phase 158 (22.5a): the dialog also carries the new-vs-append
+                        // capture choice and a per-session expiry. The expiry auto-
+                        // dismisses a stale hold (CONFIRM_HOLD_EXPIRY_MS) so an
+                        // unnoticed dialog never lingers; the CONFIRMED clip stays
+                        // exempt (it was explicitly approved and applies on the very
+                        // next authenticated frame, and lock() drops it for password
+                        // vaults — no content ever survives a lock).
                         if (authenticated) {
                             pendingShareConfirm?.let { request ->
+                                // Expire a stale, un-confirmed hold: schedule a
+                                // cancel at the hold deadline (re-checked so an
+                                // already-answered confirm is never clobbered).
+                                LaunchedEffect(authenticated, pendingShareConfirm) {
+                                    val req = pendingShareConfirm ?: return@LaunchedEffect
+                                    val remaining = PendingSharePolicy.CONFIRM_HOLD_EXPIRY_MS -
+                                        (System.currentTimeMillis() - req.stagedAtMs)
+                                    if (remaining <= 0L) {
+                                        viewModel.cancelPendingShareConfirm()
+                                    } else {
+                                        delay(remaining)
+                                        if (viewModel.pendingShareConfirm.value == req) {
+                                            viewModel.cancelPendingShareConfirm()
+                                            viewModel.showSnackbar(
+                                                "The share confirmation expired — nothing was clipped.",
+                                                isLong = false
+                                            )
+                                        }
+                                    }
+                                }
+                                // 22.5: the capture mode choice is hoisted out of the
+                                // ViewModel state (it is purely presentational) but
+                                // remembered across rotation; it resets to new-note
+                                // whenever a fresh clip arrives.
+                                var clipModeToken by rememberSaveable(pendingShareConfirm) {
+                                    mutableStateOf(ShareCaptureMode.NEW_NOTE.name)
+                                }
+                                val clipMode = ShareCaptureMode.fromToken(clipModeToken)
+                                val appendUsable = activePage != null && request.uriStrings.isEmpty()
                                 androidx.compose.material3.AlertDialog(
                                     onDismissRequest = { viewModel.cancelPendingShareConfirm() },
                                     title = { Text("Clip into InkFlow?") },
@@ -714,10 +813,69 @@ class MainActivity : FragmentActivity() {
                                                 style = MaterialTheme.typography.bodyMedium,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                                             )
+                                            Spacer(Modifier.height(12.dp))
+                                            // 22.5: honest new-vs-append choice. Append
+                                            // is disabled (never silently re-routed) when
+                                            // there is no active note or the clip carries
+                                            // images — those degrade to a new note and the
+                                            // button says so.
+                                            Text(
+                                                "Add as",
+                                                style = MaterialTheme.typography.labelLarge
+                                            )
+                                            Row(
+                                                modifier = Modifier
+                                                    .padding(top = 4.dp)
+                                                    .clickable(enabled = true) {
+                                                        clipModeToken = ShareCaptureMode.NEW_NOTE.name
+                                                    }
+                                                    .padding(vertical = 4.dp),
+                                                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                                            ) {
+                                                androidx.compose.material3.RadioButton(
+                                                    selected = clipMode == ShareCaptureMode.NEW_NOTE,
+                                                    onClick = {
+                                                        clipModeToken = ShareCaptureMode.NEW_NOTE.name
+                                                    }
+                                                )
+                                                Spacer(Modifier.width(8.dp))
+                                                Text("A new note")
+                                            }
+                                            Row(
+                                                modifier = Modifier
+                                                    .clickable(enabled = appendUsable) {
+                                                        clipModeToken = ShareCaptureMode.APPEND_TO_ACTIVE.name
+                                                    }
+                                                    .padding(vertical = 4.dp),
+                                                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                                            ) {
+                                                androidx.compose.material3.RadioButton(
+                                                    selected = clipMode == ShareCaptureMode.APPEND_TO_ACTIVE,
+                                                    enabled = appendUsable,
+                                                    onClick = {
+                                                        clipModeToken = ShareCaptureMode.APPEND_TO_ACTIVE.name
+                                                    }
+                                                )
+                                                Spacer(Modifier.width(8.dp))
+                                                Text(
+                                                    if (appendUsable) "Append to the open note"
+                                                    else "Append to the open note (not available)"
+                                                )
+                                            }
+                                            if (!appendUsable) {
+                                                Text(
+                                                    if (request.uriStrings.isEmpty())
+                                                        "No note is open right now — this clip will be a new note."
+                                                    else
+                                                        "Attachments become a new note.",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
                                         }
                                     },
                                     confirmButton = {
-                                        TextButton(onClick = { viewModel.confirmPendingShare() }) {
+                                        TextButton(onClick = { viewModel.confirmPendingShare(clipMode) }) {
                                             Text("Clip")
                                         }
                                     },
@@ -779,6 +937,27 @@ class MainActivity : FragmentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         readShareIntent(intent)
+        handleQuickCaptureIntent(intent)
+    }
+
+    /**
+     * Phase 158 (22.5b): the home widget taps MainActivity with an explicit
+     * [WidgetLaunchPolicy.EXTRA_QUICK_CAPTURE] boolean. We never create a note
+     * here (a locked vault has no DEK and B2-UI-1 rejects it anyway) — we
+     * remember the launcher request; the composable fires the quick-capture
+     * once `authenticated` is true. A tap while already authenticated re-fires
+     * through onNewIntent and the LaunchedEffect consumes it on the next frame.
+     */
+    private fun handleQuickCaptureIntent(intent: Intent?) {
+        if (intent == null) return
+        // Intent extras → the pure-JVM Map contract WidgetLaunchPolicy parses
+        // (Bundle.toMap() gives Any?, which does not satisfy the typed contract).
+        val extras: Map<String, Boolean?> = intent.extras?.keySet()?.associateWith { key ->
+            (intent.extras?.get(key) as? Boolean)
+        } ?: emptyMap()
+        if (WidgetLaunchPolicy.hasQuickCaptureExtra(extras)) {
+            quickCaptureRequested = true
+        }
     }
 
     // B1-PLAT-4 (phase-60): the runtime action-screen-off receiver lives exactly
