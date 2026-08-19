@@ -36,6 +36,23 @@
 > no multi-select yet, so no separate selection state. Public `GalleryView(pages,
 > viewModel, onOpenPage, modifier)` API unchanged — `HomeScreen.kt:1333` keeps working.
 
+> **Implemented in phase-166** (2026-08-19, compact-screen overflow pass): no fixed-width
+> Row may clip on a 360dp portrait screen. (1) `MarkdownPreviewScreen` app bar is
+> decluttered — the title row holds only the note title + the Reader toggle chip, and the
+> view-mode / split-orientation / Serif chips moved to a full-width horizontally
+> scrollable sub-bar beneath the app bar (`MarkdownPreviewScreen.kt:564-635`; Serif stays
+> reachable in reader/preview modes). (2) `WebDavSyncDialog` primary actions moved from the
+> alert-dialog confirm row to stacked full-width body buttons (`WebDavSyncDialog.kt:305-388`;
+> `confirmButton` = Close only, `:391`). (3) `CalendarView` stacks the date summary above
+> the "New Note for Date" button (`CalendarView.kt:188-212`). (4) HomeScreen import
+> orientation chips row is horizontally scrollable (`HomeScreen.kt:1711-1714`). (5) the
+> filtered-by-tag banner text wraps/ellipsizes (`HomeScreen.kt:1233-1245`).
+> (6) `InteractiveTutorial` puts "Skip Tutorial" on its own line and end-aligns the
+> Back/Skip-step/Next row (`InteractiveTutorial.kt:338-402`). (7) KnowledgeGraph card title
+> wraps (`KnowledgeGraphScreen.kt:670`). Regression guard:
+> `app/src/test/java/com/authorss81/noteflow/Phase166LayoutOverflowTest.kt` (8 source-
+> pinning tests, `class Phase166LayoutOverflowTest` at `:29`).
+
 ## Core subsystem anchors (file:line)
 
 - **Encryption/vault**: `services/EncryptionService.kt:18` (PBKDF2 600k, AES-256-GCM, NFKC-normalized password);

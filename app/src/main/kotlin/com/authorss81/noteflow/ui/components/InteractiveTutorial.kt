@@ -334,12 +334,13 @@ fun InteractiveTutorial(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Main actions
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
+                // Main actions.
+                // Phase 166: "Skip Tutorial" previously sat next to the Back /
+                // Skip-step / Next buttons in one SpaceBetween row — the four
+                // buttons together exceeded the dialog width on 360dp screens and
+                // clipped. They now sit on two full-width lines, so there is no
+                // width to overflow.
+                Column(modifier = Modifier.fillMaxWidth()) {
                     TextButton(
                         onClick = onSkip,
                         modifier = Modifier.minimumInteractiveComponentSize()
@@ -352,7 +353,8 @@ fun InteractiveTutorial(
                     }
 
                     Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         if (!isFirst) {

@@ -301,10 +301,12 @@ fun WebDavSyncDialog(
                 if (isLoading) {
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(top = 6.dp))
                 }
-            }
-        },
-        confirmButton = {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+
+                // Phase 166: the primary actions live in the BODY as full-width
+                // buttons instead of two side-by-side confirm buttons — the AlertDialog
+                // buttons row is a compact right-aligned row, and "Upload Backup" +
+                // "Download & Restore" together overflow the dialog on 360dp devices.
+                // A stack of full-width buttons can never clip on any supported width.
                 Button(
                     onClick = {
                         isLoading = true
@@ -332,7 +334,8 @@ fun WebDavSyncDialog(
                             }
                         }
                     },
-                    enabled = !isLoading && username.isNotBlank() && passwordOrToken.isNotBlank()
+                    enabled = !isLoading && username.isNotBlank() && passwordOrToken.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
                     Icon(Icons.Outlined.CloudUpload, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(6.dp))
@@ -376,7 +379,8 @@ fun WebDavSyncDialog(
                             }
                         }
                     },
-                    enabled = !isLoading && !isRestoring && username.isNotBlank() && passwordOrToken.isNotBlank()
+                    enabled = !isLoading && !isRestoring && username.isNotBlank() && passwordOrToken.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
                     Icon(Icons.Outlined.CloudDownload, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(6.dp))
@@ -384,7 +388,7 @@ fun WebDavSyncDialog(
                 }
             }
         },
-        dismissButton = {
+        confirmButton = {
             TextButton(onClick = onDismiss) {
                 Text("Close")
             }

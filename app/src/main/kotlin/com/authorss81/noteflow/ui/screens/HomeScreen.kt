@@ -1228,10 +1228,19 @@ fun HomeScreen(
                             ) {
                                 Row(
                                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.SpaceBetween
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text("Filtered by tag: #${activeTagFilterPath}", style = MaterialTheme.typography.bodyMedium)
+                                    // Phase 166: the tag path can be long (nested
+                                    // tags, date keys), so it takes the flexible width
+                                    // and wraps/ellipsizes instead of pushing the close
+                                    // button out of the banner.
+                                    Text(
+                                        "Filtered by tag: #${activeTagFilterPath}",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        modifier = Modifier.weight(1f),
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
                                     IconButton(
                                         onClick = {
                                             activeTagFilterPath = null
@@ -1697,7 +1706,12 @@ fun HomeScreen(
                         Spacer(modifier = Modifier.height(6.dp))
                         Row(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                // Phase 166: this chip row (~350dp natural) overflows
+                                // the dialog on 360dp screens, so it scrolls horizontally
+                                // instead of clipping the "Landscape" chip.
+                                .horizontalScroll(rememberScrollState())
                         ) {
                             FilterChip(
                                 selected = selectedImportOrientation == "AUTO",

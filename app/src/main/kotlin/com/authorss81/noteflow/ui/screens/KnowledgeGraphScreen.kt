@@ -41,6 +41,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.authorss81.noteflow.data.model.NotePageEntity
@@ -666,7 +667,17 @@ fun KnowledgeGraphScreen(
                                             .background(node.color, RoundedCornerShape(6.dp))
                                     )
                                     Spacer(Modifier.width(8.dp))
-                                    Text(node.page.title, style = MaterialTheme.typography.titleMedium)
+                                    // Phase 166: a long title (date-stamped import
+                                    // titles, file names with paths) would otherwise
+                                    // overflow the card, so it wraps within the
+                                    // column next to the Open Note button.
+                                    Text(
+                                        node.page.title,
+                                        style = MaterialTheme.typography.titleMedium,
+                                        modifier = Modifier.weight(1f),
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
                                 }
                                 Text(
                                     "Cluster ${node.clusterId} · tap again to open note",

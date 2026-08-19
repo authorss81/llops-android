@@ -185,10 +185,14 @@ fun CalendarView(
 
         // Selected Date Details & Pages List
         val selectedPages = pagesByDate[selectedDateKey] ?: emptyList()
-        Row(
+        // Phase 166: stack the date summary and the "New Note for Date" button
+        // instead of forcing both into one right-aligned row — on a 360dp screen
+        // the long "Notes for <YYYY-MM-DD> (n)" text plus the button-label row no
+        // longer fits, and a fixed-width Row clips whichever doesn't. A Column lets
+        // the summary wrap and the button stay at its natural width.
+        Column(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+            verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             Text(
                 text = "Notes for $selectedDateKey (${selectedPages.size})",

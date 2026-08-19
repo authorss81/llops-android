@@ -2,6 +2,7 @@ package com.authorss81.noteflow.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -277,49 +278,6 @@ fun MarkdownPreviewScreen(
                             label = { Text(stringResource(com.authorss81.noteflow.R.string.reader_toggle_label), style = MaterialTheme.typography.labelSmall) },
                             leadingIcon = { Icon(Icons.Outlined.Book, contentDescription = null, modifier = Modifier.size(14.dp)) }
                         )
-                        if (!readerMode) {
-                        FilterChip(
-                            selected = viewMode == MarkdownViewMode.SPLIT,
-                            onClick = {
-                                viewMode = when (viewMode) {
-                                    MarkdownViewMode.EDIT -> MarkdownViewMode.SPLIT
-                                    MarkdownViewMode.SPLIT -> MarkdownViewMode.PREVIEW
-                                    MarkdownViewMode.PREVIEW -> MarkdownViewMode.EDIT
-                                }
-                            },
-                            label = { Text(viewMode.name, style = MaterialTheme.typography.labelSmall) },
-                            leadingIcon = { Icon(Icons.Outlined.Splitscreen, contentDescription = null, modifier = Modifier.size(14.dp)) }
-                        )
-                        if (viewMode == MarkdownViewMode.SPLIT) {
-                            FilterChip(
-                                selected = splitOrientation != SplitOrientation.AUTO,
-                                onClick = {
-                                    splitOrientation = when (splitOrientation) {
-                                        SplitOrientation.AUTO -> SplitOrientation.VERTICAL
-                                        SplitOrientation.VERTICAL -> SplitOrientation.HORIZONTAL
-                                        SplitOrientation.HORIZONTAL -> SplitOrientation.AUTO
-                                    }
-                                },
-                                label = {
-                                    Text(
-                                        when (splitOrientation) {
-                                            SplitOrientation.AUTO -> if (isPortrait) "Auto (Top/Bottom)" else "Auto (Left/Right)"
-                                            SplitOrientation.VERTICAL -> "Top/Bottom"
-                                            SplitOrientation.HORIZONTAL -> "Left/Right"
-                                        },
-                                        style = MaterialTheme.typography.labelSmall
-                                    )
-                                },
-                                leadingIcon = {
-                                    Icon(
-                                        if (isTopBottomSplit) Icons.Outlined.TableRows else Icons.Outlined.ViewColumn,
-                                        contentDescription = "Toggle Split Orientation",
-                                        modifier = Modifier.size(14.dp)
-                                    )
-                                }
-                            )
-                        }
-                    }
                     }
                 },
                 navigationIcon = {
@@ -354,23 +312,10 @@ fun MarkdownPreviewScreen(
                             Icon(Icons.Outlined.Save, contentDescription = "Save Content")
                         }
                     }
-                    if (readerMode || viewMode != MarkdownViewMode.EDIT) {
-                        FilterChip(
-                            selected = serifReadingMode,
-                            onClick = {
-                                serifReadingMode = !serifReadingMode
-                                viewModel.settings.serifReadingEnabled = serifReadingMode
-                            },
-                            label = { Text("Serif", style = MaterialTheme.typography.labelSmall) },
-                            leadingIcon = {
-                                Icon(
-                                    Icons.Outlined.Book,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(14.dp)
-                                )
-                            }
-                        )
-                    }
+                    // Phase 166: the Serif chip moved out of the app-bar actions
+                    // into the full-width sub-bar beneath the app bar (see below),
+                    // where the editor/preview view mode + split orientation chips
+                    // also live. The app bar no longer crowds on 360dp screens.
                     // Phase 158 (22.5): the plugin menu is editing chrome (text
                     // transforms insert/rewrite content) — hidden in reader mode.
                     if (!readerMode) {
@@ -609,10 +554,87 @@ fun MarkdownPreviewScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(12.dp)
-                .imePadding()
         ) {
-            if (readerMode) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(12.dp)
+                    .imePadding()
+            ) {
+                // Phase 166: the view-mode, split-orientation and serif chips moved
+                // out of the top app bar so the title / action icons no longer crowd
+                // on 360dp screens. They now live in this full-width sub-bar, which
+                // scrolls horizontally if a future chip ever gets wider than the
+                // screen — the app bar itself can never clip again.
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    FilterChip(
+                        selected = serifReadingMode,
+                        onClick = {
+                            serifReadingMode = !serifReadingMode
+                            viewModel.settings.serifReadingEnabled = serifReadingMode
+                        },
+                        label = { Text("Serif", style = MaterialTheme.typography.labelSmall) },
+                        leadingIcon = {
+                            Icon(
+                                Icons.Outlined.Book,
+                                contentDescription = null,
+                                modifier = Modifier.size(14.dp)
+                            )
+                        }
+                    )
+                    if (!readerMode) {
+                        FilterChip(
+                            selected = viewMode == MarkdownViewMode.SPLIT,
+                            onClick = {
+                                viewMode = when (viewMode) {
+                                    MarkdownViewMode.EDIT -> MarkdownViewMode.SPLIT
+                                    MarkdownViewMode.SPLIT -> MarkdownViewMode.PREVIEW
+                                    MarkdownViewMode.PREVIEW -> MarkdownViewMode.EDIT
+                                }
+                            },
+                            label = { Text(viewMode.name, style = MaterialTheme.typography.labelSmall) },
+                            leadingIcon = { Icon(Icons.Outlined.Splitscreen, contentDescription = null, modifier = Modifier.size(14.dp)) }
+                        )
+                        if (viewMode == MarkdownViewMode.SPLIT) {
+                            FilterChip(
+                                selected = splitOrientation != SplitOrientation.AUTO,
+                                onClick = {
+                                    splitOrientation = when (splitOrientation) {
+                                        SplitOrientation.AUTO -> SplitOrientation.VERTICAL
+                                        SplitOrientation.VERTICAL -> SplitOrientation.HORIZONTAL
+                                        SplitOrientation.HORIZONTAL -> SplitOrientation.AUTO
+                                    }
+                                },
+                                label = {
+                                    Text(
+                                        when (splitOrientation) {
+                                            SplitOrientation.AUTO -> if (isPortrait) "Auto (Top/Bottom)" else "Auto (Left/Right)"
+                                            SplitOrientation.VERTICAL -> "Top/Bottom"
+                                            SplitOrientation.HORIZONTAL -> "Left/Right"
+                                        },
+                                        style = MaterialTheme.typography.labelSmall
+                                    )
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        if (isTopBottomSplit) Icons.Outlined.TableRows else Icons.Outlined.ViewColumn,
+                                        contentDescription = "Toggle Split Orientation",
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                }
+                            )
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(6.dp))
+                Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                    if (readerMode) {
                 // Phase 158 (22.5): reader/focus mode is read-only by construction —
                 // the hybrid editor is never composed here, so long-press can never
                 // open an edit surface. Instant swap, no transition animation
@@ -768,6 +790,8 @@ fun MarkdownPreviewScreen(
                         }
                     }
                 }
+                }
+            }
             }
 
             if (showSlashCommands) {
