@@ -63,17 +63,30 @@ inset-aware through their Scaffold content padding:
 - `KnowledgeGraphScreen.kt:385-389` — content root `.padding(padding)`; the bottom-aligned selected-node card (`:650-654`) is inside that padded content.
 - `EditorScreen.kt:1810-1814` — content root `.padding(padding)`; the canvas, minimap and draggable `FloatingToolDock` (already `WindowInsets.safeDrawing`-aware at `:2563-2567`) all sit above the bar.
 
+> **Review fix (2026-08-19) — honest scope note:** this phase changed NO code in the
+> four content screens (Home/Editor/Preview/Graph) — they were already inset-aware,
+> so if the calendar symptom is still visible on a real gesture-nav device the root
+> cause is NOT the nav-bar inset. The likeliest secondary candidate is the calendar's
+> FIXED 260dp month grid + summary row (`CalendarView.kt:139` + `:219`) overflowing
+> short/landscape viewports and collapsing the `weight(1f)` pages list
+> (`CalendarView.kt:229-231`) to near-zero height — a short-screen layout issue, not a
+> nav-bar-overlay one. It is left as a follow-up (phase-27 bug-fix queue) rather than
+> silently re-scoping this UI pass.
+
 ### 1c. Edge-to-edge recovery screens (no Scaffold) — real gap, FIXED
 
 `RestoreBlockedScreen`, `CorruptionRecoveryScreen`, `KeystoreKeyLostScreen`
-(`MainActivity.kt:1261`, `:1336`, `:1459`) render
+(`MainActivity.kt:1261`, `:1339`, `:1465`) render
 `Column(fillMaxSize().verticalScroll(...).padding(24.dp))` with NO Scaffold wrapper.
 Under edge-to-edge their scroll container reaches the window bottom, so the last
 row (the "Choose Backup & Restore" / "Start Fresh" buttons and the error text)
 could scroll under the nav bar.
 
-AFTER: each gets `.navigationBarsPadding()` appended to its scroll-content modifier
-(`MainActivity.kt:1292`, `:1370`, `:1490`) — same dynamic inset. The
+AFTER: each gets `.navigationBarsPadding()` + `.statusBarsPadding()` appended to its
+scroll-content modifier (`MainActivity.kt:1294-1295`, `:1375-1376`, `:1498-1499`) —
+dynamic insets. The status-bar inset is the **phase-167 review fix** (the original
+draft only covered the bottom edge; these screens draw under the TRANSPARENT status
+bar too, and the top row relied on a hard-coded 48dp `Spacer`). The
 `LockScreen` already had `systemBarsPadding()` (`LockScreen.kt:72`), left untouched.
 
 ## 2. Definition-of-done check
@@ -92,9 +105,9 @@ AFTER: each gets `.navigationBarsPadding()` appended to its scroll-content modif
 
 | File | Change |
 |---|---|
-| `app/src/main/kotlin/com/authorss81/noteflow/MainActivity.kt:804-810` | Root `SnackbarHost` + `.navigationBarsPadding()` (`:808`, messages above the bar). |
-| `app/src/main/kotlin/com/authorss81/noteflow/MainActivity.kt:1292, 1370, 1490` (screens `:1261`, `:1336`, `:1459`) | `RestoreBlockedScreen` / `CorruptionRecoveryScreen` / `KeystoreKeyLostScreen` scroll content + `.navigationBarsPadding()`. |
-| `app/src/test/java/com/authorss81/noteflow/Phase167BottomNavOverlayTest.kt` | NEW — 8 source-pinning regression tests (§4). |
+| `app/src/main/kotlin/com/authorss81/noteflow/MainActivity.kt:804-809` | Root `SnackbarHost` + `.navigationBarsPadding()` (`:808`, messages above the bar). |
+| `app/src/main/kotlin/com/authorss81/noteflow/MainActivity.kt:1294-1295, 1375-1376, 1498-1499` (screens `:1261`, `:1339`, `:1465`) | `RestoreBlockedScreen` / `CorruptionRecoveryScreen` / `KeystoreKeyLostScreen` scroll content + `.navigationBarsPadding()` (bottom, original) + `.statusBarsPadding()` (top, review-fix). |
+| `app/src/test/java/com/authorss81/noteflow/Phase167BottomNavOverlayTest.kt` | NEW — 8 source-pinning regression tests (§4), review-fix hardened. |
 
 No navigation logic changed. No `.github/workflows/` edits. No schema/DB/deps.
 
@@ -102,10 +115,10 @@ No navigation logic changed. No `.github/workflows/` edits. No schema/DB/deps.
 
 | Test | Pins |
 |---|---|
-| `root SnackbarHost is inset above the navigation bar` | `navigationBarsPadding()` present on the root host, still `align(BottomCenter)`, no fixed-pixel offset. |
+| `root SnackbarHost is inset above the navigation bar` | `navigationBarsPadding()` present on the root host AND after `align(BottomCenter)` in the modifier chain (review-fix: no inset on a surface that stops bottom-anchoring), no fixed-pixel offset. |
 | 4× `…content applies Scaffold innerPadding` | Home / Editor / MarkdownPreview / KnowledgeGraph content roots each `.padding(padding)` under their `Scaffold`; preview also `.imePadding()`. |
 | `CalendarView pages list is weight-bounded…` | calendar pages `LazyColumn` is `weight(1f)` (scrollable, bounded) and NOT a fixed `.height(...)`. |
-| `recovery screens carry the navigation-bar inset` | all three Scaffold-less recovery screens include `navigationBarsPadding()`. |
+| `recovery screens carry the navigation-bar inset` | all three Scaffold-less recovery screens include `navigationBarsPadding()` (bottom) AND `statusBarsPadding()` (top, review-fix). |
 | `no surface hard-codes a pixel height for the bottom bar` | grep-guard against fixed `bottom = NN.dp` offsets in the root overlays + calendar list. |
 
 ## 5. Verification
@@ -132,14 +145,20 @@ Triage of `docs/kali-report-round2.md` (27 rows `R2-KS-01..07`, `R2-KS-10..19`,
 | **R2-KS-21** | **MEDIUM** | ML Kit OCR `assets/mlkit-google-ocr-models/` + `libmlkit_google_ocr_pipeline.so` + translate `libtranslate_jni.so` + `res/raw/translate_models_metadata.json` in base APK — contradicts approved downloadable-plugin architecture | **no phase owned it → NEW `phase-175`** |
 | **R2-KS-27** | **LOW** | release payload ships `DebugProbesKt.bin` + `kotlin-tooling-metadata.json` + `firebase-*.properties` | **no phase owned it → NEW `phase-176`** |
 | **R2-KS-24** | **INFO** | no R8 `mapping.txt` retained for forensic back-mapping | **no phase owned it → NEW `phase-176`** (same release-packaging area as R2-KS-27) |
-| R2-KS-22 | MEDIUM (ABI splits re-confirmed) | identical to NEW-02 under phase-170 scope | **already covered → phase-170** |
+| R2-KS-22 | LOW | ABI splits missing (4 ABIs × 6 libs, x86/x86_64 unused) — legacy alias of round-1 Phase-32-NEW-02 | **already covered → phase-170** |
 | R2-KS-17 | INFO | placeholder plugin cert-pin fails closed | **already covered → phase-171** (fail-closed pin test + runbook) |
-| R2-KS-23 | INFO | plugin-channel pin rotation runbook | **already covered → phase-171** |
-| R2-KS-25 | INFO | FileProvider restricted to `apk/` + `exports/` | PASS — no fix needed (INFO, verified restricted) |
-| R2-KS-26 | INFO | allowBackup/backup-rules off | PASS — no fix needed (INFO) |
-| R2-KS-28 | INFO | single exporter + share-sheet SEND filters | PASS — no fix needed (INFO) |
+| R2-KS-23 | INFO | signing scheme v2-only (no v3/v3.1/v4) — blocks key rotation | **already covered → phase-171** (round-1 Phase-32-NEW-03: force `enableV3Signing`) |
+| R2-KS-25 | INFO | baseline profile absent (`ProfileInstaller` wired, no profile in `assets/`) | PASS — phase-03 round-1 deferral (perf, non-security) |
+| R2-KS-26 | INFO | native hardening spot-check (sqlcipher RELRO/BIND_NOW present); full per-lib check not done | deferred → `DYNAMIC-DEFERRED` (needs device/emulator) |
+| R2-KS-28 | INFO | `android:extractNativeLibs="true"` (install footprint) | PASS — optional; decision documented in phase-176 |
 | R2-KS-29 | INFO | MobSF scan exceeded 2-core runner timeout | deferred (tooling) — rerun only when a bigger runner is available |
-| R2-KS-01..07, R2-KS-10..16, R2-KS-18, R2-KS-19 | INFO/PASS | encryption, WebDAV, quarantine, FLAG_SECURE, plugin sandbox, sqlcipher RELRO/BIND_NOW, dex-string secret scan etc. | PASS-verified at phase-160 — no new work |
+| R2-KS-01..07 (except R2-KS-23/28), R2-KS-10..16, R2-KS-18, R2-KS-19 | INFO/PASS | encryption, WebDAV, quarantine, FLAG_SECURE, plugin sandbox, R2-KS-01 backup flags (`allowBackup="false"` + data-extraction rules), R2-KS-02/05-07 exported components, R2-KS-04/13 FileProvider restricted to `files-path apk/` + `cache-path exports/`, dex-string secret scan | PASS-verified at phase-160 — no new work |
+
+> **Review fix (2026-08-19):** the row descriptions for **R2-KS-23, R2-KS-25,
+> R2-KS-26 and R2-KS-28** in the first draft of this table were copy-pasted from
+> R2-KS-17/13/01/02. Corrected above to match `docs/kali-report-round2.md:101-107`
+> verbatim; the phase assignments were already correct and unchanged. R2-KS-22
+> severity corrected from MEDIUM → LOW (matches the source report).
 
 No duplicates with phases 168-174 (pre-seeded) or the new 175/176: the two new
 phases own exactly the two unowned rows, split by AREA (birth 175 = base-APK ML Kit

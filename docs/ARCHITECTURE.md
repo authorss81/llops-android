@@ -56,15 +56,17 @@
 > **Implemented in phase-167** (2026-08-19, bottom-nav-bar overlay fix — dynamic insets,
 > see `workspace/phase-167/REPORT.md`): the app draws edge-to-edge (`MainActivity.kt:252`),
 > so any bottom-anchored surface outside a Scaffold must consume the system navigation-bar
-> inset itself. The root `SnackbarHost` (`MainActivity.kt:804-810`) and the three
+> inset itself. The root `SnackbarHost` (`MainActivity.kt:804-809`) and the three
 > Scaffold-less recovery screens (`RestoreBlockedScreen`/`CorruptionRecoveryScreen`/
-> `KeystoreKeyLostScreen`, insets at `MainActivity.kt:1292/1370/1490`) gained
-> `.navigationBarsPadding()` — pure runtime inset, works on small/large screens,
-> portrait/landscape, gesture/3-button nav. The four content screens were audited and
-> already apply the Scaffold `innerPadding` (M3 default `contentWindowInsets` =
-> `systemBarsForVisualComponents`, bytecode-verified), so page lists / Calendar
-> (`CalendarView.kt:229-231` weight-bounded) / canvas / graph end above the bar.
-> Regression guard: `Phase167BottomNavOverlayTest` (8 source-pinning tests).
+> `KeystoreKeyLostScreen`, insets at `MainActivity.kt:1294-1295/1375-1376/1498-1499`) gained
+> `.navigationBarsPadding()` (bottom) — review-fix also added `.statusBarsPadding()` (top,
+> these Screens draw under the transparent status bar too) — pure runtime insets, works on
+> small/large screens, portrait/landscape, gesture/3-button nav. The four content screens
+> were audited and already apply the Scaffold `innerPadding` (M3 default
+> `contentWindowInsets` = `systemBarsForVisualComponents`, bytecode-verified), so page
+> lists / Calendar (`CalendarView.kt:229-231` weight-bounded) / canvas / graph end above
+> the bar. Regression guard: `Phase167BottomNavOverlayTest` (8 source-pinning tests,
+> review-fix hardened: modifier-order assertion + top-inset pin).
 > No fixed-pixel heights anywhere.
 
 ## Core subsystem anchors (file:line)

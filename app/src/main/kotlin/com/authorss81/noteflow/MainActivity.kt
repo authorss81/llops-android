@@ -1286,10 +1286,13 @@ private fun RestoreBlockedScreen(viewModel: NoteflowViewModel) {
             .verticalScroll(rememberScrollState())
             .padding(24.dp)
             // Phase 167: these recovery screens render edge-to-edge WITHOUT a
-            // Scaffold — the scroll container's bottom edge is the window edge,
-            // so without the dynamic navigation-bar inset the last content row
-            // (Buttons / error text) scrolls into the system nav bar area.
-            .navigationBarsPadding(),
+            // Scaffold — the scroll container reaches BOTH window edges, so it
+            // must consume the dynamic status-bar AND navigation-bar insets
+            // itself (the top inset is the phase-167 review fix; the bottom one
+            // is the original fix). Without them the first/last content row
+            // (title / Buttons / error text) scrolls under the system bars.
+            .navigationBarsPadding()
+            .statusBarsPadding(),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Spacer(Modifier.height(48.dp))
@@ -1364,10 +1367,13 @@ private fun CorruptionRecoveryScreen(viewModel: NoteflowViewModel) {
             .verticalScroll(rememberScrollState())
             .padding(24.dp)
             // Phase 167: these recovery screens render edge-to-edge WITHOUT a
-            // Scaffold — the scroll container's bottom edge is the window edge,
-            // so without the dynamic navigation-bar inset the last content row
-            // (Buttons / error text) scrolls into the system nav bar area.
-            .navigationBarsPadding(),
+            // Scaffold — the scroll container reaches BOTH window edges, so it
+            // must consume the dynamic status-bar AND navigation-bar insets
+            // itself (the top inset is the phase-167 review fix; the bottom one
+            // is the original fix). Without them the first/last content row
+            // (title / Buttons / error text) scrolls under the system bars.
+            .navigationBarsPadding()
+            .statusBarsPadding(),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Spacer(Modifier.height(48.dp))
@@ -1484,10 +1490,13 @@ private fun KeystoreKeyLostScreen(viewModel: NoteflowViewModel) {
             .verticalScroll(rememberScrollState())
             .padding(24.dp)
             // Phase 167: these recovery screens render edge-to-edge WITHOUT a
-            // Scaffold — the scroll container's bottom edge is the window edge,
-            // so without the dynamic navigation-bar inset the last content row
-            // (Buttons / error text) scrolls into the system nav bar area.
-            .navigationBarsPadding(),
+            // Scaffold — the scroll container reaches BOTH window edges, so it
+            // must consume the dynamic status-bar AND navigation-bar insets
+            // itself (the top inset is the phase-167 review fix; the bottom one
+            // is the original fix). Without them the first/last content row
+            // (title / Buttons / error text) scrolls under the system bars.
+            .navigationBarsPadding()
+            .statusBarsPadding(),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Spacer(Modifier.height(48.dp))

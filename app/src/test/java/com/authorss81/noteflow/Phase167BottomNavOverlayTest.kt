@@ -61,6 +61,13 @@ class Phase167BottomNavOverlayTest {
             "root SnackbarHost must stay bottom-centered",
             host.contains("align(Alignment.BottomCenter)")
         )
+        // Review-fix: the inset must sit INSIDE the bottom alignment (host is
+        // bottom-centered first, THEN lifted by the dynamic inset). Pinning the
+        // order stops a future edit from moving `navigationBarsPadding()` onto a
+        // surface that no longer sits at the window bottom.
+        val alignIdx = host.indexOf("align(Alignment.BottomCenter)")
+        val insetIdx = host.indexOf("navigationBarsPadding()")
+        assertTrue("align must precede the inset in the modifier chain", alignIdx in 0 until insetIdx)
         // The inset must be dynamic — no hard-coded pixel bottom for the bar.
         assertFalse(
             "the snackbar offset must not be a hard-coded pixel height",
@@ -155,6 +162,14 @@ class Phase167BottomNavOverlayTest {
             assertTrue(
                 "$name must be inset above the navigation bar",
                 block.contains("navigationBarsPadding()")
+            )
+            // Phase-167 review fix: the same Scaffold-less screens draw edge-to-
+            // edge at the TOP too (transparent status bar), so the scroll content
+            // must consume the status-bar inset as well — else the first row
+            // (title) slides under the status bar instead of under the nav bar.
+            assertTrue(
+                "$name must be inset below the status bar (review-fix)",
+                block.contains("statusBarsPadding()")
             )
         }
     }
