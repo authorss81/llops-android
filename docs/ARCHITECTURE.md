@@ -640,6 +640,26 @@
     `lock()` zeroize-before-dispose race now renders the marker, consistent with the other three
     sinks); and `loadSearchCorpus` drops undecryptable pages (`decryptPageOrNullForCorpus`, fails
     recorded only by the display reads, never a rankable marker).
+  - **Implemented in phase-169** ("pages become Unreadable after export/import", see
+    `workspace/phase-169/REPORT.md`): the export path is a faithful checkpoint→verify→stage snapshot
+    (`ImportExportService.exportBackup`, no AAD/id/DEK mutation), so export itself never corrupts a
+    row. The reported symptom was the cross-key RESTORE path: `migrateFieldCiphertexts` re-keys every
+    `fieldEncryptedColumns` row to the restoring device's DEK with the SAME per-record AAD, but a row
+    that failed to re-key (damaged/already-unreadable ciphertext) was silently left under the old DEK
+    — after the SQLCipher re-key that row is permanently unreadable. NOW the per-value decision is
+    explicit pure-JVM `ImportExportService.reencryptFieldOutcome`
+    (`FieldReencryptOutcome.{Migrated,LeavePlaintext,AuthFailed}`); `migrateTable` counts
+    `AuthFailed` rows and throws `RestoreReEncryptionException` — the restore is REJECTED before any
+    swap, the temp DB is quarantined (`quarantineRejectedRestoredDb`), and
+    `UiFailureTextPolicy.RESTORE_REENCRYPT_FAIL_TEXT` surfaces as fixed text (never the raw count).
+    Second data-loss guard: `NoteRepository.updatePageBody` / `updatePageTitleAndTags` /
+    `renamePage` refuse to persist the literal `UNREADABLE_MARKER` (typed
+    `UnreadableContentWriteException`) — an editor/rename pre-filled with the marker could otherwise
+    permanently overwrite the still-recoverable encrypted original — and every `NoteflowViewModel`
+    save/rename/flush surface catches it and shows `DecryptFailurePolicy.UNREADABLE_ROW_GUIDANCE`;
+    `autoTagLanguageOnSave` skips it silently (cosmetic background merge). Round-trip proof:
+    `Phase169ExportImportRoundTripTest` (encrypt→re-key→decrypt for all 7 columns, legacy global-AAD
+    migration, same-DEK identity, the missed-re-key control that renders the marker).
 - **Canvas**: `ui/components/AnnotationCanvas.kt:83` (ink canvas, gestures, layers, `pointerInteropFilter`);
   `services/WetBrushEngine.kt:13` (AGSL wet-mixing gating); `ui/components/ShaderCapabilityHelper.kt:5`
   (`isAgslSupported` = SDK ≥ 33); `services/ShapeRecognitionHelper.kt:13` (`trySnapShape()` :27).

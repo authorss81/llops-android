@@ -611,6 +611,14 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
      * AEAD payload so even an empty note carries an integrity tag.
      */
     suspend fun updatePageBody(id: String, body: String) = withContext(Dispatchers.Default) {
+        // Phase-169: never persist the fail-closed render marker as real content.
+        // The marker only ever appears when GCM authentication failed, so writing
+        // it would permanently replace the (still-recoverable) original ciphertext
+        // with the marker text. Refuse loudly and keep the encrypted bytes intact.
+        // Trimmed so a trailing newline (a common editor ending) cannot bypass it.
+        if (com.authorss81.noteflow.services.DecryptFailurePolicy.isUnreadableMarker(body.trim())) {
+            throw com.authorss81.noteflow.services.UnreadableContentWriteException()
+        }
         // B2-UI-1 (phase-49): fail closed — the note body column is encrypted at
         // rest, so a locked vault must throw rather than store the raw body.
         val storedBody = EncryptionService.encryptField(body.toByteArray(), requireEncryptionKey(), "pages", id, "extractedText")
@@ -807,6 +815,14 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
 
     suspend fun renamePage(id: String, title: String) = withContext(Dispatchers.Default) {
         val rawTitle = title.trim()
+        // Phase-169: never persist the fail-closed render marker as a real title
+        // (the rename dialogs pre-fill the rendered title, which is the marker
+        // when the page title failed to decrypt — saving it unchanged would
+        // permanently replace the recoverable original). Same guard as
+        // [updatePageTitleAndTags].
+        if (com.authorss81.noteflow.services.DecryptFailurePolicy.isUnreadableMarker(rawTitle)) {
+            throw com.authorss81.noteflow.services.UnreadableContentWriteException()
+        }
         // B2-UI-1 (phase-49): fail closed — a locked vault can never store a plaintext title.
         val storedTitle = EncryptionService.encryptField(rawTitle.toByteArray(), requireEncryptionKey(), "pages", id, "title")
         db.pageDao().renamePage(id, storedTitle)
@@ -820,6 +836,11 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
 
     suspend fun updatePageTitleAndTags(id: String, title: String, tags: String) = withContext(Dispatchers.Default) {
         val rawTitle = title.trim()
+        // Phase-169: never persist the fail-closed render marker as a real title —
+        // same rationale as the body guard in [updatePageBody].
+        if (com.authorss81.noteflow.services.DecryptFailurePolicy.isUnreadableMarker(rawTitle)) {
+            throw com.authorss81.noteflow.services.UnreadableContentWriteException()
+        }
         // B2-UI-1 (phase-49): fail closed — a locked vault can never store a plaintext title.
         val storedTitle = EncryptionService.encryptField(rawTitle.toByteArray(), requireEncryptionKey(), "pages", id, "title")
         db.pageDao().updatePageTitleAndTags(id, storedTitle, tags.trim())

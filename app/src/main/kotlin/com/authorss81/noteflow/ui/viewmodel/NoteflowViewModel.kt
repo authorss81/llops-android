@@ -2355,11 +2355,17 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             // B2-UI-1 (phase-49): reject while locked — never store a plaintext title.
             // B2-UI-1 review-fix: a lock racing the rename is a notice, not a crash.
-            writeGuardedAgainstLock("Vault is locked — rename not saved") {
-                repository.renamePage(id, title)
-                if (selectedPage.value?.id == id) {
-                    _selectedPage.value = repository.getPageById(id)
+            try {
+                writeGuardedAgainstLock("Vault is locked — rename not saved") {
+                    repository.renamePage(id, title)
+                    if (selectedPage.value?.id == id) {
+                        _selectedPage.value = repository.getPageById(id)
+                    }
                 }
+            } catch (e: com.authorss81.noteflow.services.UnreadableContentWriteException) {
+                // Phase-169: the rename dialogs pre-fill the rendered (marker)
+                // title — never save it over the recoverable original.
+                showSnackbar(com.authorss81.noteflow.services.DecryptFailurePolicy.UNREADABLE_ROW_GUIDANCE, isLong = true)
             }
         }
     }
@@ -2368,11 +2374,16 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             // B2-UI-1 (phase-49): reject while locked — never store a plaintext title.
             // B2-UI-1 review-fix: a lock racing the save is a notice, not a crash.
-            writeGuardedAgainstLock("Vault is locked — title not saved") {
-                repository.updatePageTitleAndTags(id, title, tags)
-                if (selectedPage.value?.id == id) {
-                    _selectedPage.value = repository.getPageById(id)
+            try {
+                writeGuardedAgainstLock("Vault is locked — title not saved") {
+                    repository.updatePageTitleAndTags(id, title, tags)
+                    if (selectedPage.value?.id == id) {
+                        _selectedPage.value = repository.getPageById(id)
+                    }
                 }
+            } catch (e: com.authorss81.noteflow.services.UnreadableContentWriteException) {
+                // Phase-169: never persist the fail-closed marker as a real title.
+                showSnackbar(com.authorss81.noteflow.services.DecryptFailurePolicy.UNREADABLE_ROW_GUIDANCE, isLong = true)
             }
         }
     }
@@ -2407,6 +2418,10 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
+            } catch (e: com.authorss81.noteflow.services.UnreadableContentWriteException) {
+                // Phase-169: the title is the fail-closed marker (unreadable page) —
+                // the cosmetic tag merge must not crash; it is already moot since
+                // the page cannot be edited. Silent no-op per the function contract.
             } catch (e: Exception) {
                 if (!isLockRacedWrite(e)) throw e
             }
@@ -3095,6 +3110,10 @@ fun updatePageTags(id: String, tags: String) {
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
+            } catch (e: com.authorss81.noteflow.services.UnreadableContentWriteException) {
+                // Phase-169: the displayed body is the fail-closed marker — never
+                // save it over the (still recoverable) encrypted original.
+                showSnackbar(com.authorss81.noteflow.services.DecryptFailurePolicy.UNREADABLE_ROW_GUIDANCE, isLong = true)
             } catch (e: VaultLockedWriteException) {
                 // Vault locked mid-write: stash, never plaintext, never dropped.
                 editorFlushPolicy.deferBody(deferred)
@@ -3997,6 +4016,9 @@ fun updatePageTags(id: String, tags: String) {
                     if (!committed) return@launch
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     throw e
+                } catch (e: com.authorss81.noteflow.services.UnreadableContentWriteException) {
+                    // Phase-169: same marker-save refusal as the live save path.
+                    showSnackbar(com.authorss81.noteflow.services.DecryptFailurePolicy.UNREADABLE_ROW_GUIDANCE, isLong = true)
                 } catch (e: VaultLockedWriteException) {
                     editorFlushPolicy.deferBody(body)
                 } catch (e: Exception) {

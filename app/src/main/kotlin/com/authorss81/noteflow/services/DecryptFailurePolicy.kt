@@ -42,6 +42,22 @@ object DecryptFailurePolicy {
     const val UNREADABLE_MARKER = "Unreadable (decryption failed)"
 
     /**
+     * Phase-169: a save-write gate + per-row call-to-action. A content write must
+     * NEVER persist the literal [UNREADABLE_MARKER] as the page's real title or
+     * body — doing so would permanently replace the still-recoverable encrypted
+     * original with the marker text (the reported "pages become unreadable and
+     * contents don't show" data-loss path). This is also the honest guidance for
+     * a single unreadable page (below the persistent threshold): nothing was
+     * edited or replaced, and the user can act by importing a fresh backup.
+     */
+    const val UNREADABLE_ROW_GUIDANCE =
+        "This note's contents could not be decrypted, so it was not edited. " +
+            "Your notes are safe — restore a recent backup to recover this note."
+
+    /** True iff [text] is exactly the fail-closed render marker ([UNREADABLE_MARKER]). */
+    fun isUnreadableMarker(text: String): Boolean = text == UNREADABLE_MARKER
+
+    /**
      * Distinct records failing to decrypt in one session at/after which the
      * failure is judged PERSISTENT (escalate to the corruption/restore event).
      * Deliberately an ID-count, never an attempt-count: one broken row is read

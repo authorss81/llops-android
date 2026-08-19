@@ -90,6 +90,11 @@ object UiFailureTextPolicy {
     const val RESTORE_NO_DEVICE_KEY_TEXT: String =
         "This backup cannot be restored on this device — no vault data key is available."
 
+    /** Fixed "rows could not be re-keyed" restore refusal (phase-169). */
+    const val RESTORE_REENCRYPT_FAIL_TEXT: String =
+        "Restore rejected: some notes in this backup could not be re-encrypted for this device. " +
+            "Your vault was left unchanged — restore a backup created on this device instead."
+
     private val PATH_TOKEN_REGEX = Regex(
         // Android app-private + shared/unix roots — group 1 keeps a short label.
         "((?:/data/(?:user/\\d+|data|app))|/(?:storage|sdcard|home|tmp))" +
@@ -146,6 +151,8 @@ object UiFailureTextPolicy {
                 BACKUP_TOO_LARGE_TEXT
             lower.contains("no data key available") ->
                 RESTORE_NO_DEVICE_KEY_TEXT
+            lower.contains("could not be re-encrypted") ->
+                RESTORE_REENCRYPT_FAIL_TEXT
             lower.contains("vault locked") ->
                 RESTORE_LOCKED_TEXT
             lower.contains("could not read the selected") ||

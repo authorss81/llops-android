@@ -1259,23 +1259,100 @@ object ImportExportService {
     )
 
     /**
-     * C1/B2-CRYPTO-09 (phase-107): re-keys a single field-ciphertext value from
-     * the backup DEK to the current DEK and re-binds it to its per-record AAD
-     * (`table|recordId|fieldName`). The source may be a legacy global-AAD row
-     * or an already-record-bound row — [EncryptionService.decryptField]'s
-     * fallback reads both under the backup DEK — and the result is always a
-     * per-record-bound ciphertext under the new DEK. Returns null (leave the
-     * value alone) when the value is plaintext, blank, or not decryptable.
+     * Phase-169: the three possible outcomes of re-keying one stored field value
+     * on a cross-key restore.
+     *
+     * This is the fail-closed seam for the "pages become Unreadable (decryption
+     * failed) after export/import" class: while the old DEK is still in hand
+     * (before any file swap), a value that cannot be migrated is still perfectly
+     * recoverable. Once the DB is re-keyed and swapped into the live vault,
+     * reading that same value with the NEW DEK fails GCM authentication and
+     * renders [DecryptFailurePolicy.UNREADABLE_MARKER] forever. Therefore a
+     * genuine ciphertext row that fails to migrate must be treated as a RESTORE
+     * FAILURE, never silently left behind.
      */
-    internal fun reencryptFieldValue(value: String?, oldDek: ByteArray, newDek: ByteArray, table: String, recordId: String, fieldName: String): String? {
-        if (value.isNullOrBlank()) return null
+    internal sealed class FieldReencryptOutcome {
+        /** The value was a genuine ciphertext and now lives under [value] (new DEK, per-record AAD). */
+        data class Migrated(val value: String) : FieldReencryptOutcome()
+
+        /** The value is blank or genuine plaintext (not structurally a payload) — leave it as-is. */
+        object LeavePlaintext : FieldReencryptOutcome()
+
+        /** Structural ciphertext that fails to decrypt under the OLD DEK — would be orphaned by the re-key. */
+        object AuthFailed : FieldReencryptOutcome()
+    }
+
+    /**
+     * C1/B2-CRYPTO-09 (phase-107) + phase-169: re-keys a single field-ciphertext
+     * value from the backup DEK to the current DEK and re-binds it to its
+     * per-record AAD (`table|recordId|fieldName`). The source may be a legacy
+     * global-AAD row or an already-record-bound row — [EncryptionService.decryptField]'s
+     * fallback reads both under the backup DEK — and the result is always a
+     * per-record-bound ciphertext under the new DEK. Returns the outcome rather
+     * than a nullable String so the caller can distinguish "leave this plaintext
+     * alone" (legitimate) from "this ciphertext could not be re-keyed" (a
+     * restore that must fail loudly instead of installing unreadable pages).
+     */
+    internal fun reencryptFieldOutcome(
+        value: String?,
+        oldDek: ByteArray,
+        newDek: ByteArray,
+        table: String,
+        recordId: String,
+        fieldName: String
+    ): FieldReencryptOutcome {
+        if (value.isNullOrBlank()) return FieldReencryptOutcome.LeavePlaintext
+        if (!DecryptFailurePolicy.isStructuralCiphertext(value)) return FieldReencryptOutcome.LeavePlaintext
         return try {
             val plain = EncryptionService.decryptField(value, oldDek, table, recordId, fieldName)
-            EncryptionService.encryptField(plain, newDek, table, recordId, fieldName)
+            FieldReencryptOutcome.Migrated(
+                EncryptionService.encryptField(plain, newDek, table, recordId, fieldName)
+            )
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
-            null
+            // A malformed payload (IllegalArgumentException) and an auth failure
+            // (AEADBadTagException) are BOTH fail-closed here — either way the row
+            // cannot be re-keyed and the restore must fail loudly, not strand it.
+            FieldReencryptOutcome.AuthFailed
         }
     }
+
+    /**
+     * Compatibility wrapper (kept for existing callers/tests): returns the
+     * migrated value, or null when the value is plaintext/blank or could not be
+     * re-keyed. Prefer [reencryptFieldOutcome] on the restore path so an
+     * [FieldReencryptOutcome.AuthFailed] result fails the restore loudly instead
+     * of silently stranding the row under the old DEK.
+     */
+    internal fun reencryptFieldValue(value: String?, oldDek: ByteArray, newDek: ByteArray, table: String, recordId: String, fieldName: String): String? {
+        return when (val outcome = reencryptFieldOutcome(value, oldDek, newDek, table, recordId, fieldName)) {
+            is FieldReencryptOutcome.Migrated -> outcome.value
+            FieldReencryptOutcome.LeavePlaintext,
+            FieldReencryptOutcome.AuthFailed -> null
+        }
+    }
+
+    /**
+     * Phase-169: a restore is REJECTED (before any file swap) when one or more
+     * structurally-ciphertext rows failed to re-key to the restoring device's
+     * DEK. After the SQLCipher-layer re-key those rows could never authenticate
+     * again, so installing them would guarantee permanently unreadable pages —
+     * exactly the "pages become unreadable after export/import" report. Surfaced
+     * through [com.authorss81.noteflow.services.UiFailureTextPolicy.restoreFailureMessage]
+     * as fixed text (never the raw message).
+     */
+    internal class RestoreReEncryptionException(
+        val table: String,
+        val column: String,
+        val failedRowCount: Int,
+        cause: Throwable? = null
+    ) : Exception(
+        "Restore rejected: $failedRowCount stored rows could not be re-encrypted for this device " +
+            "($table.$column). The backup may be damaged or contain content that cannot be decrypted. " +
+            "Your vault was left unchanged.",
+        cause
+    )
 
     /**
      * H3: rejects a backup whose SQLCipher schema (PRAGMA user_version) is newer
@@ -2329,7 +2406,17 @@ object ImportExportService {
             if (currentDekHex != null && openedWith != currentDekHex) {
                 rekeySqlcipherDb(context, tempDb, openedWith, currentDekHex)
                 if (!openedWith.isNullOrEmpty() && openedWith != currentDekHex) {
-                    migrateFieldCiphertexts(context, tempDb, currentDekHex, openedWith)
+                    try {
+                        migrateFieldCiphertexts(context, tempDb, currentDekHex, openedWith)
+                    } catch (e: RestoreReEncryptionException) {
+                        // Phase-169: rows that failed to re-key would be PERMANENTLY
+                        // unreadable after the swap — quarantine the rejected copy for
+                        // forensic evidence (same as RestoredDbPolicy rejections) and
+                        // let the restore fail loudly with the fixed UI text. The live
+                        // vault is never swapped (RestoreFailSafe reopens it).
+                        quarantineRejectedRestoredDb(context, tempDb)
+                        throw e
+                    }
                     // B1-DB-3 (phase-54): the voice `.enc` blobs were encrypted with
                     // the BACKUP device's DEK — re-encrypt them in place to the
                     // restoring device's DEK so the retargeted media_embeds rows keep
@@ -2740,13 +2827,26 @@ object ImportExportService {
             val idIdx = cursor.getColumnIndex("id")
             val colIdx = cursor.getColumnIndex(column)
             val updates = mutableListOf<Pair<String, String>>()
-            while (cursor.moveToNext()) {
-                val id = cursor.getString(idIdx)
-                val value = cursor.getString(colIdx)
-                val reencrypted = reencryptFieldValue(value, oldDek, newDek, table, id, column)
-                if (reencrypted != null) updates.add(id to reencrypted)
+            // Phase-169: a genuine ciphertext row that fails to re-key would be
+            // irrecoverably unreadable after the SQLCipher re-key — count it so
+            // the restore fails loudly (never silently installs the rows).
+            var failed = 0
+            try {
+                while (cursor.moveToNext()) {
+                    val id = cursor.getString(idIdx)
+                    val value = cursor.getString(colIdx)
+                    when (val outcome = reencryptFieldOutcome(value, oldDek, newDek, table, id, column)) {
+                        is FieldReencryptOutcome.Migrated -> updates.add(id to outcome.value)
+                        FieldReencryptOutcome.LeavePlaintext -> Unit
+                        FieldReencryptOutcome.AuthFailed -> failed++
+                    }
+                }
+            } finally {
+                cursor.close()
             }
-            cursor.close()
+            if (failed > 0) {
+                throw RestoreReEncryptionException(table, column, failed)
+            }
             updates.forEach { (id, newValue) ->
                 db.execSQL("UPDATE $table SET $column = ? WHERE id = ?", arrayOf(newValue, id))
             }
