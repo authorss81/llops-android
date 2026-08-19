@@ -31,14 +31,14 @@ painting engine, free features).
 | phase-134..153 | Round-2 fix phases (all 43 findings bundled 2-3 per phase by area/root cause; generated 2026-08-17 by phase-119) | Round-2 audit |
 | phase-154..158 | Round-2 feature phases (2-3 related features each, incl. UI/UX + plugin ideas; generated 2026-08-17 by phase-119) | Round-2 audit |
 | phase-159 | **Build Release APK + verify it assembles without error** (feeds phase-160) | Kali redo |
-| phase-160 | Kali full-environment dynamic pentest (6-hr budget) on the phase-159 APK → `docs/kali-report-round2.md` | Kali redo |
+| phase-160 | Kali STATIC security analysis of the phase-159 APK (jadx/apktool/MobSF; dynamic checks declared DEFERRED - no rooted device on runner) → `docs/kali-report-round2.md` | Kali redo |
 | phase-161 | Triage the Kali round-2 report → generate new phases | Kali redo |
 | phase-162 | Build & code failure fixes (dup methods, deprecated project.exec, trusted-artifacts) + verify decryption-safety edge cases | build/code hardening |
 | phase-163 | "Don't show again" must persist for data-recovery screens (per-event, not per-launch) | user-reported |
 | phase-164 | Tag vault scoped to current notebook only (not all notebooks) | user-reported |
 | phase-165 | Beautify Gallery page thumbnails (Material 3 card design) | user-reported |
 | phase-166 | Buttons/text fit screens & cards — wrap or shorten (paging arrows) | user-reported |
-| phase-167 | Bottom nav bar no longer overlays messages & calendar (dynamic padding/insets) | user-reported |
+| phase-167 | Bottom nav bar no longer overlays messages & calendar (dynamic padding/insets) + triage Kali report → generate next phases (no dupes with 167-174) | user-reported |
 | phase-168 | App opens the last-used notebook on cold start | user-reported |
 | phase-169 | Fix post-export "Unreadable (decryption failed)" + keep fail-closed UX | user-reported |
 | phase-170 | **Base-APK size: strip unused lingua `language-models/` (24 of 75 languages) + ABI splits** (Phase-32-NEW-01 MEDIUM + NEW-02 LOW) | phase-161 Kali triage |
