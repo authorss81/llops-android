@@ -68,16 +68,21 @@ class B1Net06LocalSendDiscoveryGateTest {
     @Test
     fun `sender default never hard-codes the sweep on and routes through the gate`() {
         val sender = source("services/localsend/LocalSendSender.kt")
+        val seam = source("services/localsend/FileTransferSender.kt")
         // The default for the legacy scan must come from the policy's OFF value,
-        // never a hard-coded `= true`.
+        // never a hard-coded `= true`. Phase 173: the default now lives on the
+        // FileTransferSender seam (Kotlin forbids defaults on the override), with
+        // LocalSendSender implementing it; the property is unchanged.
         assertTrue(
-            "discoverDevices must default includeLegacyHttpScan to the policy constant",
-            sender.contains("includeLegacyHttpScan: Boolean = LocalSendDiscoveryPolicy.LEGACY_HTTP_SCAN_ENABLED_BY_DEFAULT")
+            "discoverDevices default must reference the policy OFF constant",
+            seam.contains("includeLegacyHttpScan: Boolean = LocalSendDiscoveryPolicy.LEGACY_HTTP_SCAN_ENABLED_BY_DEFAULT")
         )
-        assertFalse(
-            "a hard-coded `includeLegacyHttpScan: Boolean = true` default would auto-enable the sweep",
-            sender.contains("includeLegacyHttpScan: Boolean = true")
-        )
+        for (s in listOf(sender, seam)) {
+            assertFalse(
+                "a hard-coded `includeLegacyHttpScan: Boolean = true` default would auto-enable the sweep",
+                s.contains("includeLegacyHttpScan: Boolean = true")
+            )
+        }
         // The probe is only reached through the gate decision.
         assertTrue(
             "discoverDevices must route the sweep through MayRunLegacyHttpScan",

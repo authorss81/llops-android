@@ -16,6 +16,7 @@ import com.authorss81.noteflow.plugins.PluginEnableResult
 import com.authorss81.noteflow.plugins.PluginLifecycleState
 import com.authorss81.noteflow.plugins.PluginStateInfo
 import com.authorss81.noteflow.services.PluginDiagnosticsRowPolicy
+import com.authorss81.noteflow.services.PluginInvocationJournal
 import com.authorss81.noteflow.ui.viewmodel.NoteflowViewModel
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -37,6 +38,7 @@ fun PluginSettingsDialog(
     val enabledIds by viewModel.pluginEnabledIds.collectAsState()
     val states by viewModel.pluginStates.collectAsState()
     val diagnostics by viewModel.pluginDiagnosticsEntries.collectAsState()
+    val journals by viewModel.pluginJournals.collectAsState()
     // Inline per-plugin messages (e.g. an enable refusal with its reason).
     var localMessages by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
 
@@ -154,6 +156,31 @@ fun PluginSettingsDialog(
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.outline
                             )
+                        }
+                        // Phase 173 feature 2: the honest, bounded invocation
+                        // journal — timestamp · capability · outcome/reason, no
+                        // payload content (the ViewModel keeps entries parsed,
+                        // newest-first; each line is scrubbed + bounded).
+                        val journalLines = journals[plugin.id].orEmpty()
+                            .take(PluginInvocationJournal.MAX_JOURNAL_ENTRIES)
+                            .map { PluginInvocationJournal.renderLine(it) }
+                        if (journalLines.isNotEmpty()) {
+                            Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                                Text(
+                                    "Recent activity (keeps last ${PluginInvocationJournal.MAX_JOURNAL_ENTRIES} per plugin)",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontWeight = FontWeight.Medium
+                                )
+                                journalLines.forEach { line ->
+                                    Text(
+                                        line,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.outline,
+                                        maxLines = 2
+                                    )
+                                }
+                            }
                         }
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             OutlinedButton(

@@ -21,6 +21,9 @@ import com.authorss81.noteflow.plugins.ExportFormat
 import com.authorss81.noteflow.plugins.ExportOutcome
 import com.authorss81.noteflow.plugins.ExportPlugin
 import com.authorss81.noteflow.plugins.ExportRequest
+import com.authorss81.noteflow.plugins.FileTransferOutcome
+import com.authorss81.noteflow.plugins.FileTransferPlugin
+import com.authorss81.noteflow.plugins.FileTransferRequest
 import com.authorss81.noteflow.plugins.LanguageDetectionOutcome
 import com.authorss81.noteflow.plugins.LanguageDetectionPlugin
 import com.authorss81.noteflow.plugins.OcrOutcome
@@ -97,7 +100,9 @@ import com.authorss81.noteflow.services.SecurityService
 import com.authorss81.noteflow.services.SettingsManager
 import com.authorss81.noteflow.services.SettingsPluginEnableStore
 import com.authorss81.noteflow.services.SettingsPluginInstallStore
+import com.authorss81.noteflow.services.SettingsPluginInvocationJournalStore
 import com.authorss81.noteflow.services.SettingsPluginSettingsStore
+import com.authorss81.noteflow.services.PluginInvocationJournal
 import com.authorss81.noteflow.services.VaultLockedWriteException
 import com.authorss81.noteflow.services.VaultWriteGate
 import com.authorss81.noteflow.services.VoiceNoteCrypto
@@ -223,6 +228,7 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     private val pluginEnableStore = SettingsPluginEnableStore(settings)
     private val pluginSettingsStore = SettingsPluginSettingsStore(settings)
     private val pluginInstallStore = SettingsPluginInstallStore(settings)
+    private val pluginInvocationJournalStore = SettingsPluginInvocationJournalStore(settings)
     val pluginRegistry = PluginRegistry(
         pluginEnableStore,
         pluginSettingsStore,
@@ -233,7 +239,7 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         optionalPluginFactories = listOf({ CaseChangePlugin() }),
         logger = AndroidPluginLogger()
     )
-    val pluginManager = PluginManager(pluginRegistry, AndroidPluginLogger())
+    val pluginManager = PluginManager(pluginRegistry, AndroidPluginLogger(), pluginInvocationJournalStore)
     val pluginDiagnostics = PluginDiagnostics(pluginRegistry, pluginManager)
 
     // Phase 21/22: plugin store — bundled catalog + install/uninstall lifecycle
@@ -318,6 +324,14 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
 
     private val _pluginDiagnostics = MutableStateFlow<List<PluginDiagnostics.Entry>>(emptyList())
     val pluginDiagnosticsEntries: StateFlow<List<PluginDiagnostics.Entry>> = _pluginDiagnostics.asStateFlow()
+
+    // Phase 173 feature 2: the bounded, scrubbed invocation journal per plugin
+    // (Settings → Plugins → "Recent activity"). Parsed from the SettingsManager
+    // store on refresh so disabled/locked states never go stale.
+    private val _pluginJournals =
+        MutableStateFlow<Map<String, List<PluginInvocationJournal.Entry>>>(emptyMap())
+    val pluginJournals: StateFlow<Map<String, List<PluginInvocationJournal.Entry>>> =
+        _pluginJournals.asStateFlow()
 
     // Phase 21: plugin store UI state (rows + per-plugin download progress/busy/messages).
     private val _storeRows = MutableStateFlow<List<PluginStoreController.StoreRow>>(emptyList())
@@ -459,6 +473,9 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         _pluginEnabledIds.value = pluginRegistry.allPlugins.associate { it.id to pluginRegistry.isEnabled(it.id) }
         _pluginStates.value = pluginRegistry.resolve(appContext)
         _pluginDiagnostics.value = pluginDiagnostics.snapshot(appContext)
+        _pluginJournals.value = pluginRegistry.allPlugins.associate { p ->
+            p.id to PluginInvocationJournal.newestFirst(pluginInvocationJournalStore.read(p.id))
+        }
         _storeRows.value = pluginStoreController.rows(appContext)
     }
 
@@ -911,6 +928,23 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
             val formatter = plugin as? CitationPlugin
                 ?: throw IllegalStateException("${plugin.name} does not implement CitationPlugin")
             formatter.formatCitation(url, title)
+        }
+
+    /**
+     * Phase 173 (File Transfer): route a ready-to-send file — a note (HTML), the
+     * encrypted vault backup, or an Obsidian/HTML export — to a nearby device
+     * through the FileTransfer capability. The resolved plugin is the LocalSend-
+     * backed [LocalSendFileTransferPlugin], which delegates to the EXISTING
+     * `LocalSendSender` (Protocol v2.2) with its consent model intact (TOFU
+     * pairing gate + receiver accept). Fails loudly (typed
+     * [PluginResult.Failure]/[Unavailable], e.g. `NONE_ENABLED`) until the
+     * plugin is opted in — never a silent no-op.
+     */
+    suspend fun sendFileWithPlugin(request: FileTransferRequest): PluginResult<FileTransferOutcome> =
+        pluginManager.withPluginAsync(PluginCapability.FileTransfer, appContext) { plugin ->
+            val ft = plugin as? FileTransferPlugin
+                ?: throw IllegalStateException("${plugin.name} does not implement FileTransferPlugin")
+            ft.sendFile(appContext, request)
         }
 
     /**

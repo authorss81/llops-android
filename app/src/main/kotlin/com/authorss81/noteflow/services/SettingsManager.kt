@@ -501,9 +501,25 @@ class SettingsManager(context: Context) {
                 key == "plugin_entry_$pluginId" ||
                 key == "plugin_download_consent_$pluginId" ||
                 key == "plugin_update_previous_$pluginId" ||
+                key == "plugin_invocation_journal_$pluginId" ||
                 key.startsWith(prefix)
         }
         prefs.edit().apply { keys.forEach { remove(it) } }.apply()
+    }
+
+    // Phase 173: bounded per-plugin invocation journal (Settings → Plugins →
+    // "Recent activity"). Lives in its OWN key family (NOT under plugins.<id>.*)
+    // so a plugin can never read or forge its own journal through the plugin
+    // settings API, and is wiped together with the plugin by the store's Delete
+    // (wipePluginState above — delete = gone + journal gone; disable keeps it).
+    fun getPluginInvocationJournal(pluginId: String): String? =
+        prefs.getString("plugin_invocation_journal_$pluginId", null)
+
+    fun setPluginInvocationJournal(pluginId: String, journal: String?) {
+        prefs.edit().apply {
+            if (journal == null) remove("plugin_invocation_journal_$pluginId")
+            else putString("plugin_invocation_journal_$pluginId", journal)
+        }.apply()
     }
 
     // Phase 22: persisted unified catalog-entry blobs (downloadable/remote plugin

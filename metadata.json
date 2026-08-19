@@ -33,6 +33,7 @@
       "text_transform",
       "ocr",
       "web_search",
+      "file_transfer",
       "export",
       "clip_share",
       "text_tools",
@@ -52,9 +53,7 @@
     "servedByDownloadablePlugins": [
       "assistant"
     ],
-    "unserved": [
-      "file_transfer"
-    ]
+    "unserved": []
   },
   "downloadablePlugins": {
     "llm": {

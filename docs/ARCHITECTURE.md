@@ -14,11 +14,11 @@
 | `data/db/` | `NoteflowDatabase.kt`, `Daos.kt` | Room DB (schema v9, 8 DAOs), corrupt-DB quarantine |
 | `data/repository/` | `NoteRepository.kt`, `LruBoundedMap.kt` | Encrypted read/write, search corpus, WAL checkpoint, re-key |
 | `services/` | `EncryptionService.kt`, `SecurityService.kt`, `DatabaseSecurityHelper.kt`, `VaultKeyHolder.kt`, `WetBrushEngine.kt`, `WebDavSyncService.kt`, `ImportExportService.kt`, `ImportArchivePolicy.kt`, `PaletteCatalog.kt`, `ColorModePersistencePolicy.kt`, `ShapeRecognitionHelper.kt`, `SsrfHostPolicy.kt`, `VoiceNoteCrypto.kt`, `DecryptFailurePolicy.kt`, `BrushEdgePolicy.kt` | Non-UI: crypto/vault, brush math, sync, import/export, zip-import zip-bomb policy (B1-DB-5), palette, rainbow-mode persistence decision table (phase-122), SSRF blocklist (B1-NET-04), voice-note audio cryptor (B1-DB-3), decrypt-failure render decision (B1-DB-8), brush cap/join roundness policy (phase-121) |
-| `services/localsend/` | `LocalSendProtocol.kt`, `LocalSendSender.kt`, `LocalSendPairing.kt`, `SettingsLocalSendPairedDeviceStore.kt`, `LocalSendDiscoveryPolicy.kt` | Pure-JVM LocalSend v2.2 + real network sender + TOFU pairing gate (B1-NET-02) + discovery/sweep gate (B1-NET-06) |
-| `plugins/` | `NoteflowPlugin.kt`, `PluginRegistry.kt`, `PluginManager.kt`, `PluginDiagnostics.kt`, `PluginLifecycle.kt` | Compile-time plugin framework + typed serving interfaces |
+| `services/localsend/` | `LocalSendProtocol.kt`, `LocalSendSender.kt`, `LocalSendPairing.kt`, `SettingsLocalSendPairedDeviceStore.kt`, `LocalSendDiscoveryPolicy.kt`, `FileTransferSender.kt`, `LocalSendSenderFactory.kt` | Pure-JVM LocalSend v2.2 + real network sender + TOFU pairing gate (B1-NET-02) + discovery/sweep gate (B1-NET-06) + FileTransfer seam/factory (phase-173) |
+| `plugins/` | `NoteflowPlugin.kt`, `PluginRegistry.kt`, `PluginManager.kt`, `PluginDiagnostics.kt`, `PluginLifecycle.kt` | Compile-time plugin framework + typed serving interfaces + capability routes |
 | `plugins/runtime/` | `RuntimePluginLoader.kt`, `SignatureVerifiedPluginRuntime.kt`, `ArtifactSignatureVerifier.kt`, `PinnedCertHash.kt`, `PinnedTlsConnector.kt`, `PluginManifestFetcher.kt`, `HttpsPluginDownloadTransport.kt`, `PluginDownloader.kt`, `PluginUpdateEngine.kt`, `CompileTimePluginPinStore.kt`, `PluginFrameworkClassLoader.kt`, `ArtifactStaticScan.kt` | Downloadable-plugin runtime: pinned-cert verify (manifest + artifact transports, no redirects), DexClassLoader (scoped `plugins.*`-only parent), verify-time static content scan (B1-AUTH-01), updates |
 | `plugins/store/` | `PluginStoreCatalog.kt`, `PluginStoreController.kt`, `RemotePluginInstaller.kt`, `PluginInstallStore.kt` | Plugin Store lifecycle (bundled catalog + remote install) |
-| `plugins/<capability>/` | `ocr/MlKitOcrEngine.kt`, `websearch/DuckDuckGoWebSearchPlugin.kt`, `translation/MlKitTranslatorEngine.kt`, `inktos/InkToShapePlugin.kt`, `weather/`, `dictation/`, `readaloud/`, `citation/`, ... | One impl per capability, registered in `PluginRegistry` |
+| `plugins/<capability>/` | `ocr/MlKitOcrEngine.kt`, `websearch/DuckDuckGoWebSearchPlugin.kt`, `translation/MlKitTranslatorEngine.kt`, `inktos/InkToShapePlugin.kt`, `weather/`, `dictation/`, `readaloud/`, `citation/`, `filetransfer/LocalSendFileTransferPlugin.kt`, ... | One impl per capability, registered in `PluginRegistry` |
 | `ui/components/` | `AnnotationCanvas.kt` (4535 lines), `AgslShaders.kt`, `ShaderCapabilityHelper.kt`, `PenNibVisualPreview.kt`, `LayerBitmapCache.kt`, `BrushStudioDialog.kt`, `PluginStoreDialog.kt`, `GalleryView.kt` | Compose components: canvas, AGSL shaders, dialogs; gallery grid (`GalleryCardItem` redesigned in phase-165) |
 | `ui/screens/` | `EditorScreen.kt` (4805), `MarkdownPreviewScreen.kt`, `HomeScreen.kt`, `KnowledgeGraphScreen.kt`, `LockScreen.kt` | Top-level screens |
 | `ui/viewmodel/` | `NoteflowViewModel.kt` (~1500) | God-ViewModel: DB, security, plugins, all state flows |
@@ -791,7 +791,8 @@
     (1) **Capability browser + store filter** — pure-JVM `services/PluginCapabilityDirectory.kt`
     maps every `PluginCapability` to its serving catalog plugins with an honest
     `Coverage` verdict (`INSTALLED` / `AVAILABLE_ON_STORE` / `UNSERVED`), so the still-unserved
-    capabilities (FileTransfer today; Assistant until the downloadable LLM is installed) are
+    capabilities (Assistant until the downloadable LLM is installed — FileTransfer became
+    served in phase-173) are
     surfaced in the store BEFORE a request fails loudly. `PluginStoreDialog` gains a
     "Plugins | What can plugins do?" view-mode toggle (`showCapabilities`) + `StoreCapabilityRow`
     per capability (installed vs store-available plugin lists; "No plugin yet" copy for unserved),
@@ -812,6 +813,21 @@
     opt-in / lifecycle footer and `state.reason` + last-invocation summaries are scrubbed
     (phase-148 rule) before rendering. Tests: `PluginCapabilityDirectoryTest` (9),
     `PluginUpdatePromptPolicyTest` (10), `PluginDiagnosticsRowPolicyTest` (9).
+  - **Implemented in phase-173** (plugin ecosystem round 2, see `workspace/phase-173/REPORT.md`):
+    (1) **FileTransfer served over LocalSend** — `plugins/filetransfer/LocalSendFileTransferPlugin.kt`
+    (id `plugins.filetransfer`) sends note-HTML / encrypted vault backup / Obsidian+HTML exports through
+    the existing Protocol v2.2 sender via the new `FileTransferSender` seam
+    (`services/localsend/FileTransferSender.kt`); `LocalSendSender` implements that seam (reuse, never
+    fork), and a host `LocalSendSenderFactory` (`services/localsend/LocalSendSenderFactory.kt`) builds
+    the production sender so `plugins.*` never references a vault handle (bytecode-isolation pin).
+    Fail-closed: typed `FileTransferOutcome` (Sent/Rejected/Error), scrubbed descriptions, opt-in/off
+    by default, B1-NET-06 sweep never auto-enabled. (2) **Invocation journal** —
+    `services/PluginInvocationJournal.kt` (bounded 20/plugin, persisted via `plugin_invocation_journal_<id>`,
+    scrubbed, `NoOpStore` default keeps callers unchanged); `PluginManager` records every invocation +
+    self-check through a `SettingsPluginInvocationJournalStore`. (3) **Store row metadata** —
+    `services/PluginStoreRowPolicy.kt` (capability labels folded to 3, exclusive-first then alpha,
+    bucket + download-size/"needs the hosted channel" honesty). Tests: `FileTransferPluginPolicyTest`,
+    `PluginInvocationJournalPolicyTest`, `PluginStoreRowPolicyTest`.
 - **Downloadable runtime**: `plugins/runtime/RuntimePluginLoader.kt:68`; `services/AppClassLoaderFactory.kt:23`
   (`DexClassLoader`); `services/AppFacadeHost.kt:27` (deny-by-default facade, NO direct DB/keystore handles);
   `plugins/runtime/PinnedCertHash.kt:25`; `plugins/runtime/ArtifactSignatureVerifier.kt:52`.

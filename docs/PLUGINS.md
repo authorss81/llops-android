@@ -103,9 +103,12 @@ Today `TextTransform` (ROT13 proof), `OCR` (on-device ML Kit), `WebSearch`
 LLM. Phase 25 added `ShapeFromInk` — converting freehand ink into crisp shapes on
 demand. Phase 26 added five lightweight compile-time plugins — `Dictionary`,
 `Weather`, `UnitConversion`, `OutlineGenerator` and `CitationFormatter` (see the
-Phase 26 section below). The only remaining capability with no serving plugin is
-`FileTransfer` — requests for it fail loudly with `NO_PLUGIN_INSTALLED`. See the
-phase-12 and phase-16 implementation notes below.
+Phase 26 section below). **Phase 173 added `FileTransfer`** — served by the
+compile-time `LocalSendFileTransferPlugin` that reuses the LocalSend Protocol
+v2.2 sender (see the Phase 173 section below). The only remaining capability with
+no serving plugin is `Assistant` until the downloadable LLM plugin is installed —
+requests for it fail loudly with `NO_PLUGIN_INSTALLED`. See the phase-12 and
+phase-16 implementation notes below.
 
 ### `PluginManifest` & `NoteflowPlugin` — what a plugin is
 
@@ -557,6 +560,68 @@ user-initiated, and every one has a graceful offline path or a clear error.
 - **Tests:** `CitationFormatterTest` (payload building, URL validation, title
   extraction + entity decoding, escaping, injected-fetcher plugin behaviour,
   routing).
+
+## File Transfer over LocalSend + plugin diagnostics (Phase 173)
+
+Phase 173 served the last unserved exclusive capability and added honest
+diagnostics + store-row metadata:
+
+### FileTransfer is now REAL (`filetransfer/`, capability `FileTransfer`)
+
+`LocalSendFileTransferPlugin` (`app/.../plugins/filetransfer/`, id
+`plugins.filetransfer`) sends a note (HTML), the encrypted vault backup, or the
+Obsidian/HTML export to a nearby device — **reusing** the existing LocalSend
+Protocol v2.2 sender, never forking it:
+
+- The plugin talks through the `FileTransferSender` seam
+  (`services/localsend/FileTransferSender.kt`); its production implementation IS
+  `LocalSendSender` (the same sender HomeScreen's ⋮ menu → "Send to Nearby
+  Device (LocalSend)" uses), so every security property holds unchanged: TLS-only
+  payloads, the TOFU pairing gate (runs inside the sender BEFORE any byte
+  leaves), and the receiver's own `/prepare-upload` human-accept step.
+- **Fail-closed by construction.** A request with no sender in context (JVM
+  tests, background) returns a typed `FileTransferOutcome.Error`; every sender
+  failure maps to `Rejected`; all descriptions pass `UiFailureTextPolicy` scrub
+  (R2-b2b3-LOG-03 precedent).
+- **Opt-in, off by default** like every compile-time plugin; `availability()`
+  is `Ok` (INTERNET is a normal, always-granted permission — the real gates live
+  in the sender).
+- Discovery defaults to plain UDP announce/listen only — the `/24` HTTP register
+  sweep is never auto-enabled (`includeLegacyHttpScan = false`; B1-NET-06).
+- The default sender is built by a **host seam** (`LocalSendSenderFactory`,
+  `services/localsend/`) so plugin-host code under `plugins.*` never references a
+  vault handle (`SettingsManager` etc.) — pinned by `PluginBytecodeIsolationTest`.
+- Routing: `NoteflowViewModel.sendFileWithPlugin(FileTransferRequest)` →
+  `PluginManager.withPluginAsync(PluginCapability.FileTransfer, …)`.
+- Tests: `FileTransferPluginPolicyTest` (recording `FileTransferSender` fake,
+  zero network) + `Phase131MetadataAlignmentTest` (metadata.json now lists
+  `file_transfer` under `servedByCompileTimePlugins`).
+
+### Invocation journal (`services/PluginInvocationJournal.kt`)
+
+Settings → Plugins now shows an honest, bounded **invocation journal** — the last
+20 invocations per plugin (timestamp, capability, outcome, scrubbed reason) in
+addition to the existing per-plugin summary:
+
+- Bounded (`MAX_JOURNAL_ENTRIES = 20`), persisted via
+  `plugin_invocation_journal_<id>` in `SettingsManager` (no schema change).
+- Scrub-all-the-way: every detail passes `UiFailureTextPolicy.scrubForUi` and the
+  journal's own separators are stripped — a hostile availability reason can never
+  forge extra journal lines or leak a path. Payload content is never written by
+  construction (manager records fixed labels + exception-class names).
+- Journaling is wired through `PluginManager` (every invocation + self-check);
+  the default `NoOpStore` keeps all existing callers/tests unchanged.
+- Tests: `PluginInvocationJournalPolicyTest`. The journal key family deliberately
+  lives OUTSIDE `plugins.<id>.*` so a plugin cannot forge its own history, and
+  store Delete wipes it with the rest of the plugins state.
+
+### Store row metadata (`services/PluginStoreRowPolicy.kt`)
+
+`PluginStoreDialog` rows gained a compact one-line footer: **capabilities served**
+(bounded to 3 with a "+N more" fold, sorted exclusive-first then alphabetical) ·
+**shipping bucket** (Bundled / Downloadable-verified) · for downloadable plugins
+the download size or the honest "needs the hosted channel" note. Tests:
+`PluginStoreRowPolicyTest`.
 
 ## Plugin Store — install/uninstall lifecycle (Phase 21)
 

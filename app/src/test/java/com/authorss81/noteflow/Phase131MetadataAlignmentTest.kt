@@ -157,10 +157,12 @@ class Phase131MetadataAlignmentTest {
             caps.servedByCompileTimePlugins.orEmpty().distinct().sorted()
         )
 
-        // 4. Assistant is served ONLY by the downloadable LLM plugin; FileTransfer is unserved.
+        // 4. Assistant is served ONLY by the downloadable LLM plugin; FileTransfer
+        //    is served by the compile-time LocalSend plugin (phase-173) — not unserved.
         assertTrue("assistant must be served by a downloadable plugin", "assistant" in caps.servedByDownloadablePlugins.orEmpty())
         assertTrue("assistant must NOT be a compile-time capability", "assistant" !in caps.servedByCompileTimePlugins.orEmpty())
-        assertTrue("file_transfer must be unserved (fails loudly with NO_PLUGIN_INSTALLED)", "file_transfer" in caps.unserved.orEmpty())
+        assertTrue("file_transfer must be served by a compile-time plugin (phase-173)", "file_transfer" in caps.servedByCompileTimePlugins.orEmpty())
+        assertTrue("file_transfer must NOT be unserved anymore", "file_transfer" !in caps.unserved.orEmpty())
     }
 
     @Test

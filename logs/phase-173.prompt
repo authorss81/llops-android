@@ -1,0 +1,129 @@
+# PIPELINE CONTEXT (injected by phase_runner.sh — do not delete)
+
+## Hard rules (AGENTS.md)
+## Hard rules
+- **MAJOR ARCHITECTURAL CHANGE → ASK THE USER FIRST.** Any change that restructures packages, replaces the navigation model (e.g., migrating away from `mutableStateOf` navigation to Navigation Compose), adds a new DB schema/migration, introduces SQLCipher, adds new dependencies with broad impact, or rewrites a subsystem (canvas renderer, encryption layer) MUST be proposed to the user and get explicit approval BEFORE writing code. Tell the user what's changing, why, and the risk. Do not silently refactor architecture.
+  - **USER APPROVED (2026-08-14): hybrid downloadable-plugin architecture** — the plugin model change (base-APK-size constraint, downloadable signature-verified plugins for heavy native features, compile-time for lightweight plugins, user-approved dynamic updates) was proposed to the user with risks and explicitly approved (commit `9292978`). Implementation proceeds per phases 22–26; the approved design doc is `docs/plugin-architecture.md`.
+- **Android hardware reality**: this is a native Kotlin app targeting API 26+. Every feature must ship with a fallback for older/lower-end devices (API 33- for AGSL, API 31- for dynamic color, low-RAM behavior for 2-core devices). Never silent degradation — one-time non-alarming message + settings re-enable. See ROADMAP Phase 33 + `docs/COMPATIBILITY.md` (to be created).
+- **Kali Linux pentest findings → write to a FILE immediately, not just the agent reply.** Security/pentest agents (running in opencode on the Kali VM) MUST append findings incrementally to `docs/pentest-findings-<YYYY-MM-DD>.md` as they work (one block per finding: severity, evidence, file/line or command output, reproducer), and commit/push after each agent batch. This prevents detail loss when a report grows long or context is truncated. The pentest plan lives in `docs/pentest-plan.md`; the summary report goes to `docs/pentest-report.md`.
+- `allowBackup="false"` + `data_extraction_rules.xml` — never re-enable backup.
+- **Base-APK size is a hard constraint.** Heavy/native features (ML Kit OCR, ML Kit
+  barcode/QR, the MediaPipe `tasks-genai` LLM) MUST NOT be baked into the base APK.
+  They ship as **downloadable, signature-verified plugins** (Phase 23 runtime:
+  HTTPS download → pinned-cert-hash verify → `DexClassLoader` load → capability
+  facade, never direct DB/keystore handles). Lightweight pure-JVM plugins stay
+  compile-time. Do NOT add large native deps to the base app; use a separate
+  plugin module instead. Plan: Phase 22 = architecture skeleton, Phase 23 =
+  downloadable runtime, Phase 24 = user-approved updates, Phase 25 = ink→shape,
+  Phase 26 = lightweight ecosystem, Phase 29 = move the LLM out of the base APK
+  into a downloadable plugin.
+- PBKDF2WithHmacSHA256 600k iterations, AES-256-GCM (12-byte IV, 128-bit tag), AndroidKeyStore-wrapped DEK, in-memory zeroization on lock (`NoteRepository.kt`, `EncryptionService.kt`, `SecurityService.kt`).
+- Never log keys, passwords, or decrypted note content. Never add `INTERNET` usage without a real feature.
+- Known broken things (do NOT trust ROADMAP [x] claims — see ROADMAP.md "POST-AUDIT TRUTH TABLE" @ commit ac781de):
+  - ~~Checksum hashes `noteflow.db`~~ — FIXED: `DatabaseSecurityHelper` HMACs the real `noteflow.sqlite` (`DatabaseSecurityHelper.kt:26`) and the result is surfaced as the `databaseTampered` banner in MainActivity (`NoteflowViewModel.kt:35-55`). This stale claim was corrected in Phase 09.
+  - `pointsJson` (stroke geometry) is FIELD-ENCRYPTED at rest now — title/extractedText/textContent/pointsJson are all encrypted fields (`saveStrokesForPage`, NoteRepository.kt); the Phase 02 restore re-key gap is closed.
+  - "Sync" = WebDAV upload/download of ENCRYPTED backup archives to/from the user's own server (`WebDavSyncService.kt`, HTTPS enforced, HTTP only with explicit opt-in for local-network hosts), reachable from HomeScreen's ⋮ menu via `WebDavSyncDialog` — Phase 14 FIXED the previously-dead menu trigger; AGSL wet-mixing is WIRED through `WetBrushEngine` in `AnnotationCanvas` (gated by `ShaderCapabilityHelper.isAgslSupported` + the `gpuWetBrushesEnabled` setting, verified in the Phase 14 audit); pressure/tilt/timestamp are captured via the official raw-MotionEvent bridge (`pointerInteropFilter`, no reflection); FLAG_SECURE is applied in non-debug builds; R8 minify is ON in release; baseline profiles are NOT wired (deferred — the dead `baseline-prof.txt` was deleted in the Phase 03 honesty audit).
+  - WAL checkpoint DOES execute — `checkpointWal()` fully steps the cursor (`NoteRepository.kt:136-144`).
+  - **Phase 14 (2026-08-13) production readiness + LocalSend**: full per-phase audit lives in `workspace/phase-14/AUDIT_REPORT.md`. LocalSend sender (Protocol v2.2, sender-only, local-network only, no new permissions) is implemented in `services/localsend/` (`LocalSendProtocol.kt` pure-JVM + `LocalSendSender.kt` network) and reachable from HomeScreen's ⋮ menu → "Send to Nearby Device (LocalSend)". It sends a single note as HTML, the encrypted vault backup, or the Obsidian/HTML vault archives; the receiving device must human-accept before bytes move. Unit tests: `LocalSendProtocolTest` (18 tests, no network). **Release signing (updated 2026-08-17, phase-57/B1-PLAT-1): the release build FAILS CLOSED when `RELEASE_KEYSTORE_B64` (or `KEYSTORE_FILE`) is unset — the old debug-keystore fallback is gone; see `docs/RELEASE.md` + `B1Plat01ReleaseSigningTest`.**
+  - **Phase 21 (2026-08-14) added the Plugin Store + verified the execution path** (see `docs/PLUGINS.md` "Plugin Store — install/uninstall lifecycle"): `PluginStoreCatalog` (bundled catalog, no network) + `PluginStoreController` (pure-JVM download/delete) + `PluginRegistry.installPlugin/uninstallPlugin` (install-aware registry; `compiledPlugins` = full shipped set, `allPlugins` = installed set) + `SettingsPluginInstallStore`/`SettingsManager.plugin_uninstalled_<id>` (default installed = backward compatible). Delete wipes opt-in + ever-enabled + all `plugins.<id>.*` settings and deletes downloaded assets (`NoteflowPlugin.deleteDownloadedAssets`); Disable keeps data. `CaseChangePlugin` is the store's OPTIONAL plugin (not in `defaultPlugins()`). UI: `PluginStoreDialog` reachable from HomeScreen ⋮ menu → "Plugin Store". Tests: `PluginStoreLifecycleTest` (8), `PluginExecutionSimulationTest` (4). Also fixed a pre-existing `PaletteCatalog.familyFor` hue-band bug (curated swatches misclassified) — `PaletteCatalogTest` is green again.
+  - **Phase 10 (2026-08-13) added a REAL plugin framework** (`app/src/main/kotlin/com/authorss81/noteflow/plugins/`): `NoteflowPlugin` + `PluginCapability` sealed type (`TextTransform`, `OCR`, `WebSearch`, `FileTransfer`, `Assistant`, `Export`), compile-time `PluginRegistry` (no dynamic APK loading), `PluginManager` routing that fails loudly via `PluginResult.Failure`, per-plugin opt-in persisted in `SettingsManager` (`plugin_enabled_<id>`, off by default), a Settings → Plugins dialog (`PluginSettingsDialog`, reachable from HomeScreen's ⋮ menu), and `Rot13TransformPlugin` served through the `TextTransformPlugin` interface and wired into the Markdown editor's Plugins menu (`MarkdownPreviewScreen`). Covered by `PluginFrameworkTest` (10 tests). **Phase 12 made OCR + Web Search real**: `OnDeviceOcrPlugin` (ML Kit text-recognition, offline, no API key) and `DuckDuckGoWebSearchPlugin` (HTTPS, keyless) are registered (`PluginRegistry.kt`) and wired into `EditorScreen` (OCR result dialog) and `MarkdownPreviewScreen` (web-search dialog). The still-unserved capabilities are `FileTransfer`, `Assistant`, `Export` — requests for those fail loudly with `NO_PLUGIN_INSTALLED`. See `docs/PLUGINS.md`.
+  - **Phase 09 (2026-08-13) fixed the two Phase-02 data-loss defects that were still live** (see workspace/phase-09/REPORT.md): (1) H2 — a corrupt/wrong-key DB open no longer DELETES the vault files; `SafeSupportSQLiteOpenHelper` now quarantines them as `*.corrupt-<timestamp>` (bytes preserved), sets a persistent corruption flag, and MainActivity shows `CorruptionRecoveryScreen` (restore-from-backup or explicit start-fresh) before any normal vault UI (`NoteflowDatabase.kt` `quarantineCorruptDatabase`, `DatabaseSecurityHelper.kt` corruption flags, `MainActivity.kt` `CorruptionRecoveryScreen`). (2) H1 — a failed restore no longer bricks the app: the backup password is validated BEFORE `closeDatabase()` (`ImportExportService.validateBackupPassword` now called from `HomeScreen.performRestore` and `NoteflowViewModel.attemptRecoveryFromBackup`), and on any post-close failure the Room instance is reopened (`NoteflowDatabase.dispose()` + `NoteRepository.reopenDatabase`) and the process restarts via the existing restart dialog. (3) C1 — `reencryptPlaintextFields` now also re-encrypts `note_versions.{title,extractedText}`, matching the cross-device migrate map.
+  - **Phase 03 (2026-08-13) removed these dead/fake features**: the LibMyPaint C++ stub + whole engine-selector stack (`mypaint_jni.cpp`/`CMakeLists.txt`, `LibMyPaintJni`, `BrushEngine`/`BrushEngineFactory`, `HardwareProfiler`/`RenderingEngineTier`, `BrushEngineSettingsDialog`, `SettingsManager.renderingEngineOverride` — all deleted; the canvas renders via `WetBrushEngine`); `HandwritingRecognitionService` + `HandwritingToTextDialog` (dictionary-hash stub, unreachable — deleted); `FtsSearchEngine` (misnamed in-memory loop — deleted; vault search now uses a cached decrypted corpus in `NoteRepository`). Shape auto-snap is now WIRED (`ShapeRecognitionHelper.trySnapShape` runs on freehand draw-end in `AnnotationCanvas`, gated by the `shapeAutoSnapEnabled` setting; wet tools, LASER, DOTTED and NEON are excluded, and the RECT/ARROW/LINE detectors require real geometry fits so plain handwriting isn't snapped).
+
+## Roadmap state (August 2026)
+
+## Orientation (read these files yourself — do NOT rely on memory)
+- docs/ARCHITECTURE.md = living architecture map (package layout, core
+  subsystem file:line anchors, build/CI essentials, gotchas). READ IT.
+- docs/phase-status.md = phase status truth table. READ IT, then UPDATE
+  your phase's row when you finish.
+- workspace/PHASES.md = full phase table.
+- workspace/SECURITY_FIX_PLAN.md + docs/security-report*.md = security
+  findings status (only if your phase touches security).
+
+## Your task
+Execute the phase described in workspace/phase-173/PROMPT.md. Read that file now and
+complete it fully. The context above is orientation only.
+
+# Phase 173: Plugin ecosystem — serve FileTransfer over LocalSend + diagnostics surfacing [NOT STARTED]
+
+You are working on **InkFlow/Noteflow**. This is a FEATURE phase generated by
+the phase-161 triage's plugin-ecosystem bucket. It bundles related plugin
+improvements.
+
+Read `docs/ARCHITECTURE.md`, `docs/phase-status.md`, `docs/PLUGINS.md`,
+`docs/plugin-architecture.md`, and `AGENTS.md` first. Key files:
+`plugin-sdk/src/main/kotlin/com/authorss81/noteflow/plugins/PluginCapability.kt`
+(sealed capability set), `app/src/main/kotlin/com/authorss81/noteflow/plugins/`
+(`PluginRegistry.kt`, `PluginManager.kt`, per-capability impls/lifecycle),
+`app/src/main/kotlin/com/authorss81/noteflow/services/localsend/`
+(`LocalSendSender.kt`, `LocalSendProtocol.kt`), and the plugin docs mentioned
+above.
+
+## Feature 1 — Serve the FileTransfer capability over LocalSend
+
+`PluginCapability.FileTransfer` is STILL unserved — `PluginCapabilityDirectory`
+(`services/PluginCapabilityDirectory.kt`, phase-157) honestly reports it as
+`UNSERVED`, and any request fails loudly with `NO_PLUGIN_INSTALLED`
+(`PluginRegistry.kt` / `PluginManager.kt`). Wire a REAL `FileTransferPlugin`
+whose implementation sends a note (or the encrypted vault backup, or an
+Obsidian/HTML export) to a nearby device via the EXISTING LocalSend protocol
+v2.2 sender (`services/localsend/LocalSendSender.kt`) — the exact payload
+kinds HomeScreen's ⋮ menu already offers. Reuse the LocalSend strings/assets
+and the sender's consent flow; do NOT add any new permission.
+
+Design constraints:
+- Reuse `LocalSendSender` (Protocol v2.2) — do not fork it. Expose its
+  `sendFile(...)`/discovery through the plugin's capability API.
+- The plugin must fail CLOSED (respect `PluginManager` fail-loudly semantics)
+  and must NOT bypass the human-consent step ("receiving device must accept
+  before bytes move", as the protocol already does).
+- Keep opt-in semantics: plugin does nothing unless the user enables it
+  (default OFF) — consistent with every other compile-time plugin.
+- Pure-JVM testability: a `FileTransferPluginPolicyTest` (or extend
+  `LocalSendProtocolTest`) proving the plugin maps capability calls to the
+  expected LocalSend messages/endpoints without touching the network.
+
+Definition of done Feature 1: `PluginCapabilityDirectory` now lists FileTransfer
+as served; an enable-able `FileTransferPlugin` is registered; tests cover the
+routing/consent mapping; `assembleDebug` green. Update `docs/PLUGINS.md` (the
+"still-unserved" list changes to Assistant-only until the LLM plugin is
+installed).
+
+## Feature 2 — Surfacing plugin invocation diagnostics & last-run state
+
+`services/PluginDiagnosticsRowPolicy.kt` (phase-157) already renders served
+capabilities/opt-in/lifecycle and `lastInvocation` summaries. Extend it (or a
+small `services/PluginInvocationJournal.kt`) so the plugin settings dialog shows
+an honest, bounded **invocation journal** (last N invocations per plugin:
+timestamp, capability, outcome `PluginResult.Success/Failure` reason, no
+payload content) so users can diagnose silent failures. Bound the journal
+(`MAX_JOURNAL_ENTRIES`, e.g. 20 per plugin), persist in `SettingsManager`
+(no schema change), scrub anything user-content-ish (reuse the phase-148
+`UiFailureTextPolicy` scrub) before rendering.
+
+Definition of done Feature 2: journal is persisted, bounded, scrubbed, rendered
+in `PluginSettingsDialog`, and covered by `PluginInvocationJournalPolicyTest`;
+`assembleDebug` green. Update `docs/PLUGINS.md` diagnostics section.
+
+## Feature 3 — Plugin Store: per-plugin "what it can do / needs" honesty
+
+The phase-157 store already has a capability browser + filter. Add a compact
+per-plugin **metadata line** in store rows: capabilities served + whether it is
+compile-time-in-base or downloadable + (for downloadable) the download size /
+"needs the hosted channel" note. Reuse `PluginCapabilityDirectory` output and
+`docs/PLUGINS.md` bucket rules; pure-JVM policy test
+(`PluginStoreRowPolicyTest`) for the line-formatting edge cases (long lists,
+unserved, downloadable).
+
+Definition of done Feature 3: store row metadata implemented + tested; docs
+updated; `assembleDebug` green.
+
+## Constraints
+- NO `.github/workflows/` edits. NO schema change. NO new dependencies beyond
+  what the plugin module already declares. NEVER log decrypted note content.
+- Keep the base-APK-size rule: the FileTransfer plugin is lightweight/JVM —
+  compile-time is fine; do NOT add native/ML deps.
+- The plugin-update channel cert pin stays placeholder (Phase-171 owns that).
+
+Commit as `llops: phase-173 <one-line description>` and push.

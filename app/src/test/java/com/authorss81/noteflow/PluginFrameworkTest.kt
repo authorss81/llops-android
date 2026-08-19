@@ -115,13 +115,14 @@ class PluginFrameworkTest {
     fun unavailableCapabilityFailsClearlyWithoutCrashing() {
         // Phase 12/15: OCR, WebSearch, Export, ClipShare, TextTools,
         // LanguageDetection and WebCapture now have REAL plugins in the default
-        // registry. FileTransfer is still an unserved (declared-only) extension
-        // point, so it is the correct probe for "declared but unserved → loud
-        // Failure, never fake".
-        val registry = PluginRegistry(InMemoryPluginEnableStore(), currentApiLevel = 26) // no plugin declares FileTransfer
+        // registry. Phase 173 added the FileTransfer plugin over LocalSend, so
+        // the base-APK unserved probe is now Assistant — it is declared-only
+        // (the LLM is a DOWNLOADABLE plugin) and therefore the correct probe for
+        // "declared but unserved → loud Failure, never fake".
+        val registry = PluginRegistry(InMemoryPluginEnableStore(), currentApiLevel = 26) // no plugin declares Assistant
         val manager = PluginManager(registry)
 
-        val result = manager.withPlugin(PluginCapability.FileTransfer, null) { it.id }
+        val result = manager.withPlugin(PluginCapability.Assistant, null) { it.id }
 
         assertTrue(result is PluginResult.Failure)
         assertTrue((result as PluginResult.Failure).message.contains("No plugin is installed"))

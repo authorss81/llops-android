@@ -1,6 +1,7 @@
 package com.authorss81.noteflow.plugins
 
 import android.content.Context
+import com.authorss81.noteflow.services.localsend.LocalSendDevice
 
 /**
  * Serving interface for the [PluginCapability.TextTransform] capability.
@@ -680,4 +681,68 @@ interface ScreenshotNotePlugin {
         shouldOcr: Boolean,
         ocrPluginAvailable: Boolean
     ): ScreenshotCaptureOutcome
+}
+
+// ---------------------------------------------------------------------------
+// Phase 173 — FileTransfer capability serving interface (over LocalSend).
+// The plugin sends a note / the encrypted vault backup / an Obsidian or HTML
+// export to a nearby device. It REUSES the existing LocalSend Protocol v2.2
+// sender (`services/localsend/LocalSendSender`) and its consent model — the
+// TOFU pairing gate runs inside the sender before any byte leaves the device,
+// and the receiving device's own `/prepare-upload` accept step is honoured by
+// the sender on every transfer. The plugin never constructs raw LocalSend
+// messages itself.
+// ---------------------------------------------------------------------------
+
+/** The payload kinds the FileTransfer plugin can send — exactly the kinds the
+ *  built-in HomeScreen "Send to nearby device (LocalSend)" flow already offers. */
+enum class FileTransferKind(val label: String) {
+    NOTE_HTML("Note (HTML)"),
+    VAULT_BACKUP("Encrypted vault backup (.nfb)"),
+    OBSIDIAN_ZIP("Obsidian vault (ZIP)"),
+    HTML_ZIP("HTML website (ZIP)")
+}
+
+/** A concrete, ready-to-send local file plus its destination receiver. */
+data class FileTransferRequest(
+    val kind: FileTransferKind,
+    /** The export/backup file already produced by the caller. */
+    val file: java.io.File,
+    /** The discovered, TLS-capable receiving device. */
+    val device: LocalSendDevice
+)
+
+/**
+ * Outcome of a LocalSend-backed transfer request. Never null, never silent.
+ *
+ * - [Sent] — bytes reached the receiver (the receiver still hashes-verify on
+ *   its side; success here means the receiver's HTTP upload step returned 2xx).
+ * - [Rejected] — the transfer did NOT happen (pairing gate / receiver decline /
+ *   transport failure). Fail-closed by construction.
+ * - [Error] — the request could not even be attempted (no sender in this
+ *   context, empty/missing file).
+ */
+sealed class FileTransferOutcome {
+    data class Sent(val bytesSent: Long, val description: String) : FileTransferOutcome()
+    data class Rejected(val message: String) : FileTransferOutcome()
+    data class Error(val message: String) : FileTransferOutcome()
+}
+
+/**
+ * Serving interface for the [PluginCapability.FileTransfer] capability.
+ *
+ * Routing stays capability-based: a caller gets a typed [FileTransferOutcome]
+ * and never hardcodes the plugin class. The production implementation delegates
+ * to the existing `LocalSendSender` (same sender the HomeScreen dialog uses) —
+ * this interface is what the plugin exposes through the framework so discovery
+ * and sending are reachable through [PluginManager.withPluginAsync].
+ */
+interface FileTransferPlugin {
+    /** Transfer [FileTransferRequest.file] to its destination device. */
+    suspend fun sendFile(context: Context?, request: FileTransferRequest): FileTransferOutcome
+
+    /** Discover nearby LocalSend receivers on the local network, or null when no
+     *  sender is available in this context (fail-closed). [timeoutMillis] caps
+     *  the discovery budget; the legacy HTTP sub-net sweep is never auto-enabled. */
+    suspend fun discover(context: Context?, timeoutMillis: Long = 3_000L): List<LocalSendDevice>?
 }

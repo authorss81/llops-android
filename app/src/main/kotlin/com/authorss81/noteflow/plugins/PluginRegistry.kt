@@ -7,6 +7,7 @@ import com.authorss81.noteflow.plugins.clipshare.ClipToInkFlowPlugin
 import com.authorss81.noteflow.plugins.dictionary.DictionaryPluginImpl
 import com.authorss81.noteflow.plugins.dictation.OnDeviceDictationPlugin
 import com.authorss81.noteflow.plugins.export.ExportEnginePlugin
+import com.authorss81.noteflow.plugins.filetransfer.LocalSendFileTransferPlugin
 import com.authorss81.noteflow.plugins.inktos.InkToShapePlugin
 import com.authorss81.noteflow.plugins.langdetect.LanguageDetectionEngine
 import com.authorss81.noteflow.plugins.ocr.OnDeviceOcrPlugin
@@ -880,7 +881,13 @@ class PluginRegistry(
             WeatherPluginImpl(),
             UnitConverterPluginImpl(),
             OutlineGeneratorPluginImpl(),
-            CitationFormatterPluginImpl()
+            CitationFormatterPluginImpl(),
+            // Phase 173: serve FileTransfer through the existing LocalSend v2.2
+            // sender (reuse, never fork). The capability was UNSERVED since
+            // Phase 17 — now requests route here (opt-in required, off by
+            // default). The Assistant capability stays unserved in the base APK
+            // (downloadable LLM plugin only).
+            LocalSendFileTransferPlugin()
         )
     }
 }

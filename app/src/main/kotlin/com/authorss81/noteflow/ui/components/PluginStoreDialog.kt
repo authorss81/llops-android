@@ -25,6 +25,7 @@ import com.authorss81.noteflow.plugins.PluginEnableResult
 import com.authorss81.noteflow.plugins.PluginLifecycleState
 import com.authorss81.noteflow.plugins.store.PluginStoreController
 import com.authorss81.noteflow.services.PluginCapabilityDirectory
+import com.authorss81.noteflow.services.PluginStoreRowPolicy
 import com.authorss81.noteflow.services.PluginUpdatePromptPolicy
 import com.authorss81.noteflow.ui.viewmodel.NoteflowViewModel
 
@@ -345,13 +346,13 @@ fun PluginStoreDialog(
                                             buildString {
                                                 append("v${entry.version}")
                                                 append("  ·  ${entry.category}")
-                                                append("  ·  ${entry.sourceLabel}")
-                                                append("  ·  " + entry.capabilities.joinToString(", ") { it.label })
+                                                // Phase 173 feature 3: the compact
+                                                // metadata line — declared capabilities
+                                                // (bounded) + shipping bucket + download
+                                                // size / hosted-channel honesty.
+                                                append("  ·  " + PluginStoreRowPolicy.metadataLine(entry.entry))
                                                 if (entry.permissions.isNotEmpty()) {
                                                     append("  ·  " + entry.permissions.joinToString(", ") { it.label })
-                                                }
-                                                entry.installSizeBytes?.let {
-                                                    append("  ·  ~${it / (1024 * 1024)} MB model on device")
                                                 }
                                             },
                                             style = MaterialTheme.typography.labelSmall,

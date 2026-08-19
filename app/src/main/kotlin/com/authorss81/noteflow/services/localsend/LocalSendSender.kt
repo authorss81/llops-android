@@ -53,10 +53,14 @@ import com.authorss81.noteflow.utils.HttpUserAgent
  *   certificate fingerprint (SHA-256 of the cert). A mismatched cert fails
  *   loudly.
  * - The current in-flight connection is exposed for cancellation.
+ *
+ * Phase 173: implements [FileTransferSender] so the FileTransfer plugin routes
+ * through THE sender the HomeScreen dialog uses (reuse, never fork) through a
+ * JVM-testable seam.
  */
 class LocalSendSender(
     private val pairedDevices: LocalSendPairedDeviceStore = InMemoryLocalSendPairedDeviceStore()
-) {
+) : FileTransferSender {
 
     companion object {
         private const val TAG = "LocalSendSender"
@@ -102,9 +106,9 @@ class LocalSendSender(
      * here only when the caller explicitly opted in for it (per-search checkbox),
      * so a plain search never blasts 254 HTTP POSTs across the subnet.
      */
-    suspend fun discoverDevices(
-        discoveryTimeoutMs: Long = 3_000L,
-        includeLegacyHttpScan: Boolean = LocalSendDiscoveryPolicy.LEGACY_HTTP_SCAN_ENABLED_BY_DEFAULT
+    override suspend fun discoverDevices(
+        discoveryTimeoutMs: Long,
+        includeLegacyHttpScan: Boolean
     ): List<LocalSendDevice> = withContext(Dispatchers.IO) {
         val found = LinkedHashMap<String, LocalSendDevice>()
 
@@ -309,7 +313,7 @@ class LocalSendSender(
      * The receiver's `/prepare-upload` returns only after its user accepts
      * (200 + sessionId) or declines (403). We surface exactly those states.
      */
-    suspend fun sendFile(
+    override suspend fun sendFile(
         device: LocalSendDevice,
         file: File,
         onProgress: (sentBytes: Long, totalBytes: Long) -> Unit

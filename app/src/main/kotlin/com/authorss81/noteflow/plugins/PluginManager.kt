@@ -1,6 +1,7 @@
 package com.authorss81.noteflow.plugins
 
 import android.content.Context
+import com.authorss81.noteflow.services.PluginInvocationJournal
 import kotlinx.coroutines.withContext
 
 /**
@@ -82,7 +83,8 @@ data class PluginInvocationRecord(
  */
 class PluginManager(
     private val registry: PluginRegistry,
-    private val logger: PluginLogger = PluginLogger.NoOp
+    private val logger: PluginLogger = PluginLogger.NoOp,
+    private val journal: PluginInvocationJournal.Store = PluginInvocationJournal.NoOpStore
 ) {
 
     private val lastResults = java.util.concurrent.ConcurrentHashMap<String, PluginInvocationRecord>()
@@ -102,7 +104,7 @@ class PluginManager(
         context: Context?,
         action: (NoteflowPlugin) -> T
     ): PluginResult<T> = when (val resolved = resolvePlugin(capability, context)) {
-        is Resolution.Success -> invokeGuarded(resolved.plugin) { action(resolved.plugin) }
+        is Resolution.Success -> invokeGuarded(resolved.plugin, capability) { action(resolved.plugin) }
         is Resolution.Rejected -> resolved.result
     }
 
@@ -120,7 +122,7 @@ class PluginManager(
         action: suspend (NoteflowPlugin) -> T
     ): PluginResult<T> = withContext(kotlinx.coroutines.Dispatchers.Default) {
         when (val resolved = resolvePlugin(capability, context)) {
-            is Resolution.Success -> invokeGuardedSuspend(resolved.plugin) { action(resolved.plugin) }
+            is Resolution.Success -> invokeGuardedSuspend(resolved.plugin, capability) { action(resolved.plugin) }
             is Resolution.Rejected -> resolved.result
         }
     }
@@ -139,21 +141,21 @@ class PluginManager(
         return try {
             when (val availability = plugin.selfCheck(context)) {
                 PluginAvailability.Ok -> {
-                    record(pluginId, ok = true, summary = "Self-check passed")
+                    record(pluginId, "self-check", ok = true, summary = "Self-check passed")
                     PluginCheckResult.Success(pluginId)
                 }
                 is PluginAvailability.Unavailable -> {
-                    record(pluginId, ok = false, summary = "Self-check failed: ${availability.reason}")
+                    record(pluginId, "self-check", ok = false, summary = "Self-check failed: ${availability.reason}")
                     PluginCheckResult.Failure(pluginId, availability.reason)
                 }
                 PluginAvailability.Unknown -> {
-                    record(pluginId, ok = false, summary = "Self-check inconclusive (no context)")
+                    record(pluginId, "self-check", ok = false, summary = "Self-check inconclusive (no context)")
                     PluginCheckResult.Failure(pluginId, "Self-check inconclusive — try again with a device context.")
                 }
             }
         } catch (e: Throwable) {
             val detail = e::class.java.simpleName
-            record(plugin.id, ok = false, summary = "Self-check threw $detail")
+            record(plugin.id, "self-check", ok = false, summary = "Self-check threw $detail")
             logger.error(pluginId, plugin.name, "selfCheck threw $detail")
             PluginCheckResult.Failure(pluginId, "Self-check threw $detail. See plugin diagnostics.")
         }
@@ -203,22 +205,22 @@ class PluginManager(
         return Resolution.Success(winner)
     }
 
-    private fun <T> invokeGuarded(plugin: NoteflowPlugin, action: () -> T): PluginResult<T> {
+    private fun <T> invokeGuarded(plugin: NoteflowPlugin, capability: PluginCapability, action: () -> T): PluginResult<T> {
         return try {
             val value = action()
             if (value == null) {
-                record(plugin.id, ok = false, summary = "Returned no result")
+                record(plugin.id, capability.key, ok = false, summary = "Returned no result")
                 PluginResult.Failure(
                     PluginFailureReason.PLUGIN_ERROR,
                     "Plugin '${plugin.name}' returned no result."
                 )
             } else {
-                record(plugin.id, ok = true, summary = "Success")
+                record(plugin.id, capability.key, ok = true, summary = "Success")
                 PluginResult.Success(value)
             }
         } catch (e: Throwable) {
             val detail = e::class.java.simpleName
-            record(plugin.id, ok = false, summary = "Threw $detail")
+            record(plugin.id, capability.key, ok = false, summary = "Threw $detail")
             logger.error(plugin.id, plugin.name, "invocation threw $detail")
             PluginResult.Failure(
                 PluginFailureReason.PLUGIN_ERROR,
@@ -228,22 +230,22 @@ class PluginManager(
     }
 
     /** Suspend sibling of [invokeGuarded] for plugin actions that perform their own IO. */
-    private suspend fun <T> invokeGuardedSuspend(plugin: NoteflowPlugin, action: suspend () -> T): PluginResult<T> {
+    private suspend fun <T> invokeGuardedSuspend(plugin: NoteflowPlugin, capability: PluginCapability, action: suspend () -> T): PluginResult<T> {
         return try {
             val value = action()
             if (value == null) {
-                record(plugin.id, ok = false, summary = "Returned no result")
+                record(plugin.id, capability.key, ok = false, summary = "Returned no result")
                 PluginResult.Failure(
                     PluginFailureReason.PLUGIN_ERROR,
                     "Plugin '${plugin.name}' returned no result."
                 )
             } else {
-                record(plugin.id, ok = true, summary = "Success")
+                record(plugin.id, capability.key, ok = true, summary = "Success")
                 PluginResult.Success(value)
             }
         } catch (e: Throwable) {
             val detail = e::class.java.simpleName
-            record(plugin.id, ok = false, summary = "Threw $detail")
+            record(plugin.id, capability.key, ok = false, summary = "Threw $detail")
             logger.error(plugin.id, plugin.name, "invocation threw $detail")
             PluginResult.Failure(
                 PluginFailureReason.PLUGIN_ERROR,
@@ -287,7 +289,23 @@ class PluginManager(
         return PluginResult.Unavailable(reason, message)
     }
 
-    private fun record(pluginId: String, ok: Boolean, summary: String) {
-        lastResults[pluginId] = PluginInvocationRecord(System.currentTimeMillis(), ok, summary)
+    /**
+     * Record an invocation for BOTH diagnostic surfaces:
+     * - the in-memory last-invocation record ([lastInvocation]);
+     * - the persisted, bounded, scrubbed [PluginInvocationJournal] (phase-173
+     *   feature 2). The journal entry's capability key is the fixed framework
+     *   key (or "self-check"); summaries are fixed labels + exception class
+     *   names — the journal policy scrubs/bounds them on both write and render.
+     */
+    private fun record(pluginId: String, capabilityKey: String, ok: Boolean, summary: String) {
+        val now = System.currentTimeMillis()
+        lastResults[pluginId] = PluginInvocationRecord(now, ok, summary)
+        journal.write(
+            pluginId,
+            PluginInvocationJournal.record(
+                journal.read(pluginId),
+                PluginInvocationJournal.Entry(now, capabilityKey, ok, summary)
+            )
+        )
     }
 }
