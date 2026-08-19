@@ -106,8 +106,20 @@ job **before** the `assembleRelease` step, for example:
 # Signing key of a produced APK (check the universal + every ABI split)
 keytool -printcert -jarfile app/build/outputs/apk/release/app-universal-release.apk | grep -E "owner|CN"
 keytool -printcert -jarfile app/build/outputs/apk/release/app-arm64-v8a-release.apk | grep -E "owner|CN"
-apksigner verify --verbose app/build/outputs/apk/release/*.apk   # all must print "Verifies"
+apksigner verify --verbose app/build/outputs/apk/release/*.apk                # all must print "Verifies"
+apksigner verify --print-certs -v app/build/outputs/apk/release/*.apk         # scheme lines:
 ```
+
+The `--print-certs -v` output must show, on EVERY split + universal:
+
+```
+Verified using v2 scheme (APK Signature Scheme v2): true
+Verified using v3 scheme (APK Signature Scheme v3): true
+```
+
+(v1/v3.1/v3.2/v4 may read `false` — v2+v3 is the phase-171 requirement;
+B1-PLAT-1 keeps the fail-closed keystore gate live, so a keystore-less
+`assembleRelease` still fails loudly instead of emitting a debug-signed APK.)
 
 Expected for a real build: your `CN=InkFlow...` cert. If it says
 `CN=Android Debug`, you are still on the debug fallback — fix the keystore
@@ -124,9 +136,15 @@ device only downloads/native-loads its own ABI. The output directory is
 | `assembleRelease` | `app-arm64-v8a-release.apk`, `app-armeabi-v7a-release.apk`, `app-x86-release.apk`, `app-x86_64-release.apk` (one per ABI) **and** `app-universal-release.apk` (all 4 ABIs, for sideloading/emulators) — signed with the same `releaseConfig` (fail-closed, B1-PLAT-1) |
 | `assembleDebug` | `app/build/outputs/apk/debug/app-debug.apk` (single monolithic APK, unchanged) |
 
-- The ABI split runs ONLY on release builds (`splits.abi.isEnable` is gated on the
+- ABI split runs ONLY on release builds (`splits.abi.isEnable` is gated on the
   requested task list containing a release task); `assembleDebug` output is unchanged.
-- Every produced split APK passes `apksigner verify` (v2), signed `CN=InkFlow Release`.
+- Every produced split APK passes `apksigner verify` with BOTH **v2 and v3**
+  (APK Signature Scheme v3 is force-enabled in `releaseConfig` — phase-171,
+  Phase-32-NEW-03 — because AGP 8.7.3 only enables v3 automatically at
+  `minSdk >= 28` and this app floors at `minSdk = 26`), signed
+  `CN=InkFlow Release`. v3 gives the release an in-place signing-key-rotation
+  capability; v2 stays on as the Android 8.x (API 26-27) fallback scheme;
+  v1/v4 are intentionally off (v4 only aids Android 11+ incremental installs).
 - The universal APK is the full-fat fallback for sideloading / emulators / x86
   test-beds; it keeps ALL four ABIs + the trimmed lingua corpus and is the honest
   "one build downloads everything" channel (Phase-32-NEW-02 notes it as the only
@@ -134,6 +152,21 @@ device only downloads/native-loads its own ABI. The output directory is
 
 A ".aab" (Android App Bundle) is not produced yet — generating one needs
 `bundleRelease`. Do that when actually onboarding to Play.
+
+## Plugin update channel (operator action — Phase-32-NEW-04)
+
+The hosted plugin-update manifest (`plugin-updates.inkflow.app`) is fetched over
+a TLS connection pinned to the COMPILE-TIME constant `PLUGIN_MANIFEST_CERT_PIN`
+(`app/.../plugins/runtime/HostedPluginManifest.kt:242-243`), which today is the
+documented **placeholder** — so every shipped build fails the channel closed
+(safe, inert). Going live is an operator runbook, not a code change: substitute
+the real leaf-cert hash → re-ship → verify one hosted fetch succeeds.
+
+Follow **`docs/PLUGIN_CHANNEL.md`** — it has the exact file/line, the correct
+`openssl` pin recipe (the LEAF-cert-DER hash the app computes — NOT the
+RFC-7469 `-pubkey`/SPKI variant, which this app rejects), the failure-mode
+tests that pin the fail-closed contract, the go-live checklist and the cert
+renewal procedure.
 
 ## Publish checklist
 

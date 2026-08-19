@@ -1732,12 +1732,27 @@
     (~53.3-56.3 MB each) + `app-universal-release.apk` (~96.9 MB, all 4 ABIs, sideload/emulator channel); every
     split is signed by `releaseConfig` and passes `apksigner verify` (B1-PLAT-1 fail-closed untouched).
     `docs/RELEASE.md` Artifacts table updated. `gradle assembleDebug` + `assembleRelease` green.
+  - **Implemented in phase-171** (Phase-32-NEW-03 + NEW-04, see `workspace/phase-171/REPORT.md`): the release
+    APK now carries **APK Signature Scheme v3** alongside v2 — `enableV3Signing = true` in
+    `signingConfigs.create("releaseConfig")` (`app/build.gradle.kts` ~`:57`) because AGP 8.7.3 only auto-enables
+    v3 at `minSdk >= 28` and this app floors at 26 (empirically confirmed: baseline release APK was v2-only;
+    post-fix all 5 outputs `apksigner verify --print-certs -v` = `v2:true` + `v3:true`, real `CN=InkFlow Release`
+    identity — v1/v4 untouched, minSdk NOT bumped, B1-PLAT-1 fail-closed gate re-verified: keystore-less
+    `assembleRelease` still fails "Release build refused"). The plugin-update channel's operator substitution is
+    now runbooked: `docs/PLUGIN_CHANNEL.md` (the compile-time `PLUGIN_MANIFEST_CERT_PIN`
+    `HostedPluginManifest.kt:242-243` pin recipe is the LEAF-cert-DER hash `PinnedCertHash.base64Sha256`
+    computes — NOT the RFC-7469 `-pubkey`/SPKI pin, which this app rejects, verified), go-live checklist,
+    cert-renewal procedure; the placeholder is intentionally NOT substituted. `PinnedCertHashTest` (4→9) pins
+    the fail-closed `matches` contract (placeholder/wrong/near-miss pins never match; known-good does) and the
+    exact placeholder value, so a changed-but-wrong constant can never silently slip in.
 - Tests: `app/src/test/java/com/authorss81/noteflow/` (~110 unit tests, pure JVM, no androidTest).
 - **Do NOT run Gradle on the Windows dev machine** (no SDK; CI-only builds).
 - Version: `VERSION_CODE`/`VERSION_NAME` env (default 2 / "1.0.0"). Release signing is FAIL-CLOSED
   (B1-PLAT-1): `KEYSTORE_FILE`+`KEYSTORE_PASSWORD`+`KEY_ALIAS`+`KEY_PASSWORD` must be supplied or
   `assembleRelease` refuses — there is NO debug-keystore fallback (corrected 2026-08-17; the old "falls
-  back to debug keystore" note was stale).
+  back to debug keystore" note was stale). **Since phase-171 the release APK is signed with BOTH
+  v2 and v3 (APK Signature Scheme v3, `enableV3Signing = true`, for in-place key rotation) — verify with
+  `apksigner verify --print-certs -v` expecting `v2 scheme: true` AND `v3 scheme: true`.**
   - **Implemented in phase-32** (APK attack, see `workspace/phase-32/REPORT.md`): the release APK was built and audited with apktool/jadx/androguard/APKiD/strings/apksigner/readelf. Confirmed at binary level: release release signing is the well-known Android **debug** cert (`CN=Android Debug`, SHA-256 `81a2980a…`, v2-only scheme — B1-PLAT-1 + new Phase-32-NEW-03); base APK bundles an **80.2 MB packed `language-models/` n-gram pack (~199 MB raw = 56% of the 142 MB release APK) that is the compile-time `lingua` language-detection library's corpus** (Phase-32-NEW-01 — identical byte-for-byte to the lingua JAR; note the review corrected the initial "ML Kit translation models" attribution: ML Kit translate models are runtime-downloaded, only its `libtranslate_jni.so`/`libmlkit_google_ocr_pipeline.so` natives are baked in) despite the downloadable-plugin hard rule; no ABI splits (Phase-32-NEW-02); plugin-manifest cert pin is still the placeholder `sha256/AAECAwQFBgcI…` so hosted plugin updates fail closed until the operator substitutes the real pin (Phase-32-NEW-04, B1-CRYPTO-01 fix wiring verified). Positives re-verified: release not debuggable, FLAG_SECURE wired, allowBackup=false, R8 ON, no tasks-genai/GGUF in base, no hardcoded secrets in 1M+ strings.
 - **Implemented in phase-32 review fix (2026-08-15)**: `scripts/phase_runner.sh` only writes a phase's `.done` if the `opencode run` left working-tree changes outside `logs/` + the phase's own markers (`tree_work`/`has_new_work` in `phase_runner.sh`). A zero-work run (opencode exit 0 with no delta — the phase-32 false completion at commit `6b17422`) counts as a failed attempt and leaves a `.no_work` marker; phase-32's bogus `.done` was removed so the pipeline re-selects it. **Second fix (same day)**: normal-run mode now also short-circuits when `.done` already exists (`phase_runner.sh` "Already-done guard") and clears stale failure markers (`.deferred`/`.no_work`/`.session`/`.deferred_attempts`/`.attempts`), so a completed phase is never re-run — phase-32 had been re-selected after completion, leaving contradictory `.no_work`+`.deferred` alongside `.done` (commits `44a7210`+`27b93fd`); those stale markers are now removed.
 

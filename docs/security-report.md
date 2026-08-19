@@ -54,16 +54,20 @@ Per area:
 
 ### Top risks (read this first)
 
-> **Post-fix status (2026-08-19, phase-170).** All CRITICAL/HIGH/MEDIUM
+> **Post-fix status (2026-08-19, phase-171).** All CRITICAL/HIGH/MEDIUM
 > findings are FIXED by the phase-39..114 pipeline unless noted. The remaining
 > OPEN/MEDIUM item is **`B2-DEPS-05`** (the downloadable LLM model is neither
 > hash-pinned nor signature-verified; `AssistantModelDownloader.kt:72` still
 > `instanceFollowRedirects = true`, no pin, `expectedSizeBytes` never compared —
 > the phase-77 `.done` was a false completion, removed in this sweep). The only
 > other OPEN items are INFO triage (B1-PLAT-6 namespace, B2-LOG-06, B2-DEPS-06)
-> and the Phase-32-NEW signing/rotation note (NEW-03/04). The base-APK-size
-> findings are now FIXED: **Phase-32-NEW-01 (lingua corpus trim) + Phase-32-NEW-02
-> (ABI splits) closed by phase-170** (`workspace/phase-170/REPORT.md`). What each
+> and the Phase-32-NEW signing/rotation note — NEW-03 (v2-only signing) is
+> **FIXED by phase-171** (`enableV3Signing = true`, v2+v3 verified); NEW-04
+> (placeholder manifest pin) remains **intentional-fail-closed, runbooked in
+> phase-171** (`docs/PLUGIN_CHANNEL.md` + `PinnedCertHashTest` pin). The
+> base-APK-size findings are now FIXED: **Phase-32-NEW-01 (lingua corpus trim) +
+> Phase-32-NEW-02 (ABI splits) closed by phase-170**
+> (`workspace/phase-170/REPORT.md`). What each
 > original top risk now means:
 
 1. **CRITICAL — Downloadable-plugin integrity pins are attacker-defined.** **FIXED**
@@ -121,7 +125,8 @@ Per area:
    keystore, and release signing fails closed without `RELEASE_KEYSTORE_B64`/
    `KEYSTORE_FILE`. **Remaining:** `B2-DEPS-05` (LLM model pin — OPEN) and the
    operator-side substitution of the production plugin-manifest cert pin
-   (Phase-32-NEW-04; intentional fail-closed until then).
+   (Phase-32-NEW-04; intentional fail-closed until then — runbooked in
+   phase-171, `docs/PLUGIN_CHANNEL.md`).
 
 ### Reconciliation notes (dedupe/merge)
 
@@ -1076,20 +1081,20 @@ No DB schema, workflow, or dependency changes were made.
 ### [Phase-32-NEW-03] Release APK signed with APK Signature Scheme v2 only (no v3/v4) — no in-place signing-key rotation capability
 - **Severity:** INFO
 - **Area:** Android platform surface / signing
-- **Status:** `OPEN` — no fix phase (phase-115 sweep confirmed: not in the phase-39..114 fix plan; depends on the B1-PLAT-1 real-keystore deployment + a future release-engineering decision to enable v3 signing).
-- **Agent/tool:** `apksigner verify --print-certs -v`
-- **Evidence:** `Verified using v2 scheme: true`; `v1/v3/v3.1/v3.2/v4: false`; `Number of signers: 1`; `V2 Signer: certificate DN: C=US, O=Android, CN=Android Debug`, SHA-256 `81a2980a…`.
+- **Status:** `FIXED` — phase-171 (2026-08-19, see `workspace/phase-171/REPORT.md`). `enableV3Signing = true` was added to `signingConfigs.create("releaseConfig")` (`app/build.gradle.kts`, inside the `:36-60` releaseConfig block, ~`:57`). Root cause confirmed empirically: AGP 8.7.3 only enables v3 automatically when `minSdk >= 28`; with `minSdk = 26` (`app/build.gradle.kts:34`) the pre-fix release APK verified `v2 scheme: true / v3 scheme: false`. Every post-fix release output (4 ABI splits + universal) now `apksigner verify --print-certs -v` as `v2 scheme: true` **and** `v3 scheme: true`, signed `CN=InkFlow Release` (real keystore). v1/v4 intentionally unchanged (v4 only accelerates Android 11+ incremental installs); `minSdk` NOT bumped (out of scope). B1-PLAT-1 fail-closed gate untouched: a keystore-less `assembleRelease` still fails at the `whenReady` gate ("Release build refused: no release keystore configured (B1-PLAT-1)") before R8. `B1Plat01ReleaseSigningTest` green.
+- **Agent/tool:** `apksigner verify --print-certs -v` on `gradle assembleRelease` outputs (baseline pre-fix + post-fix), `keytool -list` on the CI-provisioned real keystore.
+- **Evidence:** Baseline (current tree, pre-change): every release APK `Verified using v2 scheme: true` / `Verified using v3 scheme: false`. Post-fix universal: `Verified using v2 scheme: true`, `Verified using v3 scheme: true`, `Number of signers: 1`, V3.0 signer `CN=InkFlow Release` SHA-256 `69636edb…c50196`; same v2+v3 on all 4 ABI splits (SHA-256: arm64 `171d43eb…`, armeabi-v7a `6be95492…`, x86 `3a6fdb42…`, x86_64 `7f5522ea…`, universal `2c969325…`).
 - **Exploit scenario:** No direct exploit (v2 is the validated install scheme for minSdk 26+), but v3 carries the versioned key-rotation structure; with only v2, a future signing-key compromise cannot be rotated in-place — the app must be uninstalled/reinstalled, and combined with B1-PLAT-1 (well-known debug keystore) there is currently no production signing identity to rotate at all.
-- **Fix:** Configure a real release keystore (B1-PLAT-1's phase-57 fix) AND enable APK Signature Scheme v3 (automatic with AGP `v3SigningEnabled`/default when the min/target SDK ≥ 28 — it is off here only because signing config relies on the v2-only debug path).
+- **Fix:** Release APK now carries APK Signature Scheme v3 (in-place key-rotation capability), always v2+v3-signed with the real `releaseConfig` identity — kept fail-closed (B1-PLAT-1).
 
 ### [Phase-32-NEW-04] Compiled-in plugin-manifest pin is still the placeholder (`sha256/AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=`) — plugin-update channel dead until the operator substitutes the real pin
 - **Severity:** INFO (availability; security posture = intended fail-closed)
 - **Area:** Downloadable-plugin runtime / supply chain
-- **Status:** `OPEN` — no fix phase (phase-115 sweep confirmed: not in the phase-39..114 fix plan; intentionally fail-closed placeholder, resolved by the operator substituting the real production leaf hash before the hosted channel goes live).
+- **Status:** `OPEN — intentional fail-closed, RUNBOOKED (phase-171)`. The placeholder is NOT substituted in this phase (no real channel certs exist; do NOT fake a pin). Phase-171 delivered exactly the two things the finding's own fix-verdict called for: (1) a full operator runbook `docs/PLUGIN_CHANNEL.md` (exact file/line `HostedPluginManifest.kt:242-243`, the correct LEAF-cert-DER `openssl` pin recipe — NOT the RFC-7469 `-pubkey`/SPKI variant this app rejects, cross-checks, go-live checklist, cert-renewal procedure) referenced from `docs/RELEASE.md` and `docs/PLUGINS.md`; and (2) a fail-closed contract TEST: `PinnedCertHashTest` (now 9 tests) asserts `PinnedCertHash.matches` returns true for a known-good pin and FALSE for the placeholder / any well-formed wrong / near-miss / wrong-prefix / blank pin, and pins the exact placeholder value so a changed-but-wrong constant can never silently substitute. The channel remains fail-closed ("update checks are disabled") until the operator performs the substitution + re-ship + one-fetch-verified go-live (checklist in the runbook) — safe and inert, no security regression.
 - **Agent/tool:** `strings` + smali inspection (`HostedPluginManifestKt`), decompiled `PinnedCertHash`/`HttpsManifestTransport` via jadx
-- **Evidence:** `HostedPluginManifestKt.PLUGIN_MANIFEST_CERT_PIN = "sha256/AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="` (base64 of bytes 0x00..0x1F — obvious placeholder) compiled into the release binary; `HttpsManifestTransport$fetch$2` smali shows the full guard chain (scheme-only → host allow-list `plugin-updates.inkflow.app` → `PinnedTlsConnector.open` → explicit 3xx refusal → 256 KiB cap); `PinnedCertHash.matches` = `ConstantTime.hexEqual`, `parse` rejects non-32-byte pins.
+- **Evidence:** `HostedPluginManifestKt.PLUGIN_MANIFEST_CERT_PIN = "sha256/AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="` (base64 of bytes 0x00..0x1F — obvious placeholder) compiled into the release binary; `HttpsManifestTransport$fetch$2` smali shows the full guard chain (scheme-only → host allow-list `plugin-updates.inkflow.app` → `PinnedTlsConnector.open` → explicit 3xx refusal → 256 KiB cap); `PinnedCertHash.matches` = `ConstantTime.hexEqual`, `parse` rejects non-32-byte pins. Phase-171: `PinnedCertHashTest` now proves the placeholder never cert-matches; `HttpsManifestTransportTest` `the compiled-in host and pin constants are well-formed` proves it is a parseable 32-byte pin (configured + pin-gated, never unpinned-HTTP degradation).
 - **Exploit scenario:** Because the placeholder hash can never equal any real certificate's SHA-256, **every plugin-update check on a shipped build fails closed** ("the manifest host's certificate does not match the pinned hash"). This is the phase-39 security fix working as designed — but it means the plugin-update channel is non-functional for all end-users until the operator replaces the constant with the real production leaf hash (fails-safe, availability-only).
-- **Fix:** Before the hosted plugin channel goes live, substitute the production `plugin-updates.inkflow.app` leaf cert hash for the placeholder in `HostedPluginManifest.kt:220` and re-ship. Until then, document that hosted updates are disabled (they already fail closed, so no code change is urgent).
+- **Fix:** Operator action, runbooked (phase-171): substitute the production `plugin-updates.inkflow.app` leaf cert hash for the placeholder in `HostedPluginManifest.kt:242-243` and re-ship, following `docs/PLUGIN_CHANNEL.md` (leaf-DER `openssl` recipe, go-live checklist, cert-renewal procedure). Until then, hosted updates are documented as disabled.
 
 ## Prior findings CONFIRMED on the APK (tool evidence vs source-only)
 

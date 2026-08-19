@@ -53,6 +53,17 @@ android {
     // auto-generated debug keystore.
     signingConfigs {
         create("releaseConfig") {
+            // Phase 171 (Phase-32-NEW-03 INFO): force APK Signature Scheme v3 ON.
+            // Root cause is NOT a config flag disabling v3 — AGP 8.7.3 only enables
+            // v3 automatically when `minSdk >= 28`, and this app floors at minSdk 26
+            // (below), so every prior release built v2-only and had NO in-place
+            // signing-key-rotation capability. `enableV3Signing = true` overrides
+            // that threshold while leaving v2 on (v2 remains the fallback scheme a
+            // pre-Android-9 device understands) and v1/v4 untouched by design:
+            // v4 only accelerates Android 11+ incremental installs and is not
+            // required; bumping minSdk to 28 would be a user-approval-level change
+            // and is intentionally OUT of scope here.
+            enableV3Signing = true
             val ksFilePath = System.getenv("KEYSTORE_FILE")
             val ksPassword = System.getenv("KEYSTORE_PASSWORD")
             val ksAlias = System.getenv("KEY_ALIAS")

@@ -625,6 +625,16 @@ verified.** A downloaded remote plugin can be updated from the store:
 > newer releases need an app bump that ships their pins. This is the intended
 > fail-closed stance until the first genuine release is pinned (see below).
 
+> **Manifest-host pin (fail closed — Phase-32-NEW-04, phase 171):** the manifest
+> TRANSPORT's compile-time pin `PLUGIN_MANIFEST_CERT_PIN`
+> (`HostedPluginManifest.kt:242-243`) is likewise still the documented
+> placeholder, so Check for Updates on a shipped build reports "disabled" —
+> the channel is safe but inert until the operator substitutes the real
+> `plugin-updates.inkflow.app` leaf-cert hash. The substitution is a runbook:
+> see **`docs/PLUGIN_CHANNEL.md`** (exact `openssl` leaf-DER pin recipe,
+> go-live checklist, cert-renewal procedure). `PinnedCertHashTest` pins the
+> placeholder value so a changed-but-wrong constant can never slip in.
+
 ### Publishing a downloadable plugin release
 
 > **Signing (B2-DEPS-04, phase 76):** the artifact must be signed by the ONE real
