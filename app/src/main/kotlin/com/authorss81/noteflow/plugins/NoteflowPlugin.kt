@@ -695,13 +695,13 @@ interface ScreenshotNotePlugin {
 // ---------------------------------------------------------------------------
 
 /** The payload kinds the FileTransfer plugin can send — exactly the kinds the
- *  built-in HomeScreen "Send to nearby device (LocalSend)" flow already offers. */
-enum class FileTransferKind(val label: String) {
-    NOTE_HTML("Note (HTML)"),
-    VAULT_BACKUP("Encrypted vault backup (.nfb)"),
-    OBSIDIAN_ZIP("Obsidian vault (ZIP)"),
-    HTML_ZIP("HTML website (ZIP)")
-}
+ *  built-in HomeScreen "Send to nearby device (LocalSend)" flow already offers.
+ *
+ *  No user-facing label lives here: the enum is the programmatic transfer
+ *  contract, and any UI copy must come from string resources (the caller that
+ *  builds [FileTransferRequest] supplies the human text it shows).
+ */
+enum class FileTransferKind { NOTE_HTML, VAULT_BACKUP, OBSIDIAN_ZIP, HTML_ZIP }
 
 /** A concrete, ready-to-send local file plus its destination receiver. */
 data class FileTransferRequest(
@@ -736,10 +736,26 @@ sealed class FileTransferOutcome {
  * to the existing `LocalSendSender` (same sender the HomeScreen dialog uses) —
  * this interface is what the plugin exposes through the framework so discovery
  * and sending are reachable through [PluginManager.withPluginAsync].
+ *
+ * NOTE (review-fix, phase-173): this serving surface is LOCALSEND-SHAPED — it
+ * carries `LocalSendDevice`, a type that lives in app host code
+ * (`services.localsend.*`). Under the `PluginFrameworkClassLoader` sandbox, a
+ * DOWNLOADABLE plugin can only resolve types under `plugins.*`, so this
+ * interface is realistically implementable by compile-time/host plugins only.
+ * A future downloadable `FileTransfer` server plugin would need a new
+ * surface-neutral seam (no `services.*` types in its signatures) to be
+ * introduced first.
  */
 interface FileTransferPlugin {
-    /** Transfer [FileTransferRequest.file] to its destination device. */
-    suspend fun sendFile(context: Context?, request: FileTransferRequest): FileTransferOutcome
+    /** Transfer [FileTransferRequest.file] to its destination device.
+     *  [onProgress] reports (sentBytes, totalBytes) while the transfer runs
+     *  (the LocalSend implementation forwards the sender's own progress; the
+     *  default is a no-op so callers without a progress UI can omit it). */
+    suspend fun sendFile(
+        context: Context?,
+        request: FileTransferRequest,
+        onProgress: (sentBytes: Long, totalBytes: Long) -> Unit = { _, _ -> }
+    ): FileTransferOutcome
 
     /** Discover nearby LocalSend receivers on the local network, or null when no
      *  sender is available in this context (fail-closed). [timeoutMillis] caps

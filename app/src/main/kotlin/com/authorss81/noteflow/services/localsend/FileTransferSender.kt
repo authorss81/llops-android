@@ -9,8 +9,15 @@ import java.io.File
  * v2.2) — the plugin REUSES it, never forks it, and never constructs LocalSend
  * messages/endpoints itself. This interface exists so the plugin's capability
  * mapping (device + payload → exactly one `sendFile` call on [LocalSendSender])
- * is unit-testable with a recording fake and zero network, and so a future
- * runtime (downloadable) plugin can implement the same seam.
+ * is unit-testable with a recording fake and zero network.
+ *
+ * NOTE (review-fix, phase-173): this seam and its types (incl. [LocalSendDevice]
+ * and [LocalSendSender.SendResult]) live in app, NODE in the plugin SDK, so the
+ * `PluginFrameworkClassLoader` sandbox (downloadable artifacts may resolve only
+ * `com.authorss81.noteflow.plugins.*`) means it is implementable by compile-time
+ * / host plugins and used as a unit-test surface — NOT by a downloadable plugin.
+ * A future downloadable `FileTransfer` server plugin needs a surface-neutral
+ * seam with no `services.*` types in its signatures.
  *
  * Both methods run off the main thread and enforce the sender's security model
  * (TLS-only payloads, TOFU pairing gate, receiver-side `/prepare-upload` accept)

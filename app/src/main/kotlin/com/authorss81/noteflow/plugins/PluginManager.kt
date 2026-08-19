@@ -89,6 +89,12 @@ class PluginManager(
 
     private val lastResults = java.util.concurrent.ConcurrentHashMap<String, PluginInvocationRecord>()
 
+    // Review-fix (phase-173): the journal is a read-modify-write (read → record →
+    // write) which must not race between concurrent invocations (withPluginAsync
+    // runs on Dispatchers.Default). One serializing lock makes "records every
+    // invocation" hold under concurrency; the critical section is tiny.
+    private val journalLock = Any()
+
     /** Most recent invocation outcome for diagnostics (null = never invoked). */
     fun lastInvocation(pluginId: String): PluginInvocationRecord? = lastResults[pluginId]
 
@@ -300,12 +306,14 @@ class PluginManager(
     private fun record(pluginId: String, capabilityKey: String, ok: Boolean, summary: String) {
         val now = System.currentTimeMillis()
         lastResults[pluginId] = PluginInvocationRecord(now, ok, summary)
-        journal.write(
-            pluginId,
-            PluginInvocationJournal.record(
-                journal.read(pluginId),
-                PluginInvocationJournal.Entry(now, capabilityKey, ok, summary)
+        synchronized(journalLock) {
+            journal.write(
+                pluginId,
+                PluginInvocationJournal.record(
+                    journal.read(pluginId),
+                    PluginInvocationJournal.Entry(now, capabilityKey, ok, summary)
+                )
             )
-        )
+        }
     }
 }

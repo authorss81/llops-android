@@ -593,6 +593,17 @@ Protocol v2.2 sender, never forking it:
   vault handle (`SettingsManager` etc.) — pinned by `PluginBytecodeIsolationTest`.
 - Routing: `NoteflowViewModel.sendFileWithPlugin(FileTransferRequest)` →
   `PluginManager.withPluginAsync(PluginCapability.FileTransfer, …)`.
+- **Review-fix (phase-173): a REAL production caller.** When the plugin is
+  enabled, HomeScreen's "Send to Nearby Device (LocalSend)" dialog sends THROUGH
+  the capability (`LocalSendSendDialog` routes `doSend` via the plugin, mapper
+  payload→`FileTransferKind`; disabled = the unchanged direct sender), so the
+  route is exercised end-to-end with the full pairing/per-send consent UI
+  intact, and the sender's progress numbers reach the dialog.
+- The `FileTransferSender` seam and `LocalSendDevice` are app/host types
+  (`services.localsend.*`); under the `PluginFrameworkClassLoader` sandbox a
+  DOWNLOADABLE plugin may only resolve `plugins.*`, so this seam is for
+  compile-time/host plugins + unit-test fakes, not downloadable implementations
+  (a future downloadable `FileTransfer` server needs a surface-neutral seam).
 - Tests: `FileTransferPluginPolicyTest` (recording `FileTransferSender` fake,
   zero network) + `Phase131MetadataAlignmentTest` (metadata.json now lists
   `file_transfer` under `servedByCompileTimePlugins`).
@@ -609,6 +620,10 @@ addition to the existing per-plugin summary:
   journal's own separators are stripped — a hostile availability reason can never
   forge extra journal lines or leak a path. Payload content is never written by
   construction (manager records fixed labels + exception-class names).
+- **Review-fix (phase-173):** the capability key is sanitized on write too
+  (same separator-strip + bound), and the journal read→record→write is
+  serialized so concurrent invocations never lose an entry. Settings → Plugins
+  re-refreshes the flows when it opens, so "Recent activity" is never stale.
 - Journaling is wired through `PluginManager` (every invocation + self-check);
   the default `NoOpStore` keeps all existing callers/tests unchanged.
 - Tests: `PluginInvocationJournalPolicyTest`. The journal key family deliberately

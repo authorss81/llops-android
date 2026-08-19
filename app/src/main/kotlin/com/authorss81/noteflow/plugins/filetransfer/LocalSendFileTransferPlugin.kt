@@ -87,7 +87,11 @@ class LocalSendFileTransferPlugin(
         // per-send consent dialogs are the real gates and live in the app.
     }
 
-    override suspend fun sendFile(context: Context?, request: FileTransferRequest): FileTransferOutcome {
+    override suspend fun sendFile(
+        context: Context?,
+        request: FileTransferRequest,
+        onProgress: (sentBytes: Long, totalBytes: Long) -> Unit
+    ): FileTransferOutcome {
         val sender = senderFactory(context)
             ?: return FileTransferOutcome.Error(
                 "File transfer is unavailable here (no LocalSend sender in this context). " +
@@ -96,7 +100,11 @@ class LocalSendFileTransferPlugin(
         if (!request.file.exists() || request.file.length() == 0L) {
             return FileTransferOutcome.Error("The file to send is empty or missing.")
         }
-        val result = sender.sendFile(request.device, request.file) { _, _ -> }
+        val result = sender.sendFile(request.device, request.file) { sent, total ->
+            // Forward the sender's own progress (same numbers the HomeScreen
+            // dialog shows); a caller without a progress UI passes a no-op.
+            onProgress(sent, total)
+        }
         return if (result.success) {
             FileTransferOutcome.Sent(result.bytesSent, scrub(result.description) ?: "The file was sent.")
         } else {

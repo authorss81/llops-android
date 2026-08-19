@@ -42,6 +42,12 @@ fun PluginSettingsDialog(
     // Inline per-plugin messages (e.g. an enable refusal with its reason).
     var localMessages by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
 
+    // Review-fix (phase-173): re-derive the plugin flows on open so the
+    // "Recent activity" journal reflects invocations that happened since the
+    // last refresh (ordinary OCR/WebSearch/… calls do not push to the flows).
+    // The public wrapper keeps the private, B1-AUTH-03-guarded routine internal.
+    LaunchedEffect(Unit) { viewModel.refreshPluginFlows() }
+
     val colorScheme = MaterialTheme.colorScheme
     val stateColor: (PluginLifecycleState) -> Color = { state ->
         when (state) {

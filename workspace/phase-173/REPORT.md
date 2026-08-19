@@ -140,3 +140,30 @@ Wiring:
 - `docs/ARCHITECTURE.md` — `services/localsend/` + `plugins/<capability>/` package
   rows; "Implemented in phase-173" note; phase-157 "still-unserved" copy updated.
 - `docs/phase-status.md` — phase-173 row `DONE`.
+
+## Review fixes (2026-08-19)
+
+Closed review findings on the phase-173 commit without touching its contract:
+
+1. **Real production caller for the plugin route.** HomeScreen's
+   `LocalSendSendDialog.doSend` now sends THROUGH `sendFileWithPlugin` when the
+   `plugins.filetransfer` plugin is enabled (payload → `FileTransferKind`,
+   outcome → the dialog's `SendResult`, sender progress forwarded via a new
+   `onProgress` param on `FileTransferPlugin.sendFile` / the VM helper); when
+   disabled the direct `LocalSendSender` send is unchanged. Consent model intact
+   (same sender + pairing store).
+2. **Seam sandbox honesty.** `FileTransferSender` + `FileTransferPlugin` KDocs now
+   state that the seam/`LocalSendDevice` live in host code and are NOT resolvable
+   by downloadable plugins under `PluginFrameworkClassLoader` (a future
+   downloadable server plugin needs a surface-neutral seam).
+3. **Journal staleness.** A public `NoteflowViewModel.refreshPluginFlows()`
+   wrapper (the private, B1-AUTH-03-guarded `refreshPluginStates()` is left
+   private and pinned) is called with a `LaunchedEffect(Unit)` when
+   `PluginSettingsDialog` opens, so "Recent activity" reflects invocations since
+   the last refresh.
+4. **Journal concurrency.** `PluginManager.record` serializes the
+   read→record→write under `journalLock`; added a concurrent no-loss test.
+5. **Journal wire fidelity.** The capability key is sanitized on write (separator
+   strip + bound); added a forgery test.
+6. **No embedded UI copy.** `FileTransferKind` no longer carries `label`s
+   (user-facing text belongs in string resources when a UI wires the kinds).

@@ -79,10 +79,21 @@ object PluginInvocationJournal {
      */
     fun record(wire: String?, entry: Entry): String {
         val detail = sanitizeDetail(entry.detail)
+        // Review-fix (phase-173): the capability key is ALSO sanitized on write
+        // (separator-stripped + bounded + non-blank) so the wire-fidelity rule —
+        // the separators never appear in any field — holds even if a caller
+        // passes a non-framework key, not just because the manager happens to
+        // use framework constants.
+        val capabilityKey = entry.capabilityKey
+            .replace(FIELD_SEPARATOR, " ")
+            .replace(ENTRY_SEPARATOR, " ")
+            .trim()
+            .take(64)
+            .ifBlank { "unknown" }
         val line = buildString {
             append(entry.atMillis)
             append(FIELD_SEPARATOR)
-            append(entry.capabilityKey)
+            append(capabilityKey)
             append(FIELD_SEPARATOR)
             append(outcomeToken(entry.ok))
             append(FIELD_SEPARATOR)

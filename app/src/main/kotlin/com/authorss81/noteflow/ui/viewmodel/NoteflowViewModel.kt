@@ -480,6 +480,17 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     }
 
     /**
+     * Review-fix (phase-173): public entry point to re-derive every plugin-backed
+     * UI flow ([refreshPluginStates] stays private — the B1-AUTH-03 source pin
+     * keeps the quiescing guard at its call site). Settings → Plugins calls this
+     * when it opens so its "Recent activity" journal reflects invocations since
+     * the last refresh. Identically quiesced while the vault is locked.
+     */
+    fun refreshPluginFlows() {
+        refreshPluginStates()
+    }
+
+    /**
      * Toggle a plugin's opt-in. Enabling may be refused by the registry with a
      * clear reason (unmet dependency / conflict / invalid manifest); the result
      * is typed so the UI can surface the refusal instead of silently failing.
@@ -939,12 +950,18 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
      * pairing gate + receiver accept). Fails loudly (typed
      * [PluginResult.Failure]/[Unavailable], e.g. `NONE_ENABLED`) until the
      * plugin is opted in — never a silent no-op.
+     *
+     * [onProgress] reports (sentBytes, totalBytes) if the caller has a progress
+     * UI (the plugin forwards the sender's own numbers); the default is a no-op.
      */
-    suspend fun sendFileWithPlugin(request: FileTransferRequest): PluginResult<FileTransferOutcome> =
+    suspend fun sendFileWithPlugin(
+        request: FileTransferRequest,
+        onProgress: (sentBytes: Long, totalBytes: Long) -> Unit = { _, _ -> }
+    ): PluginResult<FileTransferOutcome> =
         pluginManager.withPluginAsync(PluginCapability.FileTransfer, appContext) { plugin ->
             val ft = plugin as? FileTransferPlugin
                 ?: throw IllegalStateException("${plugin.name} does not implement FileTransferPlugin")
-            ft.sendFile(appContext, request)
+            ft.sendFile(appContext, request, onProgress)
         }
 
     /**

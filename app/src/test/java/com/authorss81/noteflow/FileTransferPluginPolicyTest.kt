@@ -61,6 +61,7 @@ class FileTransferPluginPolicyTest {
         var lastFile: File? = null
         var lastTimeoutMs = -1L
         var lastLegacyHttpScan: Boolean? = null
+        var lastProgress: ((sentBytes: Long, totalBytes: Long) -> Unit)? = null
 
         override suspend fun discoverDevices(
             discoveryTimeoutMs: Long,
@@ -80,6 +81,7 @@ class FileTransferPluginPolicyTest {
             sendCalls++
             lastDevice = device
             lastFile = file
+            lastProgress = onProgress
             return sendResult
         }
     }
@@ -150,6 +152,30 @@ class FileTransferPluginPolicyTest {
         // R2-b2b3-LOG-03: the raw app-private path never reaches the user.
         assertNotEquals("Refusing to send: the receiving device is not paired yet. /home/runner/private/vault key.", message)
         assertTrue("private/vault key".encodeToByteArray().size > 0 && !message.contains("/home/runner/private"))
+    }
+
+    @Test
+    fun `sender progress callbacks are forwarded to the caller unchanged`() = runBlocking {
+        val sender = RecordingSender()
+        val plugin = LocalSendFileTransferPlugin(senderFactory = { sender })
+        val file = tempFile()
+        var seenSent = -1L
+        var seenTotal = -1L
+
+        plugin.sendFile(
+            context = null,
+            request = request(file),
+            onProgress = { sent, total ->
+                seenSent = sent
+                seenTotal = total
+            }
+        )
+
+        // The plugin handed the sender a progress callback wired to the caller's.
+        assertTrue(sender.lastProgress != null)
+        sender.lastProgress?.invoke(77L, 100L)
+        assertEquals(77L, seenSent)
+        assertEquals(100L, seenTotal)
     }
 
     @Test

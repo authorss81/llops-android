@@ -6,6 +6,8 @@ import com.authorss81.noteflow.plugins.PluginRegistry
 import com.authorss81.noteflow.plugins.PluginResult
 import com.authorss81.noteflow.plugins.TextTransformPlugin
 import com.authorss81.noteflow.services.PluginInvocationJournal
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -85,6 +87,54 @@ class PluginInvocationJournalPolicyTest {
         assertEquals("ocr", parsed.single().capabilityKey)
         assertTrue(parsed.single().ok)
         assertEquals("real", parsed.single().detail)
+    }
+
+    @Test
+    fun `record sanitizes the capability key so separators cannot forge fields`() {
+        // Review-fix (phase-173): the KEY is also sanitized on write, not only
+        // the detail — a non-framework key can never forge extra lines/fields.
+        val forged = "text_transform\nEPOCH\u0001ocr\u0001fail\u0001x"
+        val wire = PluginInvocationJournal.record(
+            null,
+            entry(ok = true, key = forged, detail = "Success")
+        )
+
+        // Single, valid entry — the key's embedded separators are gone from the
+        // (parsed) key field, so it can never split the line into extra fields.
+        val parsed = PluginInvocationJournal.parse(wire)
+        assertEquals(1, parsed.size)
+        assertFalse(parsed.single().capabilityKey.contains("\u0001"))
+        assertFalse(parsed.single().capabilityKey.contains("\n"))
+        assertEquals("text_transform EPOCH ocr fail x", parsed.single().capabilityKey)
+        assertTrue(parsed.single().ok)
+    }
+
+    @Test
+    fun `concurrent invocations are serialized so the journal never loses an entry`() = runBlocking {
+        // Review-fix (phase-173): the read→record→write is serialized, so under
+        // concurrent plugin invocations the journal still records them ALL.
+        val journal = InMemoryJournal()
+        val plugin = TestPlugin(
+            id = "test.concurrent",
+            capabilities = setOf(PluginCapability.TextTransform),
+            transformBlock = { "ok:$it" }
+        )
+        val registry = PluginRegistry(InMemoryEnableStore(), plugins = listOf(plugin), currentApiLevel = 26)
+        registry.setEnabled(plugin.id, true)
+        val manager = PluginManager(registry, journal = journal)
+
+        val n = 12
+        val jobs = (0 until n).map { i ->
+            launch(Dispatchers.Default) {
+                manager.withPlugin(PluginCapability.TextTransform, null) {
+                    (it as TextTransformPlugin).transformText("x$i")
+                }
+            }
+        }
+        jobs.forEach { it.join() }
+
+        val parsed = PluginInvocationJournal.parse(journal.map[plugin.id])
+        assertEquals(n, parsed.size)
     }
 
     @Test

@@ -20,6 +20,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.authorss81.noteflow.data.model.NotePageEntity
+import com.authorss81.noteflow.plugins.FileTransferKind
+import com.authorss81.noteflow.plugins.FileTransferOutcome
+import com.authorss81.noteflow.plugins.FileTransferRequest
+import com.authorss81.noteflow.plugins.PluginResult
 import com.authorss81.noteflow.services.ImportExportService
 import com.authorss81.noteflow.services.SettingsManager
 import com.authorss81.noteflow.services.localsend.LocalSendDevice
@@ -62,6 +66,18 @@ internal enum class LocalSendPayload(val label: String) {
     OBSIDIAN_ZIP("Obsidian vault (ZIP)"),
     HTML_ZIP("HTML website (ZIP)")
 }
+
+/**
+ * Review-fix (phase-173): when the compile-time FileTransfer plugin
+ * (`plugins.filetransfer`, opt-in/off by default) is enabled, the send is routed
+ * THROUGH the capability so the plugin route has a real production caller. The
+ * plugin delegates to the exact same sender + pairing store this dialog uses, so
+ * every consent gate (TOFU pairing, TLS-only, receiver's `/prepare-upload`
+ * accept) is unchanged; when it is disabled this stays the direct LocalSend
+ * send. The plugin's own progress numbers are surfaced through the same
+ * sent/total callbacks as the direct path.
+ */
+private const val PLUGIN_ID_FILE_TRANSFER = "plugins.filetransfer"
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -219,6 +235,45 @@ fun LocalSendSendDialog(
         comparedFingerprintChecked = false
     }
 
+    /**
+     * Send [file] to [device] through the FileTransfer capability (plugin route).
+     * Maps every typed [FileTransferOutcome] and manager result into the same
+     * [LocalSendSender.SendResult] the direct path produces, so the UI states
+     * (phase / statusText / progress) are identical. Consent is unchanged: the
+     * plugin delegates to the same `LocalSendSender` + pairing store.
+     */
+    suspend fun sendViaPlugin(
+        device: LocalSendDevice,
+        file: File,
+        totalBytes: Long
+    ): LocalSendSender.SendResult {
+        val kind = when (payloadType) {
+            LocalSendPayload.NOTE_HTML -> FileTransferKind.NOTE_HTML
+            LocalSendPayload.VAULT_BACKUP -> FileTransferKind.VAULT_BACKUP
+            LocalSendPayload.OBSIDIAN_ZIP -> FileTransferKind.OBSIDIAN_ZIP
+            LocalSendPayload.HTML_ZIP -> FileTransferKind.HTML_ZIP
+        }
+        val result = viewModel.sendFileWithPlugin(
+            FileTransferRequest(kind, file, device)
+        ) { sent, total ->
+            if (phase == "Requesting") {
+                phase = "Sending"
+                statusText = "Sending ${file.name} to ${device.alias}…"
+            }
+            progressSent = sent
+            progressTotal = if (total > 0L) total else totalBytes
+        }
+        return when (result) {
+            is PluginResult.Success -> when (val outcome = result.value) {
+                is FileTransferOutcome.Sent -> LocalSendSender.SendResult(true, outcome.description, outcome.bytesSent)
+                is FileTransferOutcome.Rejected -> LocalSendSender.SendResult(false, outcome.message, 0L)
+                is FileTransferOutcome.Error -> LocalSendSender.SendResult(false, outcome.message, 0L)
+            }
+            is PluginResult.Failure -> LocalSendSender.SendResult(false, result.message, 0L)
+            is PluginResult.Unavailable -> LocalSendSender.SendResult(false, result.message, 0L)
+        }
+    }
+
     fun doSend(device: LocalSendDevice) {
         scope.launch {
             activeDevice = device
@@ -234,13 +289,19 @@ fun LocalSendSendDialog(
             progressTotal = file.length()
             phase = "Requesting"
             statusText = "Waiting for ${device.alias} to accept the transfer…"
-            val result = sender.sendFile(device, file) { sent, total ->
-                if (phase == "Requesting") {
-                    phase = "Sending"
-                    statusText = "Sending ${file.name} to ${device.alias}…"
+            // Review-fix (phase-173): the plugin route gets a REAL production
+            // caller when opted in; otherwise this is the unchanged direct send.
+            val result = if (viewModel.pluginRegistry.isEnabled(PLUGIN_ID_FILE_TRANSFER)) {
+                sendViaPlugin(device, file, file.length())
+            } else {
+                sender.sendFile(device, file) { sent, total ->
+                    if (phase == "Requesting") {
+                        phase = "Sending"
+                        statusText = "Sending ${file.name} to ${device.alias}…"
+                    }
+                    progressSent = sent
+                    progressTotal = total
                 }
-                progressSent = sent
-                progressTotal = total
             }
             activeDevice = null
             if (result.success) {

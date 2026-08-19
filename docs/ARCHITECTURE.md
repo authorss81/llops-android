@@ -828,6 +828,14 @@
     `services/PluginStoreRowPolicy.kt` (capability labels folded to 3, exclusive-first then alpha,
     bucket + download-size/"needs the hosted channel" honesty). Tests: `FileTransferPluginPolicyTest`,
     `PluginInvocationJournalPolicyTest`, `PluginStoreRowPolicyTest`.
+    **Review-fix (phase-173, commit after the phase):** the FileTransfer plugin gained a REAL production
+    caller — when enabled, HomeScreen's `LocalSendSendDialog` routes `doSend` THROUGH
+    `NoteflowViewModel.sendFileWithPlugin` (payload→`FileTransferKind`, manager failures mapped to the
+    dialog's `SendResult`, sender progress forwarded); the seam/`LocalSendDevice` were documented as host-
+    only (downloadable plugins can't resolve `services.*` under the classloader sandbox); the journal now
+    sanitizes the capability key on write + serializes the read→record→write and a public
+    `NoteflowViewModel.refreshPluginFlows()` wrapper (private `refreshPluginStates()` keeps its B1-AUTH-03
+    guard) lets Settings → Plugins refresh "Recent activity" on open.
 - **Downloadable runtime**: `plugins/runtime/RuntimePluginLoader.kt:68`; `services/AppClassLoaderFactory.kt:23`
   (`DexClassLoader`); `services/AppFacadeHost.kt:27` (deny-by-default facade, NO direct DB/keystore handles);
   `plugins/runtime/PinnedCertHash.kt:25`; `plugins/runtime/ArtifactSignatureVerifier.kt:52`.
