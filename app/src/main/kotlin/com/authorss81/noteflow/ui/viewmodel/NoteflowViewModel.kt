@@ -1863,7 +1863,13 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
                     // Keep the flag unset; re-run on the next unlock.
                 }
             }
-            val lastNbId = settings.activeNotebookId
+            // Phase 168: cold-start restore opens the LAST-USED notebook.
+            // `lastNotebookId` (written on every selection change + on exit) is the
+            // primary source; `activeNotebookId` remains the legacy fallback for
+            // sessions that only ever wrote the old pref. The section restore stays
+            // best-effort: a stale/deleted section pref yields the notebook's first
+            // section via observeSections instead of dropping the notebook restore.
+            val lastNbId = settings.lastNotebookId ?: settings.activeNotebookId
             val lastSecId = settings.activeSectionId
             var restoredNb: NotebookEntity? = null
             var restoredSec: SectionEntity? = null
@@ -1871,21 +1877,43 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
             if (!lastNbId.isNullOrEmpty()) {
                 restoredNb = repository.getNotebookById(lastNbId)
             }
-            if (!lastSecId.isNullOrEmpty()) {
-                restoredSec = repository.getSectionById(lastSecId)
+            if (restoredNb != null && !lastSecId.isNullOrEmpty()) {
+                val candidateSec = repository.getSectionById(lastSecId)
+                if (candidateSec != null && candidateSec.notebookId == restoredNb.id) {
+                    restoredSec = candidateSec
+                }
             }
 
-            if (restoredNb != null && restoredSec != null && restoredSec.notebookId == restoredNb.id) {
+            if (restoredNb != null) {
+                // The last-used notebook still exists — restore it. Persist the
+                // resolved id so the next cold start opens straight into it.
+                settings.lastNotebookId = restoredNb.id
                 _selectedNotebook.value = restoredNb
-                _selectedSection.value = restoredSec
-                observeSections(restoredNb.id)
-                observePages(restoredSec.id)
+                if (restoredSec != null) {
+                    _selectedSection.value = restoredSec
+                    observeSections(restoredNb.id)
+                    observePages(restoredSec.id)
+                } else {
+                    observeSections(restoredNb.id)
+                }
             } else {
-                val (defaultNb, defaultSec) = repository.ensureDefaultNotebookAndSection()
-                _selectedNotebook.value = defaultNb
-                _selectedSection.value = defaultSec
-                observeSections(defaultNb.id)
-                observePages(defaultSec.id)
+                // The last-used notebook was deleted (or never recorded): fall back
+                // to the FIRST existing notebook and persist it, or to the default
+                // notebook+section for a brand-new vault.
+                val existing = repository.getAllNotebooks()
+                if (existing.isNotEmpty()) {
+                    val fallbackNb = existing.first()
+                    settings.lastNotebookId = fallbackNb.id
+                    _selectedNotebook.value = fallbackNb
+                    observeSections(fallbackNb.id)
+                } else {
+                    val (defaultNb, defaultSec) = repository.ensureDefaultNotebookAndSection()
+                    settings.lastNotebookId = defaultNb.id
+                    _selectedNotebook.value = defaultNb
+                    _selectedSection.value = defaultSec
+                    observeSections(defaultNb.id)
+                    observePages(defaultSec.id)
+                }
             }
 
             // B1-CRYPTO-06 (phase-91): the ONE legitimate auto-arm of the tamper
@@ -2005,6 +2033,9 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         _selectedNotebook.value = notebook
         _selectedSection.value = null
         settings.activeNotebookId = notebook.id
+        // Phase 168: lastNotebookId is the cold-start restore source — it must be
+        // (re)written on EVERY notebook selection change, not just notebook creation.
+        settings.lastNotebookId = notebook.id
         observeSections(notebook.id)
     }
 
@@ -4610,6 +4641,11 @@ fun updatePageTags(id: String, tags: String) {
 
     override fun onCleared() {
         super.onCleared()
+        // Phase 168: app exit is the last chance to persist the last-used
+        // notebook. It is already written on every selection change, so this only
+        // covers an exit where the selection changed without going through
+        // selectNotebook (none today — kept as a belt-and-suspenders guarantee).
+        _selectedNotebook.value?.let { settings.lastNotebookId = it.id }
         // B1-AUTH-02 (phase-47): the DEK is zeroized here; drop the keyed
         // SQLCipher connection too so no SQLCipher handle outlives the token that
         // opened it (a subsequently constructed ViewModel rebuilds via getDatabase).

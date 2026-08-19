@@ -69,6 +69,19 @@
 > review-fix hardened: modifier-order assertion + top-inset pin).
 > No fixed-pixel heights anywhere.
 
+> **Implemented in phase-168** (2026-08-19, last-used notebook on cold start,
+> see `workspace/phase-168/REPORT.md`): `SettingsManager.lastNotebookId`
+> (`last_notebook_id`) was never written and cold-start restore keyed on
+> `activeNotebookId` AND a matching `activeSectionId` — a stale section pref fell
+> through to the default notebook. Now `NoteflowViewModel.selectNotebook`
+> persists `lastNotebookId` on every selection change (single notebook-switcher
+> chokepoint) and `onCleared()` on exit; `initializeDataCore` restores
+> `lastNotebookId ?: activeNotebookId`, restores the notebook even with a stale
+> section (first-section fallback via `observeSections`), falls back to the
+> first existing notebook when the last was deleted (persisted back), or
+> default_nb+default_sec on a brand-new vault. Prefs only. Tests:
+> `Phase168LastNotebookRestoreTest` (10).
+
 ## Core subsystem anchors (file:line)
 
 - **Encryption/vault**: `services/EncryptionService.kt:18` (PBKDF2 600k, AES-256-GCM, NFKC-normalized password);
