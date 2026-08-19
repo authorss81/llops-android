@@ -246,6 +246,23 @@ class SettingsManager(context: Context) {
         get() = prefs.getString("eraser_mode_key", "STROKE") ?: "STROKE"
         set(value) = prefs.edit().putString("eraser_mode_key", value).apply()
 
+    // Phase 172: PERSISTED recently-used brush colors + favorites (ARGB ints).
+    // The wire format (comma-joined decimal ARGB) and the caps/dedupe live in
+    // ColorRecentsPolicy; these accessors are the SharedPreferences glue. Stored
+    // as prefs only — never the DB schema — so a cold-restart session keeps the
+    // last used colors + favorites instead of the old volatile in-memory list.
+    var recentColors: List<Int>
+        get() = ColorRecentsPolicy.decodeColors(prefs.getString("recent_colors", null))
+        set(value) = prefs.edit()
+            .putString("recent_colors", ColorRecentsPolicy.encodeColors(ColorRecentsPolicy.sanitizeRecent(value)))
+            .apply()
+
+    var favoriteColors: List<Int>
+        get() = ColorRecentsPolicy.decodeColors(prefs.getString("favorite_colors", null))
+        set(value) = prefs.edit()
+            .putString("favorite_colors", ColorRecentsPolicy.encodeColors(ColorRecentsPolicy.sanitizeFavorites(value)))
+            .apply()
+
     // Phase 122: the editor's current brush color MODE (Rainbow / Gradient /
     // Shimmer / Solid). This is the user's brush choice, persisted across
     // sessions so reopening a note keeps the rainbow brush selected — NOT a

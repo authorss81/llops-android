@@ -1408,6 +1408,30 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         _showStrokePreviewsInPicker.value = enabled
     }
 
+    // Phase 172: PERSISTED recently-used colors + favorites, surfaced as StateFlows
+    // so the editor reads them without a blocking prefs read on main. Recorded on
+    // explicit color picks + eyedropper samples; persisted via SettingsManager.
+    private val _recentColors = MutableStateFlow(settings.recentColors)
+    val recentColors: StateFlow<List<Int>> = _recentColors.asStateFlow()
+
+    fun recordRecentColor(colorArgb: Int) {
+        val updated = com.authorss81.noteflow.services.ColorRecentsPolicy.recordRecent(_recentColors.value, colorArgb)
+        _recentColors.value = updated
+        settings.recentColors = updated
+    }
+
+    private val _favoriteColors = MutableStateFlow(settings.favoriteColors)
+    val favoriteColors: StateFlow<List<Int>> = _favoriteColors.asStateFlow()
+
+    fun toggleFavoriteColor(colorArgb: Int) {
+        val updated = com.authorss81.noteflow.services.ColorRecentsPolicy.toggleFavorite(_favoriteColors.value, colorArgb)
+        _favoriteColors.value = updated
+        settings.favoriteColors = updated
+    }
+
+    fun isFavoriteColor(colorArgb: Int): Boolean =
+        com.authorss81.noteflow.services.ColorRecentsPolicy.isFavorite(_favoriteColors.value, colorArgb)
+
     fun updatePagePaperColor(id: String, paperColor: String?) {
         viewModelScope.launch {
             repository.updatePagePaperColor(id, paperColor)

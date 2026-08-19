@@ -12,6 +12,13 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.AnimationSpec
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.VectorConverter
+import androidx.compose.animation.core.animateTo
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.*
@@ -225,6 +232,54 @@ fun AnnotationCanvas(
             delay(100)
             currentOnZoomScaleChangedState(newScale)
             currentOnPanOffsetChangedState(newOffset)
+        }
+    }
+
+    // Phase 172: minimap quick-view navigation (zoom-to-fit / jump-home). The
+    // TARGET transform is computed by the pure-JVM CanvasNavigationPolicy; this
+    // wrapper drives it through the SAME transform pipeline updateZoomAndPan
+    // exposes (debounced onZoomScaleChanged/onPanOffsetChanged → EditorScreen),
+    // animating with a SpringCanvasPan spring when motion is allowed and SNAPPING
+    // under reduce-motion (the existing minimap zoom buttons stay jump-style).
+    val navScaleAnim = remember { Animatable(1f) }
+    val navPanAnim = remember { Animatable(Offset.Zero, Offset.VectorConverter) }
+    var navRequestSeq by remember { mutableIntStateOf(0) }
+    var navRequest by remember { mutableStateOf<Pair<Float, Offset>?>(null) }
+
+    fun navigateCanvasTo(targetScale: Float, targetPan: Offset) {
+        if (!com.authorss81.noteflow.services.CanvasNavigationPolicy.shouldAnimate(reduceMotion)) {
+            updateZoomAndPan(targetScale, targetPan)
+            return
+        }
+        navRequestSeq++
+        navRequest = Pair(targetScale, targetPan)
+    }
+
+    LaunchedEffect(navRequestSeq) {
+        val request = navRequest ?: return@LaunchedEffect
+        navRequest = null
+        navScaleAnim.snapTo(internalZoomScale)
+        navPanAnim.snapTo(internalPanOffset)
+        val panTuning = com.authorss81.noteflow.services.MotionPolicy.springFor(
+            com.authorss81.noteflow.services.MotionPolicy.SpringKind.CANVAS_PAN
+        )
+        val scaleSpec: AnimationSpec<Float> = com.authorss81.noteflow.theme.MotionSystem.SpringCanvasPan
+        val panSpec: AnimationSpec<Offset> = spring(
+            dampingRatio = panTuning.dampingRatio,
+            stiffness = panTuning.stiffness
+        )
+        // Drive scale + pan in lockstep (both animators tick on the same frame
+        // clock), writing the CONVERGED pair through updateZoomAndPan each frame
+        // so the external onZoomScaleChanged/onPanOffsetChanged settle on a
+        // consistent transform, not a flicker between two sampled axes.
+        val scaleJob = launch { navScaleAnim.animateTo(request.first, scaleSpec) }
+        val panJob = launch { navPanAnim.animateTo(request.second, panSpec) }
+        launch {
+            while (scaleJob.isActive || panJob.isActive) {
+                updateZoomAndPan(navScaleAnim.value, navPanAnim.value)
+                withFrameNanos { }
+            }
+            updateZoomAndPan(request.first, request.second)
         }
     }
 
@@ -2103,6 +2158,60 @@ Stroke(
                                     modifier = Modifier.size(24.dp)
                                 ) {
                                     Icon(Icons.Outlined.Add, contentDescription = "Zoom In", modifier = Modifier.size(14.dp))
+                                }
+                            }
+
+                            // Phase 172: minimap quick-view actions — zoom-to-fit and
+                            // jump-home. Targets come from the pure-JVM
+                            // CanvasNavigationPolicy (budgeted bounds + clamped fit);
+                            // they animate through updateZoomAndPan with a spring and
+                            // SNAP under reduce-motion. Scrollable so the row never
+                            // clips on a narrow (72dp) map header.
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Go:",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                FilledTonalIconButton(
+                                    onClick = {
+                                        val worldDims = computeCanvasWorld(screenW)
+                                        val fitWorldW = if (worldDims.first > 0f) worldDims.first else MinimapGeometryPolicy.FALLBACK_WORLD
+                                        val fitWorldH = if (worldDims.second > 0f) worldDims.second else MinimapGeometryPolicy.FALLBACK_WORLD
+                                        val contentBounds = com.authorss81.noteflow.services.CanvasNavigationPolicy.computeContentBounds(
+                                            activeStrokeList
+                                        ) { page -> if (isContinuousMode) calculatePageYOffset(page) else 0f }
+                                        val fit = com.authorss81.noteflow.services.CanvasNavigationPolicy.zoomToFit(
+                                            contentBounds, screenW, screenH, fitWorldW, fitWorldH
+                                        )
+                                        navigateCanvasTo(fit.scale, Offset(fit.panX, fit.panY))
+                                    },
+                                    modifier = Modifier.minimumInteractiveComponentSize()
+                                ) {
+                                    Icon(
+                                        Icons.Outlined.CenterFocusWeak,
+                                        contentDescription = "Zoom to fit ink",
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                                IconButton(
+                                    onClick = {
+                                        val home = com.authorss81.noteflow.services.CanvasNavigationPolicy.jumpHome()
+                                        navigateCanvasTo(home.scale, Offset(home.panX, home.panY))
+                                    },
+                                    modifier = Modifier.minimumInteractiveComponentSize()
+                                ) {
+                                    Icon(
+                                        Icons.Outlined.Home,
+                                        contentDescription = "Jump to page start (home)",
+                                        modifier = Modifier.size(16.dp)
+                                    )
                                 }
                             }
                             Spacer(modifier = Modifier.height(2.dp))

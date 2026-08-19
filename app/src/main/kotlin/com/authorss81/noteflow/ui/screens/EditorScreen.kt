@@ -382,6 +382,12 @@ fun EditorScreen(
 
     val paletteItems by viewModel.paletteItems.collectAsState()
 
+    // Phase 172: PERSISTED recently-used colors + favorites (StateFlows seeded
+    // from SettingsManager at VM init — no blocking prefs read on main). Explicit
+    // picks/eyedropper samples record into recents via viewModel.recordRecentColor.
+    val recentColors by viewModel.recentColors.collectAsState()
+    val favoriteColors by viewModel.favoriteColors.collectAsState()
+
     // S-Pen / Stylus Palm Rejection & Pressure Toggle State
     var palmRejectionEnabled by remember { mutableStateOf(true) }
     var stylusPressureEnabled by remember { mutableStateOf(true) }
@@ -1902,6 +1908,9 @@ fun EditorScreen(
                 onColorSampled = { sampledColor ->
                     currentColor = sampledColor
                     viewModel.settings.brushColorArgb = sampledColor.toArgb()
+                    // Phase 172: an eyedropper pick is a real color choice — persist
+                    // it into the recent-colors list too (was only the volatile list).
+                    viewModel.recordRecentColor(sampledColor.toArgb())
                     // Eyedropper returns a concrete pixel color → back to SOLID (a
                     // reasonable default the user can re-override with a mode chip).
                     if (currentColorMode.isMultiColor) {
@@ -2138,6 +2147,11 @@ fun EditorScreen(
                 savedSwatches = paletteItems.filter { it.type == "SWATCH" },
                 currentColorMode = currentColorMode,
                 currentGradientToColor = currentGradientToColor,
+                // Phase 172: persisted recents/favorites drive the picker rows.
+                recentColors = recentColors.map { Color(it) },
+                favoriteColors = favoriteColors.map { Color(it) },
+                onToggleFavorite = { color -> viewModel.toggleFavoriteColor(color.toArgb()) },
+                onRecordRecent = { color -> viewModel.recordRecentColor(color.toArgb()) },
                 onColorSelect = { color ->
                     // Picking a concrete solid color → SOLID mode (multi-color modes
                     // are re-engaged explicitly via the mode chips).
@@ -3396,6 +3410,14 @@ private fun ColorPickerBottomSheet(
     savedSwatches: List<PaletteItemEntity>,
     currentColorMode: StrokeColorMode = StrokeColorMode.SOLID,
     currentGradientToColor: Color = currentColor,
+    // Phase 172: PERSISTED recent + favorite colors drive the picker rows (the
+    // StateFlows are seeded from SettingsManager — never a blocking prefs read).
+    // onRecordRecent fires on EXPLICIT picks only (swatch taps), so HSV slider
+    // drags can't flood the recents list with every intermediate tone.
+    recentColors: List<Color> = emptyList(),
+    favoriteColors: List<Color> = emptyList(),
+    onToggleFavorite: (Color) -> Unit = {},
+    onRecordRecent: (Color) -> Unit = {},
     onColorSelect: (Color) -> Unit,
     onColorModeChange: (StrokeColorMode, Color, Color?) -> Unit = { _, _, _ -> },
     onGradientToColorSelect: (Color) -> Unit = {},
@@ -3592,13 +3614,71 @@ private fun ColorPickerBottomSheet(
                     com.authorss81.noteflow.services.DesignerPalettes.swatchesFor(selectedPaletteName).map { it.argb }.toSet()
                 }
                 val catalogArgbSet = paletteArgbSet
-                val recentColors = remember(palette, selectedPaletteName) {
-                    val extras = palette.filter { it.toArgb() !in catalogArgbSet }
-                    val source = if (extras.isNotEmpty()) extras.asReversed() else palette.asReversed()
-                    source.distinctBy { it.toArgb() }.take(16)
+                // Phase 172: the recents row is PERSISTED (StateFlow from SettingsManager),
+                // then padded with this-session custom/sampled colors (the old in-memory
+                // extras) so a freshly-sampled eyedropper color still lands in the row.
+                val displayedRecents = remember(recentColors, palette, selectedPaletteName) {
+                    val recentArgb = recentColors.map { it.toArgb() }.toSet()
+                    val sessionExtras = palette.filter { it.toArgb() !in catalogArgbSet && it.toArgb() !in recentArgb }.asReversed()
+                    (recentColors + sessionExtras).take(com.authorss81.noteflow.services.ColorRecentsPolicy.MAX_RECENT_COLORS)
+                }
+                val favoriteArgbSet = remember(favoriteColors) { favoriteColors.map { it.toArgb() }.toSet() }
+
+                // Favorites (persisted, bounded): the star toggles the CURRENT color;
+                // tapping a swatch picks + records it.
+                if (favoriteColors.isNotEmpty() || favoriteArgbSet.contains(currentColor.toArgb())) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Favorites",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        IconButton(
+                            onClick = { onToggleFavorite(currentColor) },
+                            modifier = Modifier.minimumInteractiveComponentSize()
+                        ) {
+                            Icon(
+                                imageVector = if (favoriteArgbSet.contains(currentColor.toArgb())) {
+                                    Icons.Outlined.Star
+                                } else {
+                                    Icons.Outlined.StarBorder
+                                },
+                                contentDescription = if (favoriteArgbSet.contains(currentColor.toArgb())) {
+                                    "Remove current color from Favorites"
+                                } else {
+                                    "Add current color to Favorites"
+                                },
+                                tint = if (favoriteArgbSet.contains(currentColor.toArgb())) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        items(favoriteColors) { color ->
+                            ColorSwatch(
+                                color = color,
+                                isSelected = currentColor.toArgb() == color.toArgb(),
+                                size = 38.dp,
+                                onClick = {
+                                    onRecordRecent(color)
+                                    onColorSelect(color)
+                                }
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(16.dp))
                 }
 
-                if (recentColors.isNotEmpty()) {
+                if (displayedRecents.isNotEmpty()) {
                     Text(
                         text = "Recent Colors",
                         style = MaterialTheme.typography.titleSmall,
@@ -3606,12 +3686,15 @@ private fun ColorPickerBottomSheet(
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        items(recentColors) { color ->
+                        items(displayedRecents) { color ->
                             ColorSwatch(
                                 color = color,
                                 isSelected = currentColor.toArgb() == color.toArgb(),
                                 size = 38.dp,
-                                onClick = { onColorSelect(color) }
+                                onClick = {
+                                    onRecordRecent(color)
+                                    onColorSelect(color)
+                                }
                             )
                         }
                     }
@@ -3631,7 +3714,10 @@ private fun ColorPickerBottomSheet(
                                 color = Color(swatch.argb),
                                 isSelected = currentColor.toArgb() == swatch.argb,
                                 size = 34.dp,
-                                onClick = { onColorSelect(Color(swatch.argb)) }
+                                onClick = {
+                                    onRecordRecent(Color(swatch.argb))
+                                    onColorSelect(Color(swatch.argb))
+                                }
                             )
                         }
                     }
@@ -3674,7 +3760,10 @@ Spacer(modifier = Modifier.height(16.dp))
                                         color = if (isSelected) MaterialTheme.colorScheme.primary else Color.Gray.copy(alpha = 0.4f),
                                         shape = CircleShape
                                     )
-                                    .clickable { onColorSelect(swatchColor) },
+                                    .clickable {
+                                onRecordRecent(swatchColor)
+                                onColorSelect(swatchColor)
+                            },
                                 contentAlignment = Alignment.Center
                             ) {
                                 if (isSelected) {
@@ -5329,7 +5418,7 @@ private fun LayersPanelBottomSheet(
                                             scrollState = overflowMenuScrollState(),
                                             modifier = overflowMenuScrollModifier()
                                         ) {
-                                            val blendModes = listOf("NORMAL", "MULTIPLY", "SCREEN", "OVERLAY", "DARKEN", "LIGHTEN", "COLOR_DODGE", "COLOR_BURN", "HARD_LIGHT", "SOFT_LIGHT", "DIFFERENCE", "EXCLUSION")
+                                            val blendModes = com.authorss81.noteflow.services.LayerBlendPresetPolicy.RENDERER_SUPPORTED_MODES
                                             blendModes.forEach { mode ->
                                                 DropdownMenuItem(
                                                     text = { Text(mode) },
@@ -5389,6 +5478,29 @@ private fun LayersPanelBottomSheet(
                                         }
                                     }
                                 }
+
+                                // Phase 172: compact blend-mode QUICK PRESETS rendered as
+                                // labelled chips (normal/multiply/screen/overlay/soft-light).
+                                // The full 12-mode set stays in the dropdown above; every
+                                // change flows through the SAME onUpdateLayer →
+                                // handleLayersChange → saveLayersGated persistence path, so
+                                // opacity/blend survive by the field already on LayerEntity.
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .horizontalScroll(rememberScrollState()),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    com.authorss81.noteflow.services.LayerBlendPresetPolicy.presets().forEach { preset ->
+                                        FilterChip(
+                                            selected = layer.blendMode.equals(preset.key, ignoreCase = true),
+                                            onClick = { onUpdateLayer(layer.copy(blendMode = preset.key)) },
+                                            label = { Text(preset.label, style = MaterialTheme.typography.labelSmall) }
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(4.dp))
                             }
                         }
                     }

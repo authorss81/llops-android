@@ -82,6 +82,26 @@
 > default_nb+default_sec on a brand-new vault. Prefs only. Tests:
 > `Phase168LastNotebookRestoreTest` (10).
 
+> **Implemented in phase-172** (2026-08-19, editor & canvas productivity, see
+> `workspace/phase-172/REPORT.md`): three pure-JVM policies +
+> `services/ColorRecentsPolicy.kt` (persisted recently-used colors + favorites —
+> comma-joined decimal-ARGB prefs wire format in `SettingsManager.recentColors`/
+> `favoriteColors`, exposed as `NoteflowViewModel` StateFlows;
+> `ColorPickerBottomSheet`'s recents row is now the persisted list and a star
+> toggle favorites the current color; explicit picks AND eyedropper samples
+> record — slider drags do not, so the 16-slot list can't flood; 12-favorite
+> cap), `services/CanvasNavigationPolicy.kt` (minimap Fit + Home: budgeted
+> `computeContentBounds` via `MinimapGeometryPolicy` strides,
+> world-clamped `zoomToFit` within 0.5x..4x + 48dp margin, zero-area fits
+> fall back home, reduce-motion snaps), and `services/LayerBlendPresetPolicy.kt`
+> (5 presets Normal/Multiply/Screen/Overlay/Soft-Light chips in the layer panel
+> driving the existing `onUpdateLayer` → `saveLayersGated` path; the dropdown
+> 12-mode literal now reads `RENDERER_SUPPORTED_MODES`). `AnnotationCanvas.kt`
+> animates Fit/Home through its existing `updateZoomAndPan` transform pipeline
+> with a `SpringCanvasPan` spring (`navigateCanvasTo` + `LaunchedEffect` on a
+> nav-request seq). No schema change, no new deps. Tests: `ColorRecentsPolicyTest`
+> (13), `CanvasNavigationPolicyTest` (13), `LayerBlendPresetPolicyTest` (7).
+
 ## Core subsystem anchors (file:line)
 
 - **Encryption/vault**: `services/EncryptionService.kt:18` (PBKDF2 600k, AES-256-GCM, NFKC-normalized password);
