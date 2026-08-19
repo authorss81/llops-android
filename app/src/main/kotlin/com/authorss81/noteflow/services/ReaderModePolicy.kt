@@ -28,13 +28,22 @@ object ReaderModePolicy {
     const val MAX_COLUMN_WIDTH_DP = 680f
 
     /**
-     * Proportional line-height multiplier applied on top of the base body
-     * style. `TextStyle.lineHeight` set to this fraction of the base font size
-     * gives comfortable long-form leading and STILL scales with the system
-     * font-scale (it is derived from the already-scaled font size, never an
-     * absolute sp override that breaks accessibility scaling).
+     * Proportional leading multiplier applied on top of a style's OWN line
+     * height. The app's type scale already gives every style a leading ratio
+     * (e.g. bodyLarge 16/24 — a 1.5× ratio over its type size), so multiplying
+     * the base line height by a factor ABOVE 1.0 guarantees reader mode always
+     * WIDENS the leading instead of the phase-158 bug where a fixed fraction
+     * of the type size (1.35×) actually tightened it below the default. Every
+     * value stays derived from the already-scaled theme metrics — never an
+     * absolute size override that would break accessibility scaling.
      */
-    const val BODY_LINE_HEIGHT_MULTIPLIER = 1.35f
+    const val BODY_LINE_HEIGHT_MULTIPLIER = 1.15f
+
+    /**
+     * Fallback leading ratio used only when a base style does not declare its
+     * own line height (the type-scale default for body roles).
+     */
+    const val DEFAULT_BASE_LEADING_RATIO = 1.5f
 
     /**
      * Whether the reader layout (column cap + widened leading) applies. Kept
@@ -44,13 +53,17 @@ object ReaderModePolicy {
     fun shouldUseReaderLayout(readerMode: Boolean): Boolean = readerMode
 
     /**
-     * The target line height (in sp) for a body style in reader mode. Pass the
-     * BASE style's base font size (the already-scaled one from the theme);
-     * reader mode re-derives leading proportionally so large-font users keep a
-     * proportional — never fixed — ratio.
+     * The target line height for a style in reader mode. Pass the base style's
+     * already-scaled metrics — its type size AND its own line height. Reader
+     * mode multiplies the base line height by [BODY_LINE_HEIGHT_MULTIPLIER]
+     * (falling back to the [DEFAULT_BASE_LEADING_RATIO] ratio when the base
+     * line height is unset), so large-font users keep a proportional — never
+     * fixed — ratio and the reader leading is always wider than the default.
      */
-    fun readerLineHeightSp(baseFontSizeSp: Float): Float =
-        baseFontSizeSp * BODY_LINE_HEIGHT_MULTIPLIER
+    fun readerLineHeightSp(baseFontSizeSp: Float, baseLineHeightSp: Float): Float {
+        val baseLeading = if (baseLineHeightSp > 0f) baseLineHeightSp else baseFontSizeSp * DEFAULT_BASE_LEADING_RATIO
+        return baseLeading * BODY_LINE_HEIGHT_MULTIPLIER
+    }
 
     /**
      * Reader mode is the DEFAULT post-capture destination: a note created from
@@ -59,7 +72,4 @@ object ReaderModePolicy {
      */
     fun defaultReaderForCapturedNote(captureArrived: Boolean): Boolean =
         captureArrived
-
-    /** Non-localized UI label used by the reader toggle's content description. */
-    const val READER_TOGGLE_LABEL = "Reader / focus mode"
 }

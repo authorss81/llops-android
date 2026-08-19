@@ -14,6 +14,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.authorss81.noteflow.data.model.NotePageEntity
@@ -29,6 +30,10 @@ import java.util.Locale
 fun VersionHistoryBottomSheet(
     page: NotePageEntity,
     viewModel: NoteflowViewModel,
+    // Phase 158 review-fix: restoring a version WRITES the note body, so it is
+    // disabled when the sheet is opened from reader/focus mode (which promises
+    // read-only browsing). Browsing history remains available.
+    readOnly: Boolean = false,
     onRestoreVersion: (NoteVersionEntity) -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -197,15 +202,25 @@ fun VersionHistoryBottomSheet(
                                 Spacer(modifier = Modifier.height(8.dp))
                                 Button(
                                     onClick = {
+                                        if (readOnly) return@Button
                                         onRestoreVersion(activeVer)
                                         onDismiss()
                                     },
                                     modifier = Modifier.fillMaxWidth(),
-                                    contentPadding = PaddingValues(vertical = 8.dp)
+                                    contentPadding = PaddingValues(vertical = 8.dp),
+                                    enabled = !readOnly
                                 ) {
                                     Icon(Icons.Outlined.Restore, contentDescription = null, modifier = Modifier.size(18.dp))
                                     Spacer(modifier = Modifier.width(6.dp))
                                     Text("Restore Version")
+                                }
+                                if (readOnly) {
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = stringResource(com.authorss81.noteflow.R.string.reader_history_restore_disabled),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = scheme.onSurfaceVariant
+                                    )
                                 }
                             } else {
                                 Text("Select a version snapshot to preview", style = MaterialTheme.typography.bodySmall)

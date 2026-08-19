@@ -35,6 +35,7 @@ import androidx.compose.material.icons.outlined.Security
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.res.stringResource
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
@@ -79,6 +80,9 @@ import androidx.compose.ui.text.font.FontWeight
 enum class WindowSizeCategory {
     COMPACT, MEDIUM, EXPANDED
 }
+
+/** Phase 158 review-fix: saved-state key for the pending quick-capture flag. */
+private const val STATE_KEY_QUICK_CAPTURE_REQUESTED = "quick_capture_requested"
 
 /**
  * B1-PLAT-2 (phase-58) + R2-B1P-05 (phase-140): the share-confirmation flow
@@ -158,6 +162,10 @@ class MainActivity : FragmentActivity() {
         }
 
         readShareIntent(intent)
+        // Phase 158 review-fix: a home-widget tap made while the vault is LOCKED
+        // must survive a rotation (onSaveInstanceState restores the pending flag
+        // here before the fresher intent may re-raise it).
+        quickCaptureRequested = savedInstanceState?.getBoolean(STATE_KEY_QUICK_CAPTURE_REQUESTED, false) ?: false
         // Phase 158 (22.5b): the home widget is a launcher shortcut carrying the
         // explicit EXTRA_QUICK_CAPTURE boolean — remember it and fire the new-note
         // flow once the vault is authenticated (see the LaunchedEffect below).
@@ -306,6 +314,11 @@ class MainActivity : FragmentActivity() {
             // start in reader/focus mode — the clip is for reading. Holds the
             // captured page's id until MarkdownPreviewScreen consumes it.
             var readerModeRequestedFor by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf<String?>(null) }
+            // Phase 158 review-fix: the result of an "append to current" capture,
+            // pushed into the open editor so it shows the appended text instead of
+            // the stale pre-append snapshot (which a later save would clobber).
+            // One-shot Pair(pageId, newBody); consumed by MarkdownPreviewScreen.
+            var appendedBodyForPage by remember { mutableStateOf<Pair<String, String>?>(null) }
             // R2-B1P-05 (phase-140): share-flow state + the command-palette HUD
             // open/close live at activity level (ViewModel-scoped / activity
             // field) so rotation can neither re-prompt an answered confirm nor
@@ -396,6 +409,9 @@ class MainActivity : FragmentActivity() {
             // ViewModel (R2-B1P-05) so a rotation mid-deferral keeps the deferred
             // clip without re-prompting, and lock() drops it so it never
             // auto-applies at the NEXT unlock.
+            // Phase 158 review-fix: resolved here because the apply body and the
+            // onDone lambda are non-composable (stringResource is composable).
+            val appendSuccessLabel = stringResource(R.string.share_append_success)
             LaunchedEffect(authenticated, pendingShare) {
                 if (!authenticated) return@LaunchedEffect
                 val share = viewModel.consumePendingShare() ?: return@LaunchedEffect
@@ -428,8 +444,16 @@ class MainActivity : FragmentActivity() {
                     mode = share.captureMode
                 )
                 if (resolution == com.authorss81.noteflow.services.AppendResolution.APPEND_TO_ACTIVE && target != null) {
-                    viewModel.appendSharedContentToPage(target, share.text)
-                    viewModel.showSnackbar("Shared text added to this note")
+                    viewModel.appendSharedContentToPage(target, share.text) { newBody ->
+                        // Review-fix: only surface the result while the SAME note is
+                        // still the active one — a note navigated away from must not
+                        // receive a stale one-shot body later. The DB write itself is
+                        // not gated on this; only the UI push is.
+                        if (newBody != null && activePageId == target.id) {
+                            appendedBodyForPage = target.id to newBody
+                            viewModel.showSnackbar(appendSuccessLabel, isLong = false)
+                        }
+                    }
                     return@LaunchedEffect
                 }
                 viewModel.createNoteFromSharedContent(share.text, paths) { page ->
@@ -449,6 +473,24 @@ class MainActivity : FragmentActivity() {
                 if (!quickCaptureRequested) return@LaunchedEffect
                 quickCaptureRequested = false
                 viewModel.addPage("New Page", onCreated = setActivePage)
+            }
+
+            // Phase 158 review-fix: the NON-SECRET captured marker is now READ.
+            // When the process died with a capture still in flight, the clip itself
+            // was never persisted (nothing secret survives a kill), so the honest
+            // post-unlock notice is "a shared clip from a previous session wasn't
+            // captured". Skipped when a confirm or deferred clip is still live —
+            // those cover the in-app cases — and the marker is cleared once shown.
+            // (stringResource is composable — resolved here, used in the effect.)
+            val capturedPendingNotice = stringResource(R.string.share_captured_previous_session)
+            LaunchedEffect(authenticated) {
+                if (!authenticated) return@LaunchedEffect
+                if (viewModel.pendingShareConfirm.value != null || viewModel.pendingShare.value != null) return@LaunchedEffect
+                if (viewModel.settings.capturedSharePending) {
+                    viewModel.settings.capturedSharePending = false
+                    viewModel.settings.capturedSharePendingAtMs = 0L
+                    viewModel.showSnackbar(capturedPendingNotice, isLong = true)
+                }
             }
 
             NoteflowTheme(themeMode = themeMode) {
@@ -581,6 +623,8 @@ class MainActivity : FragmentActivity() {
                                                 onConsumeReaderMode = {
                                                     if (readerModeRequestedFor == page.id) readerModeRequestedFor = null
                                                 },
+                                                externalBodyUpdate = if (page.id == appendedBodyForPage?.first) appendedBodyForPage?.second else null,
+                                                onConsumeExternalBodyUpdate = { if (appendedBodyForPage?.first == page.id) appendedBodyForPage = null },
                                                 onBack = { setActivePage(null) },
                                                 onOpenWikiLink = { targetTitle ->
                                                     viewModel.openPageByTitle(targetTitle, this@MainActivity) { openedPage ->
@@ -685,6 +729,8 @@ class MainActivity : FragmentActivity() {
                                                                 onConsumeReaderMode = {
                                                                     if (readerModeRequestedFor == page.id) readerModeRequestedFor = null
                                                                 },
+                                                                externalBodyUpdate = if (page.id == appendedBodyForPage?.first) appendedBodyForPage?.second else null,
+                                                                onConsumeExternalBodyUpdate = { if (appendedBodyForPage?.first == page.id) appendedBodyForPage = null },
                                                                 onBack = { setActivePage(null) },
                                                                 onOpenWikiLink = { targetTitle ->
                                                                     viewModel.openPageByTitle(targetTitle, this@MainActivity) { openedPage ->
@@ -775,6 +821,8 @@ class MainActivity : FragmentActivity() {
                                 // Expire a stale, un-confirmed hold: schedule a
                                 // cancel at the hold deadline (re-checked so an
                                 // already-answered confirm is never clobbered).
+                                // (stringResource is composable — resolved first.)
+                                val expiredNotice = stringResource(R.string.share_confirm_expired)
                                 LaunchedEffect(authenticated, pendingShareConfirm) {
                                     val req = pendingShareConfirm ?: return@LaunchedEffect
                                     val remaining = PendingSharePolicy.CONFIRM_HOLD_EXPIRY_MS -
@@ -785,10 +833,7 @@ class MainActivity : FragmentActivity() {
                                         delay(remaining)
                                         if (viewModel.pendingShareConfirm.value == req) {
                                             viewModel.cancelPendingShareConfirm()
-                                            viewModel.showSnackbar(
-                                                "The share confirmation expired — nothing was clipped.",
-                                                isLong = false
-                                            )
+                                            viewModel.showSnackbar(expiredNotice, isLong = false)
                                         }
                                     }
                                 }
@@ -820,7 +865,7 @@ class MainActivity : FragmentActivity() {
                                             // images — those degrade to a new note and the
                                             // button says so.
                                             Text(
-                                                "Add as",
+                                                stringResource(R.string.share_capture_add_as),
                                                 style = MaterialTheme.typography.labelLarge
                                             )
                                             Row(
@@ -839,7 +884,7 @@ class MainActivity : FragmentActivity() {
                                                     }
                                                 )
                                                 Spacer(Modifier.width(8.dp))
-                                                Text("A new note")
+                                                Text(stringResource(R.string.share_capture_new_note))
                                             }
                                             Row(
                                                 modifier = Modifier
@@ -858,16 +903,16 @@ class MainActivity : FragmentActivity() {
                                                 )
                                                 Spacer(Modifier.width(8.dp))
                                                 Text(
-                                                    if (appendUsable) "Append to the open note"
-                                                    else "Append to the open note (not available)"
+                                                    if (appendUsable) stringResource(R.string.share_capture_append)
+                                                    else stringResource(R.string.share_capture_append_unavailable)
                                                 )
                                             }
                                             if (!appendUsable) {
                                                 Text(
                                                     if (request.uriStrings.isEmpty())
-                                                        "No note is open right now — this clip will be a new note."
+                                                        stringResource(R.string.share_capture_no_active_note)
                                                     else
-                                                        "Attachments become a new note.",
+                                                        stringResource(R.string.share_capture_attachments_new_note),
                                                     style = MaterialTheme.typography.bodySmall,
                                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                                 )
@@ -969,6 +1014,15 @@ class MainActivity : FragmentActivity() {
             screenOffReceiverRegistered = false
             unregisterReceiver(screenOffReceiver)
         }
+    }
+
+    // Phase 158 review-fix: a home-widget "new note" tap while the vault is
+    // locked sets quickCaptureRequested so the capture fires on the next unlock.
+    // A rotation mid-hold would lose a plain activity field, so the pending flag
+    // is folded into the saved state (see onCreate's restore).
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putBoolean(STATE_KEY_QUICK_CAPTURE_REQUESTED, quickCaptureRequested)
     }
 
     // 22.5 + Phase 15 + B1-PLAT-2 (phase-58): classify + validate incoming share

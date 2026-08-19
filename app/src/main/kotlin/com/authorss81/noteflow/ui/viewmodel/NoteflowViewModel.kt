@@ -2205,15 +2205,22 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
      * defers the write encrypted, never drops it, never plaintext). Images are
      * intentionally not append-handled — [PendingSharePolicy.resolveAppendTarget]
      * routes image clips to a new note; see that decision table.
+     *
+     * Phase 158 review-fix: [onDone] receives the COMBINED body on success (null
+     * if the read/compose failed) so the caller can push the fresh body into the
+     * open editor — without this, the editor kept the stale pre-append snapshot
+     * and the next save would silently overwrite the appended text. Invoked on
+     * the Main dispatcher.
      */
-    fun appendSharedContentToPage(page: NotePageEntity, sharedText: String?, onDone: (() -> Unit)? = null) {
+    fun appendSharedContentToPage(page: NotePageEntity, sharedText: String?, onDone: ((String?) -> Unit)? = null) {
         val text = sharedText?.trim() ?: return
         viewModelScope.launch(Dispatchers.IO) {
+            var combinedBody: String? = null
             try {
                 val current = readMarkdownNoteBody(page.id, page.extractedText, page.sourceFilePath, page.sourceFileType)
-                val body = if (current.isBlank()) text else current.trimEnd() + "\n\n" + text
-                if (body != current) {
-                    saveMarkdownNoteBody(page, body)
+                combinedBody = if (current.isBlank()) text else current.trimEnd() + "\n\n" + text
+                if (combinedBody != current) {
+                    saveMarkdownNoteBody(page, combinedBody)
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
@@ -2221,8 +2228,10 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
                 // A lock zeroized the DEK mid-read: never plaintext, never crash.
                 // saveMarkdownNoteBody itself would defer; this is the read side.
                 showSnackbar("Shared text could not be added", isLong = true)
+                combinedBody = null
             }
-            onDone?.invoke()
+            val result = combinedBody
+            withContext(Dispatchers.Main) { onDone?.invoke(result) }
         }
     }
 

@@ -2,4 +2,15 @@
     <string name="app_name">InkFlow</string>
     <string name="widget_quick_capture_label">New note</string>
     <string name="widget_quick_capture_desc">Open a new note in InkFlow</string>
+    <string name="reader_toggle_label">Reader / focus mode</string>
+    <string name="share_capture_add_as">Add as</string>
+    <string name="share_capture_new_note">A new note</string>
+    <string name="share_capture_append">Append to the open note</string>
+    <string name="share_capture_append_unavailable">Append to the open note (not available)</string>
+    <string name="share_capture_no_active_note">No note is open right now — this clip will be a new note.</string>
+    <string name="share_capture_attachments_new_note">Attachments become a new note.</string>
+    <string name="share_append_success">Shared text added to this note</string>
+    <string name="share_confirm_expired">The share confirmation expired — nothing was clipped.</string>
+    <string name="share_captured_previous_session">A shared clip from a previous session wasn\'t captured.</string>
+    <string name="reader_history_restore_disabled">Restore is disabled while reading — focus mode is read-only.</string>
 </resources>

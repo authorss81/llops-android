@@ -23,17 +23,24 @@ class ReaderModePolicyTest {
     }
 
     @Test
-    fun `reader line height stays proportional to the base font size`() {
-        // A user with a larger system font feeds a larger already-scaled base;
-        // the ratio must stay fixed so leading scales with accessibility.
-        assertEquals(13.5f * ReaderModePolicy.BODY_LINE_HEIGHT_MULTIPLIER,
-            ReaderModePolicy.readerLineHeightSp(13.5f), 0.001f)
+    fun `reader line height widens the style's own leading at a fixed ratio`() {
+        // The app's own type scale gives bodyLarge 16/24 and titleSmall 14/20
+        // (TypeScale.kt). Reader mode multiplies the style's OWN line height, so
+        // the reader leading is always WIDER than the default (24 -> 27.6,
+        // 20 -> 23) — never the phase-158 bug where a fixed 1.35x fraction of the
+        // type size produced 21.6sp, TIGHTER than the 24sp default.
+        assertEquals(24f * ReaderModePolicy.BODY_LINE_HEIGHT_MULTIPLIER,
+            ReaderModePolicy.readerLineHeightSp(baseFontSizeSp = 16f, baseLineHeightSp = 24f), 0.001f)
         assertEquals(20f * ReaderModePolicy.BODY_LINE_HEIGHT_MULTIPLIER,
-            ReaderModePolicy.readerLineHeightSp(20f), 0.001f)
-        val base = ReaderModePolicy.readerLineHeightSp(12f)
-        val bigger = ReaderModePolicy.readerLineHeightSp(18f)
-        assertEquals(ReaderModePolicy.BODY_LINE_HEIGHT_MULTIPLIER,
-            (bigger - base) / (18f - 12f), 0.001f)
+            ReaderModePolicy.readerLineHeightSp(baseFontSizeSp = 14f, baseLineHeightSp = 20f), 0.001f)
+        assertTrue("reader leading must exceed the style's own default",
+            ReaderModePolicy.readerLineHeightSp(baseFontSizeSp = 16f, baseLineHeightSp = 24f) > 24f)
+        assertTrue("reader leading must exceed the style's own default",
+            ReaderModePolicy.readerLineHeightSp(baseFontSizeSp = 14f, baseLineHeightSp = 20f) > 20f)
+        // A style that declares no line height falls back to the type-scale ratio,
+        // still widened by the reader multiplier.
+        assertEquals(12f * ReaderModePolicy.DEFAULT_BASE_LEADING_RATIO * ReaderModePolicy.BODY_LINE_HEIGHT_MULTIPLIER,
+            ReaderModePolicy.readerLineHeightSp(baseFontSizeSp = 12f, baseLineHeightSp = 0f), 0.001f)
     }
 
     @Test
@@ -58,9 +65,12 @@ class ReaderModePolicyTest {
     }
 
     @Test
-    fun `reader toggle has a stable non-localized label`() {
-        assertTrue(ReaderModePolicy.READER_TOGGLE_LABEL.isNotBlank())
-        assertEquals("Reader / focus mode", ReaderModePolicy.READER_TOGGLE_LABEL)
+    fun `reader toggle label lives in the string resource`() {
+        // Review-fix: the toggle label was hardcoded in the policy; it now ships
+        // as a resource so localization stays consistent with the widget strings.
+        val strings = java.io.File(repoRoot(), "app/src/main/res/values/strings.xml").readText()
+        assertTrue(strings.contains("<string name=\"reader_toggle_label\">"))
+        assertTrue(strings.contains("Reader / focus mode"))
     }
 
     private fun repoRoot(): java.io.File {

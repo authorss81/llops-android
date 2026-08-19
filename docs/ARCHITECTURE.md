@@ -846,9 +846,14 @@
     leading — `HybridMarkdownEditor` is NEVER composed in reader mode (long-press-safe) and the
     editing chrome (Save / Smart-Assistant / Plugins) is hidden. All numbers/decisions live in the
     pure-JVM `services/ReaderModePolicy.kt` (`MAX_COLUMN_WIDTH_DP`=680f,
-    `BODY_LINE_HEIGHT_MULTIPLIER`=1.35f, `readerLineHeightSp` proportional to the ALREADY-SCALED
-    theme font — no absolute `.sp`, `defaultReaderForCapturedNote`, `READER_TOGGLE_LABEL`); the
+    `BODY_LINE_HEIGHT_MULTIPLIER`=1.15f applied to the style's OWN already-scaled line height so
+    reader leading is always WIDER than the default (phase-158 review-fix — the original 1.35x
+    fraction of the type size produced 21.6sp, tighter than the 24sp bodyLarge default), no
+    absolute `.sp`, `defaultReaderForCapturedNote`, `DEFAULT_BASE_LEADING_RATIO`); the
     leading flows into headings/paragraphs via a file-local `LocalReaderMode` CompositionLocal.
+    Reader-mode toggle survives rotation (`rememberSaveable`, review-fix); version-RESTORE is
+    disabled in reader mode (`VersionHistoryBottomSheet readOnly`, review-fix) so no write action
+    is reachable from the reading surface.
     Captured notes open in reader mode by default (`MainActivity.kt` `readerModeRequestedFor`,
     `rememberSaveable`); `.txt`/`sourceFileType=="text"` pages route to this screen too.
   - **Implemented in phase-151** (R2-b2b5-FEA-02 + R2-b2b5-FEA-03, see
@@ -1289,6 +1294,14 @@
       B2-UI-1 lock-gated) or `createNoteFromSharedContent`. Honest defer/drop: applies only on an
       authenticated frame, password-vault `lock()` drops both states + clears the marker (no content
       survives a lock, no stale flag), and only the non-secret marker ever touches disk.
+      Phase-158 review-fixes: the captured marker is now READ — after a process death mid-capture
+      (the clip is never persisted) the next unlock shows an honest "previous capture wasn't
+      captured" notice (`MainActivity.kt`, cleared once shown, skipped while a confirm/deferred clip
+      is live); `appendSharedContentToPage`'s `onDone` returns the combined body which `MainActivity`
+      pushes into the open `MarkdownPreviewScreen` (`externalBodyUpdate`, one-shot) so the appended
+      text is visible immediately and a stale pre-append snapshot can no longer be saved back over it
+      (snackbar shows only on real success); the mode-choice + phase-158 snackbar strings moved into
+      `strings.xml`.
   - **Implemented in phase-133** (user-requested UI/UX, see `workspace/phase-133/REPORT.md`): new
     pages (Add Page FAB) and Daily Journal entries now open IMMEDIATELY on click. Root cause: the
     active page was resolved only via `pages.find { it.id == activePageId }` against the

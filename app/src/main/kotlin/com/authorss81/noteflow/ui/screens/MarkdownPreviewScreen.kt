@@ -16,10 +16,12 @@ import androidx.compose.material.icons.outlined.Save
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -155,6 +157,13 @@ fun MarkdownPreviewScreen(
     // re-applies it); the user can toggle reader mode on/off any time after.
     initialReaderMode: Boolean = false,
     onConsumeReaderMode: () -> Unit = {},
+    // Phase 158 review-fix: when a share-sheet clip is appended to this note,
+    // MainActivity pushes the resulting body here so the open screen shows it
+    // immediately — without this, the editor kept the stale pre-append snapshot
+    // and the next save would write it back, silently dropping the appended
+    // text. One-shot: consumed the moment it is applied.
+    externalBodyUpdate: String? = null,
+    onConsumeExternalBodyUpdate: () -> Unit = {},
     onBack: () -> Unit,
     onOpenWikiLink: (String) -> Unit,
     onOpenPage: (NotePageEntity) -> Unit,
@@ -164,8 +173,9 @@ fun MarkdownPreviewScreen(
     var splitOrientation by remember { mutableStateOf(SplitOrientation.AUTO) }
     // Phase 158 (22.5): focus/reading mode. Read-only by construction — the
     // hybrid editor is never composed while reader mode is active, so a
-    // long-press can never open an edit surface.
-    var readerMode by remember(page.id) { mutableStateOf(initialReaderMode) }
+    // long-press can never open an edit surface. rememberSaveable so a rotation
+    // keeps the user's reader/editor choice (review-fix).
+    var readerMode by rememberSaveable(page.id) { mutableStateOf(initialReaderMode) }
     LaunchedEffect(page.id) {
         if (initialReaderMode) onConsumeReaderMode()
     }
@@ -196,6 +206,17 @@ fun MarkdownPreviewScreen(
             savedContent = contentText
             onSaveContent(contentText)
         }
+    }
+
+    // Phase 158 review-fix: apply an externally-computed body (a share-clip
+    // append) so the open screen never shows — and never flushes back — the
+    // stale pre-append snapshot. Aligning savedContent prevents a redundant
+    // rewrite of the just-appended body.
+    LaunchedEffect(page.id, externalBodyUpdate) {
+        val body = externalBodyUpdate ?: return@LaunchedEffect
+        contentText = body
+        savedContent = body
+        onConsumeExternalBodyUpdate()
     }
 
     androidx.activity.compose.BackHandler {
@@ -253,7 +274,7 @@ fun MarkdownPreviewScreen(
                         FilterChip(
                             selected = readerMode,
                             onClick = { readerMode = !readerMode },
-                            label = { Text(com.authorss81.noteflow.services.ReaderModePolicy.READER_TOGGLE_LABEL, style = MaterialTheme.typography.labelSmall) },
+                            label = { Text(stringResource(com.authorss81.noteflow.R.string.reader_toggle_label), style = MaterialTheme.typography.labelSmall) },
                             leadingIcon = { Icon(Icons.Outlined.Book, contentDescription = null, modifier = Modifier.size(14.dp)) }
                         )
                         if (!readerMode) {
@@ -312,7 +333,9 @@ fun MarkdownPreviewScreen(
                     }
                     // Phase 158 (22.5): reader/focus mode strips the EDITING chrome
                     // (save, smart-assistant, plugins). History + backlinks stay —
-                    // they are strictly read-only.
+                    // browsing either is read-only; a version RESTORE is disabled
+                    // while reader mode is active (review-fix), so no write action
+                    // is reachable from the reading surface.
                     if (!readerMode) {
                         IconButton(onClick = { showSmartAssistant = true }) {
                             Icon(Icons.Outlined.AutoAwesome, contentDescription = "On-Device Smart Assistant", tint = primaryColor)
@@ -760,6 +783,10 @@ fun MarkdownPreviewScreen(
                 VersionHistoryBottomSheet(
                     page = page,
                     viewModel = viewModel,
+                    // Phase 158 review-fix: version RESTORE writes the note body,
+                    // so the sheet is read-only in reader/focus mode — a restore
+                    // must leave reader mode first. Browsing history stays.
+                    readOnly = readerMode,
                     onRestoreVersion = { restoredVer ->
                         contentText = restoredVer.extractedText ?: ""
                         flushSave()
@@ -1080,11 +1107,12 @@ private fun RenderBlocks(
                     else -> MaterialTheme.typography.titleSmall
                 }
                 // Phase 158 (22.5): reader mode widens leading proportionally to the
-                // ALREADY-SCALED theme font size (never an absolute sp override), so
-                // system font-scale accessibility is preserved.
+                // style's OWN already-scaled line height (never an absolute sp
+                // override), so system font-scale accessibility is preserved and the
+                // reader leading is always wider than the default.
                 val baseStyle = serifBodyStyle(style, serif)
                 val readerStyle = if (LocalReaderMode.current) {
-                    baseStyle.copy(lineHeight = ReaderModePolicy.readerLineHeightSp(baseStyle.fontSize.value).sp)
+                    baseStyle.copy(lineHeight = ReaderModePolicy.readerLineHeightSp(baseStyle.fontSize.value, baseStyle.lineHeight.value).sp)
                 } else {
                     baseStyle
                 }
@@ -1386,10 +1414,10 @@ private fun MarkdownParagraph(
     }
     Column {
         // Phase 158 (22.5): reader mode widens leading proportionally to the
-        // already-scaled body font (see ReaderModePolicy).
+        // already-scaled body line height (see ReaderModePolicy).
         val baseBodyStyle = serifBodyStyle(MaterialTheme.typography.bodyLarge, serif)
         val bodyStyle = if (LocalReaderMode.current) {
-            baseBodyStyle.copy(lineHeight = ReaderModePolicy.readerLineHeightSp(baseBodyStyle.fontSize.value).sp)
+            baseBodyStyle.copy(lineHeight = ReaderModePolicy.readerLineHeightSp(baseBodyStyle.fontSize.value, baseBodyStyle.lineHeight.value).sp)
         } else {
             baseBodyStyle
         }
