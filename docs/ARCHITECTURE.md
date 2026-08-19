@@ -431,6 +431,17 @@
     `noteflow.sqlite.keystore-lost-<ts>` via `quarantineVaultFiles`, bytes preserved — never
     quarantined as corrupt). `MainActivity` renders the dedicated `KeystoreKeyLostScreen` between
     the corruption and restore screens. Tests: `B1Crypto05SilentRekeyTest` (16).
+  - **Implemented in phase-163** (see `workspace/phase-163/REPORT.md`): both recovery screens
+    (`CorruptionRecoveryScreen`, `KeystoreKeyLostScreen`) gained a real, PERSISTED "Don't show
+    again for this … event" control. Dismissals are keyed to the recovery EVENT, never a bare
+    boolean: `RecoveryDismissalPolicy.mayShow(blocking, eventTs, dismissedTs)` suppresses only the
+    SAME event timestamp, re-shows on a NEW stamp (fresh `setCorruptionDetected` / a different
+    keystore-lost wrapper alias), and fails closed for un-keyable legacy events. Prefs live in
+    `DatabaseSecurityHelper` (`corruption_dismissed_timestamp`,
+    `keystore_lost_{event_alias,event_timestamp,dismissed_timestamp}`, `.commit()` because the
+    restore path exits the process). The keystore-lost event identity is exactly ONE
+    `readDekResult()` result: `DekReadResult.AuthRequired` now carries the same non-secret
+    `wrapperAlias` as `KeyLost`. The phase-87 DB-integrity banner dismissal remains per-session.
   - **Implemented in phase-65** (B1-CRYPTO-07, see `workspace/phase-65/REPORT.md`): the vault-DEK
     biometric AndroidKeyStore key is now ONLY ever created STRONG-bound (API 30+); on API 26-29 the
     biometric-lock feature is refused/downgraded. Pure-JVM `services/BiometricKeyBindingPolicy.kt`

@@ -199,13 +199,6 @@ object DatabaseSecurityHelper {
             .commit()
     }
 
-    fun clearCorruptionDismissal(context: Context) {
-        context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
-            .edit()
-            .remove(PREF_CORRUPTION_DISMISSED_TIMESTAMP)
-            .apply()
-    }
-
     /**
      * Phase-163: records the CURRENT keystore-key-lost event the FIRST time a
      * given lost key is detected in-process, and returns the event timestamp.
@@ -244,12 +237,14 @@ object DatabaseSecurityHelper {
 
     /** Phase-163: clears the event + dismissal (successful restore / start-fresh). */
     fun clearKeystoreLostDismissal(context: Context) {
+        // R2-B1D-01-style commit(): the restore path calls this immediately before
+        // exiting the process — an async apply() could be lost before the exit.
         context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
             .edit()
             .remove(PREF_KEYSTORE_LOST_EVENT_ALIAS)
             .remove(PREF_KEYSTORE_LOST_EVENT_TIMESTAMP)
             .remove(PREF_KEYSTORE_LOST_DISMISSED_TIMESTAMP)
-            .apply()
+            .commit()
     }
 
     /**

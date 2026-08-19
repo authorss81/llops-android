@@ -199,7 +199,7 @@ class SecurityService internal constructor(
      */
     fun readDekResult(): DekReadResult {
         val blob = dekStore.read() ?: return DekReadResult.NoBlob
-        if (blob.authRequired) return DekReadResult.AuthRequired // Must use biometric unlock flow
+        if (blob.authRequired) return DekReadResult.AuthRequired(blob.wrapperAlias) // Must use biometric unlock flow
 
         return try {
             val combined = Base64.decode(blob.encoded, Base64.NO_WRAP)
@@ -239,13 +239,6 @@ class SecurityService internal constructor(
         else -> null
     }
 
-    /**
-     * Phase-163: non-secret alias marker of the CURRENTLY stored device wrapper
-     * (B1-CRYPTO-05's `wrapperAlias`), or null when no blob is stored / the blob
-     * carries no marker. Used purely as the EVENT identity for the keystore-key
-     * lost recovery screen's keyed "Don't show again" — never itself a secret.
-     */
-    fun currentWrapperAlias(): String? = dekStore.read()?.wrapperAlias
     fun getOrCreateDek(allowPasswordlessMint: Boolean = true): ByteArray? {
         // B1-CRYPTO-05 (phase-64): readDekResult() distinguishes the four states
         // the pre-fix readDek()-then-mint collapse treated as "null ⇒ mint".
@@ -253,7 +246,7 @@ class SecurityService internal constructor(
             is DekReadResult.Unlocked -> result.dek
             // A biometric-gated device copy exists but was not unlockable without
             // the biometric flow: never silently mint/re-persist a fresh fallback key.
-            DekReadResult.AuthRequired -> null
+            is DekReadResult.AuthRequired -> null
             // A device copy IS stored but its wrapping key is lost/unreadable.
             // NEVER mint — overwriting the wrapper with a fresh DEK would open the
             // still-encrypted vault with the wrong SQLCipher passphrase and the

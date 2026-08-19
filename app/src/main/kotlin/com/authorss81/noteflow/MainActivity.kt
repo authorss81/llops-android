@@ -1396,6 +1396,33 @@ private fun CorruptionRecoveryScreen(viewModel: NoteflowViewModel) {
             Spacer(Modifier.height(12.dp))
             Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
         }
+        // Phase-163: "Don't show again" for THIS corruption event only — keyed to
+        // the quarantine timestamp (RecoveryDismissalPolicy), so a NEW corruption
+        // (fresh *.corrupt-<ts> stamp) always re-shows this screen.
+        Spacer(Modifier.height(20.dp))
+        var dontShowAgain by rememberSaveable { mutableStateOf(false) }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(enabled = !isRestoring) { dontShowAgain = !dontShowAgain },
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            androidx.compose.material3.Checkbox(
+                checked = dontShowAgain,
+                onCheckedChange = { dontShowAgain = it },
+                enabled = !isRestoring
+            )
+            Text(
+                text = "Don't show again for this corruption event",
+                style = MaterialTheme.typography.bodyMedium
+            )
+        }
+        OutlinedButton(
+            onClick = { viewModel.dismissCorruptionRecovery(dontShowAgain) },
+            enabled = !isRestoring
+        ) {
+            Text("Dismiss")
+        }
     }
 }
 
@@ -1508,6 +1535,33 @@ private fun KeystoreKeyLostScreen(viewModel: NoteflowViewModel) {
         errorMessage?.let {
             Spacer(Modifier.height(12.dp))
             Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+        }
+        // Phase-163: "Don't show again" for THIS lost-key event only — keyed to the
+        // recorded wrapper-lost event timestamp (RecoveryDismissalPolicy), so a
+        // DIFFERENT lost key (a new event) always re-shows this screen.
+        Spacer(Modifier.height(20.dp))
+        var dontShowAgain by rememberSaveable { mutableStateOf(false) }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(enabled = !isRestoring) { dontShowAgain = !dontShowAgain },
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            androidx.compose.material3.Checkbox(
+                checked = dontShowAgain,
+                onCheckedChange = { dontShowAgain = it },
+                enabled = !isRestoring
+            )
+            Text(
+                text = "Don't show again for this lost device key",
+                style = MaterialTheme.typography.bodyMedium
+            )
+        }
+        OutlinedButton(
+            onClick = { viewModel.dismissKeystoreKeyLostRecovery(dontShowAgain) },
+            enabled = !isRestoring
+        ) {
+            Text("Dismiss")
         }
     }
 }

@@ -181,7 +181,11 @@ class B1Crypto05SilentRekeyTest {
         )
         assertTrue(
             "a lost device key must surface the keystore-key-lost recovery, not mint",
-            initBlock.contains("_keystoreKeyLost.value = true")
+            initBlock.contains("_keystoreKeyLost.value = keystoreLostBlockedForCurrentEvent")
+        )
+        assertTrue(
+            "no detection site may set the key-lost state unconditionally (phase-163 keyed gate)",
+            !initBlock.contains("_keystoreKeyLost.value = true")
         )
         assertTrue(
             "the pre-fix silent mint (`var dek = security.readDek(); if (dek == null) generateDek()`) must be gone",

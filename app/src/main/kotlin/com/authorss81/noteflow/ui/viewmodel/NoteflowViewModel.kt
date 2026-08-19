@@ -69,6 +69,7 @@ import com.authorss81.noteflow.services.DatabaseHmacPolicy
 import com.authorss81.noteflow.services.DatabaseIntegrityPolicy
 import com.authorss81.noteflow.services.DatabaseIntegrityVerdict
 import com.authorss81.noteflow.services.DatabaseSecurityHelper
+import com.authorss81.noteflow.services.RecoveryDismissalPolicy
 import com.authorss81.noteflow.services.DecryptFailurePolicy
 import com.authorss81.noteflow.services.DekAtRestMode
 import com.authorss81.noteflow.services.DekAtRestPolicy
@@ -1194,7 +1195,10 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         )
     )
     val corruptionBlocked: StateFlow<Boolean> = _corruptionBlocked.asStateFlow()
-    val corruptionTimestamp: Long = DatabaseSecurityHelper.getCorruptionTimestamp(appContext)
+    val corruptionTimestamp: Long
+        // Phase-163 review-fix: computed, not captured — a NEW quarantine event
+        // stamped mid-session (setCorruptionDetected) must be reflected on screen.
+        get() = DatabaseSecurityHelper.getCorruptionTimestamp(appContext)
 
     /**
      * B1-CRYPTO-05 (phase-64): the AndroidKeyStore key that wraps the device DEK
@@ -1735,12 +1739,20 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
                         eventTimestamp = DatabaseSecurityHelper.getCorruptionTimestamp(appContext),
                         dismissedTimestamp = DatabaseSecurityHelper.getCorruptionDismissedTimestamp(appContext),
                     )
-                } else if (runCatching { security.readDekResult() is DekReadResult.KeyLost }.getOrDefault(false)) {
-                    _keystoreKeyLost.value = keystoreLostBlockedForCurrentEvent(security.currentWrapperAlias())
                 } else {
-                    // Any other exception is rethrown (data corruption must never
-                    // be silently swallowed).
-                    throw e
+                    // B1-CRYPTO-05 (phase-64): a failed open whose device copy is
+                    // LEGITIMATELY unreadable (keystore key lost) must surface the
+                    // key-lost recovery screen, not self-corrupt. Phase-163 review-fix:
+                    // single readDekResult() — the same result carries the event
+                    // identity (result.wrapperAlias), never a second blob read.
+                    val dekRead = runCatching { security.readDekResult() }.getOrDefault(DekReadResult.NoBlob)
+                    if (dekRead is DekReadResult.KeyLost) {
+                        _keystoreKeyLost.value = keystoreLostBlockedForCurrentEvent(dekRead.wrapperAlias)
+                    } else {
+                        // Any other exception is rethrown (data corruption must never
+                        // be silently swallowed).
+                        throw e
+                    }
                 }
             } finally {
                 // B1-CRYPTO-06 review (phase-91): release the deferred first
@@ -1916,13 +1928,14 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
                     security.storeDek(dek, authRequired = false)
                     initializeData()
                 }
-                DekReadResult.AuthRequired -> {
+                is DekReadResult.AuthRequired -> {
                     // A passwordless vault whose device copy is the biometric-gated
                     // wrapper (anomalous — biometrics requires a master password).
                     // It cannot be read without the biometric flow; surface the
                     // recovery screen instead of minting over it.
-                    // Phase-163: honor a persisted "Don't show again" for this event.
-                    _keystoreKeyLost.value = keystoreLostBlockedForCurrentEvent(security.currentWrapperAlias())
+                    // Phase-163: honor a persisted "Don't show again" for this event,
+                    // keyed to the SAME single-read alias as KeyLost (review-fix).
+                    _keystoreKeyLost.value = keystoreLostBlockedForCurrentEvent(result.wrapperAlias)
                     // B1-CRYPTO-06 review (phase-91): no DB open happens here, so
                     // nothing raced the file — release the deferred first
                     // verification so the fail-closed notice can still surface.
@@ -2749,6 +2762,9 @@ fun updatePageTags(id: String, tags: String) {
                 }
                 DatabaseSecurityHelper.clearCorruptionDetected(getApplication())
                 DatabaseSecurityHelper.clearRestoreBlock(getApplication())
+                // Phase-163: wipe the keyed-lost event + its dismissal too, so a
+                // freshly keyed vault is never nagged by the now-stale event.
+                DatabaseSecurityHelper.clearKeystoreLostDismissal(getApplication())
                 _keystoreKeyLost.value = false
                 _restoreBlocked.value = false
                 _corruptionBlocked.value = false
@@ -2784,6 +2800,9 @@ fun updatePageTags(id: String, tags: String) {
                 security.clearDek()
             }
             _keystoreKeyLost.value = false
+            // Phase-163: the old wrapper is being discarded — clear the keyed-lost
+            // event identity + any dismissal so a brand-new event can re-present.
+            DatabaseSecurityHelper.clearKeystoreLostDismissal(getApplication())
             // Re-run the passwordless boot with a deliberately fresh DEK.
             val dek = EncryptionService.generateDek()
             security.storeDek(dek, authRequired = false)
@@ -3188,7 +3207,7 @@ fun updatePageTags(id: String, tags: String) {
                 val existing = existingDek ?: when (val r = security.readDekResult()) {
                     is DekReadResult.Unlocked -> r.dek
                     DekReadResult.NoBlob -> null
-                    DekReadResult.AuthRequired -> null
+                    is DekReadResult.AuthRequired -> null
                     is DekReadResult.KeyLost -> throw KeystoreKeyLostException(
                         "Stored device DEK copy cannot be unwrapped — refuse to set a " +
                             "password over a vault whose device key is lost. Restore from " +

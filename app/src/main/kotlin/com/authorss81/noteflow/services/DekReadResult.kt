@@ -24,8 +24,14 @@ sealed class DekReadResult {
     /**
      * The device copy is the biometric-gated wrapper — it requires the biometric
      * unlock flow and must never be read (or re-wrapped) without a credential.
+     *
+     * [wrapperAlias] is the non-secret marker persisted at wrap time (same marker
+     * as [KeyLost.wrapperAlias]) so the keystore-lost recovery screen can key its
+     * "Don't show again" to the SAME event identity regardless of which read
+     * branch reports it (phase-163 review-fix: one source of truth, no
+     * re-reading the blob for a second identity).
      */
-    object AuthRequired : DekReadResult()
+    data class AuthRequired(val wrapperAlias: String?) : DekReadResult()
 
     /**
      * A device copy IS stored but could not be unwrapped: the AndroidKeyStore
