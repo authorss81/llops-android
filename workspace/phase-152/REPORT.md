@@ -108,7 +108,7 @@ All three findings are `CLOSED`. Source: `docs/security-report-round2.md`.
 
 New / updated tests:
 - `app/src/test/java/com/authorss81/noteflow/services/graph/KnowledgeGraphEdgePolicyTest.kt` —
-  14 tests: cull-to-survivors, self-edge drop, deterministic dedup, top-K by
+  15 tests: cull-to-survivors, self-edge drop, deterministic dedup, top-K by
   recency, tie-break stability, per-edge-cap tiers, and the WikiLinkParser
   per-page (200) + total (100k) discovery caps.
 - `app/src/test/java/com/authorss81/noteflow/Phase152FeatureDataBoundsWiringTest.kt` —
