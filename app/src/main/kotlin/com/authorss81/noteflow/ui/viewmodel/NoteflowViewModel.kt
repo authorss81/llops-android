@@ -117,8 +117,9 @@ import com.authorss81.noteflow.services.DownloadablePluginInstaller
 import com.authorss81.noteflow.services.DownloadablePluginUpdater
 import com.authorss81.noteflow.services.PluginArtifactStorage
 import com.authorss81.noteflow.services.SettingsPluginEntryStore
-import com.authorss81.noteflow.services.SettingsPluginUpdateStore
 import com.authorss81.noteflow.services.WikiLinkParser
+import com.authorss81.noteflow.services.graph.GraphPreviewPolicy
+import com.authorss81.noteflow.services.SettingsPluginUpdateStore
 import com.authorss81.noteflow.services.graph.CommandPaletteMath
 import com.authorss81.noteflow.theme.AppThemeMode
 import com.authorss81.noteflow.ui.components.WorkspaceTemplate
@@ -3839,6 +3840,56 @@ fun updatePageTags(id: String, tags: String) {
     suspend fun loadSectionCounts(sectionId: String): Int =
         withLockedPoolGuard("section counts", 0) {
             repository.getSectionCounts(sectionId)
+        }
+
+    /**
+     * Phase 154 — node peek/quick-preview payload for the Knowledge Graph's
+     * selected-node card. The title/tags come from a FRESH decrypted page read
+     * and the body is snapped to the capped first-lines preview. R2-b2b1-UI-01
+     * (phase-134) + B1-AUTH-02 posture: the read routes through
+     * [withLockedPoolGuard], so a `lock()` racing the load degrades to [emptyGraphNodePreview]
+     * and NEVER decrypts (the pool is disposed — a locked open fails before any
+     * decrypt); the phase-153 gating rule stands: the preview card is composed
+     * alone inside [KnowledgeGraphScreen] which is reached only past the auth
+     * gate, and the snippet is only as close to the decrypted text as the
+     * preview's own narrow window.
+     */
+    data class GraphNodePreview(
+        val title: String,
+        val tags: List<String>,
+        val snippet: String
+    )
+
+    /** Inbound-link counts for the preview's backlinks breadcrumb (feature 3). */
+    data class BacklinkSummary(
+        val explicitLinks: Int,
+        val unlinkedMentions: Int
+    )
+
+    private val emptyGraphNodePreview = GraphNodePreview("", emptyList(), "")
+    private val emptyBacklinkSummary = BacklinkSummary(0, 0)
+
+    suspend fun loadGraphNodePreview(page: NotePageEntity): GraphNodePreview =
+        withLockedPoolGuard("note preview", emptyGraphNodePreview) {
+            // Decrypt ONLY while the auth gate is up; a locked pool cannot open,
+            // so no decrypted content is ever produced past a lock.
+            val fresh = repository.getPageById(page.id) ?: return@withLockedPoolGuard emptyGraphNodePreview
+            GraphNodePreview(
+                title = fresh.title,
+                tags = GraphPreviewPolicy.parseTags(fresh.tags),
+                snippet = GraphPreviewPolicy.previewSnippet(fresh.extractedText)
+            )
+        }
+
+    suspend fun loadBacklinkSummary(page: NotePageEntity): BacklinkSummary =
+        withLockedPoolGuard("backlinks", emptyBacklinkSummary) {
+            val all = repository.getAllActivePages()
+            // B1-AUTH-05 (phase-69): legacy source-file reads are confined to the
+            // app-private imports root.
+            val (linked, unlinked) = WikiLinkParser.findBacklinks(
+                page, all, forceRefresh = false, ImportExportService.getImportsDir(appContext)
+            )
+            BacklinkSummary(linked.size, unlinked.size)
         }
 
     /**
