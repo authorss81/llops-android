@@ -7,6 +7,9 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.horizontalScroll
@@ -36,6 +39,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke as DrawStrokeStyle
 import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -167,7 +171,17 @@ fun AnnotationCanvas(
     // color from the mode + seed stored ON the stroke itself.
     currentColorMode: com.authorss81.noteflow.data.model.StrokeColorMode = com.authorss81.noteflow.data.model.StrokeColorMode.SOLID,
     currentColorSeed: Int = 0,
-    currentGradientToColor: Color = Color(0xFF1B365D)
+    currentGradientToColor: Color = Color(0xFF1B365D),
+    // Phase 155: canvas workshop — two-finger undo/redo + quick-color ring.
+    // Both are strictly opt-in via settings (default OFF so classic rendering and
+    // the single-finger stroke path stay byte-for-byte unchanged); default no-op
+    // callbacks keep pre-existing call sites compiling.
+    twoFingerGesturesEnabled: Boolean = false,
+    onTwoFingerUndo: () -> Unit = {},
+    onTwoFingerRedo: () -> Unit = {},
+    quickColorRingEnabled: Boolean = false,
+    quickColorSwatches: List<Color> = emptyList(),
+    onQuickColorPicked: (Color) -> Unit = {}
 ) {
     val vibrancyBoost = if (vibrancyEnabled) vibrancyBoostLevel.coerceIn(0f, 1f) else 0f
     var internalZoomScale by remember { mutableFloatStateOf(zoomScale) }
@@ -263,6 +277,31 @@ fun AnnotationCanvas(
     // Eyedropper Magnifying Loupe State
     var sampledColorPreview by remember { mutableStateOf<Color?>(null) }
     var eyedropperPosition by remember { mutableStateOf<Offset?>(null) }
+
+    // Phase 155: two-finger undo/redo classifier (pure JVM) + quick-color ring.
+    // The classifier lives inside the canvas because it must observe the SAME
+    // pointer frames the pinch-zoom handler sees; it never consumes, so the zoom
+    // and single-finger stroke paths below are untouched.
+    val gestureClassifier = remember { com.authorss81.noteflow.services.GestureRedoUndoClassifier() }
+    // Selected index while the ring is open (-1 = none, -2 = center "keep color"
+    // per QuickColorRingMath), plus the anchor the ring is centred on.
+    var quickColorRingOpen by remember { mutableStateOf(false) }
+    var quickColorRingAnchor by remember { mutableStateOf(Offset.Zero) }
+    var quickColorRingSelection by remember { mutableIntStateOf(com.authorss81.noteflow.services.QuickColorRingMath.NOTHING_HIT) }
+
+    // Phase 155 (reduce-motion): the ring and its feedback are INSTANT — a
+    // long-press attention shiver, no animation tween. Documented here so no
+    // later refactor wraps the ring in an Animatable without consulting the
+    // reduce-motion policy in MotionPolicy.
+    fun openQuickColorRing(anchor: Offset) {
+        quickColorRingAnchor = anchor
+        quickColorRingSelection = com.authorss81.noteflow.services.QuickColorRingMath.CENTER_SLOT
+        quickColorRingOpen = true
+    }
+    fun closeQuickColorRing() {
+        quickColorRingOpen = false
+        quickColorRingSelection = com.authorss81.noteflow.services.QuickColorRingMath.NOTHING_HIT
+    }
 
     var showTextInputDialog by remember { mutableStateOf(false) }
     var textInputOffset by remember { mutableStateOf<Offset?>(null) }
@@ -584,6 +623,39 @@ fun AnnotationCanvas(
                 lastTimestampMs = motionEvent.eventTime
                 false
             }
+            // Phase 155: two-finger undo/redo gestures (pure-JVM classifier).
+            // MUST sit BEFORE the pinch-zoom handler so it observes every frame the
+            // zoom handler later consumes; it consumes nothing itself, so pinch-zoom
+            // and single-finger drawing are byte-for-byte unaffected. The classifier
+            // enforces two layers of pinch separation: the separation-ratio band
+            // (fingers spread/closing = pinch, never undo/redo) AND the horizontal
+            // centroid rule (a vertical pan is not a swipe). Wired to the existing
+            // undo/redo stack via EditorScreen callbacks.
+            .pointerInput(twoFingerGesturesEnabled) {
+                if (!twoFingerGesturesEnabled) return@pointerInput
+                awaitPointerEventScope {
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val pressed = event.changes.count { it.pressed }
+                        val coords = if (pressed >= 2 && event.changes.size >= 2) {
+                            // Fewer churn for the classifier: it only needs the
+                            // FIRST TWO pressed pointers' positions per frame.
+                            val c = event.changes.filter { it.pressed }.take(2)
+                            if (c.size >= 2) {
+                                floatArrayOf(
+                                    c[0].position.x, c[0].position.y,
+                                    c[1].position.x, c[1].position.y
+                                )
+                            } else null
+                        } else null
+                        when (gestureClassifier.onFrame(pressed, coords, event.changes.firstOrNull()?.uptimeMillis ?: 0L)) {
+                            com.authorss81.noteflow.services.GestureRedoUndoClassifier.Action.UNDO -> onTwoFingerUndo()
+                            com.authorss81.noteflow.services.GestureRedoUndoClassifier.Action.REDO -> onTwoFingerRedo()
+                            else -> Unit
+                        }
+                    }
+                }
+            }
             // 1. Two-finger Zoom and Pan Gestures
             .pointerInput(Unit) {
                 awaitPointerEventScope {
@@ -681,6 +753,70 @@ fun AnnotationCanvas(
                         }
                     }
                 )
+            }
+
+            // Phase 155: QUICK-COLOR RING — long-press the canvas to pop the
+            // radial mini-palette seeded from the active DesignerPalette. This
+            // block sits BETWEEN the tap handler and the drawing drag handler so
+            // it can claim a long-press (with local consumption) BEFORE the
+            // stroke drag path ever sees slop; a quick tap or quick drag falls
+            // through untouched and draws exactly as before. Only freehand tools
+            // can hold a color, so TEXT/SELECT/PAN/EYEDROPPER/sticker/shape tools
+            // never trigger it. Reduce-motion is respected: the ring opens and
+            // closes instantly (no animation).
+            .pointerInput(quickColorRingEnabled, currentTool, quickColorSwatches) {
+                if (!quickColorRingEnabled || !currentTool.isFreehandTool || quickColorSwatches.isEmpty()) {
+                    return@pointerInput
+                }
+                val viewConfig = LocalViewConfiguration.current
+                val layout = com.authorss81.noteflow.services.QuickColorRingMath.ringLayout(
+                    swatchCount = quickColorSwatches.size,
+                    centerX = 0f,
+                    centerY = 0f
+                )
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    // Long-press = still down after viewConfiguration.longPressTimeoutMillis.
+                    val timedOut = kotlinx.coroutines.withTimeoutOrNull(viewConfig.longPressTimeoutMillis) {
+                        waitForUpOrCancellation()
+                    }
+                    if (timedOut != null) {
+                        // Released (or cancelled) before the timeout — ordinary
+                        // tap/potential drag; let the stroke path handle it.
+                        return@awaitEachGesture
+                    }
+                    // Long-press confirmed: take exclusive ownership of this finger.
+                    down.consume()
+                    openQuickColorRing(down.position)
+                    // Drag to a swatch; release applies. Selection tracks the first
+                    // (long-pressed) pointer.
+                    val swatchCenters = layout.map { (x, y) ->
+                        ((x + down.position.x) to (y + down.position.y))
+                    }
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull { it.id == down.id }
+                        val stillPressed = change?.pressed == true
+                        if (!stillPressed) break
+                        quickColorRingSelection =
+                            com.authorss81.noteflow.services.QuickColorRingMath.hitIndex(
+                                pointerX = change.position.x,
+                                pointerY = change.position.y,
+                                centerX = down.position.x,
+                                centerY = down.position.y,
+                                swatchCenters = swatchCenters,
+                                touchSlopPx = 12f
+                            )
+                        change.consume()
+                    }
+                    val chosen = when {
+                        quickColorRingSelection in quickColorSwatches.indices -> quickColorSwatches[quickColorRingSelection]
+                        quickColorRingSelection == com.authorss81.noteflow.services.QuickColorRingMath.CENTER_SLOT -> null
+                        else -> null
+                    }
+                    closeQuickColorRing()
+                    if (chosen != null) onQuickColorPicked(chosen)
+                }
             }
 
             // 3. Drawing / Eyedropper / Single-Finger Pan Gestures.
@@ -1748,6 +1884,18 @@ Stroke(
                 )
             }
 
+            // Phase 155: QUICK-COLOR RING overlay. Drawn AFTER the loupe so the
+            // ring always sits on top; instant (no animation) per reduce-motion.
+            if (quickColorRingOpen && quickColorSwatches.isNotEmpty()) {
+                QuickColorRingOverlay(
+                    anchor = quickColorRingAnchor,
+                    swatches = quickColorSwatches,
+                    currentColor = currentColor,
+                    selectedIndex = quickColorRingSelection,
+                    visibleSwatchCount = com.authorss81.noteflow.services.QuickColorRingMath.cappedSwatches(quickColorSwatches.size)
+                )
+            }
+
             // Canvas Viewport Minimap Widget (bottom-right by default).
             // Phase 129: the map box is proportional to the canvas WORLD aspect
             // ratio (fitted inside the pre-35 120x140dp max box, aspect
@@ -2278,6 +2426,78 @@ private fun EyedropperMagnifierLoupe(
                     color = if (textLight) Color.White else Color.Black,
                     fontSize = 10.sp
                 )
+            )
+        }
+    }
+}
+
+/**
+ * Phase 155: the QUICK-COLOR RING overlay — the radial mini-palette shown while
+ * the user long-presses + drags on the canvas. Rendered with a single Canvas
+ * positioned exactly at the finger anchor; INSTANT (no animation) per the app's
+ * reduce-motion policy. The center disc shows the CURRENT tool color and means
+ * "keep current"; the outer band shows the active palette swatches in the same
+ * clockwise 12-o'clock layout QuickColorRingMath.ringLayout produces, so the
+ * hit-test and the pixels always agree.
+ */
+@Composable
+private fun QuickColorRingOverlay(
+    anchor: Offset,
+    swatches: List<Color>,
+    currentColor: Color,
+    selectedIndex: Int,
+    visibleSwatchCount: Int
+) {
+    val outerR = com.authorss81.noteflow.services.QuickColorRingMath.RING_OUTER_RADIUS_PX
+    val innerR = com.authorss81.noteflow.services.QuickColorRingMath.RING_INNER_RADIUS_PX
+    val midR = (outerR + innerR) / 2f
+    val swatchR = com.authorss81.noteflow.services.QuickColorRingMath.SWATCH_RADIUS_PX
+    val centers = com.authorss81.noteflow.services.QuickColorRingMath.ringLayout(visibleSwatchCount, anchor.x, anchor.y)
+    val underlineColor = if (currentColor.luminance() > 0.5f) Color.Black else Color.White
+
+    Canvas(
+        modifier = Modifier
+            .offset { IntOffset((anchor.x - outerR).toInt(), (anchor.y - outerR).toInt()) }
+            .size(with(androidx.compose.ui.platform.LocalDensity.current) {
+                (outerR * 2).toDp()
+            })
+    ) {
+        // Backing disc (dark scrim) so the ring reads over light paper.
+        drawCircle(color = Color.Black.copy(alpha = 0.30f), radius = outerR)
+        drawCircle(color = Color.Black.copy(alpha = 0.55f), radius = midR)
+
+        // Center disc = current tool color, "keep current" target.
+        drawCircle(
+            color = currentColor,
+            radius = com.authorss81.noteflow.services.QuickColorRingMath.CENTER_RADIUS_PX
+        )
+        drawCircle(
+            color = underlineColor,
+            radius = com.authorss81.noteflow.services.QuickColorRingMath.CENTER_RADIUS_PX,
+            style = DrawStrokeStyle(width = if (selectedIndex == com.authorss81.noteflow.services.QuickColorRingMath.CENTER_SLOT) 5f else 2f)
+        )
+
+        // Selection halo ring when the finger sits between swatches.
+        if (selectedIndex == com.authorss81.noteflow.services.QuickColorRingMath.NOTHING_HIT) {
+            drawCircle(
+                color = Color.White.copy(alpha = 0.9f),
+                radius = midR,
+                style = DrawStrokeStyle(width = 2f)
+            )
+        }
+
+        for (i in centers.indices) {
+            val (cx, cy) = centers[i]
+            val isSelected = selectedIndex == i
+            if (isSelected) {
+                drawCircle(color = Color.White.copy(alpha = 0.95f), radius = swatchR + 5f)
+                drawCircle(color = Color.Black.copy(alpha = 0.6f), radius = swatchR + 6f, style = DrawStrokeStyle(width = 2f))
+            }
+            drawCircle(color = swatches[i % swatches.size], radius = swatchR)
+            drawCircle(
+                color = if (isSelected) Color.White else Color.Black.copy(alpha = 0.35f),
+                radius = swatchR,
+                style = DrawStrokeStyle(width = if (isSelected) 3f else 1.5f)
             )
         }
     }
