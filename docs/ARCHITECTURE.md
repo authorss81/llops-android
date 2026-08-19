@@ -1635,8 +1635,20 @@ androidx.biometric 1.1.0 · coroutines 1.9.0.
 10. Two plugin-state persistence layers exist (`SettingsPlugin*Store.kt` vs `plugins/runtime/Plugin*Store.kt`) —
     keep them in sync when changing install/update state.
 11. **Round-2 security audit** (phase-116, 2026-08-17): full source re-audit on the post-fix tree — 43 findings
-    (0 CRITICAL · 0 HIGH · 12 MEDIUM · 26 LOW · 5 INFO) live in `docs/security-report-round2.md`; phase-118
-    appends dynamic/APK findings to the same file. Audit-only, no code changed; fixes are phase-119's job.
+     (0 CRITICAL · 0 HIGH · 12 MEDIUM · 26 LOW · 5 INFO) live in `docs/security-report-round2.md`; phase-118
+     appends dynamic/APK findings to the same file. Audit-only, no code changed; fixes are phase-119's job.
+
+Implemented in phase-161 (2026-08-19): Kali round-2 triage → generated the next
+pipeline phases starting at **phase-170** (max existing was 169). The Kali
+dynamic pass (phase-160) is `.blocked` — `docs/kali-report-round2.md` is
+APK-metadata only, no findings. Genuinely-OPEN round-1 APK packaging findings
+(fix phases): Phase-32-NEW-01 lingua corpus trim + ABI splits → **170**;
+Phase-32-NEW-03 v3 signing + NEW-04 plugin cert-pin runbook → **171**.
+Feature phases 172 (editor/canvas productivity), 173 (FileTransfer plugin over
+LocalSend + invocation journal), 174 (reading & authoring UX). All `file:line`
+anchors and DoD live in each `workspace/phase-NN/PROMPT.md`. `R2-b2b2-DEP-01`
+(CI action pinning) remains `PENDING USER APPROVAL` (workflow edit) — not
+re-triaged.
 
 ## Phase status truth table
 See `docs/phase-status.md` — per-phase `DONE`/`PARTIAL`/`NOT STARTED` with verified commit evidence.

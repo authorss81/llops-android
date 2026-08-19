@@ -41,6 +41,11 @@ painting engine, free features).
 | phase-167 | Bottom nav bar no longer overlays messages & calendar (dynamic padding/insets) | user-reported |
 | phase-168 | App opens the last-used notebook on cold start | user-reported |
 | phase-169 | Fix post-export "Unreadable (decryption failed)" + keep fail-closed UX | user-reported |
+| phase-170 | **Base-APK size: strip unused lingua `language-models/` (24 of 75 languages) + ABI splits** (Phase-32-NEW-01 MEDIUM + NEW-02 LOW) | phase-161 Kali triage |
+| phase-171 | **Release signing v3 + plugin-channel operator runbook + fail-closed pin test** (Phase-32-NEW-03 + NEW-04 INFO) | phase-161 Kali triage |
+| phase-172 | Feature: editor & canvas productivity — persistent color/brush recents + favorites, minimap zoom-to-fit & jump-home, layer blend/opacity presets | phase-161 UI/UX bucket |
+| phase-173 | Feature: plugin ecosystem — serve FileTransfer over LocalSend + invocation journal + honest store metadata | phase-161 plugin bucket |
+| phase-174 | Feature: reading & authoring UX — note stats bar, outline quick-jump in reader mode, wiki-link autocomplete + slash-menu insert | phase-161 UI/UX bucket |
 
 ## How phases run
 

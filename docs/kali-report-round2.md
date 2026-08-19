@@ -25,3 +25,21 @@
 Verify identity against the keystore before attacking:
 `keytool -list -keystore "$KEYSTORE_FILE" -storepass "$KEYSTORE_PASSWORD"` must list the same
 certificate SHA-256 fingerprint.
+
+## Triage note (phase-161, 2026-08-19)
+
+- **No findings were recorded here.** The Kali dynamic/instrumented pass
+  (phase-160) was BLOCKED on CI: `workspace/phase-160/.blocked` + `.no_work` +
+  3 attempts + timeout 360 — no rooted Android device/emulator is available on
+  the Linux runner, so no dynamic findings could be produced or appended.
+- The static re-review performed during phase-161 (finding → fix phase) is
+  documented in `workspace/phase-161/REPORT.md` and generated phases 170-174:
+  - **phase-170** — round-1 APK finding Phase-32-NEW-01 (MEDIUM: lingua
+    `language-models/` 80.2 MB pack, 24/75 languages used) + Phase-32-NEW-02
+    (LOW: no ABI splits).
+  - **phase-171** — Phase-32-NEW-03 (INFO: v2-only signing) + Phase-32-NEW-04
+    (INFO: plugin-manifest cert-pin placeholder → operator runbook).
+  - **phase-172..174** — feature phases (editor/canvas productivity, FileTransfer
+    plugin over LocalSend, reading & authoring UX).
+- Re-running the dynamic pass requires operator-provided rooted hardware/AVD;
+  the pipeline cannot supply it on this runner.
