@@ -25,6 +25,23 @@
 | `theme/` | `Theme.kt`, `GlassSurfaces.kt`, `GlassThemeMath.kt`, `Motion.kt`, `Type.kt`, `Color.kt` | Material3 + frosted-glass design system |
 | `utils/` | `ConstantTime.kt`, `BitmapPool.kt`, `DeviceCompatibilityManager.kt`, `WikiLinkParser.kt` (dup, see notes) | Pure helpers |
 
+> **Implemented in phase-186** (2026-08-20, gallery quick actions, see
+> `workspace/phase-186/REPORT.md`): gallery cards now expose the SAME quick
+> actions as the List view — a compact `MoreVert` overflow menu (`GalleryView.kt`)
+> with Pin/Unpin → `viewModel.togglePinPage(page.id, page.pinned)`, Edit Tags →
+> `onEditTags(page)` → HomeScreen `tagEditorTargetPage` → the shared
+> `TagEditorDialog` → `viewModel.updatePageTags`, and Move to Trash →
+> `viewModel.trashPage(page.id)` (text + icon in `scheme.error`). New pure-JVM
+> `services/GalleryCardActionsPolicy.kt` owns the labels/order/badge/tint rules
+> (no inline literals de-syncing the two views); the pinned badge is now compact
+> 18dp and the overflow button 28dp so the header fits the ~140dp grid column at
+> 360dp (phase-166 discipline). `GalleryView` gained an optional
+> `onEditTags: (NotePageEntity) -> Unit = {}` param (backward compatible);
+> "Move to Trash" is recoverable-trash only — the app's hard delete stays behind
+> its confirmation gate. Tests: `GalleryCardActionsPolicyTest` (6) +
+> `Phase186GalleryQuickActionsTest` (7 source pins). No schema change, no new
+> deps.
+
 > **Implemented in phase-165** (`ui/components/GalleryView.kt`): the gallery page cards
 > were redesigned from the old flat square box to tasteful Material 3 cards — 20 dp
 > rounded corners, tonal `surfaceVariant` container with a subtle `primaryContainer`
