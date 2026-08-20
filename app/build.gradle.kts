@@ -23,6 +23,11 @@ plugins {
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.ksp)
+    // Phase 195: JVM screenshot-render suite. TEST-ONLY — creates the
+    // `recordPaparazziDebug`/`verifyPaparazziDebug` tasks and injects the
+    // `app.cash.paparazzi:paparazzi` lib into the unit-test configuration only.
+    // It adds zero bytes to the base APK (no runtime/compile dependency).
+    alias(libs.plugins.paparazzi)
 }
 
 android {

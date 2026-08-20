@@ -65,6 +65,12 @@ internal object CentralAllowlist {
         "org\\.slf4j.*",
         "it\\.unimi\\.dsi.*",
         "net\\.java.*",
-        "net\\.sf.*"
+        "net\\.sf.*",
+        // Phase 195: Paparazzi screenshot-render suite (test-only) transitive
+        // groups that resolve from Maven Central on the unit-test classpath.
+        "app\\.cash\\.paparazzi.*",
+        "net\\.bytebuddy.*",
+        "kxml2",
+        "dev\\.drewhamilton\\.poko.*"
     )
 }

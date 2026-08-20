@@ -1,7 +1,7 @@
 // R2-b2b2-DEP-04 (phase-146 + review): the one-way mavenCentral() allow-list applies
 // to plugin resolution AND dependency resolution so a poisoned Central index can
 // inject neither an unknown plugin nor an unknown dependency group. pluginManagement
-// is pre-evaluated and cannot reference script-level declarations, so the 52 literal
+// is pre-evaluated and cannot reference script-level declarations, so the 56 literal
 // `includeGroupByRegex("...")` lines are written out TWICE in this file (pluginManagement
 // and dependencyResolutionManagement) — the source-pinning tests
 // (`Phase146BuildIntegrityTest` + `B2Deps03DependencyVerificationTest`, both reading
@@ -78,6 +78,16 @@ pluginManagement {
                 includeGroupByRegex("it\\.unimi\\.dsi.*")
                 includeGroupByRegex("net\\.java.*")
                 includeGroupByRegex("net\\.sf.*")
+                // Phase 195: Paparazzi screenshot-render suite. The marker +
+                // plugin artifact resolve here (`app.cash.paparazzi`); the
+                // bytebuddy/kxml2/poko groups are TEST-CLASSPATH-only but are
+                // listed for PARITY with dependencyResolutionManagement
+                // (Phase146BuildIntegrityTest pins that the two lists + the
+                // CentralAllowlist test data can never drift).
+                includeGroupByRegex("app\\.cash\\.paparazzi.*")
+                includeGroupByRegex("net\\.bytebuddy.*")
+                includeGroupByRegex("kxml2")
+                includeGroupByRegex("dev\\.drewhamilton\\.poko.*")
             }
         }
         gradlePluginPortal()
@@ -179,6 +189,15 @@ dependencyResolutionManagement {
                 includeGroupByRegex("it\\.unimi\\.dsi.*")
                 includeGroupByRegex("net\\.java.*")
                 includeGroupByRegex("net\\.sf.*")
+                // Phase 195: Paparazzi screenshot-render suite transitive groups
+                // that resolve on the UNIT-TEST classpath only (never the base
+                // APK): `app.cash.paparazzi` (paparazzi + paparazzi-agent),
+                // `net.bytebuddy` (byte-buddy agent), the `kxml2` XML pull
+                // parser (layoutlib), and `dev.drewhamilton.poko` annotations.
+                includeGroupByRegex("app\\.cash\\.paparazzi.*")
+                includeGroupByRegex("net\\.bytebuddy.*")
+                includeGroupByRegex("kxml2")
+                includeGroupByRegex("dev\\.drewhamilton\\.poko.*")
             }
         }
     }
