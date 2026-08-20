@@ -1,6 +1,8 @@
 package com.authorss81.noteflow
 
+import com.authorss81.noteflow.services.GalleryTagRowPolicy
 import java.io.File
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -93,17 +95,20 @@ class Phase188GalleryRobustnessTest {
     fun `tag row is capped by the pure-JVM policy`() {
         val gallery = mainSource("ui/components/GalleryView.kt")
         assertTrue("parsing must go through the policy", gallery.contains("GalleryTagRowPolicy.parseTags(page.tags)"))
-        assertTrue("chip cap must go through the policy", gallery.contains("GalleryTagRowPolicy.MAX_VISIBLE_TAGS"))
+        assertTrue("chip cap must go through the policy", gallery.contains("GalleryTagRowPolicy.visibleChips(tags)"))
+        assertTrue("hidden count must go through the policy", gallery.contains("GalleryTagRowPolicy.hiddenChipCount(tags)"))
         assertTrue("badge text must go through the policy", gallery.contains("GalleryTagRowPolicy.hiddenBadgeText("))
         assertTrue("chip labels must go through the policy", gallery.contains("GalleryTagRowPolicy.chipText(tag)"))
-        assertFalse("no inline .take(3) tag cap may survive", gallery.contains(".take(3)"))
+        assertFalse("no inline .take( may survive in the composable (cap lives in the policy)", gallery.contains(".take("))
+        // The cap constant itself lives in the pure-JVM policy.
+        assertEquals(2, GalleryTagRowPolicy.MAX_VISIBLE_TAGS)
     }
 
     @Test
     fun `tag row is single-line and never wraps`() {
         val gallery = mainSource("ui/components/GalleryView.kt")
         assertFalse("the wrapping FlowRow must be gone", gallery.contains("FlowRow"))
-        assertTrue("a single-line Row renders the chips", gallery.contains("val visibleTags = tags.take(GalleryTagRowPolicy.MAX_VISIBLE_TAGS)"))
+        assertTrue("no inline tag math - visible chips come from the policy", gallery.contains("GalleryTagRowPolicy.visibleChips(tags)"))
         assertTrue("chip text must be single-line + ellipsized", gallery.contains("maxLines = 1,") && gallery.contains("overflow = TextOverflow.Ellipsis"))
         assertTrue(
             "chips are weighted so long tags ellipsize instead of pushing the badge out",

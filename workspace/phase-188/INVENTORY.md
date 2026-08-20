@@ -4,6 +4,14 @@ Inventory of the current `ui/components/GalleryView.kt` (479 lines, read end-to-
 after phases 183–187 landed) against the 4 risks raised in the user visual review
 "exploration" section. Every risk is checked against the CURRENT tree.
 
+> **Review-fix 2026-08-20:** this file is the pre-fix exploration snapshot. The
+> risk-#2 "intended mechanism" written below (`weight(1f, fill=false)` seating
+> the floor's slack between preview and footer) was later found to be INERT in
+> the implemented layout (Compose only redistributes flex slack when the parent's
+> main axis is finite; the card is never height-capped). The implemented +
+> review-fixed guarantee is structural: min-floor + no height cap means the
+> footer can never be clipped. See `REPORT.md` Risk #2.
+
 ## Risk #1 — Canvas stroke deserialization overhead
 
 **Status: already clean, needs a dedicated source-pin test.**

@@ -111,19 +111,40 @@ class Phase188GalleryLayoutBoundsTest {
     }
 
     @Test
-    fun `composable seats the footer slack with a weight fill-false preview`() {
+    fun `footer guarantee is structural - the card is min-floored but never height-capped`() {
         val src = mainSource("ui/components/GalleryView.kt")
-        // The prompt mechanism: Column(weight(1f, fill=false)) + heightIn(min).
-        val first = src.indexOf("weight(1f, fill = false)")
-        val second = src.indexOf("weight(1f, fill = false)", src.indexOf("weight(1f, fill = false)") + 1)
-        assertTrue(
-            "both preview paths (text + placeholder) must carry the slack seat",
-            first >= 0 && second > first
-        )
-        assertTrue("the body column must share the min-height floor", src.contains(".heightIn(min = minCardHeight)"))
+        // The floor input remains the font scale (accessibility rule).
         assertTrue(
             "the floor input remains the font scale (accessibility rule)",
             src.contains("GalleryCardLayoutPolicy.minCardHeightDp(LocalDensity.current.fontScale)")
+        )
+        // Card AND body Column share the font-scaled MIN floor.
+        val floorCount = Regex("\\.heightIn\\(min = minCardHeight\\)").findAll(src).count()
+        assertTrue("the Card and the body Column share the min floor", floorCount >= 2)
+        // The guarantee is structural: the card is min-floored only. Nothing may
+        // cap the card height, otherwise a grown font scale could clip the footer
+        // instead of growing the card. (This is the real, testable invariant — a
+        // `weight(1f, fill=false)` flex seat only redistributes slack when the
+        // parent's main axis is FINITE, and here it never is.)
+        // Every `.height(` call in the composable is a Spacer's small gap — the
+        // Card/body modifier chains carry only `heightIn(min = ...)` (a floor,
+        // never a cap). Note `heightIn(` deliberately does not match `.height(`.
+        val heightCalls = Regex("\\.height\\(").findAll(src).count()
+        val spacerHeightCalls = Regex("Spacer\\(modifier = Modifier\\.height\\(").findAll(src).count()
+        assertEquals(
+            "only Spacers may use a fixed .height( - the card/body must stay min-floored",
+            spacerHeightCalls, heightCalls
+        )
+        assertFalse("no .heightIn(max=...) cap on the card path", src.contains("heightIn(max"))
+        assertFalse("no aspectRatio backsliding (phase-184 pin)", src.contains(".aspectRatio("))
+        // The defensive slack seat is present on BOTH preview paths (text +
+        // placeholder) and would become the enforcement point if a finite height
+        // is ever introduced.
+        val first = src.indexOf("weight(1f, fill = false)")
+        val second = src.indexOf("weight(1f, fill = false)", first + 1)
+        assertTrue(
+            "both preview paths (text + placeholder) carry the defensive slack seat",
+            first >= 0 && second > first
         )
     }
 

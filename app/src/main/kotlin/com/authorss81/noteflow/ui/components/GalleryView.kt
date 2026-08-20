@@ -110,13 +110,14 @@ private fun GalleryCardItem(
     // notebook tile with no 60% dead band.
     val minCardHeight = GalleryCardLayoutPolicy.minCardHeightDp(LocalDensity.current.fontScale).dp
 
-    // Phase 188: tag parsing/capping lives in the pure-JVM GalleryTagRowPolicy —
-    // at most MAX_VISIBLE_TAGS (2) chips plus a "+N" badge, single line, so the
-    // update timestamp below stays visible at 1.3–1.5x font scale.
+    // Phase 188: tag parsing/capping lives entirely in the pure-JVM
+    // GalleryTagRowPolicy — at most MAX_VISIBLE_TAGS (2) chips plus a "+N"
+    // badge, single line, so the update timestamp below stays visible at
+    // 1.3–1.5x font scale. There is deliberately NO inline tag math here.
     val tags = remember(page.tags) {
         GalleryTagRowPolicy.parseTags(page.tags)
     }
-    val visibleTags = tags.take(GalleryTagRowPolicy.MAX_VISIBLE_TAGS)
+    val visibleTags = GalleryTagRowPolicy.visibleChips(tags)
     val hiddenTagCount = GalleryTagRowPolicy.hiddenChipCount(tags)
 
     // Phase 187: ink-note cards whose body is real handwriting (no OCR text to
@@ -188,11 +189,14 @@ private fun GalleryCardItem(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    // Phase 188 risk #2: the body column participates in the
-                    // same min-height floor so the `weight(1f, fill = false)`
-                    // preview seat below has a definite bound to absorb slack
-                    // into — the footer is pinned visible at every font scale,
-                    // never clipped (the floor is a minimum, never a cap).
+                    // Phase 188 risk #2: the body column shares the SAME
+                    // min-height floor as the card. Both are a FLOOR, never a
+                    // cap — nothing in this composition fixes a finite height
+                    // (only `heightIn(min = ...)`, never a max-bounded variant,
+                    // a fixed height() or a ratio), so a growing font scale
+                    // grows the card and the date/tags footer below can never
+                    // be clipped. That unbounded min-floor structure IS the
+                    // footer guarantee (see the preview comment below).
                     .heightIn(min = minCardHeight)
                     .padding(14.dp)
             ) {
@@ -329,12 +333,17 @@ private fun GalleryCardItem(
                 // text block is just its own lines (maxLines = 3) and the
                 // placeholder is a compact band with an 84dp FLOOR, so large font
                 // scales grow it instead of clipping/overlapping the label.
-                // Phase 188 risk #2 adds `weight(1f, fill = false)` ON TOP of that:
-                // fill=false means the preview NEVER stretches tall (the 184 fix is
-                // preserved) but any slack from the heightIn-min floor seats here,
-                // BETWEEN the preview and the footer, so the date/tags footer is
-                // pinned visible at 1.3–1.5x font scale instead of floating below
-                // a gap.
+                // Phase 188 risk #2: `weight(1f, fill = false)` on BOTH preview
+                // paths is a DEFENSIVE slack seat, kept because it becomes the
+                // enforcement point the day a finite card height is introduced.
+                // Under the current unbounded layout it is inert — Compose only
+                // redistributes slack through a flex child when the parent's main
+                // axis is FINITE, and this card is never height-capped (the Card
+                // and body Column share only `heightIn(min = ...)`). The footer
+                // visibility guarantee therefore rests on that min-floor +
+                // unbounded-height structure (pinned by
+                // Phase188GalleryLayoutBoundsTest), not on this weight. fill=false
+                // keeps the phase-184 fix: the preview never stretches tall.
                 if (preview.isNotEmpty()) {
                     Text(
                         text = preview,

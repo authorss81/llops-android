@@ -28,41 +28,37 @@ WORKFLOW RULE: `7e62074` (step 1 inventory), `e915e61` (step 2 mitigations),
 
 ### Risk #2 — Large font scaling (1.3x–1.5x) must not clip the date/tags footer
 
-**Fixed: the prompt's exact mechanism (`Column(weight(1f, fill=false))` +
-`Modifier.heightIn(min=180.dp)`) is now wired, on top of the phase-184 floor.**
+**Guarantee holds; mechanism narrative corrected in the review-fix commit. The
+`weight(1f, fill = false)` seat is a DEFENSIVE NO-OP under the current unbounded
+layout — it does NOT pin the footer — and the docs no longer claim it does.**
 
-- `services/GalleryCardLayoutPolicy.kt` (extended): the large-font layout-bounds
-  policy —
-  - `measuredCardHeightDp(contentHeightDp, fontScale)` = `max(content, floor)`
-    — the card is content-driven with a MINIMUM and NO maximum, so growing font
-    scales grow the card instead of clipping the footer (fail-safe on NaN/negative
-    content → floor alone);
-  - `footerAlwaysFits(contentHeightDp, fontScale)` = the guarantee decision
-    (false only for garbage input, mirroring `minCardHeightDp`'s fail-safe);
-  - line budgets pinned in one place: `TITLE_MAX_LINES = 2`,
-    `PREVIEW_MAX_LINES = 3`, `TAG_ROW_MAX_LINES = 1`, `FOOTER_DATE_MAX_LINES = 1`.
-- `ui/components/GalleryView.kt`:
-  - the body `Column` now carries the SAME `heightIn(min = minCardHeight)` floor
-    as the `Card` (`:188-198`), so the slack seat below has a definite bound;
-  - both preview paths (text `Text(:338-350)` and ink/empty placeholder
-    `Box(:351-357)`) are wrapped in `Modifier.weight(1f, fill = false)` — the
-    prompt's `Column(weight(1f, fill=false))`. `fill=false` preserves the
-    phase-184 fix (the preview never *stretches* tall — the old 60% dead-band
-    sponge is NOT reintroduced); it only seats the floor's slack BETWEEN the
-    preview and the footer, pinning the footer visible at any font scale.
-- Regression note vs phase-184: the old `weight(1f)` was removed because under a
-  **rigid ratio** it soaked up ~60% dead band; re-adding it as `weight(1f,
-  fill = false)` under a **content-driven floor** has the opposite effect (slack
-  is bounded by the floor — max ~21dp at 1.0 scale — and lives before the footer).
-  The phase-184 pins (`heightIn(min = minCardHeight)`, no `aspectRatio`, preview
-  literal `maxLines = 3`) all still pass (verified in the full suite).
+- The real guarantee is structural: the card is CONTENT-DRIVEN with a MINIMUM
+  floor and NO maximum. The `Card` (`GalleryView.kt:141`) and the body `Column`
+  (`:196`) share `heightIn(min = minCardHeight)`; there is no
+  `heightIn(max=...)`/`height(...)`/`aspectRatio` anywhere on the card path.
+  A growing font scale therefore grows the card, so the date/tags footer can
+  never be clipped. This min-floor + unbounded-height structure is what pins
+  footer visibility.
+- The `weight(1f, fill = false)` on both preview paths (`GalleryView.kt:349`,
+  `:355`) is a DEFENSIVE slack seat. Compose only redistributes slack through a
+  flex child when the parent's main axis is FINITE; with the card's height
+  unbounded above it is inert today. It is retained (and source-pinned) because
+  it becomes the actual enforcement point the day a finite card height is
+  introduced. Phase-184 behavior preserved: `fill=false` never stretches the
+  preview (the old 60% dead-band sponge is NOT reintroduced).
+- `GalleryCardLayoutPolicy` holds the decision model — `measuredCardHeightDp`
+  and `footerAlwaysFits` — as the regression guard's ORACLE (independent,
+  pure-JVM, fully unit-tested), NOT as functions the composable calls; the
+  composable enforces the equivalent invariant structurally. The phase-184 pins
+  (`heightIn(min = minCardHeight)`, no `aspectRatio`, preview literal
+  `maxLines = 3`) all still pass (verified in the full suite).
 - Tests: `Phase188GalleryLayoutBoundsTest` (8) — pure-JVM
-  `measuredCardHeightDp`/`footerAlwaysFits` math across 1.0/1.3/1.5/2/3 font
-  scales and 140–1000dp bodies, fail-safes, line-budget constants,
-  source-vs-policy agreement (composable keeps the phase-184-required literal
-  `maxLines = 3` == `PREVIEW_MAX_LINES`, date `maxLines = 1` ==
-  `FOOTER_DATE_MAX_LINES`), both preview paths carry `weight(1f, fill = false)`,
-  the body Column shares the floor.
+  `measuredCardHeightDp`/`footerAlwaysFits` oracle math across 1.0/1.3/1.5/2/3
+  font scales and 140–1000dp bodies plus fail-safes AND the source-vs-structure
+  pin that the card is MIN-FLOORED but never height-capped (no `Modifier.height(`,
+  no `heightIn(max`, no `.aspectRatio(`), the body Column shares the floor, the
+  line-budget constants equal the composable literals, and both preview paths
+  carry the defensive `weight(1f, fill = false)` seat.
 
 ### Risk #3 — Dark theme: cards blend into near-black surfaces
 
@@ -107,12 +103,37 @@ WORKFLOW RULE: `7e62074` (step 1 inventory), `e915e61` (step 2 mitigations),
 
 | File | Change |
 |---|---|
-| `services/GalleryCardLayoutPolicy.kt` | Extended: large-font bounds (`measuredCardHeightDp`, `footerAlwaysFits`, line budgets) + dark-theme border constants |
+| `services/GalleryCardLayoutPolicy.kt` | Extended: decision model (`measuredCardHeightDp`, `footerAlwaysFits`, line-budget constants, dark-theme border constants). Reframed as the regression guard's ORACLE — the composable enforces the invariant structurally and calls only `minCardHeightDp` |
 | `services/GalleryTagRowPolicy.kt` | NEW pure-JVM tag-cap policy (2 chips + `+N`, parse/cap/badge/chip-text) |
-| `ui/components/GalleryView.kt` | Body Column shares the min floor; preview paths = `weight(1f, fill=false)` slack seat; `BorderStroke` on the card; single-line capped tag `Row`; `FlowRow`/`ExperimentalLayoutApi` removed; tag math routed through the policy |
+| `ui/components/GalleryView.kt` | Body Column shares the min floor; preview paths = defensive `weight(1f, fill=false)` seat (inert under the unbounded height — see Risk #2); `BorderStroke` on the card; single-line capped tag `Row`; `FlowRow`/`ExperimentalLayoutApi` removed; ALL tag math routed through the policy (no inline `.take(` survives) |
 | `app/src/test/…/GalleryTagRowPolicyTest.kt` | NEW (10 pure-JVM tests) |
-| `app/src/test/…/Phase188GalleryLayoutBoundsTest.kt` | NEW (8 tests: bounds math + border decision + source-vs-policy agreement) |
+| `app/src/test/…/Phase188GalleryLayoutBoundsTest.kt` | NEW (8 tests: oracle math + border decision + structural no-height-cap pin + line-budget agreement) |
 | `app/src/test/…/Phase188GalleryRobustnessTest.kt` | NEW (6 source pins) |
+
+## Review-fix commit (this commit)
+
+Applied the review findings on top of the three phase-188 steps:
+
+1. **Risk #2 honesty (review finding #1/#2).** The `weight(1f, fill=false)` slack
+   seat does NOT pin the footer under the current unbounded layout (Compose only
+   redistributes flex slack when the parent's main axis is finite). The
+   statement is corrected here: the footer guarantee actually rests on the
+   min-floor + never-height-capped structure, and `measuredCardHeightDp`/
+   `footerAlwaysFits` are the pure-JVM oracle, not functions the composable
+   calls. `Phase188GalleryLayoutBoundsTest` now pins the real invariant
+   (min-floored but never capped: no `Modifier.height(`, no `heightIn(max`, no
+   `.aspectRatio(`).
+2. **No inline tag math (review finding #4).** `GalleryView.kt` now calls
+   `GalleryTagRowPolicy.visibleChips(tags)` instead of inlining
+   `tags.take(…)`; the composable holds only `parseTags`/`visibleChips`/
+   `hiddenChipCount`/`hiddenBadgeText`/`chipText` calls, and the source pin
+   forbids any `.take(`.
+3. **Line-budget constants (review finding #5).** KDocs corrected: the constants
+   are the guard's single source cross-checked against the phase-184 literals —
+   the composable deliberately keeps the literals (`maxLines = 3` etc.).
+4. **Formatting (review finding #3).** Trailing newline restored in
+   `GalleryTagRowPolicy.kt` (`.editorconfig` `insert_final_newline = true`).
+5. Tests updated to the honest invariants and re-run green.
 
 ## Regression proof
 
@@ -125,7 +146,10 @@ WORKFLOW RULE: `7e62074` (step 1 inventory), `e915e61` (step 2 mitigations),
   known timing/concurrency flakes appeared once in the first full run
   (`Phase151MarkdownMainThreadPerfTest`, `WikiLinkParserCacheUnitTest`) and both
   pass in isolation and in the final clean full run (`failures=0`). 2502 =
-  2478 prior baseline + 24 new phase-188 tests (10 + 8 + 6). All prior gallery
+  2478 prior baseline + 24 new phase-188 tests (10 + 8 + 6). The review-fix
+  edits re-run clean in isolation (`:app:testDebugUnitTest --tests
+  GalleryTagRowPolicyTest --tests Phase188GalleryLayoutBoundsTest --tests
+  Phase188GalleryRobustnessTest` → BUILD SUCCESSFUL). All prior gallery
   pins green: `GalleryCardLayoutPolicyTest`, `Phase184GalleryProportionTest`,
   `Phase183GalleryTypographyTest`, `Phase186GalleryQuickActionsTest`,
   `Phase187GalleryInkPaperTest`, `GalleryTitleDisplayPolicyTest`,

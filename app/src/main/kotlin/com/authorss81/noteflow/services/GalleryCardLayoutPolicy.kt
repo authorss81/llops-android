@@ -46,22 +46,37 @@ object GalleryCardLayoutPolicy {
 
     /**
      * Line budget of each bounded text block inside a card. The card has NO
-     * maximum height (the floor is a minimum), so the only way a reviewer could
-     * clip the footer at 1.3–1.5x font scale is by capping one of these blocks
-     * below its own natural height — these constants pin the budget in one
-     * place so the composable and the regression guard share it.
+     * maximum height (the floor is a minimum), so a footer clip could only come
+     * from capping one of these blocks below its own natural height. These
+     * constants are the single source the REGRESSION GUARD compares against:
+     * the composable keeps the phase-184 literals (`maxLines = 3` etc.) and
+     * `Phase188GalleryLayoutBoundsTest` proves the literals stay equal to these
+     * constants every run.
      */
     const val TITLE_MAX_LINES = 2
     const val PREVIEW_MAX_LINES = 3
+
+    /**
+     * Single-line contract for the tag chip row. A compose `Row` has no
+     * line-capping parameter, so "single line" is enforced structurally
+     * (weighted, ellipsizing chips + unweighted "+N" badge); this constant
+     * documents the contract the guard cross-checks.
+     */
     const val TAG_ROW_MAX_LINES = 1
+
+    /** Single-line contract for the footer update timestamp. */
     const val FOOTER_DATE_MAX_LINES = 1
 
     /**
-     * Card height that a body measuring [contentHeightDp] attains at
-     * [fontScale]. The card is CONTENT-DRIVEN with a MINIMUM floor —
-     * `max(content, floor)` — and there is intentionally NO maximum, so growing
-     * font scales grow the card instead of clipping the footer. Non-finite or
-     * negative content fails safe to the floor alone.
+     * What height a card with [contentHeightDp] of body content attains at
+     * [fontScale]. This is the pure-JVM DECISION MODEL behind the phase-184/188
+     * card: content-driven with a MINIMUM floor — `max(content, floor)` — and
+     * intentionally NO maximum, so growing font scales grow the card instead of
+     * clipping the footer. `GalleryView` enforces the same invariant
+     * STRUCTURALLY (no height cap anywhere in the card composition) and calls
+     * only [minCardHeightDp]; this function and [footerAlwaysFits] are the
+     * independently-testable oracle exercised by
+     * `Phase188GalleryLayoutBoundsTest`.
      */
     fun measuredCardHeightDp(contentHeightDp: Float, fontScale: Float): Float {
         val safeContent = if (contentHeightDp.isFinite()) contentHeightDp.coerceAtLeast(0f) else 0f
@@ -69,11 +84,14 @@ object GalleryCardLayoutPolicy {
     }
 
     /**
-     * The phase-188 large-font guarantee: the date/tags footer is never clipped
-     * because the measured card height always follows the content
-     * ([measuredCardHeightDp] ≥ content for any font scale). Returns false only
-     * for a garbage content height (NaN or negative) — the same fail-safe
-     * posture as [minCardHeightDp].
+     * Oracle for the phase-188 large-font guarantee: the date/tags footer fits
+     * whenever the measured card height (≥ content, see [measuredCardHeightDp])
+     * is at least the content height. Under the structural rule "the card is
+     * never height-capped" (see GalleryView), this holds for every valid content
+     * height at every font scale. It returns false only for garbage content
+     * heights (NaN or negative) — the same fail-safe posture as [minCardHeightDp].
+     * Not called by the composable (which relies on the equivalent structural
+     * guarantee); it is the regression guard's oracle.
      */
     fun footerAlwaysFits(contentHeightDp: Float, fontScale: Float): Boolean {
         if (contentHeightDp.isNaN() || contentHeightDp < 0f) return false

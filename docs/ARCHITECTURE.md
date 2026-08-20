@@ -32,22 +32,32 @@
 > (title/extractedText/tags/pinned/sourceFileType/updatedAt); new
 > `Phase188GalleryRobustnessTest` source-pins zero `pointsJson`/`getStrokesForPage`/
 > `deserializeStrokes`/`thumbnail`/`rasterize` in `GalleryView.kt`; (2) **large
-> font scaling (1.3–1.5x)**: the body `Column` now shares the phase-184
-> `heightIn(min = minCardHeight)` floor and both preview paths carry
-> `weight(1f, fill = false)` — the prompt's `Column(weight(1f, fill=false))`
-> slack seat, so the floor's slack lands BETWEEN preview and footer and the
-> date/tags footer is pinned visible (extended `GalleryCardLayoutPolicy` with
-> `measuredCardHeightDp`/`footerAlwaysFits` + line-budget constants); (3) **dark
+> font scaling (1.3–1.5x)**: footer visibility is guaranteed STRUCTURALLY — the
+> card is content-driven with a MINIMUM floor (`heightIn(min = minCardHeight)` on
+> both the Card and the body Column) and is NEVER height-capped (no
+> `heightIn(max)`/`height(...)`/`aspectRatio` anywhere on the card path), so a
+> growing font scale grows the card and the date/tags footer can never clip;
+> both preview paths additionally carry `weight(1f, fill=false)` as a DEFENSIVE
+> slack seat — inert under the unbounded layout (a flex child only redistributes
+> slack when the parent's main axis is finite), load-bearing the day a finite
+> height is introduced. `GalleryCardLayoutPolicy` holds the decision model
+> (`measuredCardHeightDp`/`footerAlwaysFits` + line-budget constants) as the
+> regression guard's pure-JVM oracle; (3) **dark
 > theme**: the card now has an explicit `BorderStroke(1.dp,
 > outlineVariant.copy(alpha = 0.35f))` from policy constants
 > (`GALLERY_CARD_BORDER_WIDTH_DP`/`GALLERY_CARD_BORDER_ALPHA`) so cards stay
 > distinct from near-black surfaces; (4) **tag overflow**: the wrapping `FlowRow`
 > is replaced by a single-line `Row` capped at 2 chips + a `+N` badge via new
-> pure-JVM `services/GalleryTagRowPolicy.kt` (chips `weight(1f, fill=false)`
-> ellipsize, unweighted badge can never be pushed out, the update timestamp stays
-> visible). Tests: `GalleryTagRowPolicyTest` (10) +
+> pure-JVM `services/GalleryTagRowPolicy.kt` (ALL tag math — parse/cap/badge/
+> chip-text — lives in the policy; `GalleryView` renders no inline `.take(`)
+> (chips `weight(1f, fill=false)` ellipsize, unweighted badge can never be pushed
+> out, the update timestamp stays visible). Tests: `GalleryTagRowPolicyTest` (10) +
 > `Phase188GalleryLayoutBoundsTest` (8) + `Phase188GalleryRobustnessTest` (6).
-> No schema change, no new deps.
+> Review-fix 2026-08-20: corrected the risk-#2 narrative (the weight seat is a
+> defensive no-op under the unbounded layout, pinned structurally), wired
+> `visibleChips()` into the composable, corrected the line-budget KDocs, restored
+> the trailing newline, and re-pinned the layout test on the no-height-cap
+> invariant. No schema change, no new deps, `.github/workflows/` untouched.
 
 > **Implemented in phase-186** (2026-08-20, gallery quick actions, see
 > `workspace/phase-186/REPORT.md`): gallery cards now expose the SAME quick
