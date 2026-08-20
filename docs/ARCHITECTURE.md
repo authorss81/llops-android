@@ -713,6 +713,21 @@
     three HSV sliders called `onColorSelect(derivedColor)` (the previous composition's colour, so the
     final slider position never landed); each now converts its just-changed channel inline
     (`HSVToColor(floatArrayOf(it,s,v))` / `(h,it,v)` / `(h,s,it)`). Tests: `Phase123ImmediateSelectionTest` (12).
+  - **Implemented in phase-178** (see `workspace/phase-178/REPORT.md`): the per-page reference-image
+    underlay (ROADMAP Phase-07 encouraged item). A photo inserted from the editor's overflow menu
+    ("Insert Reference Image") persists as a single `media_embeds` row (`MediaEmbedType.REFERENCE_IMAGE`,
+    **no schema change**) — the opacity config lives in the field-encrypted `textContent` column
+    (`ReferenceImagePolicy.encodeConfig`/`decodeOpacity`, range-gated 30–50%, default 40%), geometry in
+    the row's plain columns like a `PHOTO` embed. The underlay is excluded from the draggable embed set
+    (`NoteRepository.getCanvasItemsForPage`) and carried forward as a RAW entity across every
+    delete+reinsert page save (`saveMediaEmbedsForPage`) so editor flushes never erase it.
+    `AnnotationCanvas` renders it above paper/template/page-bitmap yet strictly below the ink pass in
+    all three modes (single / seamless / paginated — paginated honors page offset + viewport culling);
+    artwork is stored RELATIVE and every read+delete re-resolves it through `InlineImagePathPolicy`
+    (B1-AUTH-05 app-private confinement); ingestion uses the bounded `AttachmentIngestPolicy` reader.
+    UI: overflow Insert/Remove, SAF picker, an opacity slider + removal card, and `insertPage` shifts
+    the underlay's page index/y. It is never exported — the only embed→render export surface draws
+    `PHOTO` embeds only. Tests: `Phase178ReferenceImageUnderlayTest` (6 policy + 5 source-pins).
 - **Plugins**: `plugin-sdk` → `plugins/FrameworkPlugin.kt:58` (`interface NoteflowPlugin`),
   `plugins/PluginCapability.kt:28` (sealed capability set); `plugins/PluginRegistry.kt:75`,
   `plugins/PluginManager.kt:83`; store: `plugins/store/PluginStoreCatalog.kt:57`, `PluginStoreController.kt:45`.
