@@ -39,15 +39,32 @@ import org.junit.Test
 class Phase177PluginEcosystemReviewTest {
 
     private val baseIds = PluginRegistry.defaultPlugins().map { it.id }
+    // ON states require the user's opt-in flag to be set (the router's rule:
+    // PluginManager.resolvePlugin serves only `enabled == true`). DISABLED is
+    // deliberately NOT a pure OFF state — it has two honest faces: a user turned
+    // it off (enabled=false) OR it deterministically lost capability arbitration
+    // while remaining opted-in (enabled=true; see deriveState at
+    // PluginRegistry.kt:721-728, where a conflict loser reports DISABLED with
+    // enabled=true).
     private val onStates = setOf(
         PluginLifecycleState.ENABLED,
         PluginLifecycleState.AVAILABLE,
         PluginLifecycleState.UNAVAILABLE
     )
-    private val offStates = setOf(
-        PluginLifecycleState.REGISTERED,
-        PluginLifecycleState.DISABLED
-    )
+
+    /** The deriveState contract (PluginRegistry.kt:698-776): which lifecycle
+     *  state is possible with which opt-in flag. REGISTERED/REJECTED are never
+     *  enabled; on-states always are; DISABLED covers both faces. */
+    private fun assertStateContract(id: String, state: PluginLifecycleState, enabled: Boolean) {
+        when (state) {
+            PluginLifecycleState.REGISTERED,
+            PluginLifecycleState.REJECTED ->
+                assertFalse("REGISTERED/REJECTED must never be enabled ($id)", enabled)
+            in onStates ->
+                assertTrue("on-state $state requires enabled ($id)", enabled)
+            else -> Unit // DISABLED: user-off OR arbitration loser (see above)
+        }
+    }
 
     private fun newStore(): Triple<PluginRegistry, PluginStoreCatalog, PluginStoreController> {
         val enableStore = InMemoryEnableStore()
@@ -91,22 +108,23 @@ class Phase177PluginEcosystemReviewTest {
                 assertEquals("row.plugin presence must match installed for $id", installed, row.plugin != null)
                 if (installed) {
                     val state = row.state!!.state
-                    // On/off classification must be driven by the enable store the
-                    // router reads (PluginManager.resolvePlugin requires enabled==true).
+                    // enabled travels with the enable store the router reads
+                    // (PluginManager.resolvePlugin requires enabled==true), and
+                    // the deriveState state/opt-in contract holds (DISABLED may
+                    // be an arbitration loser that is still opted-in).
                     assertEquals(
                         "enabled flag of $id must travel with the row state",
                         enabled, row.state!!.enabled
                     )
-                    assertTrue(
-                        "row state $state for $id must be exactly on or off",
-                        enabled == (state in onStates) && !(enabled && state in offStates)
-                    )
-                    // The store button can offer Enable only for off states
-                    // (PluginStoreDialog.kt:483-502) — never for an on/UNAVAILABLE row.
-                    assertEquals(
-                        "Enable affordance for $id must match the on/off classification",
-                        !enabled, offersEnable(state)
-                    )
+                    assertStateContract(id, state, enabled)
+                    // The store button is derived from the row state value ONLY
+                    // (PluginStoreDialog.kt:484-485): Enable iff REGISTERED/DISABLED.
+                    // A genuinely off row must offer Enable; a genuinely on row must
+                    // never. An arbitration loser (DISABLED with enabled=true,
+                    // absent from today's catalog) is the one row the state-derived
+                    // label does not fully describe — pinned separately below.
+                    if (state in onStates) assertFalse("on row must not offer Enable ($id)", offersEnable(state))
+                    if (!enabled) assertTrue("off row must offer Enable ($id)", offersEnable(state))
                 }
             }
         }
@@ -143,6 +161,65 @@ class Phase177PluginEcosystemReviewTest {
         // Stage 6: built-in still healthy through all of it.
         assertEquals(builtinId, controller.rowsById(registry)[builtinId]?.plugin?.id)
         assertTrue(registry.isInstalled(builtinId))
+
+        // Arbitration zone: two installed, enabled, available rivals for an
+        // EXCLUSIVE capability — the deterministic winner serves (AVAILABLE),
+        // the loser stays opted-in but reports DISABLED with enabled=true
+        // (deriveState's honest second face, PluginRegistry.kt:721-728). This
+        // pins that the state/opt-in contract above accepts exactly that row
+        // shape instead of red-laning a legitimate product state.
+        val allowWinner = booleanArrayOf(false)
+        val winner = TestPlugin(
+            id = "t.win",
+            name = "Winner",
+            version = SemanticVersion(2, 0, 0),
+            capabilities = setOf(PluginCapability.OCR)
+        )
+        val loser = TestPlugin(
+            id = "t.lose",
+            name = "Loser",
+            version = SemanticVersion(1, 0, 0),
+            capabilities = setOf(PluginCapability.OCR),
+            availabilityResult = {
+                if (allowWinner[0]) PluginAvailability.Ok
+                else PluginAvailability.Unavailable("winner-side not ready")
+            }
+        )
+        val arbRegistry = PluginRegistry(
+            enableStore = InMemoryEnableStore(),
+            plugins = listOf(winner, loser),
+            currentApiLevel = 26
+        )
+        // Enable the loser while the winner is not yet available (no refusal,
+        // because the availability gate is evaluated live on the rival).
+        arbRegistry.setEnabled(loser.id, true)
+        assertTrue(arbRegistry.isEnabled(loser.id))
+        // Winner becomes available + enabled: the loser now loses deterministically
+        // (higher version wins, PluginRegistry.kt:672-691) and is reported DISABLED
+        // while still opted-in.
+        allowWinner[0] = true
+        arbRegistry.setEnabled(winner.id, true)
+        val arbRows = PluginStoreController(arbRegistry, PluginStoreCatalog(arbRegistry))
+            .rows(null)
+            .associateBy { it.entry.pluginId }
+        val winnerRow = arbRows.getValue(winner.id)
+        val loserRow = arbRows.getValue(loser.id)
+        assertEquals(PluginLifecycleState.AVAILABLE, winnerRow.state?.state)
+        assertTrue(winnerRow.state!!.enabled)
+        assertEquals(PluginLifecycleState.DISABLED, loserRow.state?.state)
+        assertTrue("a conflict loser stays opted-in", loserRow.state!!.enabled)
+        assertEquals(winner.id, loserRow.state?.conflictWinnerId)
+        // NOTE (pre-existing product nuance, not fixed here): the store's Enable
+        // affordance is derived from the row STATE only (PluginStoreDialog.kt:484-485),
+        // so a conflict loser still renders "Enable" although the registry refuses
+        // the tap (refusalReasonForEnable, PluginRegistry.kt:830-836). The honest
+        // facts pinned here are the state + opt-in + conflict-winner; the affordance
+        // for losers is deliberately NOT asserted to match !enabled.
+        assertStateContract(loser.id, loserRow.state!!.state, enabled = true)
+        assertStateContract(winner.id, winnerRow.state!!.state, enabled = true)
+        // The loser can still be turned off by the user (opt-in revocable).
+        assertTrue(arbRegistry.setEnabled(loser.id, false) is PluginEnableResult.Changed)
+        assertFalse(arbRegistry.isEnabled(loser.id))
     }
 
     /** A plugin that records destructive asset deletion for the delete pin. */

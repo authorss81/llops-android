@@ -60,7 +60,7 @@ The app-local `plugins/NoteflowPlugin.kt` holds the capability SERVICE interface
 | `:672-691` | `computeConflictLosers` — deterministic exclusive-capability arbitration |
 | `:698-776` | `deriveState` — REGISTERED/DISABLED split on `everEnabled` (:730-740); requires `userEnabled` for AVAILABLE/ENABLED/UNAVAILABLE |
 | `:805-841` | `refusalReasonForEnable` — refuses rejected/missing-dep/conflict-loser |
-| `:854-894` | `defaultPlugins()` — **installed set, NOT enabled set**. 18 built-ins, listed at :855-893 |
+| `:854-894` | `defaultPlugins()` — **installed set, NOT enabled set**. 17 built-ins, listed at :855-893 |
 | `:904-906` | `AllInstalledInstallStore` back-compat default |
 
 `app/src/main/kotlin/com/authorss81/noteflow/plugins/PluginManager.kt` (319 lines)

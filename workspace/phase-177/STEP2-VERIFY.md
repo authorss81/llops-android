@@ -21,7 +21,7 @@ Status: VERIFIED — no plugin is on by default. Evidence below with file:line.
 
 ### 3. `defaultPlugins()` is the BACKWARD-COMPAT INSTALLED set, not an enabled set
 - `PluginRegistry.defaultPlugins()` (`PluginRegistry.kt:854-894`) constructs instances only;
-  it contains 18 built-ins. Built-ins default to INSTALLED (via
+  it contains 17 built-ins. Built-ins default to INSTALLED (via
   `AllInstalledInstallStore`, `:904-906`, and `SettingsPluginInstallStore:15-16`
   `isInstalled = !isPluginUninstalled`, absent key ⇒ installed) but NOT enabled. "Installed
   but off" is the documented Phase 126 policy (see `docs/PLUGINS.md`).

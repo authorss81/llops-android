@@ -234,13 +234,20 @@ class Phase146BuildIntegrityTest {
         // resolves okhttp-3.0.0 (and okio-1.6.0) as ACTIVE runtime deps, so the
         // lockfile now pins their verified jars. If a future graph reverts that,
         // the entry falls back to POM-only — either way it is NEVER dropped and
-        // NEVER unpinned (dependency verification stays on).
+        // NEVER unpinned. The fallback is exact: the POM-only form is accepted
+        // ONLY when no jar entry is pinned at all. A jar entry that exists but
+        // lost its sha256 fails this backstop. (Real enforcement is Gradle's own
+        // build-time dependency verification: a resolved jar without a trusted
+        // checksum fails the build regardless of this coarse source pin.)
         val okhttpComponent = xml.substringAfter("name=\"okhttp\" version=\"3.0.0\">")
             .substringBefore("</component>")
+        val okhttpJarPinned = okhttpComponent.contains("okhttp-3.0.0.jar") &&
+            okhttpComponent.contains("sha256")
+        val okhttpPomOnly = okhttpComponent.contains("okhttp-3.0.0.pom") &&
+            !okhttpComponent.contains("okhttp-3.0.0.jar")
         assertTrue(
-            "okhttp-3.0.0 must pin a VERIFIED jar (mlkit module resolves mlkit:translate -> okhttp) or its POM-only entry must survive (R2-b2b2-DEP-03)",
-            okhttpComponent.contains("okhttp-3.0.0.jar") && okhttpComponent.contains("sha256") ||
-                okhttpComponent.contains("okhttp-3.0.0.pom")
+            "okhttp-3.0.0 must pin a VERIFIED jar, or be a retained POM-only entry (no jar at all) (R2-b2b2-DEP-03)",
+            okhttpJarPinned || okhttpPomOnly
         )
     }
 
