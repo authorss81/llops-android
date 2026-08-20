@@ -1033,10 +1033,28 @@
     bounded search corpus `repository.cachedCorpus()` TITLES ONLY (no per-keystroke DB reads, fail
     closed when locked, surfaced via `NoteflowViewModel.cachedWikiLinkTitles`); `RawBlockEditor`
     (`HybridMarkdownEditor.kt`) shows an in-field popup over the cursor for an unterminated `[[` and
-    replaces the whole region; the slash menu (`SlashCommandMenu.kt` `onInsertWikiLink` first entry,
-    `Icons.AutoMirrored.Outlined.ListAlt`) opens the FLAG_SECURE `WikiLinkPickerDialog`
-    (`ui/components/WikiLinkSuggestions.kt`). Tests: `Phase174NoteStatsFormatPolicyTest` (10),
-    `Phase174HeadingScrollIndexTest` (7), `Phase174WikiSuggestionPolicyTest` (13).
+replaces the whole region; the slash menu (`SlashCommandMenu.kt` `onInsertWikiLink` first entry,
+     `Icons.AutoMirrored.Outlined.ListAlt`) opens the FLAG_SECURE `WikiLinkPickerDialog`
+     (`ui/components/WikiLinkSuggestions.kt`). Tests: `Phase174NoteStatsFormatPolicyTest` (10),
+     `Phase174HeadingScrollIndexTest` (7), `Phase174WikiSuggestionPolicyTest` (13).
+  - **Implemented in phase-179** (ROADMAP 21.8 — real syntax highlighting, see
+    `workspace/phase-179/REPORT.md`): fenced code blocks in BOTH markdown renderers
+    (`MarkdownRenderer.kt` + `MarkdownPreviewScreen.kt`) now render with token colors from the
+    pure-Kotlin tokenizer `dev.snipme:highlights` (jvm variant, 0.9.3 pinned — Kotlin 1.9 metadata,
+    readable by this build's 2.0.21; the 1.x line ships Kotlin-2.2 metadata this build cannot read
+    yet). All decisions live in pure-JVM `services/CodeHighlightPolicy.kt` (`languageForFenceTag`
+    maps fence infos incl. aliases kt/js/ts/bash/c#/objc/... onto the tokenizer grammars; unknown or
+    absent tags → `null` → honest plain text; `highlightSpans` bounds-clamps every token location to
+    the code string and returns spans ordered by the tokenizer's category priority, capped at
+    `MAX_TOKENIZED_CHARS`=40k with try/catch → plain text, so a single bad token can never crash a
+    note render). Rendering goes through the shared composable
+    `ui/components/markdown/CodeBlockTextView.kt` — the fence literal is emitted VERBATIM into an
+    `AnnotatedString` (copy/selection unchanged), `atom` theme selected by the luminance of the
+    scheme the code surface sits on (Atom One Light/Dark — darcula/monokai reuse the same token
+    colors for both modes, so they were rejected for light contrast). Tests:
+    `Phase179CodeHighlightTest` (10). The canvas `CodeBlockCard` (`MediaEmbedComponents.kt`) is an
+    EDITABLE text field — still plain text, so its "Plain text (no syntax highlighting)" label stays
+    honest.
   - **Implemented in phase-151** (R2-b2b5-FEA-02 + R2-b2b5-FEA-03, see
     `workspace/phase-151/REPORT.md`): the markdown main-thread performance holes
     are gone. `services/MarkdownInlineMath.kt` pre-computes every maximal backtick
