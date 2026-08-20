@@ -13,7 +13,7 @@
 | `data/model/` | `Entities.kt`, `StrokeModels.kt` | Room entities (8) + stroke/ink types |
 | `data/db/` | `NoteflowDatabase.kt`, `Daos.kt` | Room DB (schema v9, 8 DAOs), corrupt-DB quarantine |
 | `data/repository/` | `NoteRepository.kt`, `LruBoundedMap.kt` | Encrypted read/write, search corpus, WAL checkpoint, re-key |
-| `services/` | `EncryptionService.kt`, `SecurityService.kt`, `DatabaseSecurityHelper.kt`, `VaultKeyHolder.kt`, `WetBrushEngine.kt`, `WebDavSyncService.kt`, `ImportExportService.kt`, `ImportArchivePolicy.kt`, `PaletteCatalog.kt`, `ColorModePersistencePolicy.kt`, `ShapeRecognitionHelper.kt`, `SsrfHostPolicy.kt`, `VoiceNoteCrypto.kt`, `DecryptFailurePolicy.kt`, `BrushEdgePolicy.kt` | Non-UI: crypto/vault, brush math, sync, import/export, zip-import zip-bomb policy (B1-DB-5), palette, rainbow-mode persistence decision table (phase-122), SSRF blocklist (B1-NET-04), voice-note audio cryptor (B1-DB-3), decrypt-failure render decision (B1-DB-8), brush cap/join roundness policy (phase-121) |
+| `services/` | `EncryptionService.kt`, `SecurityService.kt`, `DatabaseSecurityHelper.kt`, `VaultKeyHolder.kt`, `ExportSessionPolicy.kt`, `WetBrushEngine.kt`, `WebDavSyncService.kt`, `ImportExportService.kt`, `ImportArchivePolicy.kt`, `PaletteCatalog.kt`, `ColorModePersistencePolicy.kt`, `ShapeRecognitionHelper.kt`, `SsrfHostPolicy.kt`, `VoiceNoteCrypto.kt`, `DecryptFailurePolicy.kt`, `BrushEdgePolicy.kt` | Non-UI: crypto/vault, brush math, sync, import/export, zip-import zip-bomb policy (B1-DB-5), palette, rainbow-mode persistence decision table (phase-122), SSRF blocklist (B1-NET-04), voice-note audio cryptor (B1-DB-3), decrypt-failure render decision (B1-DB-8), brush cap/join roundness policy (phase-121) |
 | `services/localsend/` | `LocalSendProtocol.kt`, `LocalSendSender.kt`, `LocalSendPairing.kt`, `SettingsLocalSendPairedDeviceStore.kt`, `LocalSendDiscoveryPolicy.kt`, `FileTransferSender.kt`, `LocalSendSenderFactory.kt` | Pure-JVM LocalSend v2.2 + real network sender + TOFU pairing gate (B1-NET-02) + discovery/sweep gate (B1-NET-06) + FileTransfer seam/factory (phase-173) |
 | `plugins/` | `NoteflowPlugin.kt`, `PluginRegistry.kt`, `PluginManager.kt`, `PluginDiagnostics.kt`, `PluginLifecycle.kt` | Compile-time plugin framework + typed serving interfaces + capability routes |
 | `plugins/runtime/` | `RuntimePluginLoader.kt`, `SignatureVerifiedPluginRuntime.kt`, `ArtifactSignatureVerifier.kt`, `PinnedCertHash.kt`, `PinnedTlsConnector.kt`, `PluginManifestFetcher.kt`, `HttpsPluginDownloadTransport.kt`, `PluginDownloader.kt`, `PluginUpdateEngine.kt`, `CompileTimePluginPinStore.kt`, `PluginFrameworkClassLoader.kt`, `ArtifactStaticScan.kt` | Downloadable-plugin runtime: pinned-cert verify (manifest + artifact transports, no redirects), DexClassLoader (scoped `plugins.*`-only parent), verify-time static content scan (B1-AUTH-01), updates |
@@ -245,6 +245,22 @@
 > and the loop recycles ONLY its own allocations — never the caller's in-window
 > cache the editor is still displaying. Tests:
 > `Phase182ExportReadLockBoundaryTest` (9).
+> **Implemented in phase-189** (2026-08-20, backup/restore must keep working
+> immediately after a vault export, see `workspace/phase-189/REPORT.md`): the
+> export chain stays session read-only, but its staged-snapshot prunes no longer
+> re-read the mutable `VaultKeyHolder.dek` singleton at prune time (a mid-export
+> lock() — SAF picker ON_STOP → `MainActivity.kt:207-209` — zeroized the DEK and
+> failed the current backup + poisoned the next one). `exportBackup`
+> (`ImportExportService.kt:1451`) now pins the DEK it was HANDED at export start
+> via new pure-JVM `services/ExportSessionPolicy.kt` — `pinnedPruneDek(key) {
+> VaultKeyHolder.dek }` resolves a snapshot-at-entry COPY (a mid-export
+> zeroization cannot null it) and the prunes take `(stagedDb, dek)` params with
+> ZERO `VaultKeyHolder` references; the pin is zeroized in a `finally` right
+> after both prunes. Fixed backup texts centralized in the policy
+> (`KEEP_CHANGING_ERROR`/`LOCKED_SNAPSHOT_ERROR`, wording unchanged). Tests:
+> `Phase189ExportSessionStateLossTest` (7).
+
+
 
 > **Implemented in phase-172** (2026-08-19, editor & canvas productivity, see
 > `workspace/phase-172/REPORT.md`): three pure-JVM policies +
