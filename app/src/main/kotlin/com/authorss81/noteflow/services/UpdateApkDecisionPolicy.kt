@@ -72,14 +72,22 @@ object UpdateApkDecisionPolicy {
         return false
     }
 
-    /** The full "is this an update candidate?" decision. VersionCode is primary. */
+    /**
+     * The full "is this an update candidate?" decision. versionCode is the
+     * PRIMARY signal and can never be overridden by the name: a LOWER versionCode
+     * is stale no matter what versionName claims (a name-ordered but lower-code
+     * APK must never be offered). versionName is consulted ONLY as the tie-breaker
+     * when the codes are equal.
+     */
     fun isNewer(
         apkVersionCode: Long,
         currentVersionCode: Long,
         apkVersionName: String,
         currentVersionName: String
-    ): Boolean = versionCodeNewer(apkVersionCode, currentVersionCode) ||
-        versionNameNewer(apkVersionName, currentVersionName)
+    ): Boolean {
+        if (apkVersionCode != currentVersionCode) return apkVersionCode > currentVersionCode
+        return versionNameNewer(apkVersionName, currentVersionName)
+    }
 
     /**
      * True iff a share-sheet stream is an APK the app should offer as an
@@ -99,8 +107,22 @@ object UpdateApkDecisionPolicy {
     fun signatureMismatchMessage(): String =
         "Signature mismatch! The file does not match the installed app's signer and will be ignored."
 
-    /** Non-alarming snackbar after a share-sheet APK is staged app-privately. */
+    /** Honest refusal copy: the file could not be read/parsed or is unsigned. */
+    fun unreadableApkMessage(): String =
+        "Could not read this APK's signature (unreadable or unsigned file). It will be ignored."
+
+    /** Non-alarming snackbar after a whole share-sheet APK batch is staged. */
     fun apkStagedMessage(count: Int): String =
         "$count APK file(s) received and staged in app storage. " +
             "Open ⋮ → App Version & Update to review it."
+
+    /** Honest snackbar when only some (or none) of a shared APK batch staged. */
+    fun apkStageFailureMessage(staged: Int, received: Int): String =
+        if (staged == 0) {
+            "None of the $received shared APK file(s) could be staged in app storage. " +
+                "Open ⋮ → App Version & Update to retry with the picker."
+        } else {
+            "$staged of $received shared APK file(s) could be staged in app storage. " +
+                "Open ⋮ → App Version & Update to review them."
+        }
 }

@@ -1044,11 +1044,6 @@ class MainActivity : FragmentActivity() {
     // arrival, and the bounded copy runs only after confirmation and unlock.
     private fun readShareIntent(intent: Intent?) {
         if (intent == null) return
-        // R2-B1P-05 (phase-140): on a rotated-recreated activity onCreate re-fires
-        // the ORIGINAL SEND intent. If a confirm is already pending (or already
-        // answered and awaiting the post-unlock copy), do NOT re-parse — the
-        // pre-fix behavior re-prompted a confirm the user already handled.
-        if (viewModel.pendingShareConfirm.value != null || viewModel.pendingShare.value != null) return
         val text = intent.getStringExtra(Intent.EXTRA_TEXT)
         val uriStrings = when (intent.action) {
             Intent.ACTION_SEND -> {
@@ -1079,6 +1074,11 @@ class MainActivity : FragmentActivity() {
         // the usual B1-PLAT-7 untrusted-confirmation install flow. It never
         // becomes a note clip, and public Downloads are never scanned. The
         // snackbar is non-secret, so a locked vault surfaces it fine.
+        //
+        // This block runs BEFORE the R2-B1P-05 rotation guard below so an APK
+        // arriving while a (non-APK) clip confirm is pending is still staged, not
+        // dropped. (A rotated-recreate re-fire of an APK intent just stages an
+        // extra copy — harmless, and the auto-scan offers the first update found.)
         if (uriStrings.isNotEmpty()) {
             val apkStreams = uriStrings.mapNotNull { uriString ->
                 val uri = Uri.parse(uriString)
@@ -1088,21 +1088,37 @@ class MainActivity : FragmentActivity() {
             }
             if (apkStreams.size == uriStrings.size) {
                 lifecycleScope.launch(Dispatchers.IO) {
+                    // Per-URI try/catch: a single over-budget/unreadable stream fails
+                    // that file loudly and HONESTLY — it must never crash the app and
+                    // must never silently drop the rest of the share.
                     var staged: Int = 0
+                    var failed: Int = 0
                     for (uri in apkStreams) {
-                        val file = ImportExportService.stageApkUriToFile(this@MainActivity, uri)
-                        if (file != null) staged++
+                        try {
+                            val file = ImportExportService.stageApkUriToFile(this@MainActivity, uri)
+                            if (file != null) staged++ else failed++
+                        } catch (e: Exception) {
+                            failed++
+                        }
+                    }
+                    val received = apkStreams.size
+                    val message = if (staged == received) {
+                        UpdateApkDecisionPolicy.apkStagedMessage(staged)
+                    } else {
+                        UpdateApkDecisionPolicy.apkStageFailureMessage(staged, received)
                     }
                     withContext(Dispatchers.Main) {
-                        viewModel.showSnackbar(
-                            UpdateApkDecisionPolicy.apkStagedMessage(staged),
-                            isLong = true
-                        )
+                        viewModel.showSnackbar(message, isLong = true)
                     }
                 }
                 return
             }
         }
+        // R2-B1P-05 (phase-140): on a rotated-recreated activity onCreate re-fires
+        // the ORIGINAL SEND intent. If a confirm is already pending (or already
+        // answered and awaiting the post-unlock copy), do NOT re-parse — the
+        // pre-fix behavior re-prompted a confirm the user already handled.
+        if (viewModel.pendingShareConfirm.value != null || viewModel.pendingShare.value != null) return
         val input = com.authorss81.noteflow.plugins.SharedInput(
             action = intent.action,
             text = text,

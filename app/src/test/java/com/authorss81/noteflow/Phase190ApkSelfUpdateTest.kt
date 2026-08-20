@@ -93,6 +93,14 @@ class Phase190ApkSelfUpdateTest {
             "equal code and equal name are not newer",
             UpdateApkDecisionPolicy.isNewer(100L, 100L, "1.0", "1.0")
         )
+        assertFalse(
+            "a LOWER code can never be overridden by a 'newer' name",
+            UpdateApkDecisionPolicy.isNewer(99L, 100L, "1.9", "1.0")
+        )
+        assertFalse(
+            "a LOWER code with a padded-equal name is still stale",
+            UpdateApkDecisionPolicy.isNewer(99L, 100L, "1.0", "1.0.0")
+        )
     }
 
     @Test
@@ -116,12 +124,22 @@ class Phase190ApkSelfUpdateTest {
         assertTrue(signature.contains("Signature"))
         assertFalse(signature.contains("new update detected"))
 
+        val unreadable = UpdateApkDecisionPolicy.unreadableApkMessage()
+        assertTrue(unreadable.contains("signature"))
+        assertFalse(unreadable.contains("new update detected"))
+
         assertEquals(
             "single staged file wording",
             "1 APK file(s) received and staged in app storage. Open ⋮ → App Version & Update to review it.",
             UpdateApkDecisionPolicy.apkStagedMessage(1)
         )
         assertTrue(UpdateApkDecisionPolicy.apkStagedMessage(2).startsWith("2 APK file(s)"))
+        assertEquals(
+            "nothing staged wording",
+            "None of the 2 shared APK file(s) could be staged in app storage. Open ⋮ → App Version & Update to retry with the picker.",
+            UpdateApkDecisionPolicy.apkStageFailureMessage(0, 2)
+        )
+        assertTrue(UpdateApkDecisionPolicy.apkStageFailureMessage(1, 2).startsWith("1 of 2 shared APK file(s)"))
     }
 
     //
@@ -167,6 +185,10 @@ class Phase190ApkSelfUpdateTest {
             "the refusal must carry the honest signature copy",
             inspect.contains("UpdateApkDecisionPolicy.signatureMismatchMessage()")
         )
+        assertTrue(
+            "an unreadable/unsigned APK must refuse with its own honest copy, not a signer mismatch",
+            inspect.contains("UpdateApkDecisionPolicy.unreadableApkMessage()")
+        )
         assertFalse(
             "the un-gated pre-phase-190 signature helper must be gone from main source",
             updateServiceSrc.contains("verifyApkSignature")
@@ -175,6 +197,11 @@ class Phase190ApkSelfUpdateTest {
 
     @Test
     fun `the version compare flows through the policy in Long - no Int wrap at inspect time`() {
+        val currentCodeSrc = updateServiceSrc.substringAfter("fun getCurrentVersionCode(").substringBefore("fun inspectApkFile(")
+        assertFalse(
+            "the installed current code must never be truncated to Int (the pre-190 wrap)",
+            currentCodeSrc.contains("longVersionCode.toInt()")
+        )
         val inspect = updateServiceSrc.substringAfter("fun inspectApkFile(").substringBefore("fun checkForDownloadedUpdates")
         assertTrue(
             "versionCode must be read as Long on API 28+",
@@ -183,10 +210,6 @@ class Phase190ApkSelfUpdateTest {
         assertTrue(
             "the decision must delegate to the Long-based policy",
             inspect.contains("UpdateApkDecisionPolicy.isNewer(")
-        )
-        assertTrue(
-            "the current code must be widened to Long at the compare",
-            inspect.contains("currentCode.toLong()")
         )
         assertFalse(
             "the pre-P Int read that truncated Long codes to Int must be gone",
@@ -204,6 +227,10 @@ class Phase190ApkSelfUpdateTest {
         assertTrue(
             "install-time re-verify must exist (TOCTOU)",
             install.contains("verifyApkIdentity(context, apkFile)")
+        )
+        assertTrue(
+            "install must fail closed unless identity FULLY matches (package + signer)",
+            install.contains("ApkIdentityResult.Match")
         )
         val unified = updateServiceSrc.substringAfter("private fun verifyApkIdentity")
         assertTrue(
@@ -262,6 +289,14 @@ class Phase190ApkSelfUpdateTest {
             region.contains("UpdateApkDecisionPolicy.apkStagedMessage(staged)")
         )
         assertTrue(
+            "a single failed stream must be caught so the staging loop never crashes the app",
+            region.contains("catch (e: Exception)")
+        )
+        assertTrue(
+            "a partial (or fully failed) staging batch must be surfaced honestly, not over-reported",
+            region.contains("UpdateApkDecisionPolicy.apkStageFailureMessage(staged, received)")
+        )
+        assertTrue(
             "the interception must happen before a note clip is ever built",
             region.indexOf("UpdateApkDecisionPolicy.isApkStream") < region.indexOf("SharedInput(")
         )
@@ -288,6 +323,10 @@ class Phase190ApkSelfUpdateTest {
         assertTrue(
             "the staging cap constant must be defined",
             importExportSrc.contains("MAX_APK_INPUT_BYTES")
+        )
+        assertTrue(
+            "staged file names must be collision-free so a multi-APK share can never overwrite itself",
+            importExportSrc.contains("UUID.randomUUID()")
         )
     }
 

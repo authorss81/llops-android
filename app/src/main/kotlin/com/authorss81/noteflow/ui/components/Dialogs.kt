@@ -99,6 +99,8 @@ fun AppUpdateDialog(
                     } else {
                         statusMessage = "Failed to read APK file."
                     }
+                } catch (e: IllegalStateException) {
+                    statusMessage = e.message ?: "Could not read the selected APK file."
                 } catch (e: Exception) {
                     statusMessage = "Could not read the selected APK file."
                 }
@@ -214,6 +216,14 @@ fun AppUpdateDialog(
             if (updateInfo != null && updateInfo!!.hasUpdate && updateInfo!!.apkFile != null) {
                 Button(
                     onClick = {
+                        // Phase 190 review-fix: the staged APK lives in cacheDir,
+                        // which the system can evict — refuse honestly BEFORE trying
+                        // to install a deleted file, never a silent generic failure.
+                        val apkFile = updateInfo!!.apkFile
+                        if (apkFile == null || !apkFile.exists()) {
+                            onSnackbar("The staged APK was cleared from the app's private storage (the system can do this for its cache directory). Select the APK file again.", false)
+                            return@Button
+                        }
                         // B1-PLAT-7: the strong confirmation gate applies ONLY to
                         // UNTRUSTED files. An OFFICIAL (channel-verified) file installs
                         // directly — nothing in this app produces one today.
@@ -222,7 +232,7 @@ fun AppUpdateDialog(
                         } else {
                             val success = UpdateService.installApk(
                                 context,
-                                updateInfo!!.apkFile!!,
+                                apkFile,
                                 updateInfo!!.trust,
                                 userConfirmedUntrusted = false
                             )
@@ -280,9 +290,16 @@ fun AppUpdateDialog(
                 TextButton(
                     onClick = {
                         showUntrustedConfirm = false
+                        // Phase 190 review-fix: honest refusal when the system
+                        // evicted the staged cacheDir copy since the confirm opened.
+                        val apkFile = confirmed.apkFile
+                        if (apkFile == null || !apkFile.exists()) {
+                            onSnackbar("The staged APK was cleared from the app's private storage (the system can do this for its cache directory). Select the APK file again.", false)
+                            return@TextButton
+                        }
                         val success = UpdateService.installApk(
                             context,
-                            confirmed.apkFile!!,
+                            apkFile,
                             confirmed.trust,
                             // the confirmation gate is only reachable for UNTRUSTED files,
                             // so by showing this dialog the user has already confirmed.

@@ -11,17 +11,30 @@ import android.util.Log
 import androidx.core.content.FileProvider
 import com.authorss81.noteflow.BuildConfig
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 
 data class UpdateInfo(
     val hasUpdate: Boolean,
     val currentVersionName: String,
-    val currentVersionCode: Int,
+    val currentVersionCode: Long,
     val newVersionName: String?,
-    val newVersionCode: Int?,
+    val newVersionCode: Long?,
     val apkFile: File?,
     val releaseNotes: String?,
     val trust: UpdateSourceTrust
 )
+
+/**
+ * Result of [UpdateService.verifyApkIdentity] — WHY an APK does not pass identity.
+ * The install-time gate only accepts [Match]; the offer-time refusal COPY is chosen
+ * per result so an unreadable file is never misreported as a signature mismatch.
+ */
+private sealed class ApkIdentityResult {
+    object Match : ApkIdentityResult()
+    object Unreadable : ApkIdentityResult()
+    object DifferentPackage : ApkIdentityResult()
+    object SignerMismatch : ApkIdentityResult()
+}
 
 object UpdateService {
 
@@ -35,18 +48,24 @@ object UpdateService {
     }
 
     @Suppress("DEPRECATION")
-    fun getCurrentVersionCode(context: Context): Int {
+    fun getCurrentVersionCode(context: Context): Long {
         return try {
             val pInfo: PackageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                pInfo.longVersionCode.toInt()
+                pInfo.longVersionCode
             } else {
-                pInfo.versionCode
+                pInfo.versionCode.toLong()
             }
         } catch (e: Exception) {
-            BuildConfig.VERSION_CODE
+            BuildConfig.VERSION_CODE.toLong()
         }
     }
+
+    // Phase 190 review-fix: memoize the expensive (full-file signer) inspect per
+    // staged file, keyed on bytes (length) + mtime, so re-opening the update
+    // dialog over the same files never re-hashes the whole APK. A changed or
+    // re-staged file (new length/mtime) misses the cache and is re-inspected.
+    private val scannedApkCache = ConcurrentHashMap<String, UpdateInfo>()
 
     /**
      * Inspects a local APK file and compares its versionCode and versionName against the current app.
@@ -91,7 +110,7 @@ object UpdateService {
                     currentVersionName = currentName,
                     currentVersionCode = currentCode,
                     newVersionName = apkVersionName,
-                    newVersionCode = apkVersionCode.toInt(),
+                    newVersionCode = apkVersionCode,
                     apkFile = null,
                     releaseNotes = UpdateApkDecisionPolicy.differentAppMessage(),
                     trust = trust
@@ -100,23 +119,45 @@ object UpdateService {
 
             // Integrity hint only — signature equality with the installed app is NOT
             // proof of vendor provenance (B1-PLAT-1 debug-key fallback). A mismatch is
-            // still an outright refusal.
-            if (!verifyApkIdentity(context, apkFile)) {
-                return UpdateInfo(
+            // still an outright refusal, and the refusal COPY is chosen per result so
+            // an unreadable file is never misreported as a signer mismatch.
+            when (verifyApkIdentity(context, apkFile)) {
+                ApkIdentityResult.Match -> {}
+                ApkIdentityResult.DifferentPackage -> return UpdateInfo(
                     hasUpdate = false,
                     currentVersionName = currentName,
                     currentVersionCode = currentCode,
                     newVersionName = apkVersionName,
-                    newVersionCode = apkVersionCode.toInt(),
+                    newVersionCode = apkVersionCode,
+                    apkFile = null,
+                    releaseNotes = UpdateApkDecisionPolicy.differentAppMessage(),
+                    trust = trust
+                )
+                ApkIdentityResult.SignerMismatch -> return UpdateInfo(
+                    hasUpdate = false,
+                    currentVersionName = currentName,
+                    currentVersionCode = currentCode,
+                    newVersionName = apkVersionName,
+                    newVersionCode = apkVersionCode,
                     apkFile = null,
                     releaseNotes = UpdateApkDecisionPolicy.signatureMismatchMessage(),
+                    trust = trust
+                )
+                ApkIdentityResult.Unreadable -> return UpdateInfo(
+                    hasUpdate = false,
+                    currentVersionName = currentName,
+                    currentVersionCode = currentCode,
+                    newVersionName = apkVersionName,
+                    newVersionCode = apkVersionCode,
+                    apkFile = null,
+                    releaseNotes = UpdateApkDecisionPolicy.unreadableApkMessage(),
                     trust = trust
                 )
             }
 
             val isNewer = UpdateApkDecisionPolicy.isNewer(
                 apkVersionCode,
-                currentCode.toLong(),
+                currentCode,
                 apkVersionName,
                 currentName
             )
@@ -126,10 +167,10 @@ object UpdateService {
                 currentVersionName = currentName,
                 currentVersionCode = currentCode,
                 newVersionName = apkVersionName,
-                newVersionCode = apkVersionCode.toInt(),
+                newVersionCode = apkVersionCode,
                 apkFile = apkFile,
                 releaseNotes = if (isNewer) {
-                    UpdateTrustPolicy.announcementForLocal(apkVersionName, apkVersionCode.toInt())
+                    UpdateTrustPolicy.announcementForLocal(apkVersionName, apkVersionCode.coerceAtMost(Int.MAX_VALUE.toLong()).toInt())
                 } else {
                     UpdateTrustPolicy.staleFileMessage()
                 },
@@ -165,7 +206,14 @@ object UpdateService {
             if (dir.exists() && dir.isDirectory) {
                 val apkFiles = dir.listFiles { _, name -> name.lowercase().endsWith(".apk") } ?: emptyArray()
                 for (apk in apkFiles) {
-                    val info = inspectApkFile(context, apk)
+                    // Phase 190 review-fix: consult the memoized inspect (see
+                    // scannedApkCache) so unchanged files are not re-hashed.
+                    val key = "${apk.absolutePath}|${apk.length()}|${apk.lastModified()}"
+                    val info = scannedApkCache[key] ?: run {
+                        val fresh = inspectApkFile(context, apk)
+                        if (fresh != null) scannedApkCache[key] = fresh
+                        fresh
+                    }
                     if (info != null && info.hasUpdate) {
                         return info
                     }
@@ -215,7 +263,7 @@ object UpdateService {
         // time; re-verify package identity + signer of the CURRENT bytes so a
         // same-path swap between confirmation and staging can never install an APK
         // that is not this app or is signed by a different key (phase 190).
-        if (!verifyApkIdentity(context, apkFile)) {
+        if (verifyApkIdentity(context, apkFile) != ApkIdentityResult.Match) {
             Log.e("UpdateService", "Install refused: APK no longer matches the installed app's package/signer (B1-PLAT-7)")
             return false
         }
@@ -260,10 +308,13 @@ object UpdateService {
      * Phase 190: UNIFIED identity check — a SINGLE `GET_SIGNING_CERTIFICATES`
      * parse reads the APK's packageName AND its signers and requires BOTH to
      * match the installed app. The offer-time and install-time checks therefore
-     * operate on the same parse (and the same bytes at install time, closing
-     * the B1-PLAT-7 swap window) and can never disagree.
+     * read package + signers from the same kind of parse (and install re-parses
+     * the CURRENT bytes, closing the B1-PLAT-7 swap window), so the two checks
+     * can never disagree — even though the offer-time version/package fields use
+     * a separate cheap flags=0 parse of the same file. [ApkIdentityResult]
+     * distinguishes WHY a file fails so the refusal copy is honest.
      */
-    private fun verifyApkIdentity(context: Context, apkFile: File): Boolean {
+    private fun verifyApkIdentity(context: Context, apkFile: File): ApkIdentityResult {
         return try {
             val pm = context.packageManager
 
@@ -273,14 +324,14 @@ object UpdateService {
             } else {
                 @Suppress("DEPRECATION")
                 pm.getPackageArchiveInfo(apkFile.absolutePath, PackageManager.GET_SIGNATURES)
-            } ?: return false
+            } ?: return ApkIdentityResult.Unreadable
 
             val apkSignatures = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 apkInfo.signingInfo?.apkContentsSigners
             } else {
                 @Suppress("DEPRECATION")
                 apkInfo.signatures
-            } ?: return false
+            } ?: return ApkIdentityResult.Unreadable
 
             // Get signatures of the current app
             val currentInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
@@ -295,15 +346,18 @@ object UpdateService {
             } else {
                 @Suppress("DEPRECATION")
                 currentInfo.signatures
-            } ?: return false
+            } ?: return ApkIdentityResult.Unreadable
 
             // Phase 190 package-identity gate at install time (TOCTOU): the file
             // must claim the SAME package as the installed app.
-            if (!UpdateApkDecisionPolicy.samePackage(apkInfo.packageName, context.packageName)) return false
+            if (!UpdateApkDecisionPolicy.samePackage(apkInfo.packageName, context.packageName)) {
+                return ApkIdentityResult.DifferentPackage
+            }
 
-            signaturesMatch(apkSignatures, currentSignatures)
+            if (signaturesMatch(apkSignatures, currentSignatures)) ApkIdentityResult.Match
+            else ApkIdentityResult.SignerMismatch
         } catch (e: Exception) {
-            false
+            ApkIdentityResult.Unreadable
         }
     }
 

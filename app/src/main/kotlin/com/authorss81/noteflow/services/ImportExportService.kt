@@ -14,6 +14,7 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.InputStream
+import java.util.UUID
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
@@ -2129,7 +2130,8 @@ object ImportExportService {
      *
      * Returns null when the URI cannot be opened; an over-budget file throws
      * loudly (never silently truncated). The caller owns and may delete the
-     * returned file.
+     * returned file. The staged name is a fresh UUID so concurrent/multi-file
+     * stagings (a multi-APK share) can never collide and overwrite each other.
      */
     suspend fun stageApkUriToFile(
         context: Context,
@@ -2141,7 +2143,7 @@ object ImportExportService {
         } catch (e: Exception) {
             return@withContext null
         } ?: return@withContext null
-        val staged = File(context.cacheDir, "inkflow_update_${System.currentTimeMillis()}.apk")
+        val staged = File(context.cacheDir, "inkflow_update_${UUID.randomUUID()}.apk")
         try {
             staged.outputStream().use { out ->
                 stream.use { input ->
