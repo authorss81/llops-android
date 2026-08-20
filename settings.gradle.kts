@@ -203,11 +203,16 @@ dependencyResolutionManagement {
 // without a published `.asc` fall back to checksum-only.
 //
 // R2-b2b2-DEP-03 (phase-146) — stale build-graph-only entries are DOCUMENTED,
-// not deleted: `okhttp-3.0.0` + `okio-1.6.0` are POM-only losing candidates of
-// `com.google.mlkit:translate` (confirmed by `gradle :app:dependencyInsight
-// --dependency okhttp` → "3.0.0 -> 4.12.0"), so their jars NEVER resolve (their
-// .pom metadata does, which is why the entries must stay — deleting them fails
-// resolution). `guava-27.0.1-android`, `grpc-1.57.0`, `netty-4.1.93`,
+// not deleted: pre-phase-175 the `:app` graph treated `okhttp-3.0.0` +
+// `okio-1.6.0` as POM-only losing candidates of `com.google.mlkit:translate`
+// (confirmed by `gradle :app:dependencyInsight --dependency okhttp` →
+// "3.0.0 -> 4.12.0") whose jars never resolved. Phase 175 moved ML Kit out of
+// the base APK into the `:plugins:mlkit` downloadable-plugin module, and THERE
+// `mlkit:translate` resolves okhttp-3.0.0 (and okio-1.6.0) as ACTIVE runtime
+// deps — their jars are now pinned + verified in the lockfile (dependency
+// verification stays on; the entries are never dropped). The lockfile-bounded
+// phrase below ("their jars NEVER resolve") applies to the OLD :app-only graph
+// only. `guava-27.0.1-android`, `grpc-1.57.0`, `netty-4.1.93`,
 // `flatbuffers-1.12.0` resolve only inside the `:plugins:llm` tasks-genai graph
 // and never ship (packaged jar includes only `com/google/mediapipe/**` +
 // `lib/<abi>/*.so`, see plugins/llm/build.gradle.kts:90-122); they are tracked

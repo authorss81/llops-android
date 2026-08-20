@@ -208,12 +208,13 @@ class Phase146BuildIntegrityTest {
     fun `stale POM-only graph entries are documented with the dependencyInsight verdict`() {
         val settings = read("settings.gradle.kts")
         assertTrue(
-            "settings must record the okhttp 3.0.0 -> 4.12.0 losing-candidate verdict (R2-b2b2-DEP-03)",
-            settings.contains("okhttp") && settings.contains("3.0.0 -> 4.12.0")
+            "settings must record the okhttp 3.0.0 -> 4.12.0 verdict + mlkit ownership (R2-b2b2-DEP-03)",
+            settings.contains("okhttp") && settings.contains("3.0.0 -> 4.12.0") &&
+                settings.contains(":plugins:mlkit")
         )
         assertTrue(
-            "settings must record that the POM-only entries must stay (deleting them breaks resolution) (R2-b2b2-DEP-03)",
-            settings.contains("their jars NEVER resolve")
+            "settings must record that the mlkit graph now resolves okhttp jars (never dropped, still verified) (R2-b2b2-DEP-03)",
+            settings.contains("pinned + verified in the lockfile")
         )
         assertTrue(
             "settings must track the LLM-graph line ownership (R2-b2b2-DEP-03)",
@@ -222,18 +223,24 @@ class Phase146BuildIntegrityTest {
 
         val xml = read("gradle/verification-metadata.xml")
         assertTrue(
-            "okhttp-3.0.0 must remain in the lockfile as a POM-only losing candidate (R2-b2b2-DEP-03)",
-            xml.contains("okhttp-3.0.0.pom")
+            "okhttp-3.0.0 must be tracked in the lockfile (R2-b2b2-DEP-03)",
+            xml.contains("okhttp-3.0.0.pom") || xml.contains("okhttp-3.0.0.jar")
         )
         assertTrue(
-            "okio-1.6.0 must remain in the lockfile as a POM-only losing candidate (R2-b2b2-DEP-03)",
-            xml.contains("okio-1.6.0.pom")
+            "okio-1.6.0 must be tracked in the lockfile (R2-b2b2-DEP-03)",
+            xml.contains("okio-1.6.0.pom") || xml.contains("okio-1.6.0.jar")
         )
+        // Phase 175 moved ML Kit into `:plugins:mlkit`; there `mlkit:translate`
+        // resolves okhttp-3.0.0 (and okio-1.6.0) as ACTIVE runtime deps, so the
+        // lockfile now pins their verified jars. If a future graph reverts that,
+        // the entry falls back to POM-only — either way it is NEVER dropped and
+        // NEVER unpinned (dependency verification stays on).
+        val okhttpComponent = xml.substringAfter("name=\"okhttp\" version=\"3.0.0\">")
+            .substringBefore("</component>")
         assertTrue(
-            "the okhttp POM-only entry must be exactly that (no jar pinned) (R2-b2b2-DEP-03)",
-            !xml.substringAfter("name=\"okhttp\" version=\"3.0.0\">")
-                .substringBefore("</component>")
-                .contains("okhttp-3.0.0.jar")
+            "okhttp-3.0.0 must pin a VERIFIED jar (mlkit module resolves mlkit:translate -> okhttp) or its POM-only entry must survive (R2-b2b2-DEP-03)",
+            okhttpComponent.contains("okhttp-3.0.0.jar") && okhttpComponent.contains("sha256") ||
+                okhttpComponent.contains("okhttp-3.0.0.pom")
         )
     }
 
