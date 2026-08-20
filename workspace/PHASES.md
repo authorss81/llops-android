@@ -49,7 +49,10 @@ painting engine, free features).
 | phase-175 | **Move ML Kit OCR + translation OUT of the base APK into the signature-verified downloadable-plugin runtime** (R2-KS-21 MEDIUM — `mlkit-google-ocr-models/` assets + OCR/translate JNI libs + `translate_models_metadata.json` in payload; base-APK-size hard constraint; 170 covers lingua/ABI only, this is the dedicated ML Kit move-out) | phase-167 Kali triage |
 | phase-176 | **Release packaging hygiene: exclude `DebugProbesKt.bin` / `kotlin-tooling-metadata.json` / `firebase-*.properties` from the release APK + retain R8 `mapping.txt` for forensic back-mapping** (R2-KS-27 LOW + R2-KS-24 INFO; one area; workflow archival deferred — no `.github/workflows/` edits) | phase-167 Kali triage |
 | phase-177 | **Plugin ecosystem full review** — verify off-by-default, accurate on/off state in store/settings, enable/disable/delete correctness, delete-confirmation dialog on every path, invocation journal honesty + regression proof (all plugin tests green) | user-reported |
-| phase-178 | **Screenshot render suite** — Paparazzi (JVM, no emulator) PNGs for every screen × state × theme, saved to `visual-qa/screenshots/` curated baseline + documented artifact-upload path | user-reported |
+| phase-178 | **Share-sheet capture** - receive ACTION_SEND text/files from other apps into the vault via existing import/quarantine machinery (home-screen widget deferred, needs device) | user-reported |
+| phase-179 | **Reference-image layer** - insert a dimmed, non-inking photo underlay on the canvas (ROADMAP Phase-07 encouraged item), persisted per page, excluded from back-save/share, path-confined | user-reported |
+| phase-180 | **Real syntax highlighting for code blocks** via highlighted-kt (ROADMAP 21.8 deferred item, user-approved new dependency) in both markdown renderers, theme-aware, copy stays raw | user-reported |
+| phase-181 | **Screenshot render suite** - Paparazzi (JVM, no emulator) PNGs for every screen x state x theme, saved to `visual-qa/screenshots/` curated baseline + documented artifact-upload path | user-reported |
 
 ## How phases run
 
