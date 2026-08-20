@@ -1340,7 +1340,12 @@ fun HomeScreen(
                         } else {
                             if (selectedTab == 0) {
                                 when (pageViewMode) {
-                                    1 -> GalleryView(pages = activePageList, viewModel = viewModel, onOpenPage = onOpenPage)
+                                    1 -> GalleryView(
+                                        pages = activePageList,
+                                        viewModel = viewModel,
+                                        onOpenPage = onOpenPage,
+                                        onEditTags = { tagEditorTargetPage = it }
+                                    )
                                     2 -> KanbanBoardView(pages = activePageList, viewModel = viewModel, onOpenPage = onOpenPage)
                                     3 -> CalendarView(pages = activePageList, viewModel = viewModel, onOpenPage = onOpenPage)
                                     4 -> SpreadsheetTableView(pages = activePageList, viewModel = viewModel, onOpenPage = onOpenPage)

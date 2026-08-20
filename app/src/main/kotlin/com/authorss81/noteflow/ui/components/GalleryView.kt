@@ -11,7 +11,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Article
 import androidx.compose.material.icons.outlined.Brush
+import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Image
+import androidx.compose.material.icons.outlined.Label
+import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.PictureAsPdf
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.Schedule
@@ -30,6 +33,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.authorss81.noteflow.data.model.NotePageEntity
+import com.authorss81.noteflow.services.GalleryCardActionsPolicy
 import com.authorss81.noteflow.services.GalleryCardLayoutPolicy
 import com.authorss81.noteflow.services.GalleryTitleDisplayPolicy
 import com.authorss81.noteflow.ui.viewmodel.NoteflowViewModel
@@ -63,6 +67,7 @@ fun GalleryView(
     pages: List<NotePageEntity>,
     viewModel: NoteflowViewModel,
     onOpenPage: (NotePageEntity) -> Unit,
+    onEditTags: (NotePageEntity) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     LazyVerticalGrid(
@@ -77,7 +82,8 @@ fun GalleryView(
             GalleryCardItem(
                 page = page,
                 viewModel = viewModel,
-                onOpenPage = onOpenPage
+                onOpenPage = onOpenPage,
+                onEditTags = onEditTags
             )
         }
     }
@@ -88,7 +94,8 @@ fun GalleryView(
 private fun GalleryCardItem(
     page: NotePageEntity,
     viewModel: NoteflowViewModel,
-    onOpenPage: (NotePageEntity) -> Unit
+    onOpenPage: (NotePageEntity) -> Unit,
+    onEditTags: (NotePageEntity) -> Unit
 ) {
     val scheme = MaterialTheme.colorScheme
     val dateFormat = remember { SimpleDateFormat("MMM d, yyyy", Locale.getDefault()) }
@@ -180,12 +187,89 @@ private fun GalleryCardItem(
                         modifier = Modifier.weight(1f)
                     )
 
-                    if (page.pinned) {
+                    // Phase 186: pinned badge kept ~18dp (compact) + a ~28dp
+                    // MoreVert overflow menu with the SAME quick actions the list
+                    // view card exposes (togglePinPage / TagEditorDialog via
+                    // onEditTags / trashPage). The title takes `weight(1f)`+
+                    // ellipsis so the header row still fits the narrow grid column
+                    // at 360dp.
+                    if (GalleryCardActionsPolicy.showPinnedBadge(page.pinned)) {
                         Icon(
                             imageVector = Icons.Outlined.PushPin,
-                            contentDescription = "Pinned",
-                            tint = scheme.primary
+                            contentDescription = GalleryCardActionsPolicy.pinContentDescription(true),
+                            tint = scheme.primary,
+                            modifier = Modifier.size(18.dp)
                         )
+                        Spacer(modifier = Modifier.width(2.dp))
+                    }
+
+                    var menuExpanded by remember { mutableStateOf(false) }
+                    Box {
+                        IconButton(
+                            onClick = { menuExpanded = true },
+                            modifier = Modifier.size(28.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.MoreVert,
+                                contentDescription = "More options",
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = menuExpanded,
+                            onDismissRequest = { menuExpanded = false },
+                            scrollState = overflowMenuScrollState(),
+                            modifier = overflowMenuScrollModifier()
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text(GalleryCardActionsPolicy.pinMenuLabel(page.pinned)) },
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = Icons.Outlined.PushPin,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                },
+                                onClick = {
+                                    menuExpanded = false
+                                    viewModel.togglePinPage(page.id, page.pinned)
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(GalleryCardActionsPolicy.EDIT_TAGS_LABEL) },
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = Icons.Outlined.Label,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                },
+                                onClick = {
+                                    menuExpanded = false
+                                    onEditTags(page)
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        text = GalleryCardActionsPolicy.MOVE_TO_TRASH_LABEL,
+                                        color = scheme.error
+                                    )
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = Icons.Outlined.Delete,
+                                        contentDescription = null,
+                                        tint = scheme.error,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                },
+                                onClick = {
+                                    menuExpanded = false
+                                    viewModel.trashPage(page.id)
+                                }
+                            )
+                        }
                     }
                 }
 
