@@ -23,12 +23,14 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.Hyphens
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.authorss81.noteflow.data.model.NotePageEntity
+import com.authorss81.noteflow.services.GalleryCardLayoutPolicy
 import com.authorss81.noteflow.services.GalleryTitleDisplayPolicy
 import com.authorss81.noteflow.ui.viewmodel.NoteflowViewModel
 import java.text.SimpleDateFormat
@@ -39,8 +41,12 @@ import java.util.Locale
  * Phase 165: Gallery grid. Keeps the [LazyVerticalGrid] layout but tunes the
  * cells and gives each page a real, material card:
  *
- * - Cards use a fixed portrait 10:16 ("16:10" family, portrait) aspect ratio so
- *   the adaptive grid keeps balanced proportions on phones AND tablets.
+ * - Cards are CONTENT-DRIVEN (phase 184: the old rigid `aspectRatio(10f/16f)`
+ *   left a >60% dead band for short notes and clipped the footer at large font
+ *   scales). The card height is `heightIn(min = GalleryCardLayoutPolicy...)` —
+ *   a notebook-tile floor scaled with the user's font scale, never a strict
+ *   ratio — so the adaptive grid keeps balanced proportions on phones AND
+ *   tablets while short notes render compact tiles and large fonts never clip.
  * - Rounded corners (20 dp), tonal surfaceVariant container with a subtle
  *   primaryContainer wash that fades from the top, gentle 3 dp elevation.
  * - Rich preview: type badge, overflow-ellipsized title, first ~2-3 lines of
@@ -87,6 +93,13 @@ private fun GalleryCardItem(
     val scheme = MaterialTheme.colorScheme
     val dateFormat = remember { SimpleDateFormat("MMM d, yyyy", Locale.getDefault()) }
 
+    // Phase 184: minimum card height from the pure-JVM policy, scaled with the
+    // user's font scale so large-font content can never be clipped. It is a
+    // heightIn FLOOR, not a strict aspect ratio — content taller than the floor
+    // grows the card, and a short title + 1-2 preview lines renders a compact
+    // notebook tile with no 60% dead band.
+    val minCardHeight = GalleryCardLayoutPolicy.minCardHeightDp(LocalDensity.current.fontScale).dp
+
     val tags = remember(page.tags) {
         page.tags.split(",")
             .map { it.trim().removePrefix("#") }
@@ -99,20 +112,20 @@ private fun GalleryCardItem(
         onClick = { onOpenPage(page) },
         modifier = Modifier
             .fillMaxWidth()
-            .aspectRatio(10f / 16f),
+            .heightIn(min = minCardHeight),
         shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.cardColors(
             containerColor = scheme.surfaceVariant.copy(alpha = 0.55f)
         ),
         elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
     ) {
-        Box(modifier = Modifier.fillMaxSize()) {
-            // Subtle primaryContainer wash bleeding down from the top edge.
+        Box(modifier = Modifier.wrapContentHeight()) {
+            // Subtle primaryContainer wash bleeding down from the top edge. The
+            // wash fills whatever the content column measures (matchParentSize);
+            // it never drives the card height.
             Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .fillMaxHeight(0.5f)
-                    .align(Alignment.TopCenter)
+                    .matchParentSize()
                     .background(
                         Brush.verticalGradient(
                             listOf(
@@ -125,7 +138,7 @@ private fun GalleryCardItem(
 
             Column(
                 modifier = Modifier
-                    .fillMaxSize()
+                    .fillMaxWidth()
                     .padding(14.dp)
             ) {
                 // Header: type badge, title, pinned indicator.
@@ -179,27 +192,29 @@ private fun GalleryCardItem(
                 Spacer(modifier = Modifier.height(12.dp))
 
                 // Preview: first lines of text, or a graceful ink placeholder.
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                ) {
-                    val preview = page.extractedText?.trim().orEmpty()
-                    if (preview.isNotEmpty()) {
-                        Text(
-                            text = preview,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = scheme.onSurfaceVariant,
-                            maxLines = 3,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    } else {
+                // Content-driven height (phase 184): the preview no longer has a
+                // weight(1f) stretch that would soak up the old dead band — the
+                // text block is just its own lines (maxLines = 3) and the
+                // placeholder is a fixed compact band.
+                val preview = page.extractedText?.trim().orEmpty()
+                if (preview.isNotEmpty()) {
+                    Text(
+                        text = preview,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = scheme.onSurfaceVariant,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(84.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
                         Column(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(vertical = 4.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.Center
+                            modifier = Modifier.padding(vertical = 4.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
                         ) {
                             Box(
                                 modifier = Modifier
