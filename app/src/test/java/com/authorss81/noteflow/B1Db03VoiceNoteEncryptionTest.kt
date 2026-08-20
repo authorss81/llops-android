@@ -247,7 +247,7 @@ class B1Db03VoiceNoteEncryptionTest {
         }
 
         val stop = vm.substringAfter("fun stopRecording").substringBefore("fun startPlayback")
-        assertTrue("stop encrypts the finished AAC with the DEK", stop.contains("VoiceNoteCrypto.encryptRecordingFile(tempFile, blobFile, dek)"))
+        assertTrue("stop encrypts the finished AAC with the DEK", stop.contains("VoiceNoteCrypto.encryptRecordingFileDetailed(tempFile, blobFile, dek)"))
         assertTrue("stop reads the DEK at stop time (locked -> fails closed)", stop.contains("VaultKeyHolder.dek"))
         assertFalse("a failed encryption must NEVER return a result (plaintext destroyed)", stop.contains("filePath = tempFile"))
         assertTrue("the result path is the blob path", stop.contains("filePath = blobFile!!.absolutePath"))

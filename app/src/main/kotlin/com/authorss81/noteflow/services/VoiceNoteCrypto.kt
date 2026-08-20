@@ -3,6 +3,31 @@ package com.authorss81.noteflow.services
 import java.io.File
 
 /**
+ * Fine-grained outcome of an encrypt-a-recording attempt (phase-192). Lets the
+ * caller distinguish recoverable conditions (storage full, transient I/O/JCE)
+ * from structural refusals so the surface message is truthful instead of the
+ * one-size-fits-all "could not be saved securely".
+ */
+sealed interface VoiceEncryptOutcome {
+    /** The blob was fully written and the plaintext source is gone. */
+    object Saved : VoiceEncryptOutcome
+
+    data class Failed(val reason: VoiceEncryptFailure) : VoiceEncryptOutcome
+}
+
+/** Why an [encryptRecordingFileDetailed] attempt failed. */
+enum class VoiceEncryptFailure {
+    /** Source plaintext missing or over the [VoiceNoteCrypto.MAX_BLOB_BYTES] budget. */
+    SOURCE,
+    /** The blob name is not a real `.enc` target (would never decrypt). */
+    BLOB_TARGET,
+    /** Storage full ("No space left on device"). */
+    ENOSPC,
+    /** Any other I/O or JCE failure. */
+    IO_OR_CIPHER,
+}
+
+/**
  * B1-DB-3 (phase-54): the voice-note audio cryptor.
  *
  * Voice recordings used to be written straight to `filesDir/voice_notes` as
@@ -87,9 +112,24 @@ object VoiceNoteCrypto {
      * mirroring [decryptRecordingFile]'s guard). Returns true only when the
      * blob was fully written and the plaintext source is gone.
      */
-    fun encryptRecordingFile(plaintext: File, blob: File, dek: ByteArray): Boolean {
-        if (!plaintext.isFile || plaintext.length() > MAX_BLOB_BYTES) return false
-        if (!isEncryptedBlobName(blob.name)) return false
+    fun encryptRecordingFile(plaintext: File, blob: File, dek: ByteArray): Boolean =
+        encryptRecordingFileDetailed(plaintext, blob, dek) is VoiceEncryptOutcome.Saved
+
+    /**
+     * Detailed variant of [encryptRecordingFile] (phase-192): returns why a
+     * failed attempt failed so the caller can surface a truthful, non-alarming
+     * message (storage full vs transient I/O/JCE vs structural refusal). The
+     * same fail-closed semantics as the boolean form — a partial blob is always
+     * deleted, and a structural refusal (`SOURCE`, `BLOB_TARGET`) never touches
+     * the plaintext source (migration path dependency).
+     */
+    fun encryptRecordingFileDetailed(plaintext: File, blob: File, dek: ByteArray): VoiceEncryptOutcome {
+        if (!plaintext.isFile || plaintext.length() > MAX_BLOB_BYTES) {
+            return VoiceEncryptOutcome.Failed(VoiceEncryptFailure.SOURCE)
+        }
+        if (!isEncryptedBlobName(blob.name)) {
+            return VoiceEncryptOutcome.Failed(VoiceEncryptFailure.BLOB_TARGET)
+        }
         return try {
             val bytes = plaintext.readBytes()
             val combined = EncryptionService.encryptAad(bytes, dek, aadFor(blob.name))
@@ -102,14 +142,22 @@ object VoiceNoteCrypto {
                 // source cannot be removed the blob is not usable (the temp
                 // would linger unencrypted).
                 blob.delete()
-                return false
+                return VoiceEncryptOutcome.Failed(VoiceEncryptFailure.IO_OR_CIPHER)
             }
-            true
+            VoiceEncryptOutcome.Saved
         } catch (e: Exception) {
             try { blob.delete() } catch (_: Exception) {}
-            false
+            VoiceEncryptOutcome.Failed(classifyException(e))
         }
     }
+
+    /** Storage-full ("No space left on device") vs everything else. */
+    private fun classifyException(e: Exception): VoiceEncryptFailure =
+        if (e is java.io.IOException && (e.message?.contains("No space left") == true)) {
+            VoiceEncryptFailure.ENOSPC
+        } else {
+            VoiceEncryptFailure.IO_OR_CIPHER
+        }
 
     /**
      * Decrypts an `.enc` blob into a transient plaintext file for playback.

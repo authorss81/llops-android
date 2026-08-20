@@ -249,23 +249,55 @@ class VoiceNoteManager(private val context: Context) {
         val duration = _recordingElapsedMs.value
         val amplitudes = _waveformAmplitudes.value
 
+        // Phase 192: resolve the stop-time DEK BEFORE the save. A passwordless
+        // vault's device-wrapped copy IS the boot credential by design (the DB
+        // factory re-reads it on every open — NoteflowDatabase.kt:440-444, and
+        // LockedOpenGuard gates passwordless as "still re-reads its
+        // device-wrapped copy"), so a cleared in-memory holder must NOT fail the
+        // save: it is re-read (never minted, never a locked password-vault
+        // bypass). A genuinely-locked PASSWORD vault (DEK zeroized mid-recording)
+        // resolves to LockedVault and stays fail-closed. Any re-read is synced
+        // back into the holder so the gate below and the later attach/flush use
+        // the exact same key.
+        val stopTimeKey = VoiceRecordingSavePolicy.resolveStopTimeKey(
+            inMemoryDek = VaultKeyHolder.dek,
+            vaultHasPassword = com.authorss81.noteflow.services.SettingsManager(context.applicationContext).hasMasterPassword,
+            passwordlessReader = { com.authorss81.noteflow.services.SecurityService.forDevice(context).readDek() }
+        )
+        stopTimeKey.key?.let { VaultKeyHolder.dek = it }
+        val dek = VaultKeyHolder.dek
+
         // B1-DB-3 (phase-54): encrypt the finished AAC into the vault-DEK-wrapped
         // `.enc` blob NOW and destroy the plaintext temp. A locked vault (DEK
         // zeroized mid-recording) fails closed: the plaintext temp is deleted and
         // nothing is persisted rather than leaking raw audio at rest.
-        val dek = VaultKeyHolder.dek
-        val encrypted = blobFile != null && dek != null &&
-            VoiceNoteCrypto.encryptRecordingFile(tempFile, blobFile, dek)
+        val saveOutcome = if (blobFile != null && dek != null) {
+            VoiceNoteCrypto.encryptRecordingFileDetailed(tempFile, blobFile, dek)
+        } else null
+        val saved = saveOutcome is VoiceEncryptOutcome.Saved
         currentOutputFile = null
         currentBlobFile = null
-        if (!encrypted) {
+        if (!saved) {
             Log.w("VoiceNoteManager", "Recording could not be encrypted — plaintext temp destroyed")
-            _recordingError.value = "The recording could not be saved securely. Please try again."
-            // R2-b2b1-UI-05: this is the DEK-null (locked) / encryption-failure
-            // path — a finished recording was destroyed. Flag it so `release()`
-            // reports the discard and the editor re-surfaces the notice through
-            // the persistent snackbar pipeline.
+            // R2-b2b1-UI-05: the encrypted=false path (a finished recording was
+            // destroyed) — flag it so `release()` reports the discard and the
+            // editor re-surfaces the notice through the persistent snackbar
+            // pipeline.
             discardOnRelease = true
+            // B1-DB-3 (phase-192): the plaintext temp must never outlive a
+            // failed save — delete it NOW (fail closed) instead of letting it
+            // linger in cacheDir until the next record-start/release sweep.
+            try { tempFile.delete() } catch (_: Exception) {}
+            // Phase 192: the generic "could not be saved securely" wording is
+            // reserved for the GENUINELY-LOCKED vault; recoverable conditions
+            // (storage full / transient I/O-JCE) and the anomalous
+            // passwordless missing-key state get a truthful, non-alarming
+            // message from the policy.
+            _recordingError.value = if (stopTimeKey is VoiceRecordingSavePolicy.StopTimeKey.LockedVault) {
+                "The recording could not be saved securely. Please try again."
+            } else {
+                VoiceRecordingSavePolicy.messageFor(stopTimeKey, saveOutcome)
+            }
             return@synchronized null
         }
 
