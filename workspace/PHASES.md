@@ -48,6 +48,7 @@ painting engine, free features).
 | phase-174 | Feature: reading & authoring UX — note stats bar, outline quick-jump in reader mode, wiki-link autocomplete + slash-menu insert | phase-161 UI/UX bucket |
 | phase-175 | **Move ML Kit OCR + translation OUT of the base APK into the signature-verified downloadable-plugin runtime** (R2-KS-21 MEDIUM — `mlkit-google-ocr-models/` assets + OCR/translate JNI libs + `translate_models_metadata.json` in payload; base-APK-size hard constraint; 170 covers lingua/ABI only, this is the dedicated ML Kit move-out) | phase-167 Kali triage |
 | phase-176 | **Release packaging hygiene: exclude `DebugProbesKt.bin` / `kotlin-tooling-metadata.json` / `firebase-*.properties` from the release APK + retain R8 `mapping.txt` for forensic back-mapping** (R2-KS-27 LOW + R2-KS-24 INFO; one area; workflow archival deferred — no `.github/workflows/` edits) | phase-167 Kali triage |
+| phase-177 | **Plugin ecosystem full review** — verify off-by-default, accurate on/off state in store/settings, enable/disable/delete correctness, delete-confirmation dialog on every path, invocation journal honesty + regression proof (all plugin tests green) | user-reported |
 
 ## How phases run
 
