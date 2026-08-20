@@ -62,25 +62,33 @@ a snapshot of an unreadable page is never stored, never silent.
 
 `gradle assembleDebug` green. `Phase182ExportReadLockBoundaryTest` (9 tests):
 
-- **export→Home→re-enter**: password vault re-derives the SAME DEK on every
-  unlock (PBKDF2 deterministic) — a real AES-GCM round trip decrypts the
-  unchanged ciphertext to the original plaintext, never the marker.
-- a mismatched DEK fails GCM auth (failed-closed), never silently installing a
-  stranded row.
+- **export→Home→re-enter is proven at the byte level**: the test writes the
+  field-encrypted rows to a temp snapshot file (the shape of `exportBackup`'s
+  read-only byte-verbatim passthrough), then "re-enters" by re-deriving the SAME
+  DEK (PBKDF2 deterministic) and decrypting the unchanged ciphertext to the
+  ORIGINAL plaintext — never the marker. A mismatched DEK fails GCM auth
+  (failed-closed), never silently installing a stranded row.
 - `createNoteVersion` refuses the marker (title + extractedText, guard before
   encrypt) and the VM surfaces the guidance — source pins.
 - `ImportExportService` never calls `closeDatabase`/`reopenDatabase` — exports
   are read-only passthroughs — source pin.
-- `DocumentPdfExportPolicy` never undercounts (120-page source with a 4-page
-  window ⇒ 120 pages; stroke pages pull the floor up; degenerate inputs floor
-  at 1).
-- editor call site uses the policy fed by `pdfTotalPages` and threads
-  `sourceFilePath`; the old `maxOf(1, pdfPageBitmaps.size)` is gone — source
+- `DocumentPdfExportPolicy` never undercounts: 120-page source with a 4-page
+  window ⇒ 120 pages; the highest stroke page pulls the floor up; sticky notes /
+  media embeds beyond both contribute their page too; degenerate inputs floor at
+  1 (policy + item-page tests).
+- editor call site uses the policy fed by the page count RE-DERIVED from the
+  source at export time (`getPdfPageCount` / `imagePageCountForExport`,
+  closing the async-load race where a tap before the initial decode could still
+  export the `pdfTotalPages = 1` default) and threads `sourceFilePath`; the old
+  `maxOf(1, pdfPageBitmaps.size, ...)` is gone — source pins.
+- export loop iterates `0 until count` with per-page source fallback + template
+  background; tall multi-page images are sliced per page
+  (`renderImageSliceForPage`, mirroring the editor canvas, never the whole image
+  stamped onto each page) and the loop recycles ONLY its own allocations — the
+  caller's in-window cached bitmaps stay live on the editor screens — source
   pins.
-- export loop iterates `0 until count` with per-page source fallback +
-  template background — source pins.
 
-Full suite: **2424 tests, 1 pre-existing `Phase148UiFailureTextScrubTest`
+Full suite: **2426 tests, 1 pre-existing `Phase148UiFailureTextScrubTest`
 UNC-path failure** (untouched; reproduced in isolation on clean code —
 matches the documented pre-existing failure; `WikiLinkParserCacheUnitTest`
 timing flake passes in isolation). No schema change, no new deps,

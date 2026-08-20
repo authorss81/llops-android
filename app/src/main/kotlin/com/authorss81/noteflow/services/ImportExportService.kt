@@ -188,6 +188,57 @@ object ImportExportService {
         }
     }
 
+    /**
+     * Phase-182 review-fix (#3): renders the [pageIdx]'th slice of a tall
+     * multi-page IMAGE source (the source of `pageCountNeeded` > 1 in the editor),
+     * mirroring the editor canvas's own slice (AnnotationCanvas:1803-1823) instead
+     * of stamping the full image onto every page. The page count is computed from
+     * the source normalized to 1080-wide / 1528-tall pages
+     * (EditorScreen:793-801), so the per-page band is exactly one page height of
+     * image content starting at `pageIdx * band`, in the same homogeneous
+     * coordinate space regardless of the decode's resolution. Page 0 keeps the
+     * historical whole-image behavior (the caller owns and recycles the returned
+     * bitmap). A page beyond the image's last band returns null — the export loop
+     * then falls back to the template background, so no page is ever blank and no
+     * page repeats the whole image.
+     */
+    private fun renderImageSliceForPage(sourceFilePath: String, pageIdx: Int): android.graphics.Bitmap? {
+        if (pageIdx < 0) return null
+        val full = decodeImageSampled(sourceFilePath, maxLongEdge = 4096) ?: return null
+        val imgW = full.width
+        val imgH = full.height
+        if (imgW <= 0 || imgH <= 0) {
+            full.recycle()
+            return null
+        }
+        if (pageIdx == 0) return full
+        return try {
+            val pageWidth = 1080
+            val pageHeight = 1528
+            val scale = pageWidth.toFloat() / imgW
+            val bandHeightInImgPx = pageHeight / scale
+            val srcY = pageIdx * bandHeightInImgPx
+            if (srcY >= imgH) {
+                null
+            } else {
+                val bandH = minOf(bandHeightInImgPx, imgH - srcY)
+                val page = android.graphics.Bitmap.createBitmap(
+                    pageWidth, pageHeight, android.graphics.Bitmap.Config.ARGB_8888
+                )
+                val canvas = android.graphics.Canvas(page)
+                canvas.drawColor(android.graphics.Color.WHITE)
+                val src = android.graphics.Rect(0, srcY.toInt(), imgW, (srcY + bandH).toInt())
+                val dstH = (bandH * scale).toInt()
+                canvas.drawBitmap(full, src, android.graphics.Rect(0, 0, pageWidth, dstH), null)
+                page
+            }
+        } catch (e: Exception) {
+            null
+        } finally {
+            full.recycle()
+        }
+    }
+
     fun renderPageInkToSvg(strokes: List<com.authorss81.noteflow.data.model.Stroke>, width: Int = 1080, height: Int = 1528): String {
         val sb = StringBuilder()
         sb.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
@@ -319,11 +370,18 @@ object ImportExportService {
 
             val count = maxOf(1, totalPages)
             for (pageIdx in 0 until count) {
-                val bg = bgBitmaps[pageIdx] ?: if (!sourceFilePath.isNullOrBlank()) {
+                // Phase-182 review-fix: keep a reference to the CALLER's cached
+                // bitmap so the loop never recycles it — those objects are the same
+                // instances the editor is still displaying (pdfPageBitmaps /
+                // activeRawBitmapMap), so a recycle would corrupt the on-screen
+                // pages after the export returns. Only loop-ALLOCATED per-page
+                // source re-renders are recycled below.
+                val cachedBg = bgBitmaps[pageIdx]
+                val bg = cachedBg ?: if (!sourceFilePath.isNullOrBlank()) {
                     if (sourceFilePath.lowercase().endsWith(".pdf")) {
                         renderPdfPageToBitmap(sourceFilePath, pageIdx)
                     } else {
-                        decodeImageSampled(sourceFilePath, maxLongEdge = 4096)
+                        renderImageSliceForPage(sourceFilePath, pageIdx)
                     }
                 } else null
 
@@ -357,9 +415,12 @@ object ImportExportService {
                 pdfPage.canvas.drawBitmap(bitmap, 0f, 0f, null)
                 pdfDoc.finishPage(pdfPage)
                 bitmap.recycle()
-                // The source background is a fresh (possibly sampled) decode per
-                // page; release it so multi-page exports hold only one at a time.
-                bg?.recycle()
+                // Recycle ONLY the bitmaps THIS loop allocated (per-page source
+                // re-renders). The caller's in-window cached bitmaps are still live
+                // on the editor screens and must never be recycled here.
+                if (bg != null && bg !== cachedBg) {
+                    bg.recycle()
+                }
             }
 
             FileOutputStream(outFile).use { pdfDoc.writeTo(it) }

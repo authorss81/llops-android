@@ -30,26 +30,28 @@ import org.junit.Test
  *  - a password vault re-derives the SAME DEK on every unlock (PBKDF2 is
  *    deterministic), so "export → Home → re-enter" (lock/unlock session
  *    boundary) decrypts the unchanged ciphertext back to the ORIGINAL plaintext,
- *    never the marker (behavioral, real AES-GCM);
+ *    never the marker (behavioral: a real AES-GCM round trip across a
+ *    byte-verbatim export snapshot written to disk and read back — the shape of
+ *    `exportBackup`'s read-only passthrough);
  *  - "Export Document as PDF" must export EVERY source page: the call site now
- *    computes the page count from the REAL source count
- *    ([DocumentPdfExportPolicy.pageCountForExport], fed by `pdfTotalPages`) — not
- *    the memory-bounded visible render window — and threads `sourceFilePath` so
- *    the export loop's per-page `renderPdfPageToBitmap`/`decodeImageSampled`
- *    fallback can draw every page beyond the window (source-pinned).
+ *    computes the page count from the REAL source count re-derived at export
+ *    time ([DocumentPdfExportPolicy.pageCountForExport], fed by `pdfTotalPages`
+ *    plus a fresh `getPdfPageCount` / `imagePageCountForExport`) plus the highest
+ *    stroke AND sticky-note/media-embed page — not the memory-bounded visible
+ *    render window — and threads `sourceFilePath` so the export loop's per-page
+ *    fallback can draw every page beyond the window (PDFs via
+ *    `renderPdfPageToBitmap`, tall images as per-page SLICES via
+ *    `renderImageSliceForPage`, never the whole image stamped onto each page,
+ *    and the loop recycles ONLY its own allocations — never the caller's live
+ *    window cache). All source-pinned.
  */
 class Phase182ExportReadLockBoundaryTest {
 
     // ---- export→Home→re-enter: the session boundary keeps rows readable ----
 
     @Test
-    fun `export this session then re-enter derives the same dek and decrypts the original plaintext never the marker`() {
-        // A password vault derives its DEK from password+salt on every unlock;
-        // PBKDF2WithHmacSHA256 is deterministic, so session 2 must re-derive the
-        // EXACT key that wrote the ciphertext in session 1. This is the mechanism
-        // that makes "export → Home (lock on ON_STOP) → unlock" safe: the reopen
-        // uses the same DEK, so the unchanged ciphertext decrypts to the original
-        // plaintext (the phase-169 re-key crash can never be reached).
+    fun `byte verbatim export snapshot then re enter with the same dek decrypts the original plaintext never the marker`() {
+        // "Session 1": a password vault derives its DEK from password+salt.
         val password = "correct horse battery staple 42"
         val salt = EncryptionService.generateSalt()
 
@@ -58,8 +60,7 @@ class Phase182ExportReadLockBoundaryTest {
         val originalTitle = "Meeting notes with launch decision"
         val originalBody = "# Heading\nBody text with ünïcode and secrets."
 
-        // Session 1 (locked-in content): field-encrypt with the per-record AAD the
-        // read path uses.
+        // Field-encrypt with the per-record AAD the read path uses.
         val titleCipher = EncryptionService.encryptField(
             originalTitle.toByteArray(), session1Dek, "pages", rowId, "title"
         )
@@ -67,32 +68,48 @@ class Phase182ExportReadLockBoundaryTest {
             originalBody.toByteArray(), session1Dek, "pages", rowId, "extractedText"
         )
 
-        // The export paths pass ciphertext through VERBATIM (see the source-pin
-        // below: ImportExportService never closes/reopens the DB) — the bytes under
-        // the original DEK are what come back on re-import.
+        // "Export": the export surface is a byte-verbatim passthrough
+        // (ImportExportService never reads/decrypts/re-encrypts page fields and
+        // never closes/reopens the DB — source-pinned below). Simulate it by
+        // writing the ciphertext rows to disk and reading them back unchanged.
+        val snapshot = File.createTempFile("phase182-export", ".snap")
+        try {
+            snapshot.outputStream().buffered().use { out ->
+                out.write(titleCipher.toByteArray(Charsets.UTF_8))
+                out.write('\n'.code)
+                out.write(bodyCipher.toByteArray(Charsets.UTF_8))
+            }
 
-        // Re-enter: password vault re-derives the SAME key on every unlock.
-        val session2Dek = EncryptionService.deriveKey(password, salt)
-        assertTrue(
-            "unlock must re-derive the identical DEK",
-            session1Dek.contentEquals(session2Dek)
-        )
+            // "Re-enter": the password vault re-derives the SAME DEK on every
+            // unlock (PBKDF2WithHmacSHA256 is deterministic), so the bytes that
+            // rode through the export decrypt under session 2's re-derived key.
+            val session2Dek = EncryptionService.deriveKey(password, salt)
+            assertTrue(
+                "unlock must re-derive the identical DEK",
+                session1Dek.contentEquals(session2Dek)
+            )
 
-        val decryptedTitle = String(
-            EncryptionService.decryptField(titleCipher, session2Dek, "pages", rowId, "title"),
-            Charsets.UTF_8
-        )
-        val decryptedBody = String(
-            EncryptionService.decryptField(bodyCipher, session2Dek, "pages", rowId, "extractedText"),
-            Charsets.UTF_8
-        )
+            val snapshotText = snapshot.readText()
+            val lines = snapshotText.split('\n')
+            assertEquals(2, lines.size)
+            val decryptedTitle = String(
+                EncryptionService.decryptField(lines[0], session2Dek, "pages", rowId, "title"),
+                Charsets.UTF_8
+            )
+            val decryptedBody = String(
+                EncryptionService.decryptField(lines[1], session2Dek, "pages", rowId, "extractedText"),
+                Charsets.UTF_8
+            )
 
-        for (plain in listOf(decryptedTitle, decryptedBody)) {
-            assertNotEquals("re-entered session must never render the marker", DecryptFailurePolicy.UNREADABLE_MARKER, plain)
-            assertFalse(DecryptFailurePolicy.isUnreadableMarker(plain))
+            for (plain in listOf(decryptedTitle, decryptedBody)) {
+                assertNotEquals("re-entered session must never render the marker", DecryptFailurePolicy.UNREADABLE_MARKER, plain)
+                assertFalse(DecryptFailurePolicy.isUnreadableMarker(plain))
+            }
+            assertEquals(originalTitle, decryptedTitle)
+            assertEquals(originalBody, decryptedBody)
+        } finally {
+            snapshot.delete()
         }
-        assertEquals(originalTitle, decryptedTitle)
-        assertEquals(originalBody, decryptedBody)
     }
 
     @Test
@@ -191,6 +208,20 @@ class Phase182ExportReadLockBoundaryTest {
         // Degenerate inputs floor at 1 page.
         assertEquals(1, DocumentPdfExportPolicy.pageCountForExport(0, -1))
         assertEquals(1, DocumentPdfExportPolicy.pageCountForExport(-5, -1))
+        // A sticky note / media embed on page 10 of a 3-page source means page 11
+        // must exist so its content is never silently dropped from the export.
+        assertEquals(11, DocumentPdfExportPolicy.pageCountForExport(3, 0, 10))
+        // Items under both the source count and the highest stroke page don't inflate.
+        assertEquals(120, DocumentPdfExportPolicy.pageCountForExport(120, 60, 5))
+        assertEquals(120, DocumentPdfExportPolicy.pageCountForExport(120, 0, 0))
+    }
+
+    @Test
+    fun `page count policy also covers sticky note and media embed page indices`() {
+        assertEquals(11, DocumentPdfExportPolicy.pageCountForExport(3, 0, 10))
+        assertEquals(5, DocumentPdfExportPolicy.pageCountForExport(1, 4, 2))
+        assertEquals(120, DocumentPdfExportPolicy.pageCountForExport(120, 3, 2))
+        assertEquals(1, DocumentPdfExportPolicy.pageCountForExport(1, 0, -1))
     }
 
     @Test
@@ -204,9 +235,25 @@ class Phase182ExportReadLockBoundaryTest {
         )
         assertEquals("must not fall back to the windowed bitmap count", 0, Regex("totalPages = maxOf\\(1, pdfPageBitmaps").findAll(editor).count())
         assertTrue(
-            "call site must compute the REAL page count via the policy fed by pdfTotalPages",
+            "call site must compute the REAL page count via the policy",
             editor.contains("DocumentPdfExportPolicy.pageCountForExport(") &&
-                editor.contains("sourcePdfTotalPages = pdfTotalPages")
+                editor.contains("sourcePdfTotalPages = exportSourcePages")
+        )
+        // Review-fix (#4): the async-loaded pdfTotalPages must be re-derived from
+        // the source file at export time (PDF count + tall-image page capacity),
+        // so a tap before the initial load finishes cannot still under-count.
+        assertTrue(
+            "call site must re-derive the PDF page count from the source at export time",
+            editor.contains("getPdfPageCount(page.sourceFilePath)")
+        )
+        assertTrue(
+            "call site must re-derive the tall-image page capacity at export time",
+            editor.contains("imagePageCountForExport(page.sourceFilePath)")
+        )
+        // Review-fix (#5): sticky notes / media embeds contribute their pages too.
+        assertTrue(
+            "call site must count sticky-note and media-embed page indices",
+            editor.contains("maxItemPageToExport")
         )
         assertTrue(
             "call site must thread sourceFilePath so out-of-window pages re-render from source",
@@ -231,12 +278,38 @@ class Phase182ExportReadLockBoundaryTest {
             ie.contains("renderPdfPageToBitmap(sourceFilePath, pageIdx)")
         )
         assertTrue(
-            "out-of-window pages from tall images must be sampled-decoded",
-            ie.contains("decodeImageSampled(sourceFilePath")
+            "out-of-window tall-image pages must be sliced per page, not stamped whole",
+            ie.contains("renderImageSliceForPage(sourceFilePath, pageIdx)")
         )
         assertTrue(
             "a page with no bitmap and no source must still get a template background (never blank)",
             ie.contains("drawTemplateBackground(canvas, template")
+        )
+    }
+
+    @Test
+    fun `tall image export slices each page and the loop never recycles the editor window cache`() {
+        val ie = File(repoRoot(), "app/src/main/kotlin/com/authorss81/noteflow/services/ImportExportService.kt")
+            .readText()
+        assertTrue(
+            "a tall multi-page image must have a per-page slice renderer",
+            ie.contains("private fun renderImageSliceForPage")
+        )
+        assertTrue(
+            "the slice must crop one page-height band per page index",
+            ie.contains("srcY = pageIdx * bandHeightInImgPx")
+        )
+        assertTrue(
+            "out-of-range trailing pages must fall back to the template, never repeat the whole image",
+            ie.contains("if (srcY >= imgH)")
+        )
+        assertTrue(
+            "the loop must only recycle its own per-page allocations — the caller's cached window bitmap stays live on the editor screens",
+            ie.contains("bg !== cachedBg")
+        )
+        assertTrue(
+            "the exporter must not blind-recycle the caller's cached background",
+            ie.contains("if (bg != null && bg !== cachedBg)")
         )
     }
 

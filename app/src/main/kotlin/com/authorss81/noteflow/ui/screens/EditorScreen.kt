@@ -1739,9 +1739,35 @@ fun EditorScreen(
                                     // per-page background fallback re-renders every
                                     // page's source (PDF page N via renderPdfPageToBitmap,
                                     // tall images via sampled decode).
+                                    // Phase-182 review-fix (#4): those page counts load
+                                    // ASYNCHRONOUSLY (LaunchedEffect+IO); re-derive them
+                                    // from the source file at export time so a tap before
+                                    // the initial decode finishes cannot still under-count
+                                    // down to the pdfTotalPages=1 default. Review-fix (#5):
+                                    // sticky notes / media embeds beyond both the source
+                                    // count and the highest stroke page are counted too,
+                                    // so their page can never be silently dropped.
+                                    val exportSourcePages = if (!page.sourceFilePath.isNullOrEmpty()) {
+                                        val fromSource = withContext(Dispatchers.IO) {
+                                            if (isPdf) {
+                                                getPdfPageCount(page.sourceFilePath).coerceAtLeast(1)
+                                            } else if (page.sourceFileType?.equals("image", ignoreCase = true) == true) {
+                                                imagePageCountForExport(page.sourceFilePath).coerceAtLeast(1)
+                                            } else {
+                                                1
+                                            }
+                                        }
+                                        maxOf(pdfTotalPages, fromSource)
+                                    } else {
+                                        pdfTotalPages
+                                    }
                                     val totalPages = com.authorss81.noteflow.services.DocumentPdfExportPolicy.pageCountForExport(
-                                        sourcePdfTotalPages = pdfTotalPages,
-                                        maxStrokePageToExport = strokes.maxOfOrNull { it.pdfPage } ?: 0
+                                        sourcePdfTotalPages = exportSourcePages,
+                                        maxStrokePageToExport = strokes.maxOfOrNull { it.pdfPage } ?: 0,
+                                        maxItemPageToExport = maxOf(
+                                            stickyNotes.maxOfOrNull { it.pdfPage } ?: 0,
+                                            mediaEmbeds.maxOfOrNull { it.pdfPage } ?: 0
+                                        )
                                     )
                                     val androidBgBitmaps = pdfPageBitmaps.mapValues { it.value.asAndroidBitmap() }
                                     val file = ImportExportService.exportDocumentAsPdf(
@@ -5474,6 +5500,23 @@ private fun getPdfPageCount(filePath: String): Int {
     } catch (e: Exception) {
         0
     }
+}
+
+/**
+ * Phase-182 review-fix (#4): synchronously re-derives the editor's
+ * `pageCountNeeded` for a tall IMAGE source (EditorScreen matching the
+ * LaunchedEffect decode geometry: width normalized to 1080px, page height
+ * 1528px) from the file's dimensions only — no full decode — so the document
+ * PDF exporter can compute its page count without racing the async image load.
+ * Mirrors EditorScreen `:793-801` exactly.
+ */
+private fun imagePageCountForExport(filePath: String): Int {
+    val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    android.graphics.BitmapFactory.decodeFile(filePath, bounds)
+    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return 1
+    val scale = 1080f / bounds.outWidth
+    val scaledHeight = bounds.outHeight * scale
+    return Math.ceil((scaledHeight / 1528f).toDouble()).toInt().coerceAtLeast(1)
 }
 
 /**

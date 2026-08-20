@@ -113,10 +113,18 @@
 > `NoteRepository.kt:1578`), and `NoteflowViewModel.createNoteVersion` surfaces
 > `DecryptFailurePolicy.UNREADABLE_ROW_GUIDANCE`. "Export Document as PDF" no
 > longer undercounts: new pure-JVM `services/DocumentPdfExportPolicy.kt`
-> (`pageCountForExport` = `max(1, sourcePdfTotalPages, strokesBased)`) fed by
-> `pdfTotalPages` — never the memory-bounded `pdfPageBitmaps` window — and the
-> EditorScreen call site passes `sourceFilePath` so the exporter's
-> `renderPdfPageToBitmap`/`decodeImageSampled` fallback draws every page. Tests:
+> (`pageCountForExport` = `max(1, sourcePdfTotalPages, strokesBased,
+> itemsBased)`) — the EditorScreen call site feeds it a page count it
+> RE-DERIVES from the source at export time (`getPdfPageCount` /
+> `imagePageCountForExport`, closing the async-load race where a tap before the
+> initial decode could still export the `pdfTotalPages = 1` default), plus the
+> highest stroke AND sticky-note/media-embed page — never the memory-bounded
+> `pdfPageBitmaps` window — and threads `sourceFilePath` so the exporter's
+> per-page fallback draws every page: PDFs via `renderPdfPageToBitmap`, tall
+> images as per-page SLICES via `renderImageSliceForPage` (mirroring the canvas,
+> never the whole image stamped onto each page), template background otherwise,
+> and the loop recycles ONLY its own allocations — never the caller's in-window
+> cache the editor is still displaying. Tests:
 > `Phase182ExportReadLockBoundaryTest` (9).
 
 > **Implemented in phase-172** (2026-08-19, editor & canvas productivity, see
