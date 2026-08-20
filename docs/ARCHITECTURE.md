@@ -20,7 +20,7 @@
 | `plugins/store/` | `PluginStoreCatalog.kt`, `PluginStoreController.kt`, `RemotePluginInstaller.kt`, `PluginInstallStore.kt` | Plugin Store lifecycle (bundled catalog + remote install) |
 | `plugins/<capability>/` | `ocr/MlKitOcrEngine.kt`, `websearch/DuckDuckGoWebSearchPlugin.kt`, `translation/MlKitTranslatorEngine.kt`, `inktos/InkToShapePlugin.kt`, `weather/`, `dictation/`, `readaloud/`, `citation/`, `filetransfer/LocalSendFileTransferPlugin.kt`, ... | One impl per capability, registered in `PluginRegistry` |
 | `ui/components/` | `AnnotationCanvas.kt` (4535 lines), `AgslShaders.kt`, `ShaderCapabilityHelper.kt`, `PenNibVisualPreview.kt`, `LayerBitmapCache.kt`, `BrushStudioDialog.kt`, `PluginStoreDialog.kt`, `GalleryView.kt` | Compose components: canvas, AGSL shaders, dialogs; gallery grid (`GalleryCardItem` redesigned in phase-165) |
-| `ui/screens/` | `EditorScreen.kt` (4805), `MarkdownPreviewScreen.kt`, `HomeScreen.kt`, `KnowledgeGraphScreen.kt`, `LockScreen.kt` | Top-level screens |
+| `ui/screens/` | `EditorScreen.kt` (6181), `MarkdownPreviewScreen.kt`, `HomeScreen.kt`, `KnowledgeGraphScreen.kt`, `LockScreen.kt` | Top-level screens |
 | `ui/viewmodel/` | `NoteflowViewModel.kt` (~1500) | God-ViewModel: DB, security, plugins, all state flows |
 | `theme/` | `Theme.kt`, `GlassSurfaces.kt`, `GlassThemeMath.kt`, `Motion.kt`, `Type.kt`, `Color.kt` | Material3 + frosted-glass design system |
 | `utils/` | `ConstantTime.kt`, `BitmapPool.kt`, `DeviceCompatibilityManager.kt`, `WikiLinkParser.kt` (dup, see notes) | Pure helpers |
@@ -279,6 +279,28 @@
 > Move/resize delta math and pinch-zoom untouched. Tests:
 > `Phase193ResizeHandleVisibilityTest` (10, pure JVM + source pins). No schema
 > change, no new deps.
+
+> **Implemented in phase-194** (2026-08-20, Undo/Redo dim + Canvas & Paper Options
+> sheet clipping, see `workspace/phase-194/REPORT.md`): the canvas Undo/Redo
+> buttons are no longer perpetually bright — on BOTH ink bars
+> (`InkBarPortraitBar` `EditorScreen.kt:3206-3233`, `InkBarLandscapeBar`
+> `:3358-3387`) they render `IconButton(enabled = canUndo/canRedo, …)` with the
+> icon tint `onSurfaceVariant.copy(alpha = policy.iconAlpha(...))`, so an empty
+> stack dims to M3's disabled-content alpha 0.38f AND drops the click; the flags
+> come from the new pure-JVM `services/CanvasUndoRedoStatePolicy.kt` decision
+> table (`canUndo`/`canRedo` = `size > 0`, `iconAlpha`, `DISABLED_ALPHA=0.38f`,
+> plus `afterUndo`/`afterRedo`/`afterNewStroke` oracle mirrors) computed at the
+> `FloatingToolDock` call site (`EditorScreen.kt:2285-2286`) and forwarded through
+> the dock to both bars. The undo/redo DATA logic (30-cap, drop-last,
+> redo-clear-on-new-stroke) is untouched. Also, `CanvasSettingsBottomSheet`'s
+> content `Column` (`EditorScreen.kt:4700-4709`) gained
+> `.verticalScroll(rememberScrollState())` — it previously wrapped its very tall
+> option list in a non-scrolling Column, clipping every option below the fold
+> (second template row Cornell/Meeting/To-Do Grid, custom bg, paper colour, page
+> management, minimap, GPU brushes, shape auto-snap, two-finger undo, quick-color
+> ring, haptics, vibrancy, presets, Reset) on phone screens; layout/content and
+> the template list are otherwise unchanged. Tests: `Phase194UndoRedoToolbarStateTest`
+> (13, pure JVM + source pins). No schema change, no new deps.
 
 > **Implemented in phase-172** (2026-08-19, editor & canvas productivity, see
 > `workspace/phase-172/REPORT.md`): three pure-JVM policies +
