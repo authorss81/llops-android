@@ -2278,6 +2278,12 @@ fun EditorScreen(
                     },
                     onUndo = { handleUndo() },
                     onRedo = { handleRedo() },
+                    // Phase 194: the toolbar dims/disable Undo+Redo when their
+                    // stack is empty (policy-owned decision table; the button
+                    // appearance reacts to stack size changes as strokes are
+                    // added/undone/redone/cleared).
+                    canUndo = com.authorss81.noteflow.services.CanvasUndoRedoStatePolicy.canUndo(undoStack.size),
+                    canRedo = com.authorss81.noteflow.services.CanvasUndoRedoStatePolicy.canRedo(redoStack.size),
                     onQuickTool = { tool ->
                         toolbarState = FloatingToolbarState.COLLAPSED
                         currentTool = tool
@@ -2803,6 +2809,10 @@ private fun FloatingToolDock(
     onSettingsClick: () -> Unit,
     onUndo: () -> Unit,
     onRedo: () -> Unit,
+    // Phase 194: whether each undo/redo action is available (non-empty stack) —
+    // drives the enabled state + dimmed tint of the two ink-bar buttons.
+    canUndo: Boolean,
+    canRedo: Boolean,
     onQuickTool: (StrokeTool) -> Unit
 ) {
     val reduceMotion = com.authorss81.noteflow.theme.LocalReduceMotion.current
@@ -2995,6 +3005,8 @@ private fun FloatingToolDock(
                             onSettingsClick = onSettingsClick,
                             onUndo = onUndo,
                             onRedo = onRedo,
+                            canUndo = canUndo,
+                            canRedo = canRedo,
                             onExpandToggled = { expanded = !expanded }
                         )
                     }
@@ -3013,6 +3025,8 @@ private fun FloatingToolDock(
                             onSettingsClick = onSettingsClick,
                             onUndo = onUndo,
                             onRedo = onRedo,
+                            canUndo = canUndo,
+                            canRedo = canRedo,
                             expanded = expanded,
                             onExpandToggled = { expanded = !expanded }
                         )
@@ -3062,6 +3076,9 @@ private fun InkBarPortraitBar(
     onSettingsClick: () -> Unit,
     onUndo: () -> Unit,
     onRedo: () -> Unit,
+    // Phase 194: non-empty-stack flags → enabled + tint on the Undo/Redo buttons.
+    canUndo: Boolean,
+    canRedo: Boolean,
     expanded: Boolean,
     onExpandToggled: () -> Unit
 ) {
@@ -3187,11 +3204,33 @@ private fun InkBarPortraitBar(
         }
 
         // 7. Undo / Redo
-        IconButton(onClick = onUndo, modifier = Modifier.size(36.dp)) {
-            Icon(Icons.Outlined.Undo, contentDescription = "Undo", modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        IconButton(
+            onClick = onUndo,
+            enabled = canUndo,
+            modifier = Modifier.size(36.dp)
+        ) {
+            Icon(
+                Icons.Outlined.Undo,
+                contentDescription = "Undo",
+                modifier = Modifier.size(18.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(
+                    alpha = com.authorss81.noteflow.services.CanvasUndoRedoStatePolicy.iconAlpha(canUndo)
+                )
+            )
         }
-        IconButton(onClick = onRedo, modifier = Modifier.size(36.dp)) {
-            Icon(Icons.Outlined.Redo, contentDescription = "Redo", modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        IconButton(
+            onClick = onRedo,
+            enabled = canRedo,
+            modifier = Modifier.size(36.dp)
+        ) {
+            Icon(
+                Icons.Outlined.Redo,
+                contentDescription = "Redo",
+                modifier = Modifier.size(18.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(
+                    alpha = com.authorss81.noteflow.services.CanvasUndoRedoStatePolicy.iconAlpha(canRedo)
+                )
+            )
         }
 
         // Phase 35 extra kept: quick-tool rail expand chevron (additive; no
@@ -3221,6 +3260,9 @@ private fun InkBarLandscapeBar(
     onSettingsClick: () -> Unit,
     onUndo: () -> Unit,
     onRedo: () -> Unit,
+    // Phase 194: non-empty-stack flags → enabled + tint on the Undo/Redo buttons.
+    canUndo: Boolean,
+    canRedo: Boolean,
     expanded: Boolean,
     onExpandToggled: () -> Unit
 ) {
@@ -3316,11 +3358,33 @@ private fun InkBarLandscapeBar(
         }
 
         // 7. Undo / Redo
-        IconButton(onClick = onUndo, modifier = Modifier.size(36.dp)) {
-            Icon(Icons.Outlined.Undo, contentDescription = "Undo", modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        IconButton(
+            onClick = onUndo,
+            enabled = canUndo,
+            modifier = Modifier.size(36.dp)
+        ) {
+            Icon(
+                Icons.Outlined.Undo,
+                contentDescription = "Undo",
+                modifier = Modifier.size(18.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(
+                    alpha = com.authorss81.noteflow.services.CanvasUndoRedoStatePolicy.iconAlpha(canUndo)
+                )
+            )
         }
-        IconButton(onClick = onRedo, modifier = Modifier.size(36.dp)) {
-            Icon(Icons.Outlined.Redo, contentDescription = "Redo", modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        IconButton(
+            onClick = onRedo,
+            enabled = canRedo,
+            modifier = Modifier.size(36.dp)
+        ) {
+            Icon(
+                Icons.Outlined.Redo,
+                contentDescription = "Redo",
+                modifier = Modifier.size(18.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(
+                    alpha = com.authorss81.noteflow.services.CanvasUndoRedoStatePolicy.iconAlpha(canRedo)
+                )
+            )
         }
 
         // Phase 35 extra kept: quick-tool rail expand chevron (additive; no
