@@ -50,7 +50,6 @@ painting engine, free features).
 | phase-176 | **Release packaging hygiene: exclude `DebugProbesKt.bin` / `kotlin-tooling-metadata.json` / `firebase-*.properties` from the release APK + retain R8 `mapping.txt` for forensic back-mapping** (R2-KS-27 LOW + R2-KS-24 INFO; one area; workflow archival deferred — no `.github/workflows/` edits) | phase-167 Kali triage |
 | phase-177 | **Plugin ecosystem full review** — verify off-by-default, accurate on/off state in store/settings, enable/disable/delete correctness, delete-confirmation dialog on every path, invocation journal honesty + regression proof (all plugin tests green) | user-reported |
 | phase-178 | **Screenshot render suite** — Paparazzi (JVM, no emulator) PNGs for every screen × state × theme, saved to `visual-qa/screenshots/` curated baseline + documented artifact-upload path | user-reported |
-| phase-179 | **Visual QA** — free Gemini vision review of saved screenshots → severity-ordered findings in `visual-qa/findings.md` (no code fixes here; findings feed a follow-up fix phase) | user-reported |
 
 ## How phases run
 
