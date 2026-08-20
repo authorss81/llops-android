@@ -457,7 +457,7 @@ private fun pageTypeLabel(page: NotePageEntity): String = when (page.sourceFileT
  * [dotColor] at [spacingPx] pitch. The geometry comes from the bounded
  * `InkCardPaperPolicy.gridColumns/gridRows` (≤ 12×8 = 96 dots) so the loop is
  * tiny; [spacingPx]/[dotRadiusPx]/colors are computed once per composition and
- * captured (no per-frame allocation, no `pointsJson` rasterization — the
+ * captured (no per-frame allocation, no stroke-geometry rasterization — the
  * texture is pure card-size + constants).
  */
 private fun Modifier.notebookPaper(

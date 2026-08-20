@@ -42,6 +42,27 @@
 > `Phase186GalleryQuickActionsTest` (7 source pins). No schema change, no new
 > deps.
 
+> **Implemented in phase-187** (2026-08-20, gallery ink-note cards — authentic
+> notebook-paper look, see `workspace/phase-187/REPORT.md`): ink canvas notes
+> without extracted OCR text no longer render a generic pencil-icon stub.
+> `ui/components/GalleryView.kt` now gives any ink page (cards whose
+> `sourceFileType` is not pdf/image/text and that have no text preview) a
+> notebook **dot-grid paper** texture via the new pure-JVM
+> `services/InkCardPaperPolicy.kt` + a private `Modifier.notebookPaper`
+> `drawBehind` extension: paper-toned `scheme.surface.copy(alpha=0.7f)` fill +
+> `scheme.outlineVariant.copy(alpha=0.3f)` dots (22dp pitch, 1.5dp radius).
+> Draw-budget discipline (phase-188 #1): bounded `gridColumns/gridRows` keep the
+> loop ≤ 12×8 = 96 dots on any size; pitches/colors computed once per
+> composition and captured — no per-frame allocation, NO `pointsJson`/stroke
+> rasterization (GalleryView has zero `pointsJson` tokens, source-pinned). The
+> placeholder keeps its 44dp draw-Brush icon chip and now uses the honest policy
+> label `InkCardPaperPolicy.HANDWRITTEN_LABEL` = "Handwritten note" (never
+> claims OCR text exists). Dark-theme safe: the 0.7-alpha surface fill sits over
+> the `surfaceVariant@0.55` container so the card stays lighter than the page
+> surface (phase-188 adds the explicit border). Tests: `InkCardPaperPolicyTest`
+> (11, pure JVM) + `Phase187GalleryInkPaperTest` (4 source pins). No schema
+> change, no new deps.
+
 > **Implemented in phase-165** (`ui/components/GalleryView.kt`): the gallery page cards
 > were redesigned from the old flat square box to tasteful Material 3 cards — 20 dp
 > rounded corners, tonal `surfaceVariant` container with a subtle `primaryContainer`
