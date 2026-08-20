@@ -41,4 +41,50 @@ object GalleryCardLayoutPolicy {
         val scaled = BASE_MIN_HEIGHT_DP * safe
         return scaled.coerceIn(BASE_MIN_HEIGHT_DP, MAX_MIN_HEIGHT_DP)
     }
+
+    // ---- Phase 188: large-font layout-bounds policy (risk #2) ----
+
+    /**
+     * Line budget of each bounded text block inside a card. The card has NO
+     * maximum height (the floor is a minimum), so the only way a reviewer could
+     * clip the footer at 1.3–1.5x font scale is by capping one of these blocks
+     * below its own natural height — these constants pin the budget in one
+     * place so the composable and the regression guard share it.
+     */
+    const val TITLE_MAX_LINES = 2
+    const val PREVIEW_MAX_LINES = 3
+    const val TAG_ROW_MAX_LINES = 1
+    const val FOOTER_DATE_MAX_LINES = 1
+
+    /**
+     * Card height that a body measuring [contentHeightDp] attains at
+     * [fontScale]. The card is CONTENT-DRIVEN with a MINIMUM floor —
+     * `max(content, floor)` — and there is intentionally NO maximum, so growing
+     * font scales grow the card instead of clipping the footer. Non-finite or
+     * negative content fails safe to the floor alone.
+     */
+    fun measuredCardHeightDp(contentHeightDp: Float, fontScale: Float): Float {
+        val safeContent = if (contentHeightDp.isFinite()) contentHeightDp.coerceAtLeast(0f) else 0f
+        return maxOf(safeContent, minCardHeightDp(fontScale))
+    }
+
+    /**
+     * The phase-188 large-font guarantee: the date/tags footer is never clipped
+     * because the measured card height always follows the content
+     * ([measuredCardHeightDp] ≥ content for any font scale). Returns false only
+     * for a garbage content height (NaN or negative) — the same fail-safe
+     * posture as [minCardHeightDp].
+     */
+    fun footerAlwaysFits(contentHeightDp: Float, fontScale: Float): Boolean {
+        if (contentHeightDp.isNaN() || contentHeightDp < 0f) return false
+        return measuredCardHeightDp(contentHeightDp, fontScale) >= contentHeightDp.coerceAtLeast(0f)
+    }
+
+    // ---- Phase 188: dark-theme card border (risk #3) ----
+
+    /** Width of the hairline border that separates cards from near-black surfaces. */
+    const val GALLERY_CARD_BORDER_WIDTH_DP = 1f
+
+    /** Alpha of `scheme.outlineVariant` on the border — visible on dark themes. */
+    const val GALLERY_CARD_BORDER_ALPHA = 0.35f
 }

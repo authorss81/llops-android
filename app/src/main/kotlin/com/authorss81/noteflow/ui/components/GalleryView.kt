@@ -1,7 +1,7 @@
 package com.authorss81.noteflow.ui.components
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -38,6 +38,7 @@ import com.authorss81.noteflow.data.model.NotePageEntity
 import com.authorss81.noteflow.services.GalleryCardActionsPolicy
 import com.authorss81.noteflow.services.InkCardPaperPolicy
 import com.authorss81.noteflow.services.GalleryCardLayoutPolicy
+import com.authorss81.noteflow.services.GalleryTagRowPolicy
 import com.authorss81.noteflow.services.GalleryTitleDisplayPolicy
 import com.authorss81.noteflow.ui.viewmodel.NoteflowViewModel
 import java.text.SimpleDateFormat
@@ -92,7 +93,6 @@ fun GalleryView(
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun GalleryCardItem(
     page: NotePageEntity,
@@ -110,13 +110,14 @@ private fun GalleryCardItem(
     // notebook tile with no 60% dead band.
     val minCardHeight = GalleryCardLayoutPolicy.minCardHeightDp(LocalDensity.current.fontScale).dp
 
+    // Phase 188: tag parsing/capping lives in the pure-JVM GalleryTagRowPolicy —
+    // at most MAX_VISIBLE_TAGS (2) chips plus a "+N" badge, single line, so the
+    // update timestamp below stays visible at 1.3–1.5x font scale.
     val tags = remember(page.tags) {
-        page.tags.split(",")
-            .map { it.trim().removePrefix("#") }
-            .filter { it.isNotEmpty() }
+        GalleryTagRowPolicy.parseTags(page.tags)
     }
-    val visibleTags = tags.take(3)
-    val hiddenTagCount = tags.size - visibleTags.size
+    val visibleTags = tags.take(GalleryTagRowPolicy.MAX_VISIBLE_TAGS)
+    val hiddenTagCount = GalleryTagRowPolicy.hiddenChipCount(tags)
 
     // Phase 187: ink-note cards whose body is real handwriting (no OCR text to
     // preview) get an authentic notebook-paper texture instead of the flat
@@ -142,7 +143,15 @@ private fun GalleryCardItem(
         colors = CardDefaults.cardColors(
             containerColor = scheme.surfaceVariant.copy(alpha = 0.55f)
         ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
+        elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
+        // Phase 188 risk #3: an explicit hairline border keeps cards distinct
+        // from near-black surfaces in dark themes (surfaceVariant on dark is
+        // close to surface; the phase-187 paper fill flattens it further). The
+        // width/alpha come from the pure-JVM policy so the decision is pinned.
+        border = BorderStroke(
+            GalleryCardLayoutPolicy.GALLERY_CARD_BORDER_WIDTH_DP.dp,
+            scheme.outlineVariant.copy(alpha = GalleryCardLayoutPolicy.GALLERY_CARD_BORDER_ALPHA)
+        )
     ) {
         Box(
             modifier = Modifier
@@ -179,6 +188,12 @@ private fun GalleryCardItem(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
+                    // Phase 188 risk #2: the body column participates in the
+                    // same min-height floor so the `weight(1f, fill = false)`
+                    // preview seat below has a definite bound to absorb slack
+                    // into — the footer is pinned visible at every font scale,
+                    // never clipped (the floor is a minimum, never a cap).
+                    .heightIn(min = minCardHeight)
                     .padding(14.dp)
             ) {
                 // Header: type badge, title, pinned indicator.
@@ -313,21 +328,31 @@ private fun GalleryCardItem(
                 // weight(1f) stretch that would soak up the old dead band — the
                 // text block is just its own lines (maxLines = 3) and the
                 // placeholder is a compact band with an 84dp FLOOR, so large font
-                // scales grow it instead of clipping/overlapping the label
-                // (review fix: was a fixed 84dp-high unyielding box that
-                // overflowed its label at >=2x font scale).
+                // scales grow it instead of clipping/overlapping the label.
+                // Phase 188 risk #2 adds `weight(1f, fill = false)` ON TOP of that:
+                // fill=false means the preview NEVER stretches tall (the 184 fix is
+                // preserved) but any slack from the heightIn-min floor seats here,
+                // BETWEEN the preview and the footer, so the date/tags footer is
+                // pinned visible at 1.3–1.5x font scale instead of floating below
+                // a gap.
                 if (preview.isNotEmpty()) {
                     Text(
                         text = preview,
                         style = MaterialTheme.typography.bodySmall,
                         color = scheme.onSurfaceVariant,
+                        // Line budget owned by GalleryCardLayoutPolicy.PREVIEW_MAX_LINES
+                        // (kept as the literal `3` here — the phase-184 pin requires
+                        // the literal; Phase188GalleryLayoutBoundsTest cross-checks the
+                        // two stay in sync).
                         maxLines = 3,
-                        overflow = TextOverflow.Ellipsis
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
                     )
                 } else {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
+                            .weight(1f, fill = false)
                             .heightIn(min = 84.dp),
                         contentAlignment = Alignment.Center
                     ) {
@@ -378,16 +403,25 @@ private fun GalleryCardItem(
                 // Footer: tag chips, then the updated date.
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (visibleTags.isNotEmpty()) {
-                        FlowRow(
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        // Phase 188 risk #4: single-line Row, chips weighted
+                        // (fill=false keeps short pills natural, long ones
+                        // ellipsize) with the "+N" badge last and unweighted — a
+                        // Row measures unweighted children first, so the badge can
+                        // never be pushed out and the update timestamp below
+                        // always stays visible.
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
                             visibleTags.forEach { tag ->
                                 Surface(
                                     shape = RoundedCornerShape(50),
-                                    color = scheme.secondaryContainer.copy(alpha = 0.85f)
+                                    color = scheme.secondaryContainer.copy(alpha = 0.85f),
+                                    modifier = Modifier.weight(1f, fill = false)
                                 ) {
                                     Text(
-                                        text = "#$tag",
+                                        text = GalleryTagRowPolicy.chipText(tag),
                                         style = MaterialTheme.typography.labelSmall,
                                         color = scheme.onSecondaryContainer,
                                         maxLines = 1,
@@ -396,13 +430,13 @@ private fun GalleryCardItem(
                                     )
                                 }
                             }
-                            if (hiddenTagCount > 0) {
+                            GalleryTagRowPolicy.hiddenBadgeText(hiddenTagCount)?.let { badgeText ->
                                 Surface(
                                     shape = RoundedCornerShape(50),
                                     color = scheme.surfaceVariant.copy(alpha = 0.7f)
                                 ) {
                                     Text(
-                                        text = "+$hiddenTagCount",
+                                        text = badgeText,
                                         style = MaterialTheme.typography.labelSmall,
                                         color = scheme.outline,
                                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
