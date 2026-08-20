@@ -53,6 +53,18 @@
 > `app/src/test/java/com/authorss81/noteflow/Phase166LayoutOverflowTest.kt` (8 source-
 > pinning tests, `class Phase166LayoutOverflowTest` at `:29`).
 
+> **Implemented in phase-183** (2026-08-20, gallery title typography — no mid-word breaks,
+> no redundant `.md`, see `workspace/phase-183/REPORT.md`): the compact grid card title
+> (`GalleryView.kt:148`) previously rendered the RAW stored title (e.g. `2026-08-19.md`)
+> and wrapped mid-extension in the ~140dp text column. Display is now derived through the
+> pure-JVM `services/GalleryTitleDisplayPolicy.kt` (`displayTitle`): strips ONE redundant
+> `.md`/`.markdown`/`.txt` suffix for display only (never the stored DB title;
+> `foo.md.md` keeps one suffix), and the title `Text` renders with `maxLines=2`,
+> `TextOverflow.Ellipsis`, `softWrap=true`, `Hyphens.None`, `FontWeight.SemiBold`,
+> `lineHeight=18.sp`. The footer date also capped `maxLines=1`+Ellipsis
+> (`GalleryView.kt:274-279`). Tests: `app/src/test/java/com/authorss81/noteflow/
+> GalleryTitleDisplayPolicyTest.kt` (11). No schema change, no new deps.
+
 > **Implemented in phase-167** (2026-08-19, bottom-nav-bar overlay fix — dynamic insets,
 > see `workspace/phase-167/REPORT.md`): the app draws edge-to-edge (`MainActivity.kt:252`),
 > so any bottom-anchored surface outside a Scaffold must consume the system navigation-bar

@@ -150,12 +150,11 @@ private fun GalleryCardItem(
 
                     Text(
                         text = GalleryTitleDisplayPolicy.displayTitle(page.title),
-                        style = MaterialTheme.typography.titleSmall,
+                        style = MaterialTheme.typography.titleSmall.copy(hyphens = Hyphens.None),
                         fontWeight = FontWeight.SemiBold,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                         softWrap = true,
-                        hyphens = Hyphens.None,
                         lineHeight = 18.sp,
                         modifier = Modifier.weight(1f)
                     )

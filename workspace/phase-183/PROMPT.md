@@ -1,4 +1,4 @@
-# Phase 183: GalleryView typography & title wrapping — no mid-word breaks, no ".md", ellipsis [NOT STARTED]
+# Phase 183: GalleryView typography & title wrapping — no mid-word breaks, no ".md", ellipsis [DONE]
 
 You are working on **InkFlow/Noteflow**. User visual review: in the compact gallery grid,
 titles like `2026-08-19.md` wrap mid-extension (`2026-08-19.m` + dangling `d`). The column
