@@ -515,7 +515,7 @@ class Phase150CanvasRenderBudgetTest {
 
         val staged = service.substringAfter("private fun pruneStagedSnapshotLayers").substringBefore("private fun sanitizeRestoredSourceFilePaths")
         assertTrue("the staged prune opens only the snapshot copy", staged.contains("stagedDb, passphrase"))
-        assertTrue("the staged prune is keyed by the in-memory DEK", staged.contains("VaultKeyHolder.dek"))
+        assertTrue("the staged prune is keyed by the PINNED export DEK, never the mutable singleton", staged.contains("stagedDb: File, dek: ByteArray)") && !staged.contains("VaultKeyHolder"))
         assertTrue("the staged prune never touches the live repository", !staged.contains("repository."))
         // Phase-150 review fix 3: a crafted/pre-schema archive with no `layers`
         // table must not abort the whole backup — same tolerance as the restore

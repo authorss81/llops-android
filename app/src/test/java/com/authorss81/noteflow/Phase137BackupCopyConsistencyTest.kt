@@ -210,9 +210,16 @@ class Phase137BackupCopyConsistencyTest {
             exportRegion.contains("FileInputStream(dbFile).use { fis -> fis.copyTo(zos) }")
         )
         // A failed verification aborts the backup loudly — never a silent torn archive.
+        // Phase-189 (KEEP_CHANGING_ERROR): the fixed text is centralized in the pure-JVM
+        // ExportSessionPolicy and the call site surfaces it (the user-visible wording is
+        // unchanged: "Backup failed: the vault database kept changing during the snapshot
+        // copy. Please try again.").
         assertTrue(
             "a racing source must fail closed with a loud message",
-            exportRegion.contains("kept changing during the snapshot copy")
+            exportRegion.contains("ExportSessionPolicy.KEEP_CHANGING_ERROR") &&
+                com.authorss81.noteflow.services.ExportSessionPolicy.KEEP_CHANGING_ERROR.contains(
+                    "kept changing during the snapshot copy"
+                )
         )
     }
 

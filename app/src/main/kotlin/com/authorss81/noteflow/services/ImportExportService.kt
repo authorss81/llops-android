@@ -1478,24 +1478,35 @@ object ImportExportService {
                 repository.checkpointWal()
                 repository.stampDatabaseChecksum(context)
                 if (!VaultSnapshotCopyPolicy.checkpointThenCopy(dbFile, stagedDb)) {
-                    throw IllegalStateException(
-                        "Backup failed: the vault database kept changing during the snapshot copy. Please try again."
-                    )
+                    throw IllegalStateException(ExportSessionPolicy.KEEP_CHANGING_ERROR)
                 }
-                // R2-b2b4-DOS-01 (phase-149): the version-history retention prune
-                // runs on the STAGED SNAPSHOT — never the live vault — so every
-                // page's newest retained window is what the archive serializes
-                // (a legacy vault that outgrew the cap before this deploy stops
-                // inflating every export forever) and a backup that later fails
-                // (copy teardown, budget rejection, encryption) can never
-                // permanently delete the user's older version history.
-                pruneStagedSnapshotVersions(stagedDb)
-                // R2-b2b4-DOS-02 (phase-150): the live layer-count cap prune runs
-                // on the SAME staged snapshot, so the archive never serializes a
-                // page's retained-but-oversized layers backlog. Mirrors the
-                // version-history trim's safety: a backup that later fails can
-                // never permanently delete a user's extra layers.
-                pruneStagedSnapshotLayers(stagedDb)
+                // Phase-189: pin the DEK this export was HANDED (snapshot-at-entry
+                // COPY) for the staged-snapshot prunes — never a re-read of the
+                // mutable VaultKeyHolder.dek singleton at prune time. A lock that
+                // lands mid-export (SAF picker ON_STOP, screen-off) zeroizes the
+                // live array; the pinned copy survives, so the backup runs under
+                // the SAME key the export used and the next backup/restore is not
+                // poisoned. The copy is zeroized immediately after both prunes.
+                val pruneDek = ExportSessionPolicy.pinnedPruneDek(key) { VaultKeyHolder.dek }
+                    ?: throw IllegalStateException(ExportSessionPolicy.LOCKED_SNAPSHOT_ERROR)
+                try {
+                    // R2-b2b4-DOS-01 (phase-149): the version-history retention prune
+                    // runs on the STAGED SNAPSHOT — never the live vault — so every
+                    // page's newest retained window is what the archive serializes
+                    // (a legacy vault that outgrew the cap before this deploy stops
+                    // inflating every export forever) and a backup that later fails
+                    // (copy teardown, budget rejection, encryption) can never
+                    // permanently delete the user's older version history.
+                    pruneStagedSnapshotVersions(stagedDb, pruneDek)
+                    // R2-b2b4-DOS-02 (phase-150): the live layer-count cap prune runs
+                    // on the SAME staged snapshot, so the archive never serializes a
+                    // page's retained-but-oversized layers backlog. Mirrors the
+                    // version-history trim's safety: a backup that later fails can
+                    // never permanently delete a user's extra layers.
+                    pruneStagedSnapshotLayers(stagedDb, pruneDek)
+                } finally {
+                    ExportSessionPolicy.zeroize(pruneDek)
+                }
             }
             // R2-B1D-04 (phase-138): the same BackupBudgetPolicy that bounds the
             // restore extractor now bounds the packer, so a backup is only ever
@@ -2715,17 +2726,15 @@ object ImportExportService {
     /**
      * R2-b2b4-DOS-02 (phase-150): the export-time layer trim, mirroring the
      * phase-149 version-history trim. Runs on the STAGED SNAPSHOT copy — opened
-     * with the in-memory DEK and pruned via [pruneLayerPagesToLiveCap] — and
-     * NEVER on the live vault, so a backup that later fails can never
-     * permanently delete a user's extra layers. The staged file is a standalone
-     * snapshot by then (post [com.authorss81.noteflow.utils.VaultSnapshotCopyPolicy.checkpointThenCopy]),
+     * with the PINNED export DEK (phase-189: a snapshot-at-entry copy passed in,
+     * never a re-read of the mutable singleton) and pruned via
+     * [pruneLayerPagesToLiveCap] — and NEVER on the live vault, so a backup that
+     * later fails can never permanently delete a user's extra layers. The staged
+     * file is a standalone snapshot by then (post
+     * [com.authorss81.noteflow.utils.VaultSnapshotCopyPolicy.checkpointThenCopy]),
      * so writing it does not touch the live WAL connection.
      */
-    private fun pruneStagedSnapshotLayers(stagedDb: File) {
-        val dek = VaultKeyHolder.dek
-            ?: throw IllegalStateException(
-                "Backup failed: the vault is locked; cannot bound the layer snapshot."
-            )
+    private fun pruneStagedSnapshotLayers(stagedDb: File, dek: ByteArray) {
         val passphrase = dek.toSqlcipherPassphraseBytes()
         try {
             System.loadLibrary("sqlcipher")
@@ -2752,18 +2761,16 @@ object ImportExportService {
 
     /**
      * R2-b2b4-DOS-01 (phase-149 review fix): the export-time version-history
-     * trim. Runs on the STAGED SNAPSHOT copy — opened with the in-memory DEK and
-     * pruned via [pruneVersionPagesToRetention] — and NEVER on the live vault, so
-     * a backup that later fails (copy teardown, budget rejection, encryption
-     * error) can never permanently delete the user's older version history. The
-     * staged file is a standalone snapshot by then (post [VaultSnapshotCopyPolicy.checkpointThenCopy]),
-     * so writing it does not touch the live WAL connection.
+     * trim. Runs on the STAGED SNAPSHOT copy — opened with the PINNED export DEK
+     * (phase-189: a snapshot-at-entry copy passed in, never a re-read of the
+     * mutable singleton) and pruned via [pruneVersionPagesToRetention] — and
+     * NEVER on the live vault, so a backup that later fails (copy teardown,
+     * budget rejection, encryption error) can never permanently delete the
+     * user's older version history. The staged file is a standalone snapshot by
+     * then (post [VaultSnapshotCopyPolicy.checkpointThenCopy]), so writing it
+     * does not touch the live WAL connection.
      */
-    private fun pruneStagedSnapshotVersions(stagedDb: File) {
-        val dek = VaultKeyHolder.dek
-            ?: throw IllegalStateException(
-                "Backup failed: the vault is locked; cannot bound the version-history snapshot."
-            )
+    private fun pruneStagedSnapshotVersions(stagedDb: File, dek: ByteArray) {
         val passphrase = dek.toSqlcipherPassphraseBytes()
         try {
             System.loadLibrary("sqlcipher")

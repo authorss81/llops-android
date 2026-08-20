@@ -292,7 +292,7 @@ class Phase149NoteVersionsRetentionTest {
 
         val exportRegion = source.substringAfter("suspend fun exportBackup(").substringBefore("private fun copyWithLimit")
         val copyIdx = exportRegion.indexOf("VaultSnapshotCopyPolicy.checkpointThenCopy(dbFile, stagedDb)")
-        val pruneIdx = exportRegion.indexOf("pruneStagedSnapshotVersions(stagedDb)")
+        val pruneIdx = exportRegion.indexOf("pruneStagedSnapshotVersions(stagedDb, pruneDek)")
         assertTrue("export must run the verified snapshot copy first", copyIdx >= 0)
         assertTrue(
             "the retention prune must run on the STAGED snapshot, after the copy",
@@ -305,9 +305,15 @@ class Phase149NoteVersionsRetentionTest {
 
         val stagedPrune = source.substringAfter("private fun pruneStagedSnapshotVersions").substringBefore("private fun ByteArray.toSqlcipherPassphraseBytes")
         assertTrue("the staged prune must open only the staged snapshot copy", stagedPrune.contains("openOrCreateDatabase(") && stagedPrune.contains("stagedDb, passphrase"))
-        assertTrue("the staged prune must be keyed by the in-memory DEK", stagedPrune.contains("VaultKeyHolder.dek"))
+        assertTrue("the staged prune must be keyed by the PINNED export DEK, never the mutable singleton", stagedPrune.contains("stagedDb: File, dek: ByteArray)") && !stagedPrune.contains("VaultKeyHolder"))
         assertTrue("the staged prune must share the retention SQL", stagedPrune.contains("pruneVersionPagesToRetention(db)"))
         assertTrue("the staged prune must never touch the live repository", !stagedPrune.contains("repository."))
+        assertTrue(
+            "the export pins a COPY of the DEK it was handed and zeroizes it after the prunes",
+            exportRegion.contains("ExportSessionPolicy.pinnedPruneDek(key) { VaultKeyHolder.dek }") &&
+                exportRegion.contains("pruneStagedSnapshotLayers(stagedDb, pruneDek)") &&
+                exportRegion.contains("ExportSessionPolicy.zeroize(pruneDek)")
+        )
 
         val validator = source.substringAfter("private fun validateAndPrepareRestoredDb").substringBefore("private fun rekeyVoiceNoteBlobs")
         assertTrue(
