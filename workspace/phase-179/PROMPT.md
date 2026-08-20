@@ -1,66 +1,67 @@
-# Phase 179: Reference-image layer (phase-07 encouraged item) - insert a photo as a traceable underlay [NOT STARTED]
+# Phase 179: Real syntax highlighting for code blocks via highlighted-kt [NOT STARTED]
 
-You are working on **InkFlow/Noteflow**. ROADMAP Phase 7's "reference image layer"
-was an encouraged (non-mandatory) item that never shipped - recorded in
-`docs/phase-status-gaps.md`: "Phase-07 reference-image layer (encouraged item, not
-mandatory) absent". This phase ships it: insert an image as a dimmed, non-inking
-underlay on the canvas that strokes draw OVER but cannot modify.
+You are working on **InkFlow/Noteflow**. ROADMAP **21.8** honesty part shipped (code
+blocks are honestly labeled "PLAIN TEXT (NO SYNTAX HIGHLIGHTING)" in
+`MediaEmbedComponents.kt`), but the real highlighting was deferred: "REAL
+HIGHLIGHTING VIA HIGHLIGHTED-KT **DEFERRED - needs user approval (new dependency).**"
+USER APPROVAL IS GRANTED (explicitly approved 2026-08-20). This phase adds real
+syntax highlighting to fenced code blocks using the **highlighted-kt** library
+(current-maintained fork of the old `highlight.js` Kotlin port).
 
-Read `docs/ARCHITECTURE.md`, `docs/phase-status.md` and `docs/brush-styles.md`
-first.
+Read `docs/ARCHITECTURE.md` and `docs/phase-status.md` first.
 
 ## WORKFLOW RULE
 Work in small steps; `git add -A && git commit -m "llops: phase-179 step N: <desc>" && git push`
 after EVERY step. Never sit on uncommitted work.
 
-## Step 1 - Inventory (commit it)
-- Read `AnnotationCanvas.kt` (layering: how paper/template/strokes are composed,
-  the `LayerBitmapCache`, paginated culling, `graphicsLayer`/`RenderEffect`
-  usage), `EditorScreen.kt` (toolbar/overflow menus where a "Insert reference
-  image" action would live), and the media-embed path
-  (`MediaEmbedComponents.kt`, `decodeBoundedImage` in
-  `FullscreenImageDialog`) for how images are stored/loaded today.
-- Confirm there is NO existing reference-image/underlay feature to extend.
+## Step 1 - Dependency (commit it)
+- Add `highlighted-kt` (JVM/Android) to `app/build.gradle.kts` dependencies +
+  `gradle/libs.versions.toml` version catalog. Verify the artifact resolves and
+  `gradle assembleDebug` still builds.
+- Run `gradle dependencies` to confirm it is a pure Kotlin/JVM lib (no native,
+  no network at runtime) and that it does not inflate the release APK
+  meaningfully. NOTE: it adds a small jar; the base-APK-size rule must be
+  re-verified in Step 3.
 - COMMIT this step.
 
-## Step 2 - Add the reference-image layer
-- Per-page setting: one reference image per page (path or embedded bytes, reusing
-  the existing media-embed storage/decryption pattern). Persist via the same
-  field-encrypted column convention as other page embeds (no DB schema change -
-  reuse an existing column/table or the embed mechanism).
-- Render it as the BOTTOM layer (below strokes) with: dim opacity (e.g. 30-50%),
-  no inking target (strokes never draw onto it), scale/position stored with the
-  page, and it must NOT be exported into the markdown back-save or shared as part
-  of the note body (reference-only).
-- Respect the existing B1-AUTH-05 inline-image confinement if the path form is
-  used - reuse `InlineImagePathPolicy` so a reference image can only resolve
-  inside the app-private subtree.
+## Step 2 - Highlight code blocks in BOTH markdown renderers
+- Apply syntax highlighting to fenced code blocks in `MarkdownRenderer.kt`
+  (`:609-617` area) and `MarkdownPreviewScreen.kt` (`:1304-1312` area), i.e. both
+  paths that render markdown. Highlight at parse/annotate time (pure JVM) and
+  render with theme-aware colors (light + dark).
+- Language detection: use the fence language tag; fall back to language
+  auto-detection if available in highlighted-kt, else plain-text styling.
+- Preserve the existing copy-to-clipboard / line behavior; highlighting must not
+  change the copied text.
 - COMMIT this step.
 
-## Step 3 - UI
-- Toolbar/overflow entry "Insert reference image" (existing SAF picker + bounded
-  `decodeBoundedImage`), a small control to adjust opacity, and "Remove reference
-  image". Non-alarming Snackbars only.
+## Step 3 - Honest label + size check
+- Update the "PLAIN TEXT (NO SYNTAX HIGHLIGHTING)" honesty label in
+  `MediaEmbedComponents.kt` ONLY where it is now false (real highlighting is on).
+  Keep honest copy for any renderer path that still can't highlight.
+- Re-verify base APK size did not grow unreasonably and document before/after.
 - COMMIT this step.
 
 ## Step 4 - Regression proof
 - `gradle assembleDebug` green + `gradle testDebugUnitTest` green (except the
   pre-existing `Phase148UiFailureTextScrubTest` UNC-path failure + the 2
   `B1Plat01ReleaseSigningTest` asserts, untouched).
-- Pure-JVM tests for the reference-image policy: dim opacity range clamp,
-  no-inking guarantee (strokes do not modify the layer), path confinement via
-  `InlineImagePathPolicy`, export/back-save exclusion.
+- Pure-JVM tests: highlighted spans are emitted for a known fence (e.g. Kotlin
+  `val x = 1`), unknown/absent language tag renders plain text without crashing,
+  copy text is the un-highlighted raw source, light/dark theme colors resolve.
 
 ## Definition of done
-- Reference image renders dimly under strokes, strokes draw over it without
-  modifying it, opacity adjustable, removable, persisted per page, excluded from
-  markdown back-save/share, image paths confined to the app-private subtree.
-- `workspace/phase-179/REPORT.md`: design (storage, rendering order, policy),
-  before/after files, test list.
+- Fenced code blocks render with real syntax highlighting in both markdown paths,
+  theme-aware, copy-paste still returns raw source, honesty label updated where
+  true, base-APK size delta documented.
+- `workspace/phase-179/REPORT.md`: dependency + version, integration points,
+  before/after size, test list.
 - Commit + push.
 
 ## Constraints
-- Do NOT edit `.github/workflows/`. No new dependencies. No DB schema change
-  (reuse the existing embed/column mechanism).
-- Keep the existing security model: reference images are field-encrypted, paths
-  confined, never logged.
+- Do NOT edit `.github/workflows/`. The new dependency is acceptable (user
+  approved); keep it out of the base-APK hot path if possible and keep the size
+  delta small.
+- No DB schema change. Never log decrypted content.
+- If highlighted-kt does not resolve for Android/JVM, STOP and document the
+  blocker in REPORT.md instead of vendoring a fork.
