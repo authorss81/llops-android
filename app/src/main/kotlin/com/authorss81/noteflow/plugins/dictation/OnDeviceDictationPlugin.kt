@@ -19,7 +19,10 @@ import com.authorss81.noteflow.plugins.SemanticVersion
  * is ALWAYS explicit — the UI shows a mic button and the session only starts on
  * a direct user tap; nothing is ever recorded ambiently.
  *
- * Split exactly like [com.authorss81.noteflow.plugins.ocr.OnDeviceOcrPlugin]:
+ * Split exactly like the downloadable ML Kit plugin's rendering of the
+ * OcrPlugin/TranslationPlugin serving interfaces: the platform-bound engine
+ * sits behind a typed seam so the wrapper logic stays pure JVM and
+ * unit-tested:
  *  - [DictationAssembler] — PURE JVM utterance-assembly rules (unit-tested).
  *  - [SpeechErrorMapper] — PURE JVM error mapping (unit-tested).
  *  - [AndroidDictationEngine] — platform `SpeechRecognizer` glue (platform-only).

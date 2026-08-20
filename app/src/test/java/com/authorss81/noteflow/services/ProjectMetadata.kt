@@ -68,12 +68,28 @@ data class ProjectMetadata(
         val unserved: List<String>? = null
     )
 
-    data class DownloadablePlugins(val llm: LlmPlugin? = null) {
+    data class DownloadablePlugins(
+        val llm: LlmPlugin? = null,
+        val mlkit: MlKitPlugin? = null
+    ) {
         data class LlmPlugin(
             val id: String? = null,
             val className: String? = null,
             val module: String? = null,
             val capability: String? = null,
+            val inBaseApk: Boolean? = null,
+            val engine: Engine? = null,
+            val pinnedReleaseVersion: String? = null,
+            val signingEnvVars: List<String>? = null
+        ) {
+            data class Engine(val name: String? = null, val version: String? = null)
+        }
+
+        data class MlKitPlugin(
+            val id: String? = null,
+            val className: String? = null,
+            val module: String? = null,
+            val capabilities: List<String>? = null,
             val inBaseApk: Boolean? = null,
             val engine: Engine? = null,
             val pinnedReleaseVersion: String? = null,
@@ -228,6 +244,36 @@ data class ProjectMetadata(
                 llm.signingEnvVars != null &&
                     llm.signingEnvVars!!.contains("PLUGIN_SIGNING_KEYSTORE_B64") &&
                     llm.signingEnvVars.contains("PLUGIN_SIGNING_STORE_PASS"),
+                "must list PLUGIN_SIGNING_KEYSTORE_B64 + PLUGIN_SIGNING_STORE_PASS (B2-DEPS-04)"
+            )
+        }
+
+        val mlkit = downloadablePlugins?.mlkit
+        field("downloadablePlugins.mlkit", mlkit != null, "missing")
+        if (mlkit != null) {
+            field("downloadablePlugins.mlkit.id", !mlkit.id.isNullOrBlank(), "missing/blank")
+            field("downloadablePlugins.mlkit.className", !mlkit.className.isNullOrBlank(), "missing/blank")
+            field("downloadablePlugins.mlkit.module", !mlkit.module.isNullOrBlank(), "missing/blank")
+            field("downloadablePlugins.mlkit.capabilities", !mlkit.capabilities.isNullOrEmpty(), "missing/blank")
+            field("downloadablePlugins.mlkit.inBaseApk", mlkit.inBaseApk != null, "missing")
+            if (mlkit.inBaseApk == true) {
+                errors += "downloadablePlugins.mlkit.inBaseApk: must be false (base-APK-size hard rule — ML Kit is a downloadable plugin)"
+            }
+            if (!mlkit.capabilities.isNullOrEmpty() &&
+                mlkit.capabilities.any { it !in PluginCapability.ALL.map { c -> c.key } }
+            ) {
+                errors += "downloadablePlugins.mlkit.capabilities: every capability must be in PluginCapability.ALL"
+            }
+            field("downloadablePlugins.mlkit.engine", mlkit.engine != null, "missing")
+            if (mlkit.engine != null) {
+                field("downloadablePlugins.mlkit.engine.name", !mlkit.engine.name.isNullOrBlank(), "missing/blank")
+                field("downloadablePlugins.mlkit.engine.version", !mlkit.engine.version.isNullOrBlank(), "missing/blank")
+            }
+            field(
+                "downloadablePlugins.mlkit.signingEnvVars",
+                mlkit.signingEnvVars != null &&
+                    mlkit.signingEnvVars!!.contains("PLUGIN_SIGNING_KEYSTORE_B64") &&
+                    mlkit.signingEnvVars.contains("PLUGIN_SIGNING_STORE_PASS"),
                 "must list PLUGIN_SIGNING_KEYSTORE_B64 + PLUGIN_SIGNING_STORE_PASS (B2-DEPS-04)"
             )
         }

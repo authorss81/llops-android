@@ -5,19 +5,22 @@ import com.authorss81.noteflow.plugins.ExportFormat
 import com.authorss81.noteflow.plugins.ExportOutcome
 import com.authorss81.noteflow.plugins.ExportPlugin
 import com.authorss81.noteflow.plugins.ExportRequest
+import com.authorss81.noteflow.plugins.NoteflowPlugin
 import com.authorss81.noteflow.plugins.OcrOutcome
 import com.authorss81.noteflow.plugins.OcrPlugin
+import com.authorss81.noteflow.plugins.PluginAvailability
 import com.authorss81.noteflow.plugins.PluginCapability
 import com.authorss81.noteflow.plugins.PluginFailureReason
 import com.authorss81.noteflow.plugins.PluginManager
+import com.authorss81.noteflow.plugins.PluginManifest
 import com.authorss81.noteflow.plugins.PluginRegistry
 import com.authorss81.noteflow.plugins.PluginResult
+import com.authorss81.noteflow.plugins.PluginSettings
 import com.authorss81.noteflow.plugins.Rot13TransformPlugin
+import com.authorss81.noteflow.plugins.SemanticVersion
 import com.authorss81.noteflow.plugins.TextTransformPlugin
 import com.authorss81.noteflow.plugins.export.ExportEnginePlugin
 import com.authorss81.noteflow.plugins.export.ExportPayload
-import com.authorss81.noteflow.plugins.ocr.OcrEngine
-import com.authorss81.noteflow.plugins.ocr.OnDeviceOcrPlugin
 import java.io.File
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -45,8 +48,25 @@ class PluginExecutionSimulationTest {
     private val tempImage: File =
         File.createTempFile("exec-sim-test", ".png").apply { deleteOnExit() }
 
-    private class FakeOcrEngine(private val raw: String = "Simulated  OCR text") : OcrEngine {
-        override suspend fun recognize(context: Context?, imagePath: String): String = raw
+    /**
+     * A minimal OCR-serving plugin. Phase 175 moved the real implementation
+     * (`OnDeviceMlKitPlugin`) into the downloadable `plugins/mlkit` artifact, so
+     * this test registers a framework-conformant fake serving [PluginCapability.OCR]
+     * through the SAME routing/guarding/persistence the production plugin uses.
+     */
+    private class FakeOcrRoutingPlugin : NoteflowPlugin, OcrPlugin {
+        override val manifest = PluginManifest(
+            id = "com.authorss81.noteflow.test.ocr.capability",
+            name = "Fake OCR",
+            version = SemanticVersion(1, 0, 0),
+            minSupportedApi = 26,
+            description = "test fake serving the OCR capability",
+            capabilities = setOf(PluginCapability.OCR)
+        )
+        override fun availability(context: Context?) = PluginAvailability.Ok
+        override fun onEnable(context: Context?, settings: PluginSettings) = Unit
+        override suspend fun recognizeText(context: Context?, imagePath: String): OcrOutcome =
+            OcrOutcome.Success("Simulated OCR text")
     }
 
     private fun exportWriterToTempFile(): (Context?, ExportPayload, ExportFormat) -> ExportOutcome {
@@ -88,8 +108,8 @@ class PluginExecutionSimulationTest {
     }
 
     @Test
-    fun `ocr routes end-to-end through the real plugin wrapper`() = runBlocking {
-        val plugin = OnDeviceOcrPlugin(FakeOcrEngine("Simulated  OCR text"))
+    fun `ocr routes end-to-end through the plugin manager`() = runBlocking {
+        val plugin = FakeOcrRoutingPlugin()
         val registry = PluginRegistry(
             InMemoryEnableStore(),
             plugins = listOf(plugin),

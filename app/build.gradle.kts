@@ -258,13 +258,11 @@ dependencies {
     implementation(libs.commonmark)
     implementation(libs.commonmark.ext.gfm.tables)
 
-    // Phase 12: on-device, offline OCR (ML Kit text-recognition, bundled model).
-    // Runs offline with no API key and no INTERNET. See plugins/ocr/OnDeviceOcrPlugin.
-    implementation(libs.mlkit.text.recognition)
-
-    // Phase 16: on-device translation (ML Kit translate — keyless, offline-first,
-    // models download on explicit user action).
-    implementation(libs.mlkit.translate)
+    // Phase 12/16 on-device OCR + translation were REMOVED from the base APK in
+    // Phase 175 (R2-KS-21): the ML Kit engines + native `.so` libs + bundled
+    // Latin OCR models ship ONLY in the downloadable, signature-verified
+    // `plugins/mlkit` artifact (Plugin Store) — see those modules; the base APK
+    // rejects OCR/Translation requests with NO_PLUGIN_INSTALLED until installed.
 
     // Phase 29: the MediaPipe tasks-genai local-LLM engine is deliberately NOT
     // in the base APK. It ships as the downloadable, signature-verified
@@ -377,6 +375,107 @@ tasks.register<DefaultTask>("generateLlmPluginSeed") {
         )
         println("LLM plugin seed regenerated: ${seedFile.absolutePath}")
         println("  id             = com.authorss81.noteflow.plugins.llm")
+        println("  version        = $version")
+        println("  sha256         = $sha256")
+        println("  pinnedCertHash = $pinnedCertHash")
+        println("Commit the resulting diff to ship this pin in the app build.")
+    }
+}
+
+// --- Downloadable-ML-Kit-plugin seed ---------------------------------------
+//
+// R2-KS-21 (phase-175): `:app:generateMlKitPluginSeed` — the counterpart of
+// `:app:generateLlmPluginSeed` for the `plugins/mlkit` artifact (on-device OCR +
+// translation). Maintainers' publishing flow:
+//
+//   PLUGIN_SIGNING_KEYSTORE_B64=<base64 JKS> PLUGIN_SIGNING_STORE_PASS=<pass> \
+//     gradle :app:generateMlKitPluginSeed
+//
+// The task depends on `:plugins:mlkit:pluginMetadata`, which FAILS LOUDLY unless
+// the real plugin-signing keystore env vars are present (the B2-DEPS-04 gate in
+// `plugins/mlkit/build.gradle.kts`), so the seed can only ever match the ONE real
+// CI signing identity — never a build-bred keystore. It rewrites the committed
+// `app/src/main/kotlin/com/authorss81/noteflow/plugins/runtime/GeneratedMlKitPluginPin.kt`;
+// committing the resulting diff (with an app bump) is how a genuine release's
+// pin lands in `CompileTimePluginPins.RELEASES` via `mlKitPluginSeedRelease`.
+// Deliberately NOT wired into `assembleDebug`, so debug builds never need the
+// plugin-signing env.
+tasks.register<DefaultTask>("generateMlKitPluginSeed") {
+    group = "plugin-artifact"
+    description = "Regenerates src/main/.../GeneratedMlKitPluginPin.kt from the SIGNED :plugins:mlkit artifact metadata " +
+        "(requires PLUGIN_SIGNING_KEYSTORE_B64 + PLUGIN_SIGNING_STORE_PASS)."
+    dependsOn(":plugins:mlkit:pluginMetadata")
+    doLast {
+        val mlkitProject = rootProject.findProject(":plugins:mlkit")
+            ?: throw GradleException("ML Kit plugin seed refused: ':plugins:mlkit' is not part of this build.")
+        val metadataFile = mlkitProject.layout.buildDirectory
+            .file("plugin-artifact/plugin-metadata.properties")
+            .get().asFile
+        if (!metadataFile.isFile) {
+            throw GradleException(
+                "ML Kit plugin seed refused: plugin-metadata.properties not found at ${metadataFile.absolutePath}. " +
+                    "The seed derives from the SIGNED :plugins:mlkit artifact; run with the plugin-signing env set."
+            )
+        }
+        val props = Properties().apply {
+            metadataFile.inputStream().use { load(it) }
+        }
+        val artifact = props.getProperty("artifact").orEmpty().trim()
+        val sha256 = props.getProperty("sha256").orEmpty().trim()
+        val pinnedCertHash = props.getProperty("pinnedCertHash").orEmpty().trim()
+        val version = props.getProperty("version").orEmpty().trim()
+        if (artifact.isBlank() || sha256.isBlank() || pinnedCertHash.isBlank() || version.isBlank()) {
+            throw GradleException(
+                "ML Kit plugin seed refused: plugin-metadata.properties is incomplete " +
+                    "(artifact='$artifact', hasSha256=${sha256.isNotBlank()}, " +
+                    "hasPinnedCertHash=${pinnedCertHash.isNotBlank()}, version='$version')."
+            )
+        }
+        if (!Regex("^[0-9a-f]{64}$").matches(sha256)) {
+            throw GradleException("ML Kit plugin seed refused: metadata sha256 '$sha256' is not a 64-char lowercase hex digest.")
+        }
+        if (!Regex("^sha256/[A-Za-z0-9+/=]+$").matches(pinnedCertHash)) {
+            throw GradleException("ML Kit plugin seed refused: metadata pinnedCertHash '$pinnedCertHash' is not a 'sha256/<base64>' pin.")
+        }
+        val versionParts = version.split('.').map { it.toIntOrNull() }
+        if (versionParts.size != 3 || versionParts.any { it == null }) {
+            throw GradleException("ML Kit plugin seed refused: metadata version '$version' is not 'major.minor.patch'.")
+        }
+        val (major, minor, patch) = versionParts.map { it!! }
+
+        val seedDir = project.layout.projectDirectory
+            .dir("src/main/kotlin/com/authorss81/noteflow/plugins/runtime")
+        val seedFile = seedDir.file("GeneratedMlKitPluginPin.kt").asFile
+        seedFile.parentFile.mkdirs()
+        seedFile.writeText(
+            """
+            |package com.authorss81.noteflow.plugins.runtime
+            |
+            |/**
+            | * AUTO-GENERATED by `:app:generateMlKitPluginSeed` — DO NOT EDIT BY HAND.
+            | *
+            | * The application-compiled pin of the ONE real, CI-signed ML Kit plugin
+            | * release (R2-KS-21). The generator requires the real signing keystore
+            | * (`PLUGIN_SIGNING_KEYSTORE_B64` + `PLUGIN_SIGNING_STORE_PASS`, from the
+            | * secret store) because it depends on `:plugins:mlkit:pluginMetadata`,
+            | * which fails loudly without them — so this value can only ever match
+            | * the real CI signing identity, never a build-bred keystore.
+            | * `CompileTimePluginPins.RELEASES` folds this release into the
+            | * app-compiled pin table, so the plugin-update chain accepts ONLY an
+            | * artifact signed by this exact key. When this value is null no ML Kit
+            | * plugin release is pinned yet and the chain refuses every offer,
+            | * fail-closed (B1-NET-03).
+            | */
+            |internal val mlKitPluginSeedRelease: PinnedPluginRelease? = PinnedPluginRelease(
+            |    id = "com.authorss81.noteflow.plugins.mlkit",
+            |    version = PluginVersion($major, $minor, $patch),
+            |    sha256 = "$sha256",
+            |    pinnedCertHash = "$pinnedCertHash",
+            |)
+            |""".trimMargin()
+        )
+        println("ML Kit plugin seed regenerated: ${seedFile.absolutePath}")
+        println("  id             = com.authorss81.noteflow.plugins.mlkit")
         println("  version        = $version")
         println("  sha256         = $sha256")
         println("  pinnedCertHash = $pinnedCertHash")

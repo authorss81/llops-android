@@ -10,13 +10,11 @@ import com.authorss81.noteflow.plugins.export.ExportEnginePlugin
 import com.authorss81.noteflow.plugins.filetransfer.LocalSendFileTransferPlugin
 import com.authorss81.noteflow.plugins.inktos.InkToShapePlugin
 import com.authorss81.noteflow.plugins.langdetect.LanguageDetectionEngine
-import com.authorss81.noteflow.plugins.ocr.OnDeviceOcrPlugin
 import com.authorss81.noteflow.plugins.outline.OutlineGeneratorPluginImpl
 import com.authorss81.noteflow.plugins.readaloud.OnDeviceReadAloudPlugin
 import com.authorss81.noteflow.plugins.screenshot.ScreenshotNotePluginImpl
 import com.authorss81.noteflow.plugins.store.PluginInstallStore
 import com.authorss81.noteflow.plugins.texttools.TextToolsEngine
-import com.authorss81.noteflow.plugins.translation.OnDeviceTranslationPlugin
 import com.authorss81.noteflow.plugins.unitconverter.UnitConverterPluginImpl
 import com.authorss81.noteflow.plugins.weather.WeatherPluginImpl
 import com.authorss81.noteflow.plugins.webcapture.WebCaptureEngine
@@ -855,7 +853,6 @@ class PluginRegistry(
          */
         fun defaultPlugins(): List<NoteflowPlugin> = listOf(
             Rot13TransformPlugin(),
-            OnDeviceOcrPlugin(),
             DuckDuckGoWebSearchPlugin(),
             ExportEnginePlugin(),
             ClipToInkFlowPlugin(),
@@ -865,12 +862,18 @@ class PluginRegistry(
             // Phase 16: privacy-first on-device AI & media plugin pack.
             OnDeviceDictationPlugin(),
             OnDeviceReadAloudPlugin(),
-            OnDeviceTranslationPlugin(),
             // Phase 29: the local-LLM assistant is NOT compiled into the base APK
             // anymore — it ships as the downloadable `plugins/llm` plugin (Plugin
             // Store → "On-Device Assistant"). The Assistant capability is unserved
             // until the user installs that artifact; requests fail loudly with the
             // store hint (see NoteflowViewModel.assistant*).
+            // Phase 175: the on-device OCR + translation plugins are NOT compiled
+            // into the base APK anymore — they ship as the downloadable
+            // `plugins/mlkit` artifact (Plugin Store → "On-Device OCR &
+            // Translation"). The OCR/Translation capabilities are unserved until
+            // the user installs that signature-verified artifact; requests fail
+            // loudly with the store hint (see NoteflowViewModel.extractTextFromImage
+            // + translateText).
             ScreenshotNotePluginImpl(),
             // Phase 25: free, compile-time InkStroke→Shape plugin — pure geometry,
             // ~KB, no native deps (safe in the base APK under the hybrid model).

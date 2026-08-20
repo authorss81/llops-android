@@ -113,10 +113,10 @@ class Phase131MetadataAlignmentTest {
         )
 
         // Module wiring: every included module must be listed.
-        for (module in listOf("\":app\"", "\":plugin-sdk\"", "\":plugins:llm\"")) {
+        for (module in listOf("\":app\"", "\":plugin-sdk\"", "\":plugins:llm\"", "\":plugins:mlkit\"")) {
             assertTrue("settings.gradle.kts must include $module", settings.contains("include($module)"))
         }
-        val expectedModules = listOf("app", "plugin-sdk", "plugins:llm")
+        val expectedModules = listOf("app", "plugin-sdk", "plugins:llm", "plugins:mlkit")
         assertEquals("metadata build.modules must match settings.gradle.kts includes", expectedModules, build.modules)
     }
 
@@ -206,6 +206,52 @@ class Phase131MetadataAlignmentTest {
         assertEquals("llm pinnedReleaseVersion must be null (fail closed)", null, llm.pinnedReleaseVersion)
         val seed = fileText("app/src/main/kotlin/com/authorss81/noteflow/plugins/runtime/GeneratedLlmPluginPin.kt")
         assertTrue("GeneratedLlmPluginPin must still be the fail-closed null seed", seed.contains("llmPluginSeedRelease: PinnedPluginRelease? = null"))
+    }
+
+    @Test
+    fun `mlkit plugin metadata matches the plugin build script`() {
+        val metadata = metadata()
+        val mlkit = metadata.downloadablePlugins?.mlkit
+        assertTrue("downloadablePlugins.mlkit must be present", mlkit != null)
+
+        val mlkitBuild = fileText("plugins/mlkit/build.gradle.kts")
+        val settings = fileText("settings.gradle.kts")
+        val toml = fileText("gradle/libs.versions.toml")
+        val appBuild = fileText("app/build.gradle.kts")
+
+        assertEquals("mlkit module must be declared in settings.gradle.kts", ":plugins:mlkit", mlkit!!.module)
+        assertTrue("settings.gradle.kts must include :plugins:mlkit", settings.contains("include(\":plugins:mlkit\")"))
+
+        // id + class must match the descriptor the Phase-23 loader reads.
+        assertTrue("mlkit build must emit the plugin id in the descriptor", mlkitBuild.contains("plugin.id=com.authorss81.noteflow.plugins.mlkit"))
+        assertEquals("mlkit id must match the descriptor", "com.authorss81.noteflow.plugins.mlkit", mlkit.id)
+        assertTrue("mlkit build must emit the plugin class in the descriptor", mlkitBuild.contains("plugin.class=com.authorss81.noteflow.mlkit.OnDeviceMlKitPlugin"))
+        assertEquals("mlkit className must match the descriptor", "com.authorss81.noteflow.mlkit.OnDeviceMlKitPlugin", mlkit.className)
+
+        // Engines: ML Kit text-recognition + translate, versions from the catalog.
+        assertTrue("mlkit build must depend on the catalog text-recognition artifact", mlkitBuild.contains("libs.mlkit.text.recognition"))
+        assertTrue("mlkit build must depend on the catalog translate artifact", mlkitBuild.contains("libs.mlkit.translate"))
+        assertTrue("toml must pin mlkit text-recognition 16.0.1", toml.contains("mlkitTextRecognition = \"16.0.1\""))
+        assertTrue("toml must pin mlkit translate 17.0.3", toml.contains("mlkitTranslate = \"17.0.3\""))
+
+        // The two capabilities it serves.
+        assertEquals("mlkit capabilities must be [ocr, translation]", listOf("ocr", "translation"), mlkit.capabilities)
+
+        // Base-APK rule: :app must NEVER embed the ML Kit engines.
+        assertFalse("the base app must never depend on the text-recognition engine", appBuild.contains("implementation(libs.mlkit.text.recognition)"))
+        assertFalse("the base app must never depend on the translate engine", appBuild.contains("implementation(libs.mlkit.translate)"))
+        assertEquals("mlkit inBaseApk must be false (downloadable-plugin rule)", false, mlkit.inBaseApk)
+
+        // Signing env vars (B2-DEPS-04) must be documented in the metadata.
+        assertTrue("mlkit build must require PLUGIN_SIGNING_KEYSTORE_B64", mlkitBuild.contains("PLUGIN_SIGNING_KEYSTORE_B64"))
+        assertTrue("mlkit build must require PLUGIN_SIGNING_STORE_PASS", mlkitBuild.contains("PLUGIN_SIGNING_STORE_PASS"))
+        assertTrue("metadata must list PLUGIN_SIGNING_KEYSTORE_B64", "PLUGIN_SIGNING_KEYSTORE_B64" in mlkit.signingEnvVars.orEmpty())
+        assertTrue("metadata must list PLUGIN_SIGNING_STORE_PASS", "PLUGIN_SIGNING_STORE_PASS" in mlkit.signingEnvVars.orEmpty())
+
+        // Pinned state: null (fail-closed — no release pin committed yet) matches the generated seed.
+        assertEquals("mlkit pinnedReleaseVersion must be null (fail closed)", null, mlkit.pinnedReleaseVersion)
+        val seed = fileText("app/src/main/kotlin/com/authorss81/noteflow/plugins/runtime/GeneratedMlKitPluginPin.kt")
+        assertTrue("GeneratedMlKitPluginPin must still be the fail-closed null seed", seed.contains("mlKitPluginSeedRelease: PinnedPluginRelease? = null"))
     }
 
     // --- Pure-JVM parser/validator behavior ---------------------------------

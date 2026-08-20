@@ -4,6 +4,7 @@ import java.security.MessageDigest
 import java.security.cert.X509Certificate
 import java.util.Base64
 import java.util.jar.JarFile
+import org.gradle.api.artifacts.component.ModuleComponentIdentifier
 
 plugins {
     alias(libs.plugins.android.library)
@@ -105,26 +106,72 @@ val mlkitAars = configurations.register("mlkitAars")
 dependencies.add("mlkitAars", libs.mlkit.text.recognition)
 dependencies.add("mlkitAars", libs.mlkit.translate)
 
+// R2-KS-21 / dependency-verification: the raw-AAR graph (transitive AND leaf)
+// must not pull OLD androidx versions the lockfile has never seen. Force the
+// SAME androidx versions the app resolves (and `gradle/verification-metadata.xml`
+// already pins) so every resolved artifact is verified. ML Kit/gms artifacts are
+// already in the lockfile.
+mlkitAars.configure {
+    resolutionStrategy.eachDependency {
+        val requested = "${requested.group}:${requested.name}"
+        val forced = ANDROIDX_VERIFIED_VERSIONS[requested]
+        if (forced != null) useVersion(forced)
+    }
+}
+
+/** androidx versions the app graph resolves + the dependency-verification
+ *  lockfile already pins; force these on every configuration that resolves the
+ *  ML Kit AAR graph so nothing unverified slips in (R2-KS-21). */
+private val ANDROIDX_VERIFIED_VERSIONS: Map<String, String> = mapOf(
+    "androidx.activity:activity" to "1.9.3",
+    "androidx.annotation:annotation" to "1.8.1",
+    "androidx.annotation:annotation-experimental" to "1.4.1",
+    "androidx.arch.core:core-common" to "2.2.0",
+    "androidx.arch.core:core-runtime" to "2.2.0",
+    "androidx.collection:collection" to "1.4.4",
+    "androidx.core:core" to "1.15.0",
+    "androidx.core:core-ktx" to "1.15.0",
+    "androidx.emoji2:emoji2" to "1.3.0",
+    "androidx.emoji2:emoji2-views-helper" to "1.3.0",
+    "androidx.fragment:fragment" to "1.5.7",
+    "androidx.lifecycle:lifecycle-common" to "2.8.7",
+    "androidx.lifecycle:lifecycle-livedata" to "2.8.7",
+    "androidx.lifecycle:lifecycle-livedata-core" to "2.8.7",
+    "androidx.lifecycle:lifecycle-process" to "2.8.7",
+    "androidx.lifecycle:lifecycle-runtime" to "2.8.7",
+    "androidx.lifecycle:lifecycle-viewmodel" to "2.8.7",
+    "androidx.lifecycle:lifecycle-viewmodel-savedstate" to "2.8.7",
+    "androidx.savedstate:savedstate" to "1.2.1",
+    "androidx.startup:startup-runtime" to "1.1.1"
+)
+
+/** The ML Kit + gms ENGINE AARs the artifact carries (excludes androidx — their
+ *  classes/asserts/natives are the host's, never duplicated). */
 val mlkitAarFiles: Provider<List<File>> = providers.provider {
     mlkitAars.get().files.filter { it.name.endsWith(".aar") }.sortedBy { it.name }
 }
 
-/** Explode each raw AAR's nested `classes.jar` to a stable temp file. */
+/** Explode each raw AAR's nested `classes.jar` to a stable temp file. AARs
+ *  without a `classes.jar` entry are skipped (their classes are the host's, e.g.
+ *  androidx/AndroidX runtime classes the parent-first classloader provides). */
 val explodedClassJars: Provider<List<File>> = providers.provider {
-    mlkitAarFiles.get().map { aar ->
+    mlkitAarFiles.get().mapNotNull { aar ->
         val exploded = layout.buildDirectory.file("tmp/classes/${aar.name}.classes.jar").get().asFile
-        if (!exploded.exists() || exploded.length() == 0L || exploded.lastModified() < aar.lastModified()) {
+        val needsRebuild = !exploded.exists() || exploded.length() == 0L || exploded.lastModified() < aar.lastModified()
+        if (needsRebuild) {
             exploded.parentFile.mkdirs()
+            var found = false
             JarFile(aar).use { archive ->
-                val classesEntry = archive.getEntry("classes.jar")
-                if (classesEntry != null) {
-                    archive.getInputStream(classesEntry).use { input ->
-                        exploded.outputStream().use { output -> input.copyTo(output) }
-                    }
+                val classesEntry = archive.getEntry("classes.jar") ?: return@mapNotNull null
+                found = true
+                archive.getInputStream(classesEntry).use { input ->
+                    exploded.outputStream().use { output -> input.copyTo(output) }
                 }
             }
+            exploded
+        } else {
+            exploded.takeIf { it.isFile }
         }
-        exploded
     }
 }
 

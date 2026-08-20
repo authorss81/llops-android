@@ -158,7 +158,23 @@ class B2Deps04PluginSigningTest {
         )
         assertTrue(
             "RELEASES must build the table from the seed via buildReleaseTable",
-            text.contains("buildReleaseTable(*listOfNotNull(llmPluginSeedRelease).toTypedArray())")
+            text.contains("buildReleaseTable(") && text.contains("listOfNotNull(llmPluginSeedRelease")
+        )
+    }
+
+    @Test
+    fun `the compile-time pin table folds the mlkit seed release`() {
+        val text = File(
+            repoRoot(),
+            "app/src/main/kotlin/com/authorss81/noteflow/plugins/runtime/CompileTimePluginPinStore.kt"
+        ).readText()
+        assertTrue(
+            "CompileTimePluginPins.RELEASES must fold in mlKitPluginSeedRelease (R2-KS-21)",
+            text.contains("mlKitPluginSeedRelease")
+        )
+        assertTrue(
+            "RELEASES must build the table from all seeds via buildReleaseTable",
+            text.contains("listOfNotNull(llmPluginSeedRelease, mlKitPluginSeedRelease)")
         )
     }
 

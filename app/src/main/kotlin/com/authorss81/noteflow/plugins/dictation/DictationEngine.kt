@@ -7,7 +7,8 @@ import com.authorss81.noteflow.plugins.DictationSession
 /**
  * THE interface between [OnDeviceDictationPlugin] and the platform speech
  * recognizer — exactly the "injected engine" pattern the framework uses for
- * OCR ([com.authorss81.noteflow.plugins.ocr.OcrEngine]). The plugin's wrapper
+ * the (now downloadable) OCR plugin: a typed engine seam with the same shape
+ * as [com.authorss81.noteflow.plugins.OcrPlugin]. The plugin's wrapper
  * logic stays pure JVM and is unit-tested with a fake engine; only
  * [AndroidDictationEngine] touches `SpeechRecognizer`.
  */

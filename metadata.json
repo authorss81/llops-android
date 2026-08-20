@@ -25,13 +25,13 @@
     "modules": [
       "app",
       "plugin-sdk",
-      "plugins:llm"
+      "plugins:llm",
+      "plugins:mlkit"
     ]
   },
   "capabilities": {
     "servedByCompileTimePlugins": [
       "text_transform",
-      "ocr",
       "web_search",
       "file_transfer",
       "export",
@@ -41,7 +41,6 @@
       "web_capture",
       "dictation",
       "read_aloud",
-      "translation",
       "screenshot_note",
       "shape_from_ink",
       "dictionary",
@@ -51,7 +50,9 @@
       "citation_formatter"
     ],
     "servedByDownloadablePlugins": [
-      "assistant"
+      "assistant",
+      "ocr",
+      "translation"
     ],
     "unserved": []
   },
@@ -65,6 +66,26 @@
       "engine": {
         "name": "MediaPipe tasks-genai",
         "version": "0.10.25"
+      },
+      "pinnedReleaseVersion": null,
+      "signingEnvVars": [
+        "PLUGIN_SIGNING_KEYSTORE_B64",
+        "PLUGIN_SIGNING_STORE_PASS",
+        "PLUGIN_SIGNING_KEY_PASS"
+      ]
+    },
+    "mlkit": {
+      "id": "com.authorss81.noteflow.plugins.mlkit",
+      "className": "com.authorss81.noteflow.mlkit.OnDeviceMlKitPlugin",
+      "module": ":plugins:mlkit",
+      "capabilities": [
+        "ocr",
+        "translation"
+      ],
+      "inBaseApk": false,
+      "engine": {
+        "name": "Google ML Kit text-recognition + translate",
+        "version": "16.0.1 / 17.0.3"
       },
       "pinnedReleaseVersion": null,
       "signingEnvVars": [
