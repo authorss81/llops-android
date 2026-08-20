@@ -51,7 +51,6 @@ painting engine, free features).
 | phase-177 | **Plugin ecosystem full review** — verify off-by-default, accurate on/off state in store/settings, enable/disable/delete correctness, delete-confirmation dialog on every path, invocation journal honesty + regression proof (all plugin tests green) | user-reported |
 | phase-178 | **Reference-image layer** - insert a dimmed, non-inking photo underlay on the canvas (ROADMAP Phase-07 encouraged item), persisted per page, excluded from back-save/share, path-confined | user-reported |
 | phase-179 | **Real syntax highlighting for code blocks** via highlighted-kt (ROADMAP 21.8 deferred item, user-approved new dependency) in both markdown renderers, theme-aware, copy stays raw | user-reported |
-| phase-180 | **Screenshot render suite** - Paparazzi (JVM, no emulator) PNGs for every screen x state x theme, saved to `visual-qa/screenshots/` curated baseline + documented artifact-upload path | user-reported |
 | phase-181 | **Re-fix: last-used notebook must open after app start AND after export/Home return** (phase-168 regression still reported) | user-reported |
 | phase-182 | **Re-fix: note titles must NOT become "Unreadable (decryption failed)" after export/Home return** (phase-169 regression still reported) | user-reported |
 | phase-183 | **GalleryView typography & title wrapping** - no mid-word breaks, strip `.md`, 2-line ellipsis | user-reported |
@@ -60,6 +59,8 @@ painting engine, free features).
 | phase-186 | **GalleryView quick actions** - pinned badge + Pin/Unpin, Edit Tags, Move to Trash via shared ViewModel path | user-reported |
 | phase-187 | **GalleryView ink-note paper look** - ruled/dot-grid notebook texture instead of generic placeholder | user-reported |
 | phase-188 | **GalleryView robustness** - no stroke rasterization, large-font-safe layout, dark-theme border, tag-chip cap +N | user-reported |
+| phase-189 | **Fix: Backup-to-file and Backup-from-file FAIL after a vault export** - export leaves the in-memory session (key/DB handle/notebook state) degraded; restore must be side-effect-free + next backup/restore works with the same key | user-reported |
+| phase-190 | **Screenshot render suite** - Paparazzi (JVM, no emulator) PNGs for every screen x state x theme, saved to `visual-qa/screenshots/` curated baseline + documented artifact-upload path | user-reported |
 
 ## How phases run
 

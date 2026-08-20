@@ -1,4 +1,4 @@
-# Phase 180: Screenshot render suite — Paparazzi for every screen × state × theme [NOT STARTED]
+# Phase 190: Screenshot render suite — Paparazzi for every screen × state × theme [NOT STARTED]
 
 You are working on **InkFlow/Noteflow**. This phase adds a JVM screenshot-render
 suite (Paparazzi — NO emulator needed) that produces PNGs for the key screens,
