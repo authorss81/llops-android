@@ -262,6 +262,24 @@
 
 
 
+> **Implemented in phase-193** (2026-08-20, resize handles hidden until dragging,
+> see `workspace/phase-193/REPORT.md`): corner resize symbols on draggable canvas
+> items (sticky notes, photo embeds, code blocks, audio cards) are no longer
+> ALWAYS visible — they appear only while the item is being touched/dragged/
+> resized. New pure-JVM `services/ResizeHandleVisibilityPolicy.kt` is the single
+> decision table reused by both wrapper cards in `AnnotationCanvas.kt`
+> (`DraggableStickyNoteCard` bottom-right handle + `DraggableMediaEmbedCard` four
+> corners + both `RotationHandle` call sites): `visibleAtRest()=false`,
+> `visibleWhileActive(interacting)`, `shouldShow(interacting, collapsed)` and
+> `handleAlpha(visible)` (hidden handles draw at alpha 0 but stay COMPOSED, so
+> the hit-box + `pointerInput` remain live and a resize/rotation can still start
+> on a hidden corner or from the item body). Each card hoists a per-item
+> `interacting` state set by a non-consuming `awaitEachGesture` touch-down
+> observation and toggled by every drag gesture (`onDragStart`/`onDragEnd`).
+> Move/resize delta math and pinch-zoom untouched. Tests:
+> `Phase193ResizeHandleVisibilityTest` (10, pure JVM + source pins). No schema
+> change, no new deps.
+
 > **Implemented in phase-172** (2026-08-19, editor & canvas productivity, see
 > `workspace/phase-172/REPORT.md`): three pure-JVM policies +
 > `services/ColorRecentsPolicy.kt` (persisted recently-used colors + favorites —
