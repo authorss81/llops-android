@@ -598,6 +598,23 @@
     `NoteRepository.parseWaveformJson` (`:997-1009`) is bounded to 600 entries. Tests:
     `LiveWaveformBucketsTest` (9) + `VoiceRecordingPolicyTest` (6) + `B2Dos03VoiceRecordingTest` (12) —
     1429 app tests, only the 2 pre-existing `B1Plat01ReleaseSigningTest` failures.
+  - **Implemented in phase-192** (2026-08-20, voice recording never-saves fix, see
+    `workspace/phase-192/REPORT.md`): `finalizeRecording`'s `!encrypted` branch fired at stop time
+    whenever the stop-time DEK was absent or encryption failed, yet it always claimed "The recording
+    could not be saved securely" and never explained the real cause. New pure-JVM
+    `services/VoiceRecordingSavePolicy.kt` decides the stop-time key: a PASSWORDLESS vault re-reads its
+    device copy at stop via `SecurityService.forDevice(context).readDek()` (the same every-open re-read
+    `NoteflowSqlcipherFactory` performs — never a mint, never run for a password vault; the appended
+    row is encrypted with the re-read DEK as usual), a genuinely-LOCKED password vault (stop-time DEK
+    still null after the re-read) keeps failing closed and shows the exact historic wording, and a
+    `KeyUnavailable`/unsigned-holder state is surfaced as a truthful non-alarming unlock prompt.
+    `VoiceNoteCrypto.encryptRecordingFileDetailed` returns a typed outcome
+    (`Saved`/`Failed(reason)` with `SOURCE`/`BLOB_TARGET`/`ENOSPC`/`IO_OR_CIPHER`) so recoverable
+    conditions (disk full, transient I/O, JCE) get honest messages instead of the generic failure; the
+    old boolean `encryptRecordingFile` is preserved. B1-DB-3 fail-closed is tightened: on any failed
+    save the plaintext cacheDir temp is deleted immediately (previously left until the next
+    start/release sweep). Tests: `Phase192VoiceRecordingSavePolicyTest` + existing source pins
+    (`B1Db03VoiceNoteEncryptionTest`, `Phase153LockedSnackbarPolicyTest`) updated/verified.
   - **Implemented in phase-62** (B1-CRYPTO-03, see `workspace/phase-62/REPORT.md`): the master-password
     salt + wrapped-DEK pair is persisted atomically as ONE versioned blob
     (`services/MasterPasswordCredential.kt`, format `MPB1|<saltB64>|<wrappedDek>`, pure JVM). The old two
