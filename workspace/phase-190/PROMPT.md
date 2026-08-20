@@ -1,55 +1,83 @@
-# Phase 190: Screenshot render suite — Paparazzi for every screen × state × theme [NOT STARTED]
+# Phase 190: APK self-update — uploading an APK of the SAME app must update the installed app [NOT STARTED]
 
-You are working on **InkFlow/Noteflow**. This phase adds a JVM screenshot-render
-suite (Paparazzi — NO emulator needed) that produces PNGs for the key screens,
-states, and themes, and SAVES them so a human can review them visually.
+You are working on **InkFlow/Noteflow**. USER REQUIREMENT: "if I upload an APK of the same
+app, it should update the app." An update flow exists (`AppUpdateDialog`,
+`ui/components/Dialogs.kt:33-290`; `UpdateService`, `services/UpdateService.kt`) but the
+user reports the self-update does NOT actually work reliably. This phase makes
+"upload/select an APK of the same app (same signer, newer version) -> the app updates"
+WORK end-to-end.
 
-Read `docs/ARCHITECTURE.md` and `docs/phase-status.md` first.
+Read `docs/ARCHITECTURE.md`, `docs/phase-status.md`, `docs/RELEASE.md`, and the
+B1-PLAT-7 row in `docs/security-report.md` first (the trust model must stay intact).
 
 ## WORKFLOW RULE
-Work in small steps; `git add -A && git commit -m "llops: phase-178 step N: <desc>" && git push`
+Work in small steps; `git add -A && git commit -m "llops: phase-190 step N: <desc>" && git push`
 after EVERY step. Never sit on uncommitted work.
 
-## Step 1 - Wire Paparazzi
-- Add the Paparazzi plugin to the app module (`app/build.gradle.kts`:
-  `id("app.cash.paparazzi")`, version per `gradle/libs.versions.toml`) — do NOT add
-  to the base APK, it is test-only.
-- Configure it to render at a representative phone size (e.g. 360×800dp, density
-  xxhdpi) and verify `./gradlew :app:recordPaparazziDebug` (or `gradle recordPaparazziDebug`)
-  runs and writes PNGs to `app/build/outputs/paparazzi/`.
-- COMMIT this step (build files + a trivial smoke test).
+## Step 1 - Reproduce + trace (commit it)
+- Trace the whole path in `UpdateService.kt`:
+  - `inspectApkFile` (`:60-116`): `getPackageArchiveInfo(apkFile.absolutePath, 0)`
+    (`:67`), then `verifyApkSignature` (`:84`) which re-parses with
+    `GET_SIGNING_CERTIFICATES` (`:254`) and compares `apkContentsSigners` against
+    the INSTALLED app's signers (`:268-294`). `isNewer` = versionCode OR
+    versionName comparison (`:97`, `:230-246`).
+  - `installApk` (`:177-228`): `UpdateTrustPolicy.mayInstall` gate, TOCTOU
+    re-verify, stage into `filesDir/apk/`, FileProvider URI, ACTION_VIEW installer.
+- Identify why a same-app, same-signer, newer APK might NOT update:
+  1. **Package-identity check missing**: `inspectApkFile` never verifies the APK's
+     package name == `context.packageName`. A same-signer different-package APK
+     would be offered as an "update". Add the package-name equality check.
+  2. **`getPackageArchiveInfo` flags=0** at `:67`: versionName/versionCode are read
+     fine, but signing is only re-parsed later — confirm the two parses agree and
+     a signed APK truly yields signers (v2/v3 scheme) on the target APIs.
+  3. **Version compare edge cases**: same versionCode but versionName e.g. "1.0" vs
+     "1.0.0" (digit-filter compare). Confirm an actually-newer APK is never
+     classified stale.
+  4. **Installer not launched** (`installApk` returns false): staging into
+     `filesDir/apk/` failing, FileProvider path mismatch
+     (`app/src/main/res/xml/file_paths.xml:5` = `files-path name="internal_apk" path="apk/"`),
+     missing `ACTION_VIEW` handler, or the picker MIME filter
+     (`Dialogs.kt` `apkPickerLauncher` uses `application/vnd.android.package-archive`)
+     not matching how the user "uploads".
+  5. **"Upload" entry points**: the user uploads an APK — via the AppUpdateDialog
+     "Select Local APK File" picker, or by pushing a file the app should auto-detect.
+     Verify the picker path works and consider also accepting an APK the user
+     places anywhere reachable (share-sheet ACTION_SEND of an APK into the app is a
+     natural addition).
+- COMMIT this step with the trace + any reproduced failure.
 
-## Step 2 - Screens × states × themes matrix
-Create Paparazzi tests (one test class per screen) covering at least:
-- **Screens**: HomeScreen (list view), GalleryView, CalendarView, Kanban,
-  KnowledgeGraphScreen, MarkdownPreviewScreen, EditorScreen (canvas),
-  TagExplorerView, PluginStoreDialog, PluginSettingsDialog, WebDavSyncDialog,
-  Onboarding/FirstRun, CorruptionRecoveryScreen (static only), empty-vault state.
-- **States** (per screen): empty / populated, loading vs loaded where it exists,
-  selected/pinned items, plugin-off vs on.
-- **Themes**: light AND dark (parameterize — one test, N renders).
-- Each render goes to its own PNG under a screen/state/theme subfolder.
+## Step 2 - Fix so "same app APK -> update" works
+- Add the package-name equality check (same package + same signer + newer version =
+  offer update; otherwise honest "not the same app" refusal).
+- Fix whatever breaks the install launch (staging / provider / intent), and make the
+  flow surface a clear non-alarming message at every failure point (never silent).
+- Ensure the trust model stays B1-PLAT-7-compliant: UNTRUSTED_LOCAL still requires
+  the explicit confirmation dialog, signer still re-verified at install time, only
+  the app's own signer is accepted as "same app".
+- If adding share-sheet APK capture: reuse the existing `PendingShareState` /
+  `ShareCaptureMode` pattern (phase-158) so an APK shared into the app is staged to
+  app-private storage and offered through the update dialog — never scanned from
+  public Downloads.
+- COMMIT this step.
 
-## Step 3 - SAVE the screenshots
-- Verify the PNGs land in `app/build/outputs/paparazzi/<test>/<class>/`.
-- Do NOT commit the raw output folder (large, churns every run). Instead:
-  - Ensure a CI/phase artifact upload exists OR document the exact path so the
-    workflow's upload-artifact step can pick them up (do NOT edit workflows
-    yourself — document the path + a ready-to-paste step in the REPORT).
-  - Commit a SMALL curated set (~5-8 representative PNGs: Home light/dark,
-    Gallery, Editor, empty state) under `visual-qa/screenshots/` so there is a
-    permanent reviewed baseline.
+## Step 3 - Regression proof
+- `gradle assembleDebug` green + `gradle testDebugUnitTest` green (except the
+  pre-existing `Phase148UiFailureTextScrubTest` UNC-path failure + the 2
+  `B1Plat01ReleaseSigningTest` asserts, untouched).
+- Pure-JVM tests: package-identity gate (same package = offer, different package =
+  refuse), same-signer+newer = hasUpdate, older/equal = stale, versionName edge
+  cases, and source pins for the FileProvider staging path + the
+  `mayInstall`/re-verify gates.
 
 ## Definition of done
-- `gradle recordPaparazziDebug` green; PNGs produced for every screen × state × theme.
-- `workspace/phase-178/REPORT.md`: the full PNG inventory (path × screen × state ×
-  theme), total count, and the exact upload-artifact snippet for the workflow.
-- Curated baseline committed to `visual-qa/screenshots/`.
-- No base-APK size change (Paparazzi is test-only), no `.github/workflows/` edits.
+- Uploading/selecting an APK of the same app (same signer, newer version) offers the
+  update and launches the installer; a different-app APK is refused with honest copy;
+  trust gates + re-verify intact.
+- `workspace/phase-190/REPORT.md`: reproduced failure, fixes, test list.
 - Commit + push.
 
 ## Constraints
-- Do NOT edit `.github/workflows/`. Do NOT add runtime deps to the base app.
-- Paparazzi renders with a fake device — no real runtime; any screen that requires
-  a real device (camera, audio playback UI) gets a static-state render only.
-- Keep tests fast (2-core runner): keep total renders ≤ ~90.
+- Do NOT edit `.github/workflows/`. No new dependencies. No DB schema change.
+- Keep B1-PLAT-7 intact: never scan public Downloads; UNTRUSTED_LOCAL always behind
+  explicit confirmation; signer re-verified at install time.
+- Never log APK contents or any decrypted data.
