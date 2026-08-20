@@ -47,10 +47,15 @@
             <trusting group="^com[.]android[.]tools($|([.].*))" regex="true"/>
          </trusted-key>
          <trusted-key id="0F07D1201BDDAB67CFB84EB479752DB6C966F0B8" group="com.google.android" name="annotations" version="4.1.1.4"/>
+         <trusted-key id="10CB6F9BEEEB359BAB646EDB63A7B3585F811BA4" group="com.github.pemistahl" name="lingua" version="1.2.2"/>
          <trusted-key id="190D5A957FF22273E601F7A7C92C5FEC70161C62" group="org.apache" name="apache" version="18"/>
          <trusted-key id="19BEAB2D799C020F17C69126B16698A4ADF4D638" group="org.checkerframework"/>
          <trusted-key id="1A55F091AD28C07F831FA44D7905DE25C78AD456" group="com.google.protobuf"/>
          <trusted-key id="1D0A8B5E77C678A7C724445ABF984B4145EA13F7" group="com.squareup" name="javapoet" version="1.13.0"/>
+         <trusted-key id="1D217F8475EEE9F19AB8DD6B793FD5751A0F0780">
+            <trusting group="app.cash.paparazzi"/>
+            <trusting group="com.squareup.okio"/>
+         </trusted-key>
          <trusted-key id="24D04176586361FDA94EE0315F7786DF73E61F56" group="com.google.devtools.ksp"/>
          <trusted-key id="2DB4F1EF0FA761ECC4EA935C86FDC7E2A11262CB">
             <trusting group="commons-codec"/>
@@ -59,6 +64,7 @@
          </trusted-key>
          <trusted-key id="2E3A1AFFE42B5F53AF19F780BCF4173966770193" group="org.jetbrains" name="annotations" version="13.0"/>
          <trusted-key id="3051D45031E13516A6E8FAFF280D66A55F5316C5" group="org.bitbucket.b_c" name="jose4j" version="0.9.5"/>
+         <trusted-key id="31BAE2E51D95E0F8AD9B7BCC40A3C4432BD7308C" group="com.googlecode.juniversalchardet" name="juniversalchardet" version="1.0.3"/>
          <trusted-key id="3288B8BE8512D6C0CA185268C51E6CBC7FF46F0B" group="com.google.auto"/>
          <trusted-key id="33FD4BFD33554634053D73C0C2148900BCD3C2AF" group="org.jetbrains" name="annotations" version="23.0.0"/>
          <trusted-key id="34441E504A937F43EB0DAEF96A65176A0FB1CD0B" group="org.codehaus.groovy" name="groovy" version="3.0.21"/>
