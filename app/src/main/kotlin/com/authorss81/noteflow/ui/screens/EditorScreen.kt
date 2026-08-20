@@ -4700,6 +4700,14 @@ private fun CanvasSettingsBottomSheet(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 20.dp, vertical = 8.dp)
+                // Phase 194: every option in this very tall sheet (Canvas Mode →
+                // Paper Template chip rows → custom bg → paper color → page mgmt →
+                // minimap → GPU brushes → the second template row Cornell/Meeting/
+                // To-Do Grid → shape auto-snap → two-finger undo → quick-color →
+                // haptics → vibrancy → presets → Reset) was CLIPPED below the fold
+                // and unreachable on a phone screen. Matching the other bottom
+                // sheets in this file, the content is now vertically scrollable.
+                .verticalScroll(rememberScrollState())
         ) {
             Text(
                 text = "Canvas & Paper Options",
