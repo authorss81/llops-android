@@ -85,7 +85,10 @@ import com.authorss81.noteflow.services.PaletteMath
 import com.authorss81.noteflow.services.PressureCurve
 import com.authorss81.noteflow.services.SymmetryMode
 import com.authorss81.noteflow.services.VoiceNoteManager
+import com.authorss81.noteflow.services.ReferenceImagePolicy
+import com.authorss81.noteflow.services.InlineImagePathPolicy
 import com.authorss81.noteflow.ui.components.AnnotationCanvas
+import com.authorss81.noteflow.ui.components.decodeBoundedImage
 import com.authorss81.noteflow.ui.components.rememberSaFExporter
 import com.authorss81.noteflow.ui.components.SaFExportResult
 import com.authorss81.noteflow.ui.components.BacklinksInspectorBottomSheet
@@ -182,6 +185,16 @@ fun EditorScreen(
     var strokes by remember { mutableStateOf<List<Stroke>>(emptyList()) }
     var stickyNotes by remember { mutableStateOf<List<CanvasStickyNote>>(emptyList()) }
     var mediaEmbeds by remember { mutableStateOf<List<CanvasMediaEmbed>>(emptyList()) }
+
+    // Phase 178: per-page reference-image underlay (max one per page, delivered
+    // separately from the draggable embed set). referenceImage holds the stored
+    // embed (relative path + geometry + field-encrypted opacity config);
+    // referenceImageBitmap is the B1-AUTH-? confined decode resolved through
+    // InlineImagePathPolicy against the app-private imports dir; null when the
+    // path was unreadable or policy-blocked (render nothing — never crash).
+    var referenceImage by remember { mutableStateOf<CanvasMediaEmbed?>(null) }
+    var referenceImageBitmap by remember { mutableStateOf<ImageBitmap?>(null) }
+    var referenceImageControlsVisible by remember { mutableStateOf(false) }
 
     // Phase 13: the sticker the STICKER tool currently places (id from
     // StickerCatalog; "sparkles" default), persisted in memory for the session.
@@ -677,6 +690,8 @@ fun EditorScreen(
 
             stickyNotes = data.stickyNotes
             mediaEmbeds = data.mediaEmbeds
+            referenceImage = data.referenceImage
+            referenceImageControlsVisible = data.referenceImage != null
 
             if (!isPdf) {
                 val maxStrokePage = data.strokes.maxOfOrNull { it.pdfPage } ?: 0
@@ -687,6 +702,23 @@ fun EditorScreen(
             }
         }
         isInitialLoadComplete = true
+    }
+
+    // Phase 178: confined decode of the underlay artwork. The stored
+    // contentUrlOrPath is the RELATIVE file name inside the app-private imports
+    // dir; InlineImagePathPolicy.resolve re-verifies the canonical destination
+    // still lives inside that subtree (B1-AUTH-05 contract) before any decode.
+    // A policy-blocked or missing path yields null → the canvas renders no
+    // underlay (fail-closed, never an arbitrary file read).
+    LaunchedEffect(referenceImage?.contentUrlOrPath) {
+        referenceImageBitmap = withContext(Dispatchers.IO) {
+            val storedRelative = referenceImage?.contentUrlOrPath ?: return@withContext null
+            val resolved = InlineImagePathPolicy.resolve(
+                storedRelative,
+                ImportExportService.getImportsDir(context)
+            ) ?: return@withContext null
+            decodeBoundedImage(resolved.absolutePath, maxDim = 1600)?.asImageBitmap()
+        }
     }
 
     // Unmount Guard: flush save when navigating away — but NEVER when the vault
@@ -1029,6 +1061,40 @@ fun EditorScreen(
         viewModel.flushEditorPageSave(page.id, strokes, newNotes, mediaEmbeds, layers)
     }
 
+    // Phase 178: reset the underlay to a new opacity without touching its stored
+    // geometry/path. The new opacity is range-gated by the policy and the row is
+    // re-persisted through the lock-safe VM gate (the encrypted textContent is
+    // re-encrypted inside the repository).
+    fun handleReferenceImageOpacityChange(newOpacity: Float) {
+        val current = referenceImage ?: return
+        val updated = current.copy(
+            textContent = ReferenceImagePolicy.encodeConfig(newOpacity)
+        )
+        referenceImage = updated
+        viewModel.saveReferenceImage(page.id, updated)
+    }
+
+    // Phase 178: remove the underlay — its artwork file is deleted under the same
+    // InlineImagePathPolicy confinement used to read it, then the row is removed.
+    fun handleRemoveReferenceImage() {
+        val current = referenceImage ?: return
+        scope.launch {
+            withContext(Dispatchers.IO) {
+                val storedRelative = current.contentUrlOrPath
+                if (storedRelative != null) {
+                    InlineImagePathPolicy
+                        .resolve(storedRelative, ImportExportService.getImportsDir(context))
+                        ?.let { runCatching { it.delete() } }
+                }
+            }
+            referenceImage = null
+            referenceImageBitmap = null
+            referenceImageControlsVisible = false
+            viewModel.saveReferenceImage(page.id, null)
+            viewModel.showSnackbar("Reference image removed")
+        }
+    }
+
     fun insertPage(before: Boolean) {
         val pageStride = 1528f + 64f
         val currentIdx = if (isPdf) currentPdfPage else ((-panOffset.y / zoomScale) / pageStride).toInt().coerceAtLeast(0)
@@ -1072,16 +1138,30 @@ fun EditorScreen(
             }
         }
 
+        // Phase 178: the underlay belongs to a page like any other canvas item —
+        // inserting a page before/after it must shift its page index and world y.
+        val updatedReference = referenceImage?.let { ref ->
+            if (ref.pdfPage >= targetThreshold) {
+                ref.copy(pdfPage = ref.pdfPage + 1, y = ref.y + pageStride)
+            } else {
+                ref
+            }
+        }
+
         undoStack = undoStack + listOf(strokes)
         redoStack = emptyList()
 
         strokes = updatedStrokes
         stickyNotes = updatedNotes
         mediaEmbeds = updatedEmbeds
+        referenceImage = updatedReference
         pdfTotalPages += 1
 
         // B2-UI-1 (phase-49): lock-safe gated write.
         viewModel.flushEditorPageSave(page.id, updatedStrokes, updatedNotes, updatedEmbeds, layers)
+        if (updatedReference != null) {
+            viewModel.saveReferenceImage(page.id, updatedReference)
+        }
     }
 
     val photoPickerLauncher = rememberLauncherForActivityResult(
@@ -1125,6 +1205,72 @@ fun EditorScreen(
                     viewModel.showSnackbar("Photo is too large to attach (max 25 MB)")
                 } catch (e: Exception) {
                     viewModel.showSnackbar("Could not attach the photo. It may be unreadable or unavailable.")
+                }
+            }
+        }
+    }
+
+    // Phase 178: reference-image underlay insertion. One per page (per the phase
+    // spec); reusing the SAF picker + bounded read, persisting the artwork into
+    // the app-private imports dir, then storing the row with a RELATIVE path so
+    // the renderer re-verifies it through InlineImagePathPolicy (B1-AUTH-05
+    // confinement). Geometry is the aspect-preserving centered fit into the
+    // current page world (pdf pages use the background bitmap's aspect).
+    val referencePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            scope.launch {
+                try {
+                    val bytes = withContext(Dispatchers.IO) {
+                        context.contentResolver.openInputStream(uri)?.use { stream ->
+                            com.authorss81.noteflow.services.AttachmentIngestPolicy.boundedReadBytes(stream)
+                        }
+                    }
+                    if (bytes != null) {
+                        val savedFile = ImportExportService.persistFile(
+                            context,
+                            "reference_image_${System.currentTimeMillis()}.img",
+                            bytes
+                        )
+                        val bmp = withContext(Dispatchers.IO) {
+                            decodeBoundedImage(savedFile, maxDim = 1600)
+                        }
+                        if (bmp == null) {
+                            viewModel.showSnackbar("Could not read that image as a reference underlay")
+                            return@launch
+                        }
+                        val bg = pdfPageBitmaps[currentPdfPage]
+                        val pageWorldW = 1080f
+                        val pageWorldH = if (bg != null && bg.width > 0) {
+                            pageWorldW * bg.height / bg.width
+                        } else {
+                            1528f
+                        }
+                        val fit = ReferenceImagePolicy.fitForPage(bmp.width, bmp.height, pageWorldW, pageWorldH)
+                        val pageStride = 1528f + 64f
+                        val centerViewportY = (-panOffset.y + 600f) / zoomScale
+                        val activePageIdx = if (!isContinuousMode) currentPdfPage else (centerViewportY / pageStride).toInt().coerceIn(0, if (isPdf) (pdfTotalPages - 1).coerceAtLeast(0) else Int.MAX_VALUE)
+                        val embed = CanvasMediaEmbed(
+                            pageId = page.id,
+                            type = MediaEmbedType.REFERENCE_IMAGE,
+                            x = fit.x,
+                            y = fit.y,
+                            width = fit.width,
+                            height = fit.height,
+                            contentUrlOrPath = File(savedFile).name,
+                            textContent = ReferenceImagePolicy.encodeConfig(ReferenceImagePolicy.DEFAULT_OPACITY),
+                            pdfPage = activePageIdx
+                        )
+                        referenceImage = embed
+                        referenceImageControlsVisible = true
+                        viewModel.saveReferenceImage(page.id, embed)
+                        viewModel.showSnackbar("Reference image placed — drag to position, trace over it, adjust opacity or remove from the controls")
+                    }
+                } catch (e: com.authorss81.noteflow.services.ImportArchivePolicy.ImportSizeLimitException) {
+                    viewModel.showSnackbar("Image is too large for a reference underlay (max 25 MB)")
+                } catch (e: Exception) {
+                    viewModel.showSnackbar("Could not add the reference image. It may be unreadable or unavailable.")
                 }
             }
         }
@@ -1802,6 +1948,21 @@ fun EditorScreen(
                         )
                         HorizontalDivider()
                         DropdownMenuItem(
+                            text = {
+                                Text(if (referenceImage == null) "Insert Reference Image…" else "Remove Reference Image")
+                            },
+                            leadingIcon = { Icon(Icons.Outlined.Image, contentDescription = null) },
+                            onClick = {
+                                showOverflowMenu = false
+                                if (referenceImage == null) {
+                                    referencePickerLauncher.launch("image/*")
+                                } else {
+                                    handleRemoveReferenceImage()
+                                }
+                            }
+                        )
+                        HorizontalDivider()
+                        DropdownMenuItem(
                             text = { Text("Clear Canvas", color = MaterialTheme.colorScheme.error) },
                             leadingIcon = { Icon(Icons.Outlined.DeleteSweep, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
                             onClick = {
@@ -1968,7 +2129,17 @@ fun EditorScreen(
                         viewModel.settings.brushColorModeKey = StrokeColorMode.SOLID.persistenceKey
                     }
                 },
-                importedBrushPresets = importedBrushPresets
+                importedBrushPresets = importedBrushPresets,
+                // Phase 178: reference-image underlay (bitmap confined via
+                // InlineImagePathPolicy; opacity range-gated by the policy).
+                referenceImage = referenceImageBitmap,
+                referenceImageOpacity = referenceImage?.let { ReferenceImagePolicy.decodeOpacity(it.textContent) }
+                    ?: ReferenceImagePolicy.DEFAULT_OPACITY,
+                referenceImageX = referenceImage?.x ?: 0f,
+                referenceImageY = referenceImage?.y ?: 0f,
+                referenceImageWidth = referenceImage?.width ?: 0f,
+                referenceImageHeight = referenceImage?.height ?: 0f,
+                referenceImagePage = referenceImage?.pdfPage ?: 0
             )
 
             // Voice note failure banner (real recorder/playback errors — no silent fakes)
@@ -2101,6 +2272,64 @@ fun EditorScreen(
                     },
                     onDismiss = { ocrTargetPath = null }
                 )
+            }
+
+            // Phase 178: the reference-image control card — shown when the page
+            // has an underlay and the controls are open (auto-opened on insert).
+            // Holds the opacity slider (range-gated) and removal. Compact and
+            // dismissible so it can never crowd the canvas.
+            if (referenceImage != null && referenceImageControlsVisible) {
+                Surface(
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
+                    shape = RoundedCornerShape(12.dp),
+                    shadowElevation = 6.dp,
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(start = 12.dp, end = 12.dp, top = 4.dp)
+                        .fillMaxWidth(0.9f)
+                ) {
+                    Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = "Reference Image",
+                                style = MaterialTheme.typography.labelMedium,
+                                modifier = Modifier.weight(1f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            IconButton(
+                                onClick = { referenceImageControlsVisible = false },
+                                modifier = Modifier.size(26.dp)
+                            ) {
+                                Icon(
+                                    Icons.Outlined.Close,
+                                    contentDescription = "Hide reference image controls",
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
+                        val currentOpacity = referenceImage?.let { ReferenceImagePolicy.decodeOpacity(it.textContent) }
+                            ?: ReferenceImagePolicy.DEFAULT_OPACITY
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(text = "Opacity", style = MaterialTheme.typography.labelSmall)
+                            Slider(
+                                value = currentOpacity,
+                                onValueChange = { handleReferenceImageOpacityChange(it) },
+                                valueRange = ReferenceImagePolicy.MIN_OPACITY..ReferenceImagePolicy.MAX_OPACITY,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .padding(horizontal = 8.dp)
+                            )
+                            Text(
+                                text = "${(currentOpacity * 100).toInt()}%",
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                        }
+                        TextButton(onClick = { handleRemoveReferenceImage() }) {
+                            Text("Remove Reference Image", color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                }
             }
         }
     }

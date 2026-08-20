@@ -163,7 +163,11 @@ data class Stroke(
 }
 
 enum class MediaEmbedType {
-    PHOTO, CODE_BLOCK, AUDIO_NOTE, STICKY_NOTE, STICKER
+    PHOTO, CODE_BLOCK, AUDIO_NOTE, STICKY_NOTE, STICKER,
+    // Phase 178: per-page reference-image underlay. NOT a draggable canvas card —
+    // `getCanvasItemsForPage` filters it out of the editor's embed set and the
+    // canvas renders it (dimmed) as the bottom layer under the strokes.
+    REFERENCE_IMAGE
 }
 
 data class CanvasMediaEmbed(

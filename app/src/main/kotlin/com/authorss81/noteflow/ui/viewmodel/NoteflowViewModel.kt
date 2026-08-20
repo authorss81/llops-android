@@ -4161,11 +4161,18 @@ fun updatePageTags(id: String, tags: String) {
         val strokes: List<Stroke>,
         val layers: List<LayerEntity>,
         val stickyNotes: List<CanvasStickyNote>,
-        val mediaEmbeds: List<CanvasMediaEmbed>
+        val mediaEmbeds: List<CanvasMediaEmbed>,
+        // Phase 178: the per-page reference-image underlay (null when the page has
+        // none). Delivered OUTSIDE the draggable embed set — the canvas renders it
+        // as the bottom layer under the strokes.
+        val referenceImage: CanvasMediaEmbed? = null
     )
 
     suspend fun loadEditorCanvasPage(pageId: String): EditorCanvasData =
-        withLockedPoolGuard("canvas data", EditorCanvasData(emptyList(), emptyList(), emptyList(), emptyList())) {
+        withLockedPoolGuard(
+            "canvas data",
+            EditorCanvasData(emptyList(), emptyList(), emptyList(), emptyList())
+        ) {
             val strokes = repository.getStrokesForPage(pageId)
             // R2-b2b4-DOS-02 (phase-150): the repository read is ALREADY bounded
             // to the top LayerRenderBudgetPolicy.MAX_LIVE_LAYER_COUNT layers (the
@@ -4182,8 +4189,22 @@ fun updatePageTags(id: String, tags: String) {
                 LayerRenderBudgetPolicy.omittedLayerCount(rawLayerCount)
             )
             val (stickyNotes, mediaEmbeds) = repository.getCanvasItemsForPage(pageId)
-            EditorCanvasData(strokes, layers, stickyNotes, mediaEmbeds)
+            val referenceImage = repository.getReferenceImageForPage(pageId)
+            EditorCanvasData(strokes, layers, stickyNotes, mediaEmbeds, referenceImage)
         }
+
+    /**
+     * Phase 178: persists (or, with a null [embed], removes) the page's
+     * reference-image underlay row. Lock-guarded — a lock racing the write
+     * surfaces the non-alarming gate notice, never a crash or a plaintext row.
+     */
+    fun saveReferenceImage(pageId: String, embed: CanvasMediaEmbed?) {
+        viewModelScope.launch {
+            writeGuardedAgainstLock("reference image") {
+                repository.saveReferenceImageForPage(pageId, embed)
+            }
+        }
+    }
 
     /**
      * R2-b2b1-UI-01 (phase-134): every composition-scoped consumer of the

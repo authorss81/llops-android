@@ -193,7 +193,20 @@ fun AnnotationCanvas(
     // here so the active-preset resolver can also resolve imported ids (they are
     // NOT members of BrushPresetPack). Default empty — pre-existing call sites
     // compile unchanged.
-    importedBrushPresets: List<com.authorss81.noteflow.services.BrushPreset> = emptyList()
+    importedBrushPresets: List<com.authorss81.noteflow.services.BrushPreset> = emptyList(),
+    // Phase 178: per-page reference-image underlay (ROADMAP Phase-07 encouraged
+    // item). A dimmed bitmap rendered as the BOTTOM layer (paper → template →
+    // reference image → background bitmaps → strokes/layers), so strokes draw
+    // OVER it and never modify it. Geometry is stored with the page (world
+    // coordinates matching the stroke space); opacity is range-gated by
+    // ReferenceImagePolicy. All defaults keep pre-existing call sites unchanged.
+    referenceImage: ImageBitmap? = null,
+    referenceImageOpacity: Float = com.authorss81.noteflow.services.ReferenceImagePolicy.DEFAULT_OPACITY,
+    referenceImageX: Float = 0f,
+    referenceImageY: Float = 0f,
+    referenceImageWidth: Float = 0f,
+    referenceImageHeight: Float = 0f,
+    referenceImagePage: Int = 0
 ) {
     val vibrancyBoost = if (vibrancyEnabled) vibrancyBoostLevel.coerceIn(0f, 1f) else 0f
     var internalZoomScale by remember { mutableFloatStateOf(zoomScale) }
@@ -1607,6 +1620,18 @@ fun AnnotationCanvas(
                         }
                     }
 
+                    // Phase 178: reference-image underlay — above the paper/template/
+                    // background page image (so it is traceable on a scanned or
+                    // PDF-backed page) yet strictly BELOW the ink pass (strokes draw
+                    // over it and never modify it).
+                    if (referenceImagePage == pdfPageFilter) {
+                        drawReferenceImage(
+                            referenceImage, referenceImageOpacity,
+                            referenceImageX, referenceImageY,
+                            referenceImageWidth, referenceImageHeight
+                        )
+                    }
+
                     // Render Strokes for single page
                     val previewStroke = if (activePoints.isNotEmpty() || (activeStart != null && activeEnd != null)) {
                         Stroke(
@@ -1663,6 +1688,15 @@ fun AnnotationCanvas(
 
                     drawPaperCard(0f, 0f, canvasW, infiniteH, paperColor = parsedPaperColor, isDarkPaper = isDarkPaper, pageLabel = null)
                     drawPaperTemplate(template, 0f, 0f, canvasW, infiniteH, isDarkPaper = isDarkPaper, paperTexture = paperTexture)
+
+                    // Phase 178: reference-image underlay (seamless world coords).
+                    if (referenceImagePage == pdfPageFilter) {
+                        drawReferenceImage(
+                            referenceImage, referenceImageOpacity,
+                            referenceImageX, referenceImageY,
+                            referenceImageWidth, referenceImageHeight
+                        )
+                    }
 
                     val previewStroke = if (activePoints.isNotEmpty() || (activeStart != null && activeEnd != null)) {
                         Stroke(
@@ -1787,6 +1821,20 @@ fun AnnotationCanvas(
                                     )
                                 }
                             }
+                        }
+
+                        // Phase 178: reference-image underlay — above this page's
+                        // paper/template/page-bitmap (traceable on scanned pages)
+                        // yet strictly BELOW this page's ink pass (strokes draw over
+                        // it, never modify it). Only on its own page; offset into the
+                        // paginated world rect.
+                        if (pageIdx == referenceImagePage) {
+                            drawReferenceImage(
+                                referenceImage, referenceImageOpacity,
+                                referenceImageX, referenceImageY,
+                                referenceImageWidth, referenceImageHeight,
+                                pageTopY = pageTopY
+                            )
                         }
 
                         // 3. Render Strokes belonging to this page
@@ -2871,6 +2919,36 @@ private fun DrawScope.drawPaperTemplate(
             }
         }
     }
+}
+
+/**
+ * Phase 178: renders the per-page reference-image underlay (dim, below the ink).
+ *
+ * Drawn AFTER the paper/template and BEFORE the background bitmap + stroke pass,
+ * so strokes render OVER it and can never modify it (it is a plain DrawScope
+ * drawImage in the canvas body — it has no inking target, no touch target and no
+ * layer bitmap). Opacity is range-gated by ReferenceImagePolicy so a corrupted
+ * stored value can never render a full-strength underlay. [pageTopY] offsets the
+ * stored page-relative y into the paginated world rect.
+ */
+private fun DrawScope.drawReferenceImage(
+    image: ImageBitmap?,
+    opacity: Float,
+    x: Float,
+    y: Float,
+    width: Float,
+    height: Float,
+    pageTopY: Float = 0f
+) {
+    if (image == null) return
+    if (width <= 0f || height <= 0f) return
+    val alpha = com.authorss81.noteflow.services.ReferenceImagePolicy.clampOpacity(opacity)
+    drawImage(
+        image = image,
+        dstOffset = IntOffset(x.toInt(), (y + pageTopY).toInt()),
+        dstSize = IntSize(width.toInt(), height.toInt()),
+        alpha = alpha
+    )
 }
 
 private fun convertToInkStroke(stroke: Stroke, context: android.content.Context? = null, vibrancy: Float = 0f): InkStroke? {
@@ -4880,6 +4958,10 @@ private fun DraggableMediaEmbedCard(
                             )
                         }
                     }
+                }
+                MediaEmbedType.REFERENCE_IMAGE -> {
+                    // Phase 178: never a draggable card — the underlay is filtered
+                    // out of the editor's embed set and drawn in the canvas body.
                 }
             }
         }

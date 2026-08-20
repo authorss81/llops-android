@@ -4,6 +4,7 @@ import androidx.room.withTransaction
 import com.authorss81.noteflow.data.db.NoteflowDatabase
 import com.authorss81.noteflow.data.model.*
 import com.authorss81.noteflow.services.AttachmentIngestPolicy
+import com.authorss81.noteflow.services.ReferenceImagePolicy
 import com.authorss81.noteflow.services.DatabaseSecurityHelper
 import com.authorss81.noteflow.services.DecryptFailurePolicy
 import com.authorss81.noteflow.services.EncryptionService
@@ -1327,11 +1328,84 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
                         rotationDegrees = embed.rotationDegrees
                     )
                 )
-            } else {
+            } else if (embed.type != MediaEmbedType.REFERENCE_IMAGE) {
+                // Phase 178: the reference-image underlay is NOT part of the
+                // draggable canvas embed set — it is loaded on its own via
+                // getReferenceImageForPage and rendered as the bottom canvas layer.
                 mediaEmbeds.add(embed)
             }
         }
         Pair(stickyNotes, mediaEmbeds)
+    }
+
+    /**
+     * Phase 178: reads the page's reference-image underlay row (at most one). The
+     * row's `textContent` holds the field-encrypted opacity config (see
+     * ReferenceImagePolicy.encodeConfig); failures render the UNREADABLE_MARKER
+     * path like every other embed, and the caller falls back to the in-range
+     * default opacity.
+     */
+    suspend fun getReferenceImageForPage(pageId: String): CanvasMediaEmbed? = withContext(Dispatchers.Default) {
+        val entity = db.mediaEmbedDao().getReferenceImageForPage(pageId) ?: return@withContext null
+        val stored = entity.textContent ?: ""
+        val config = if (stored.isNotBlank()) {
+            decryptFieldForDisplay(stored, "media_embeds", entity.id, "textContent", pageId)
+        } else {
+            stored
+        }
+        CanvasMediaEmbed(
+            id = entity.id,
+            pageId = entity.pageId,
+            type = MediaEmbedType.REFERENCE_IMAGE,
+            x = entity.x,
+            y = entity.y,
+            width = entity.width,
+            height = entity.height,
+            contentUrlOrPath = entity.contentUrlOrPath,
+            textContent = config,
+            pdfPage = entity.pdfPage
+        )
+    }
+
+    /**
+     * Phase 178: persists (or, with a null [embed], removes) the page's
+     * reference-image underlay row. [embed] must carry the saved path in
+     * [CanvasMediaEmbed.contentUrlOrPath] and the stored geometry in x/y/width/
+     * height; the opacity is field-encrypted into textContent. A null [embed]
+     * only ever deletes the row — the file itself is removed by the caller's
+     * delete of the referenced artwork.
+     */
+    suspend fun saveReferenceImageForPage(pageId: String, embed: CanvasMediaEmbed?) = withContext(Dispatchers.Default) {
+        db.withTransaction {
+            db.mediaEmbedDao().deleteReferenceImagesForPage(pageId)
+            if (embed == null) return@withTransaction
+            val opacity = ReferenceImagePolicy.decodeOpacity(embed.textContent)
+            val dek = requireEncryptionKey()
+            val storedConfig = EncryptionService.encryptField(
+                ReferenceImagePolicy.encodeConfig(opacity).toByteArray(),
+                dek, "media_embeds", embed.id, "textContent"
+            )
+            db.mediaEmbedDao().insertMediaEmbeds(
+                listOf(
+                    MediaEmbedEntity(
+                        id = embed.id,
+                        pageId = pageId,
+                        typeName = MediaEmbedType.REFERENCE_IMAGE.name,
+                        x = embed.x,
+                        y = embed.y,
+                        width = embed.width,
+                        height = embed.height,
+                        contentUrlOrPath = embed.contentUrlOrPath,
+                        textContent = storedConfig,
+                        codeLanguage = null,
+                        durationMs = 0L,
+                        waveformJson = "[]",
+                        pdfPage = embed.pdfPage,
+                        rotationDegrees = 0f
+                    )
+                )
+            )
+        }
     }
 
     suspend fun saveCanvasItemsForPage(pageId: String, stickyNotes: List<CanvasStickyNote>, embeds: List<CanvasMediaEmbed>) = withContext(Dispatchers.Default) {
@@ -1366,8 +1440,18 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
         val lock = pageSaveLocks.computeIfAbsent(pageId) { Mutex() }
         lock.withLock {
             db.withTransaction {
+                // Phase 178: the reference-image underlay is NOT in the editor's
+                // embed set, so this delete-then-reinsert must carry the current
+                // reference row forward or every page save would erase it. It is
+                // re-inserted as a RAW entity pass-through (its textContent is the
+                // already-encrypted config — re-encrypting it here would double-gauze
+                // the ciphertext) AFTER the regular embeds re-insert their rows.
+                val reference = db.mediaEmbedDao().getReferenceImageForPage(pageId)
                 db.mediaEmbedDao().deleteMediaEmbedsForPage(pageId)
-                if (embeds.isEmpty()) return@withTransaction
+                if (embeds.isEmpty()) {
+                    if (reference != null) db.mediaEmbedDao().insertMediaEmbeds(listOf(reference))
+                    return@withTransaction
+                }
 
                 val entities = embeds.map { embed ->
                     val rawText = embed.textContent ?: ""
@@ -1396,6 +1480,7 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
                     )
                 }
                 db.mediaEmbedDao().insertMediaEmbeds(entities)
+                if (reference != null) db.mediaEmbedDao().insertMediaEmbeds(listOf(reference))
             }
         }
     }

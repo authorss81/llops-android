@@ -237,6 +237,17 @@ interface MediaEmbedDao {
     @Query("SELECT * FROM media_embeds WHERE pageId = :pageId")
     suspend fun getMediaEmbedsForPage(pageId: String): List<MediaEmbedEntity>
 
+    // Phase 178: the per-page reference-image underlay row (at most one per page).
+    @Query(
+        "SELECT * FROM media_embeds WHERE pageId = :pageId AND typeName = 'REFERENCE_IMAGE' LIMIT 1"
+    )
+    suspend fun getReferenceImageForPage(pageId: String): MediaEmbedEntity?
+
+    @Query(
+        "DELETE FROM media_embeds WHERE pageId = :pageId AND typeName = 'REFERENCE_IMAGE'"
+    )
+    suspend fun deleteReferenceImagesForPage(pageId: String)
+
     @Upsert
     suspend fun insertMediaEmbeds(embeds: List<MediaEmbedEntity>)
 
