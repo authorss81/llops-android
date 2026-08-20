@@ -60,10 +60,20 @@
 > pure-JVM `services/GalleryTitleDisplayPolicy.kt` (`displayTitle`): strips ONE redundant
 > `.md`/`.markdown`/`.txt` suffix for display only (never the stored DB title;
 > `foo.md.md` keeps one suffix), and the title `Text` renders with `maxLines=2`,
-> `TextOverflow.Ellipsis`, `softWrap=true`, `Hyphens.None`, `FontWeight.SemiBold`,
-> `lineHeight=18.sp`. The footer date also capped `maxLines=1`+Ellipsis
-> (`GalleryView.kt:274-279`). Tests: `app/src/test/java/com/authorss81/noteflow/
-> GalleryTitleDisplayPolicyTest.kt` (11). No schema change, no new deps.
+> `TextOverflow.Ellipsis`, `softWrap=true`, `Hyphens.None` (applied VIA THE STYLE —
+> M3 `Text` in Compose UI 1.7.6 has no `hyphens` parameter, so a direct
+> `Text(hyphens=...)` arg cannot compile), `FontWeight.SemiBold`,
+> `lineHeight=18.sp` (both `hyphens` + `lineHeight` live in `titleSmall.copy(...)`).
+> The footer date also capped `maxLines=1`+Ellipsis (`GalleryView.kt:274-279`).
+> **Review-fix (2026-08-20)** extended the same `displayTitle` to the OTHER
+> display-only title render sites in the home tab for consistency: list view
+> (`HomeScreen.kt:2587`), tag-editor dialog (`HomeScreen.kt:1920`), Kanban cards
+> (`KanbanBoardView.kt:218`), Calendar cards (`CalendarView.kt:241`), Spreadsheet
+> cells (`SpreadsheetTableView.kt:100`), editor app bar (`EditorScreen.kt:1400`),
+> Markdown-preview app bar (`MarkdownPreviewScreen.kt:536`). Stored DB titles,
+> rename dialogs, routing (`MainActivity.kt:601,711`) and export call sites keep the
+> RAW value — display-only everywhere. Tests: `GalleryTitleDisplayPolicyTest.kt` (11)
+> + `Phase183GalleryTypographyTest.kt` (2 source pins). No schema change, no new deps.
 
 > **Implemented in phase-167** (2026-08-19, bottom-nav-bar overlay fix — dynamic insets,
 > see `workspace/phase-167/REPORT.md`): the app draws edge-to-edge (`MainActivity.kt:252`),

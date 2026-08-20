@@ -35,6 +35,7 @@ import com.authorss81.noteflow.plugins.webcapture.WebPageFetchPolicy
 import com.authorss81.noteflow.services.BackupPasswordPolicy
 import com.authorss81.noteflow.services.DocumentTextExtractor
 import com.authorss81.noteflow.services.ExportDestinationPolicy
+import com.authorss81.noteflow.services.GalleryTitleDisplayPolicy
 import com.authorss81.noteflow.services.HomeStatsMath
 import com.authorss81.noteflow.services.ImportArchivePolicy
 import com.authorss81.noteflow.services.ImportExportService
@@ -1916,7 +1917,7 @@ fun HomeScreen(
 
         tagEditorTargetPage?.let { page ->
             TagEditorDialog(
-                itemTitle = page.title,
+                itemTitle = GalleryTitleDisplayPolicy.displayTitle(page.title),
                 currentTagsString = page.tags,
                 onDismiss = { tagEditorTargetPage = null },
                 onSaveTags = { newTags ->
@@ -2583,7 +2584,7 @@ private fun NotePageCard(
                 Spacer(modifier = Modifier.width(12.dp))
                 Column {
                     Text(
-                        text = page.title,
+                        text = GalleryTitleDisplayPolicy.displayTitle(page.title),
                         style = MaterialTheme.typography.titleMedium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis

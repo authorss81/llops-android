@@ -25,6 +25,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.authorss81.noteflow.data.model.NotePageEntity
+import com.authorss81.noteflow.services.GalleryTitleDisplayPolicy
 import com.authorss81.noteflow.ui.viewmodel.NoteflowViewModel
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -214,7 +215,7 @@ private fun KanbanCardItem(
                 verticalAlignment = Alignment.Top
             ) {
                 Text(
-                    text = page.title,
+                    text = GalleryTitleDisplayPolicy.displayTitle(page.title),
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 2,

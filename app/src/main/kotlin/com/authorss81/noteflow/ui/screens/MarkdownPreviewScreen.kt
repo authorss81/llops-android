@@ -69,6 +69,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.authorss81.noteflow.data.model.NotePageEntity
 import com.authorss81.noteflow.services.ImportExportService
+import com.authorss81.noteflow.services.GalleryTitleDisplayPolicy
 import com.authorss81.noteflow.services.HeadingScrollIndex
 import com.authorss81.noteflow.services.NoteStatsFormatPolicy
 import com.authorss81.noteflow.services.ReaderModePolicy
@@ -532,7 +533,7 @@ fun MarkdownPreviewScreen(
             TopAppBar(
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text(page.title, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                        Text(GalleryTitleDisplayPolicy.displayTitle(page.title), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                         // Phase 158 (22.5): instant reader/focus toggle — no
                         // transition animation (respects reduce-motion). Selecting it
                         // strips the editing chrome and renders a read-only, capped

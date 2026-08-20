@@ -19,15 +19,18 @@ The compact gallery grid = `ui/components/GalleryView.kt` (`GalleryView` + priva
 | Type badge + pin icons | `GalleryView.kt:134-146`, `:157-163` | icons only | No text. |
 | Helpers `pageTypeIcon`/`pageTypeLabel` | `GalleryView.kt:283-295` | derived from `sourceFileType` | No title text. |
 
-### Title render sites in the SAME home tab's other view modes (out of phase-183 scope — noted for the report only)
+### Title render sites in the SAME home tab's other view modes (COVERED by the phase-183
+review fix 2026-08-20 — all now render `GalleryTitleDisplayPolicy.displayTitle(page.title)`)
 | View | File:line |
 |------|-----------|
-| List view mode 0 (`NotePageCard`) | `HomeScreen.kt:2586` `text = page.title` |
-| Kanban mode 2 | `KanbanBoardView.kt:217` `text = page.title` |
-| Calendar mode 3 | `CalendarView.kt:240` `text = page.title` |
-| Spreadsheet mode 4 | `SpreadsheetTableView.kt:99` `text = page.title` |
-| Wiki-suggestion card | `HomeScreen.kt:1919` `itemTitle = page.title` |
-| Rename dialogs (raw stored value, correct to keep) | `HomeScreen.kt:608,838,1359,1389` `initialDialogText = page.title` |
+| List view mode 0 (`NotePageCard`) | `HomeScreen.kt:2587` |
+| Kanban mode 2 | `KanbanBoardView.kt:218` |
+| Calendar mode 3 | `CalendarView.kt:241` |
+| Spreadsheet mode 4 | `SpreadsheetTableView.kt:100` |
+| Tag-editor dialog item title | `HomeScreen.kt:1920` |
+| Editor app bar (display-only) | `EditorScreen.kt:1400` |
+| Markdown-preview app bar (display-only) | `MarkdownPreviewScreen.kt:536` |
+| Rename dialogs (raw stored value, correct to keep — NOT display-only) | `HomeScreen.kt:608,838,1359,1389` `initialDialogText = page.title` |
 
 Non-display consumers of `page.title` (routing only, must keep the RAW value):
 `MainActivity.kt:601,711` (`endsWith(".md")` checks driving editor choice).

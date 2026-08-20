@@ -24,6 +24,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.authorss81.noteflow.data.model.NotePageEntity
+import com.authorss81.noteflow.services.GalleryTitleDisplayPolicy
 import com.authorss81.noteflow.ui.viewmodel.NoteflowViewModel
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -96,7 +97,7 @@ private fun SpreadsheetTableRow(
         // Title Cell
         Box(modifier = Modifier.width(200.dp)) {
             Text(
-                text = page.title,
+                text = GalleryTitleDisplayPolicy.displayTitle(page.title),
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,

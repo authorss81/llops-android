@@ -71,6 +71,7 @@ import com.authorss81.noteflow.plugins.ShapeFromInkOutcome
 import com.authorss81.noteflow.plugins.export.mimeType
 import com.authorss81.noteflow.plugins.inktos.InkToShapePlugin
 import com.authorss81.noteflow.services.ImportExportService
+import com.authorss81.noteflow.services.GalleryTitleDisplayPolicy
 import com.authorss81.noteflow.services.ExportDestinationPolicy
 import com.authorss81.noteflow.services.PsdExportPolicy
 import com.authorss81.noteflow.services.DockPosturePolicy
@@ -1396,7 +1397,7 @@ fun EditorScreen(
                             .padding(horizontal = 8.dp, vertical = 6.dp)
                     ) {
                         Text(
-                            text = page.title,
+                            text = GalleryTitleDisplayPolicy.displayTitle(page.title),
                             style = MaterialTheme.typography.titleMedium,
                             color = MaterialTheme.colorScheme.onSurface,
                             maxLines = 1,

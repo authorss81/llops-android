@@ -150,12 +150,20 @@ private fun GalleryCardItem(
 
                     Text(
                         text = GalleryTitleDisplayPolicy.displayTitle(page.title),
-                        style = MaterialTheme.typography.titleSmall.copy(hyphens = Hyphens.None),
+                        // M3 `Text` in Compose UI 1.7.6 has NO `hyphens` parameter
+                        // (unlike a TextStyle property) — it must be applied through
+                        // the style, never as a direct `Text(hyphens = ...)` arg.
+                        // `lineHeight` lives here too so the typography is one source
+                        // of truth; both are sp units, so they scale with the user's
+                        // font scale (ratio preserved, no added clipping at 2x).
+                        style = MaterialTheme.typography.titleSmall.copy(
+                            hyphens = Hyphens.None,
+                            lineHeight = 18.sp
+                        ),
                         fontWeight = FontWeight.SemiBold,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                         softWrap = true,
-                        lineHeight = 18.sp,
                         modifier = Modifier.weight(1f)
                     )
 

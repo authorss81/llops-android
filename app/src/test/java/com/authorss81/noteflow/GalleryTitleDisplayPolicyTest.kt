@@ -68,7 +68,9 @@ class GalleryTitleDisplayPolicyTest {
     @Test
     fun `surrounding whitespace is trimmed in the display string only`() {
         assertEquals("Note", GalleryTitleDisplayPolicy.displayTitle("  Note.md  "))
-        assertEquals("  Note.md  ", "  Note.md  ")
+        // The same trim applies to extension-less names — a padded title is never
+        // passed through to the card verbatim (display-side only).
+        assertEquals("Groceries", GalleryTitleDisplayPolicy.displayTitle("  Groceries  "))
     }
 
     @Test
