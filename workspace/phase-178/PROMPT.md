@@ -2,7 +2,7 @@
 
 You are working on **InkFlow/Noteflow**. This phase adds a JVM screenshot-render
 suite (Paparazzi — NO emulator needed) that produces PNGs for the key screens,
-states, and themes, and SAVES them so a vision model / human can review.
+states, and themes, and SAVES them so a human can review them visually.
 
 Read `docs/ARCHITECTURE.md` and `docs/phase-status.md` first.
 
