@@ -4464,6 +4464,14 @@ private fun DraggableStickyNoteCard(
 
     val actualWidth = if (currentNote.isCollapsed) 48f else resizeWidth
 
+    // Phase 193: resize handles are INVISIBLE at rest and appear only while
+    // the item is being touched/dragged/resized. One shared policy for every
+    // item type; the observation below reveals on touch-down and hides on
+    // pointer-up/cancel, while each drag gesture also toggles the flag so a
+    // resize/rotation started on the (still-composed) handle hit-box keeps the
+    // handles visible for the duration of the gesture.
+    var interacting by remember(currentNote.id) { mutableStateOf(false) }
+
     Box(
         modifier = Modifier
             .offset { IntOffset(screenX.toInt(), screenY.toInt()) }
@@ -4478,6 +4486,17 @@ private fun DraggableStickyNoteCard(
                 rotationZ = liveRotation
             }
             .semantics { contentDescription = "Sticky note" }
+            .pointerInput(currentNote.id) {
+                // Observes touches WITHOUT consuming them: any touch-down on
+                // the item reveals the resize handles; the pointer going up or
+                // a cancelled gesture hides them again.
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    interacting = true
+                    waitForUpOrCancellation()
+                    interacting = false
+                }
+            }
     ) {
         Box(
             modifier = Modifier
@@ -4497,6 +4516,7 @@ private fun DraggableStickyNoteCard(
                                 onDragStart = {
                                     dragOffsetX = 0f
                                     dragOffsetY = 0f
+                                    interacting = true
                                 },
                                 onDrag = { change, dragAmount ->
                                     change.consume()
@@ -4514,6 +4534,7 @@ private fun DraggableStickyNoteCard(
                                     val finalY = currentNote.y + dragOffsetY
                                     dragOffsetX = 0f
                                     dragOffsetY = 0f
+                                    interacting = false
 
                                     val updated = currentNote.copy(x = finalX, y = finalY, width = resizeWidth, height = resizeHeight)
                                     val index = activeStickyNoteList.indexOfFirst { it.id == currentNote.id }
@@ -4526,6 +4547,7 @@ private fun DraggableStickyNoteCard(
                                 onDragCancel = {
                                     dragOffsetX = 0f
                                     dragOffsetY = 0f
+                                    interacting = false
                                 }
                             )
                         },
@@ -4680,14 +4702,20 @@ private fun DraggableStickyNoteCard(
             )
         }
 
-        // Resize Handle (Bottom-Right)
+        // Resize Handle (Bottom-Right) — Phase 193: hidden at rest, revealed
+        // while the item is being touched/dragged/resized (shared policy).
         if (!currentNote.isCollapsed) {
+            val handleVisible = com.authorss81.noteflow.services.ResizeHandleVisibilityPolicy.shouldShow(
+                interacting = interacting,
+                collapsed = currentNote.isCollapsed
+            )
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .size(24.dp)
                     .pointerInput(currentNote.id) {
                         detectDragGestures(
+                            onDragStart = { interacting = true },
                             onDrag = { change, dragAmount ->
                                 change.consume()
                                 resizeWidth = (resizeWidth + dragAmount.x / currentZoom).coerceAtLeast(120f)
@@ -4701,8 +4729,13 @@ private fun DraggableStickyNoteCard(
                                 }
                                 val otherNotes = if (isContinuousMode) emptyList() else stickyNotes.filter { it.pdfPage != pdfPageFilter }
                                 currentOnStickyNotesChanged(otherNotes + activeStickyNoteList.toList())
-                            }
+                                interacting = false
+                            },
+                            onDragCancel = { interacting = false }
                         )
+                    }
+                    .graphicsLayer {
+                        alpha = com.authorss81.noteflow.services.ResizeHandleVisibilityPolicy.handleAlpha(handleVisible)
                     }
                     .background(Color.Black.copy(alpha = 0.15f), RoundedCornerShape(topStart = 8.dp, bottomEnd = 8.dp)),
                 contentAlignment = Alignment.Center
@@ -4716,7 +4749,8 @@ private fun DraggableStickyNoteCard(
             }
         }
 
-        // Phase 13: rotation handle (top-center, above the note).
+        // Phase 13: rotation handle (top-center, above the note). Phase 193:
+        // gated by the shared resize-handle visibility policy like the corners.
         if (!currentNote.isCollapsed) {
             RotationHandle(
                 modifier = Modifier.align(Alignment.TopCenter),
@@ -4725,7 +4759,12 @@ private fun DraggableStickyNoteCard(
                 rotationDegrees = liveRotation,
                 zoomScale = currentZoom,
                 onRotationChange = { liveRotation = it },
-                onRotationCommit = commitRotation
+                onRotationCommit = commitRotation,
+                visible = com.authorss81.noteflow.services.ResizeHandleVisibilityPolicy.shouldShow(
+                    interacting = interacting,
+                    collapsed = currentNote.isCollapsed
+                ),
+                onInteractionChange = { interacting = it }
             )
         }
     }
@@ -4795,6 +4834,13 @@ private fun DraggableMediaEmbedCard(
     val actualWidth = if (currentEmbed.type == MediaEmbedType.AUDIO_NOTE && currentEmbed.isCollapsed) 48f else resizeWidth
     val actualHeight = if (currentEmbed.type == MediaEmbedType.AUDIO_NOTE && currentEmbed.isCollapsed) 48f else resizeHeight
 
+    // Phase 193: resize handles are INVISIBLE at rest and appear only while
+    // the item is being touched/dragged/resized (shared policy). The
+    // observation reveals on touch-down and hides on pointer-up/cancel; each
+    // drag gesture also toggles the flag so a resize/rotation started on the
+    // still-composed handle hit-box keeps the handles visible during the drag.
+    var interacting by remember(currentEmbed.id) { mutableStateOf(false) }
+
     Box(
         modifier = Modifier
             .offset { IntOffset(screenX.toInt(), screenY.toInt()) }
@@ -4805,6 +4851,16 @@ private fun DraggableMediaEmbedCard(
                 // touch area, so drag deltas arrive in the rotated local frame.
                 rotationZ = liveRotation
             }
+            .pointerInput(currentEmbed.id) {
+                // Observes touches WITHOUT consuming them: any touch-down on
+                // the item reveals the resize handles; pointer-up/cancel hides.
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    interacting = true
+                    waitForUpOrCancellation()
+                    interacting = false
+                }
+            }
     ) {
         Box(
             modifier = Modifier
@@ -4814,6 +4870,7 @@ private fun DraggableMediaEmbedCard(
                         onDragStart = {
                             dragOffsetX = 0f
                             dragOffsetY = 0f
+                            interacting = true
                         },
                         onDrag = { change, dragAmount ->
                             change.consume()
@@ -4830,6 +4887,7 @@ private fun DraggableMediaEmbedCard(
                             val finalY = currentEmbed.y + dragOffsetY
                             dragOffsetX = 0f
                             dragOffsetY = 0f
+                            interacting = false
 
                             val updated = currentEmbed.copy(x = finalX, y = finalY, width = resizeWidth, height = resizeHeight)
                             val index = activeMediaEmbedList.indexOfFirst { it.id == currentEmbed.id }
@@ -4842,6 +4900,7 @@ private fun DraggableMediaEmbedCard(
                         onDragCancel = {
                             dragOffsetX = 0f
                             dragOffsetY = 0f
+                            interacting = false
                         }
                     )
                 }
@@ -4967,6 +5026,14 @@ private fun DraggableMediaEmbedCard(
         }
 
         if (!(currentEmbed.type == MediaEmbedType.AUDIO_NOTE && currentEmbed.isCollapsed)) {
+            // Phase 193: the four corner resize handles are INVISIBLE at rest
+            // (shared ResizeHandleVisibilityPolicy); they reveal while the item
+            // is being touched/dragged/resized. The hit-boxes stay composed so
+            // a resize gesture can still START on a corner.
+            val cornerVisible = com.authorss81.noteflow.services.ResizeHandleVisibilityPolicy.shouldShow(
+                interacting = interacting,
+                collapsed = currentEmbed.isCollapsed
+            )
             // 4 Corner Resize Handles (Top-Left, Top-Right, Bottom-Left, Bottom-Right)
             val minW = if (currentEmbed.type == MediaEmbedType.AUDIO_NOTE) 220f else 120f
             val maxW = if (currentEmbed.type == MediaEmbedType.AUDIO_NOTE) 420f else 2000f
@@ -4978,6 +5045,7 @@ private fun DraggableMediaEmbedCard(
                 val finalY = currentEmbed.y + dragOffsetY
                 dragOffsetX = 0f
                 dragOffsetY = 0f
+                interacting = false
                 val updated = currentEmbed.copy(x = finalX, y = finalY, width = resizeWidth, height = resizeHeight)
                 val index = activeMediaEmbedList.indexOfFirst { it.id == currentEmbed.id }
                 if (index != -1) {
@@ -4994,13 +5062,18 @@ private fun DraggableMediaEmbedCard(
                     .size(24.dp)
                     .pointerInput(currentEmbed.id) {
                         detectDragGestures(
+                            onDragStart = { interacting = true },
                             onDrag = { change, dragAmount ->
                                 change.consume()
                                 resizeWidth = (resizeWidth + dragAmount.x / currentZoom).coerceIn(minW, maxW)
                                 resizeHeight = (resizeHeight + dragAmount.y / currentZoom).coerceIn(minH, maxH)
                             },
-                            onDragEnd = saveCurrentEmbedState
+                            onDragEnd = saveCurrentEmbedState,
+                            onDragCancel = { interacting = false }
                         )
+                    }
+                    .graphicsLayer {
+                        alpha = com.authorss81.noteflow.services.ResizeHandleVisibilityPolicy.handleAlpha(cornerVisible)
                     }
                     .background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(topStart = 8.dp, bottomEnd = 12.dp))
                     .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f), RoundedCornerShape(topStart = 8.dp, bottomEnd = 12.dp)),
@@ -5021,6 +5094,7 @@ private fun DraggableMediaEmbedCard(
                     .size(24.dp)
                     .pointerInput(currentEmbed.id) {
                         detectDragGestures(
+                            onDragStart = { interacting = true },
                             onDrag = { change, dragAmount ->
                                 change.consume()
                                 val dx = dragAmount.x / currentZoom
@@ -5030,8 +5104,12 @@ private fun DraggableMediaEmbedCard(
                                 resizeWidth = newW
                                 resizeHeight = (resizeHeight + dy).coerceAtLeast(minH)
                             },
-                            onDragEnd = saveCurrentEmbedState
+                            onDragEnd = saveCurrentEmbedState,
+                            onDragCancel = { interacting = false }
                         )
+                    }
+                    .graphicsLayer {
+                        alpha = com.authorss81.noteflow.services.ResizeHandleVisibilityPolicy.handleAlpha(cornerVisible)
                     }
                     .background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(topEnd = 8.dp, bottomStart = 12.dp))
                     .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f), RoundedCornerShape(topEnd = 8.dp, bottomStart = 12.dp)),
@@ -5052,6 +5130,7 @@ private fun DraggableMediaEmbedCard(
                     .size(24.dp)
                     .pointerInput(currentEmbed.id) {
                         detectDragGestures(
+                            onDragStart = { interacting = true },
                             onDrag = { change, dragAmount ->
                                 change.consume()
                                 val dx = dragAmount.x / currentZoom
@@ -5061,8 +5140,12 @@ private fun DraggableMediaEmbedCard(
                                 dragOffsetY += (resizeHeight - newH)
                                 resizeHeight = newH
                             },
-                            onDragEnd = saveCurrentEmbedState
+                            onDragEnd = saveCurrentEmbedState,
+                            onDragCancel = { interacting = false }
                         )
+                    }
+                    .graphicsLayer {
+                        alpha = com.authorss81.noteflow.services.ResizeHandleVisibilityPolicy.handleAlpha(cornerVisible)
                     }
                     .background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(bottomStart = 8.dp, topEnd = 12.dp))
                     .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f), RoundedCornerShape(bottomStart = 8.dp, topEnd = 12.dp)),
@@ -5083,6 +5166,7 @@ private fun DraggableMediaEmbedCard(
                     .size(24.dp)
                     .pointerInput(currentEmbed.id) {
                         detectDragGestures(
+                            onDragStart = { interacting = true },
                             onDrag = { change, dragAmount ->
                                 change.consume()
                                 val dx = dragAmount.x / currentZoom
@@ -5094,8 +5178,12 @@ private fun DraggableMediaEmbedCard(
                                 dragOffsetY += (resizeHeight - newH)
                                 resizeHeight = newH
                             },
-                            onDragEnd = saveCurrentEmbedState
+                            onDragEnd = saveCurrentEmbedState,
+                            onDragCancel = { interacting = false }
                         )
+                    }
+                    .graphicsLayer {
+                        alpha = com.authorss81.noteflow.services.ResizeHandleVisibilityPolicy.handleAlpha(cornerVisible)
                     }
                     .background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(bottomEnd = 8.dp, topStart = 12.dp))
                     .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f), RoundedCornerShape(bottomEnd = 8.dp, topStart = 12.dp)),
@@ -5110,7 +5198,8 @@ private fun DraggableMediaEmbedCard(
             }
         }
 
-        // Phase 13: rotation handle (top-center, above the item).
+        // Phase 13: rotation handle (top-center, above the item). Phase 193:
+        // gated by the shared resize-handle visibility policy like the corners.
         if (!(currentEmbed.type == MediaEmbedType.AUDIO_NOTE && currentEmbed.isCollapsed)) {
             RotationHandle(
                 modifier = Modifier.align(Alignment.TopCenter),
@@ -5119,7 +5208,12 @@ private fun DraggableMediaEmbedCard(
                 rotationDegrees = liveRotation,
                 zoomScale = currentZoom,
                 onRotationChange = { liveRotation = it },
-                onRotationCommit = commitRotation
+                onRotationCommit = commitRotation,
+                visible = com.authorss81.noteflow.services.ResizeHandleVisibilityPolicy.shouldShow(
+                    interacting = interacting,
+                    collapsed = currentEmbed.isCollapsed
+                ),
+                onInteractionChange = { interacting = it }
             )
         }
     }
@@ -5142,7 +5236,9 @@ private fun RotationHandle(
     onRotationChange: (Float) -> Unit,
     onRotationCommit: (Float) -> Unit,
     handleSizeDp: androidx.compose.ui.unit.Dp = 26.dp,
-    gapDp: androidx.compose.ui.unit.Dp = 8.dp
+    gapDp: androidx.compose.ui.unit.Dp = 8.dp,
+    visible: Boolean = true,
+    onInteractionChange: (Boolean) -> Unit = {}
 ) {
     val density = LocalDensity.current
     val handlePx = with(density) { handleSizeDp.toPx() }
@@ -5156,6 +5252,8 @@ private fun RotationHandle(
     val currentZoom by rememberUpdatedState(zoomScale)
     val currentOnRotationChange by rememberUpdatedState(onRotationChange)
     val currentOnRotationCommit by rememberUpdatedState(onRotationCommit)
+    val currentVisible by rememberUpdatedState(visible)
+    val currentOnInteractionChange by rememberUpdatedState(onInteractionChange)
 
     Box(
         modifier = modifier
@@ -5163,7 +5261,10 @@ private fun RotationHandle(
             .size(handleSizeDp)
             .pointerInput(Unit) {
                 detectDragGestures(
-                    onDragStart = { dragHasMoved = false },
+                    onDragStart = {
+                        dragHasMoved = false
+                        currentOnInteractionChange(true)
+                    },
                     onDrag = { change, _ ->
                         change.consume()
                         dragHasMoved = true
@@ -5180,9 +5281,16 @@ private fun RotationHandle(
                     onDragEnd = {
                         if (dragHasMoved) currentOnRotationCommit(currentRotation)
                         dragHasMoved = false
+                        currentOnInteractionChange(false)
                     },
-                    onDragCancel = { dragHasMoved = false }
+                    onDragCancel = {
+                        dragHasMoved = false
+                        currentOnInteractionChange(false)
+                    }
                 )
+            }
+            .graphicsLayer {
+                alpha = com.authorss81.noteflow.services.ResizeHandleVisibilityPolicy.handleAlpha(currentVisible)
             }
             .background(MaterialTheme.colorScheme.primaryContainer, CircleShape)
             .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f), CircleShape),
