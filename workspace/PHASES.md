@@ -61,7 +61,10 @@ painting engine, free features).
 | phase-188 | **GalleryView robustness** - no stroke rasterization, large-font-safe layout, dark-theme border, tag-chip cap +N | user-reported |
 | phase-189 | **Fix: Backup-to-file and Backup-from-file FAIL after a vault export** - export leaves the in-memory session (key/DB handle/notebook state) degraded; restore must be side-effect-free + next backup/restore works with the same key | user-reported |
 | phase-190 | **APK self-update** - uploading an APK of the SAME app (same package + signer, newer version) must update the installed app end-to-end; add missing package-identity gate, fix install launch, keep B1-PLAT-7 trust gates | user-reported |
-| phase-191 | **Screenshot render suite** - Paparazzi (JVM, no emulator) PNGs for every screen x state x theme, saved to `visual-qa/screenshots/` curated baseline + documented artifact-upload path | user-reported |
+| phase-192 | **Fix: voice recording shows "The recording could not be saved securely" and never saves** - VoiceNoteManager save path fails (DEK null / blob dir missing / cipher error); make it save for passwordless + password vaults, fail closed only on real lock | user-reported |
+| phase-193 | **Hide resize handles on code blocks / sticky notes / photo attachments until dragging** - corner resize symbols only visible while dragging/resizing, still resizable from item body | user-reported |
+| phase-194 | **Dim Undo/Redo buttons on canvas when stack is empty** - disabled/dimmed appearance when nothing to undo/redo, bright when available | user-reported |
+| phase-195 | **Screenshot render suite** - Paparazzi (JVM, no emulator) PNGs for every screen x state x theme, saved to `visual-qa/screenshots/` curated baseline + documented artifact-upload path | user-reported |
 
 ## How phases run
 
