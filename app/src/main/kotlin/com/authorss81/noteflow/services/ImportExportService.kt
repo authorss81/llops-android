@@ -1198,6 +1198,10 @@ object ImportExportService {
     // it feeds is now the shared BackupBudgetPolicy (== this value), so the
     // export packer and the restore extractor can never drift out of parity.
     const val MAX_BACKUP_INPUT_BYTES = 400L * 1024 * 1024 // 400MB hard cap before any decrypt/decompress
+    // Phase 190: self-update APK staging cap — a legitimate APK is well under
+    // 200 MB; the cap is large enough for real builds, bounded enough to fail
+    // loudly on a garbage 1 GB "APK" instead of filling the app's partition.
+    const val MAX_APK_INPUT_BYTES = 256L * 1024 * 1024 // 256MB hard cap for APK upload/update staging
 
     // B2-CRYPTO-03: domain separation for the two KEK uses in backup v2. The DEK
     // wrap and the zip-payload GCM now authenticate DIFFERENT AAD domains, so a
@@ -2108,6 +2112,60 @@ object ImportExportService {
                 throw e
             }
         }
+
+    /**
+     * Phase 190: stages a ContentResolver URI into an app-private cacheDir file
+     * as a `*.apk` with the SAME bounded, fail-closed streaming the restore
+     * path uses — the APK picker previously read the whole package through
+     * [readUriBytes] into a heap `ByteArray` and copied it AGAIN with
+     * `writeBytes` (a 100+ MB APK was 2-3x in heap at once → OOM/ANR on
+     * low-RAM devices right as the user tried to update).
+     *
+     * The result is a DIRECT child of `cacheDir` — `checkForDownloadedUpdates`
+     * scans exactly `filesDir` + `cacheDir` direct children through the
+     * B1-PLAT-7 `UpdateTrustPolicy.isScanSafeDirectory` filter, so a staged
+     * file is found by the very next "Scan App Storage". The APK never lands
+     * in a publicly writable directory (B1-PLAT-7) and never a note.
+     *
+     * Returns null when the URI cannot be opened; an over-budget file throws
+     * loudly (never silently truncated). The caller owns and may delete the
+     * returned file.
+     */
+    suspend fun stageApkUriToFile(
+        context: Context,
+        uri: Uri,
+        maxBytes: Long = MAX_APK_INPUT_BYTES
+    ): File? = withContext(Dispatchers.IO) {
+        val stream = try {
+            context.contentResolver.openInputStream(uri)
+        } catch (e: Exception) {
+            return@withContext null
+        } ?: return@withContext null
+        val staged = File(context.cacheDir, "inkflow_update_${System.currentTimeMillis()}.apk")
+        try {
+            staged.outputStream().use { out ->
+                stream.use { input ->
+                    val buffer = ByteArray(64 * 1024)
+                    var total = 0L
+                    var read = input.read(buffer)
+                    while (read != -1) {
+                        total += read
+                        if (total > maxBytes) {
+                            throw IllegalStateException(
+                                "APK file too large (max ${maxBytes / (1024L * 1024L)}MB)."
+                            )
+                        }
+                        out.write(buffer, 0, read)
+                        read = input.read(buffer)
+                    }
+                }
+            }
+            staged
+        } catch (e: Throwable) {
+            staged.delete()
+            throw e
+        }
+    }
 
     suspend fun importBackup(
         context: Context,

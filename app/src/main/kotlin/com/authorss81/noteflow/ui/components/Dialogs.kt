@@ -27,7 +27,6 @@ import com.authorss81.noteflow.ui.viewmodel.NoteflowViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.File
 
 @Composable
 fun AppUpdateDialog(
@@ -45,36 +44,54 @@ fun AppUpdateDialog(
 
     val scope = rememberCoroutineScope()
 
+    // Phase 190: scan app-private storage ONCE on open so a staged APK (from the
+    // picker, or an APK shared into the app via MainActivity) is offered
+    // immediately. Only runs when the user has not already picked a file this
+    // session — a picker refusal's honest copy is never clobbered by the scan.
+    LaunchedEffect(Unit) {
+        if (updateInfo == null) {
+            isChecking = true
+            val found = withContext(Dispatchers.IO) {
+                UpdateService.checkForDownloadedUpdates(context)
+            }
+            updateInfo = found
+            isChecking = false
+            statusMessage = if (found.hasUpdate) {
+                "Found a local APK in the app's private storage."
+            } else {
+                "No newer APK found in the app's private storage (public Downloads are never scanned)."
+            }
+        }
+    }
+
     val apkPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri ->
         if (uri != null) {
             scope.launch {
                 try {
-                    val bytes = withContext(Dispatchers.IO) {
-                        ImportExportService.readUriBytes(
-                            context,
-                            uri,
-                            ImportExportService.MAX_BACKUP_INPUT_BYTES
-                        )
+                    // Phase 190: STREAM the selected APK into app-private cacheDir —
+                    // never the old in-heap `readUriBytes` + `writeBytes` (a
+                    // 100+ MB APK was 2-3x in heap at once and OOM'd low-RAM
+                    // devices right as the user tried to update). The staged file
+                    // is a direct cacheDir child, so "Scan App Storage" finds it.
+                    val destFile = withContext(Dispatchers.IO) {
+                        ImportExportService.stageApkUriToFile(context, uri)
                     }
-                    val fileName = uri.lastPathSegment?.substringAfterLast('/') ?: "downloaded_update.apk"
-                    if (bytes != null) {
-                        val destFile = withContext(Dispatchers.IO) {
-                            val file = File(context.cacheDir, if (fileName.endsWith(".apk")) fileName else "$fileName.apk")
-                            file.writeBytes(bytes)
-                            file
-                        }
-
+                    if (destFile != null) {
                         val inspected = withContext(Dispatchers.IO) {
                             UpdateService.inspectApkFile(context, destFile)
                         }
                         if (inspected != null) {
                             updateInfo = inspected
+                            // Phase 190: a refusal (different package / signature)
+                            // surfaces its HONEST releaseNotes copy instead of the
+                            // misleading "equal to or older" line.
                             statusMessage = if (inspected.hasUpdate) {
                                 "Selected local APK is newer than the installed app (${inspected.newVersionName})."
                             } else {
-                                "Selected APK version (${inspected.newVersionName}) is equal to or older than current version ($currentVersionName)."
+                                inspected.releaseNotes
+                                    ?: "Selected APK version (${inspected.newVersionName}) is equal to or older than current version ($currentVersionName)."
                             }
                         } else {
                             statusMessage = "Could not parse valid Android APK from selected file."

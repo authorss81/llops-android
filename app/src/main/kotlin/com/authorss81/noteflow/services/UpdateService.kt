@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
+import android.content.pm.Signature
 import android.net.Uri
 import android.os.Build
 import android.util.Log
@@ -70,41 +71,65 @@ object UpdateService {
             val currentName = getCurrentVersionName(context)
 
             val apkVersionCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                archiveInfo.longVersionCode.toInt()
+                archiveInfo.longVersionCode
             } else {
-                archiveInfo.versionCode
+                @Suppress("DEPRECATION")
+                archiveInfo.versionCode.toLong()
             }
             val apkVersionName = archiveInfo.versionName ?: "Unknown"
 
             val trust = UpdateTrustPolicy.classifySource(UpdateTrustPolicy.hasOfficialChannel())
 
-            // Integrity hint only — signature equality with the installed app is NOT
-            // proof of vendor provenance (B1-PLAT-1 debug-key fallback). A mismatch is
-            // still an outright refusal.
-            if (!verifyApkSignature(context, apkFile)) {
+            // Phase 190 package-identity gate: a same-signer DIFFERENT-package APK
+            // is NOT an update of THIS app — refuse honestly instead of handing the
+            // platform installer a file it will reject ("App not installed") or
+            // install as a separate app. Identity is the RUNTIME packageName, never
+            // a hardcoded namespace string.
+            if (!UpdateApkDecisionPolicy.samePackage(archiveInfo.packageName, context.packageName)) {
                 return UpdateInfo(
                     hasUpdate = false,
                     currentVersionName = currentName,
                     currentVersionCode = currentCode,
                     newVersionName = apkVersionName,
-                    newVersionCode = apkVersionCode,
+                    newVersionCode = apkVersionCode.toInt(),
                     apkFile = null,
-                    releaseNotes = "Signature mismatch! The file does not match the installed app's signer and will be ignored.",
+                    releaseNotes = UpdateApkDecisionPolicy.differentAppMessage(),
                     trust = trust
                 )
             }
 
-            val isNewer = apkVersionCode > currentCode || isVersionNameNewer(apkVersionName, currentName)
+            // Integrity hint only — signature equality with the installed app is NOT
+            // proof of vendor provenance (B1-PLAT-1 debug-key fallback). A mismatch is
+            // still an outright refusal.
+            if (!verifyApkIdentity(context, apkFile)) {
+                return UpdateInfo(
+                    hasUpdate = false,
+                    currentVersionName = currentName,
+                    currentVersionCode = currentCode,
+                    newVersionName = apkVersionName,
+                    newVersionCode = apkVersionCode.toInt(),
+                    apkFile = null,
+                    releaseNotes = UpdateApkDecisionPolicy.signatureMismatchMessage(),
+                    trust = trust
+                )
+            }
+
+            val isNewer = UpdateApkDecisionPolicy.isNewer(
+                apkVersionCode,
+                currentCode.toLong(),
+                apkVersionName,
+                currentName
+            )
 
             UpdateInfo(
                 hasUpdate = isNewer,
                 currentVersionName = currentName,
                 currentVersionCode = currentCode,
                 newVersionName = apkVersionName,
-                newVersionCode = apkVersionCode,
+                newVersionCode = apkVersionCode.toInt(),
                 apkFile = apkFile,
                 releaseNotes = if (isNewer) {
-                    UpdateTrustPolicy.announcementForLocal(apkVersionName, apkVersionCode)
+                    UpdateTrustPolicy.announcementForLocal(apkVersionName, apkVersionCode.toInt())
                 } else {
                     UpdateTrustPolicy.staleFileMessage()
                 },
@@ -187,10 +212,11 @@ object UpdateService {
         if (!apkFile.exists()) return false
 
         // B1-PLAT-7 TOCTOU guard: the trust/version classification happened at OFFER
-        // time; re-verify the signer of the CURRENT bytes so a same-path swap between
-        // confirmation and staging can never install an APK signed by a different key.
-        if (!verifyApkSignature(context, apkFile)) {
-            Log.e("UpdateService", "Install refused: APK no longer matches the installed signer (B1-PLAT-7)")
+        // time; re-verify package identity + signer of the CURRENT bytes so a
+        // same-path swap between confirmation and staging can never install an APK
+        // that is not this app or is signed by a different key (phase 190).
+        if (!verifyApkIdentity(context, apkFile)) {
+            Log.e("UpdateService", "Install refused: APK no longer matches the installed app's package/signer (B1-PLAT-7)")
             return false
         }
 
@@ -227,28 +253,20 @@ object UpdateService {
         }
     }
 
-    private fun isVersionNameNewer(newVer: String, currentVer: String): Boolean {
-        return try {
-            val newParts = newVer.split(".").map { it.filter { char -> char.isDigit() }.toIntOrNull() ?: 0 }
-            val currParts = currentVer.split(".").map { it.filter { char -> char.isDigit() }.toIntOrNull() ?: 0 }
- 
-            val maxLen = maxOf(newParts.size, currParts.size)
-            for (i in 0 until maxLen) {
-                val p1 = newParts.getOrElse(i) { 0 }
-                val p2 = currParts.getOrElse(i) { 0 }
-                if (p1 > p2) return true
-                if (p1 < p2) return false
-            }
-            false
-        } catch (e: Exception) {
-            false
-        }
-    }
+    private fun isVersionNameNewer(newVer: String, currentVer: String): Boolean =
+        UpdateApkDecisionPolicy.versionNameNewer(newVer, currentVer)
 
-    private fun verifyApkSignature(context: Context, apkFile: File): Boolean {
+    /**
+     * Phase 190: UNIFIED identity check — a SINGLE `GET_SIGNING_CERTIFICATES`
+     * parse reads the APK's packageName AND its signers and requires BOTH to
+     * match the installed app. The offer-time and install-time checks therefore
+     * operate on the same parse (and the same bytes at install time, closing
+     * the B1-PLAT-7 swap window) and can never disagree.
+     */
+    private fun verifyApkIdentity(context: Context, apkFile: File): Boolean {
         return try {
             val pm = context.packageManager
-            
+
             // Get signatures of the APK file
             val apkInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 pm.getPackageArchiveInfo(apkFile.absolutePath, PackageManager.GET_SIGNING_CERTIFICATES)
@@ -279,22 +297,29 @@ object UpdateService {
                 currentInfo.signatures
             } ?: return false
 
-            // Compare signatures
-            if (apkSignatures.size != currentSignatures.size) return false
-            
-            for (sig in apkSignatures) {
-                var found = false
-                for (currSig in currentSignatures) {
-                    if (sig == currSig) {
-                        found = true
-                        break
-                    }
-                }
-                if (!found) return false
-            }
-            true
+            // Phase 190 package-identity gate at install time (TOCTOU): the file
+            // must claim the SAME package as the installed app.
+            if (!UpdateApkDecisionPolicy.samePackage(apkInfo.packageName, context.packageName)) return false
+
+            signaturesMatch(apkSignatures, currentSignatures)
         } catch (e: Exception) {
             false
         }
+    }
+
+    private fun signaturesMatch(apkSignatures: Array<Signature>, currentSignatures: Array<Signature>): Boolean {
+        if (apkSignatures.size != currentSignatures.size) return false
+
+        for (sig in apkSignatures) {
+            var found = false
+            for (currSig in currentSignatures) {
+                if (sig == currSig) {
+                    found = true
+                    break
+                }
+            }
+            if (!found) return false
+        }
+        return true
     }
 }

@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.net.Uri
+import android.provider.OpenableColumns
 import android.os.Build
 import android.os.Bundle
 import androidx.fragment.app.FragmentActivity
@@ -46,8 +47,10 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.authorss81.noteflow.data.model.NotePageEntity
 import com.authorss81.noteflow.services.DatabaseIntegrityPolicy
+import com.authorss81.noteflow.services.ImportExportService
 import com.authorss81.noteflow.services.PendingSharePolicy
 import com.authorss81.noteflow.services.ShareCaptureMode
+import com.authorss81.noteflow.services.UpdateApkDecisionPolicy
 import com.authorss81.noteflow.services.WidgetLaunchPolicy
 import com.authorss81.noteflow.theme.NoteflowTheme
 import com.authorss81.noteflow.ui.screens.EditorScreen
@@ -1069,6 +1072,37 @@ class MainActivity : FragmentActivity() {
             else -> emptyList()
         }
         if (text == null && uriStrings.isEmpty()) return
+        // Phase 190: an APK shared INTO the app is an UPDATE candidate, not note
+        // content. Classify the stream (MIME type or file name) and, when the
+        // ENTIRE share is APK(s), stage it into app-private cacheDir so the next
+        // "Scan App Storage" (or AppUpdateDialog's auto-scan) offers it through
+        // the usual B1-PLAT-7 untrusted-confirmation install flow. It never
+        // becomes a note clip, and public Downloads are never scanned. The
+        // snackbar is non-secret, so a locked vault surfaces it fine.
+        if (uriStrings.isNotEmpty()) {
+            val apkStreams = uriStrings.mapNotNull { uriString ->
+                val uri = Uri.parse(uriString)
+                val mime = runCatching { contentResolver.getType(uri) }.getOrNull()
+                val name = displayNameOf(uri)
+                if (UpdateApkDecisionPolicy.isApkStream(mime, name)) uri else null
+            }
+            if (apkStreams.size == uriStrings.size) {
+                lifecycleScope.launch(Dispatchers.IO) {
+                    var staged: Int = 0
+                    for (uri in apkStreams) {
+                        val file = ImportExportService.stageApkUriToFile(this@MainActivity, uri)
+                        if (file != null) staged++
+                    }
+                    withContext(Dispatchers.Main) {
+                        viewModel.showSnackbar(
+                            UpdateApkDecisionPolicy.apkStagedMessage(staged),
+                            isLong = true
+                        )
+                    }
+                }
+                return
+            }
+        }
         val input = com.authorss81.noteflow.plugins.SharedInput(
             action = intent.action,
             text = text,
@@ -1107,6 +1141,14 @@ class MainActivity : FragmentActivity() {
             }
         }
     }
+
+    // Phase 190: OpenableColumns.DISPLAY_NAME for APK-stream classification on
+    // ACTION_SEND shares (the MIME type is often `application/octet-stream`).
+    private fun displayNameOf(uri: Uri): String? = runCatching {
+        contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) cursor.getString(0) else null
+        }
+    }.getOrNull()
 
     // R2-B1P-05: the "user explicitly confirmed" transition now lives in the
     // ViewModel (`confirmPendingShare`) — it stages the POST-UNLOCK bounded copy
