@@ -82,6 +82,23 @@
 > default_nb+default_sec on a brand-new vault. Prefs only. Tests:
 > `Phase168LastNotebookRestoreTest` (10).
 
+> **Implemented in phase-181** (2026-08-20, export/home-return regression fix, see
+> `workspace/phase-181/REPORT.md`): phase-168 fixed cold start but the last-used
+> notebook was still lost on ANY backgrounding — `MainActivity` calls
+> `viewModel.lock()` on `ON_STOP` (SAF export picker, home button, app switch),
+> and lock() previously zeroized the DEK and nulled
+> `_selectedNotebook`/`_sections`/`_pages` UNCONDITIONALLY even for PASSWORDLESS
+> vaults, whose `_authenticated`/`dataInitialized` never flip — so nothing re-ran
+> the phase-168 restore and the home page returned with no notebook open. The
+> entire lock() session teardown (DEK zeroization, decrypt-failure ledger reset,
+> observer cancel, DB dispose, selection/content StateFlow clears, authenticated
+> flip) now lives inside `if (settings.hasMasterPassword)`, honoring the B1-AUTH-02
+> design ("passwordless has no lock boundary — the device-wrapped DEK IS the boot
+> credential"); a passwordless lock() is a session-preserving no-op so the
+> pre-export/pre-background notebook stays open on return. All source pins
+> updated (`B2Ui4` passwordless branch, `B1Db08` gate-region extraction). Tests:
+> `Phase181ExportReturnNotebookRestoreTest` (8), `B2Ui4` + `B1Db08` updated.
+
 > **Implemented in phase-172** (2026-08-19, editor & canvas productivity, see
 > `workspace/phase-172/REPORT.md`): three pure-JVM policies +
 > `services/ColorRecentsPolicy.kt` (persisted recently-used colors + favorites —

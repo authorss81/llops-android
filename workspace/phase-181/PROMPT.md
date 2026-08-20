@@ -1,4 +1,4 @@
-# Phase 181: Re-fix — last-used notebook must open after app start AND after export/home return [NOT STARTED]
+# Phase 181: Re-fix — last-used notebook must open after app start AND after export/home return [DONE]
 
 You are working on **InkFlow/Noteflow**. Phase-168 (DONE) claimed "app must always open
 the last-used notebook", but USER REPORTS it still does not: after opening the app, or
