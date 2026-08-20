@@ -242,21 +242,32 @@ class B1Db08DecryptFailureTest {
         // session teardown — DEK zeroization, ledger reset, selection clears —
         // now lives inside `if (settings.hasMasterPassword)` so a passwordless
         // lock() is a session-preserving no-op (no lock boundary by design).
-        // Bound on stable code tokens, never on comment text.
-        val lockGate = viewModelSource
-            .substringAfter("\n        if (settings.hasMasterPassword) {")
-            .substringBefore("NoteflowDatabase.dispose()")
-        assertTrue("lock() zeroizes the DEK before resetting the ledger",
-            lockGate.contains("repository.zeroizeKey()"))
-        assertTrue("lock()'s reset sits at the top of the teardown, before the connection drop",
-            lockGate.contains("repository.resetDecryptFailures()"))
-        assertFalse("the lock-region reset must precede the connection drop, not follow it",
-            lockGate.contains("NoteflowDatabase.dispose()"))
+        // Bound on the lock() BODY (fun lock() -> override fun onCleared), never
+        // on comment text and never on a bare file-wide gate match — the VM has
+        // THREE `if (settings.hasMasterPassword)` sites and a file-wide match
+        // would bind to the init-block gate (phase-181 review fix).
+        val lockBody = viewModelSource
+            .substringAfter("fun lock()")
+            .substringBefore("override fun onCleared")
+        val gateIdx = lockBody.indexOf("if (settings.hasMasterPassword) {")
+        assertTrue("lock() must gate its session teardown on the master password", gateIdx >= 0)
+        val zeroizeAt = lockBody.indexOf("repository.zeroizeKey()")
+        val resetAt = lockBody.indexOf("repository.resetDecryptFailures()")
+        val disposeAt = lockBody.indexOf("NoteflowDatabase.dispose()")
+        assertTrue("lock() zeroizes the DEK inside the gate (passwordless ON_STOP keeps the DEK)",
+            zeroizeAt > gateIdx)
+        assertTrue("lock() resets the ledger inside the gate", resetAt > gateIdx)
+        assertTrue("the DEK zeroization precedes the ledger reset",
+            zeroizeAt in 0 until resetAt)
+        assertTrue("the ledger reset precedes the connection drop (not after it)",
+            resetAt in 0 until disposeAt)
         // Phase 181: the selection/content StateFlow clears must be gated on the
         // same has-master-password boundary (passwordless ON_STOP keeps its
-        // last-used notebook open across the SAF export picker).
+        // last-used notebook open across the SAF export picker). Bounding on the
+        // lock() body makes `indexOf` hit the lock's OWN clear (`:4790`) rather
+        // than the unrelated deleteNotebook clear.
         assertTrue("the selection clears live inside the same gate",
-            lockGate.contains("_selectedNotebook.value = null"))
+            lockBody.indexOf("_selectedNotebook.value = null") > gateIdx)
 
         val rekeyRegion = viewModelSource
             .substringAfter("fun changeMasterPassword")

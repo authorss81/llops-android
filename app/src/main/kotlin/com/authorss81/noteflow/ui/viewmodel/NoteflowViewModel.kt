@@ -4723,6 +4723,18 @@ fun updatePageTags(id: String, tags: String) {
         // (`dataInitialized` stays true + `_authenticated` never flips for a
         // passwordless vault, so `initializeData()` cannot re-boot). Regression
         // evidence: workspace/phase-181/STEP1_TRACE.md Trace 3.
+        //
+        // Accepted posture trade-off (review fix, phase-181): because every
+        // passwordless lock() call site — including the ACTION_SCREEN_OFF and
+        // idle-auto-lock hooks in MainActivity — is now this same session-
+        // preserving no-op, a passwordless vault's decrypted content StateFlows
+        // and in-memory DEK also SURVIVE a display-off / idle timeout. This is
+        // deliberate: a passwordless vault has no lock boundary (the device-
+        // wrapped DEK IS the boot credential), and its protection against a
+        // no-keyguard pick-up is the OS keyguard + FLAG_SECURE, not this app's
+        // lock screen. Re-introducing a content clear here would re-lose the
+        // last-used notebook on the very screen-off path (authenticated and
+        // dataInitialized stay true, so nothing re-restores it).
         if (settings.hasMasterPassword) {
             // B1-DB-8 (phase-88): the session ledger must not survive a lock — the
             // next unlock recomputes it from fresh reads (and a locked vault never
