@@ -85,3 +85,31 @@ No native libs, no `.so`, no network permission, no new INTERNET usage — the t
 - No `.github/workflows/` edit.
 - `git status` clean after commit; phase logs (`logs/phase-179.prompt/.ctx`) committed with the phase.
 - The `MarkdownHtmlConverter` export path (HTML/print) still emits the raw code block — future work if export highlighting is ever wanted (out of scope, document here for the record).
+
+## 8. Review fixes (2026-08-20, commit "llops: phase-179 review fixes")
+Post-phase code review (see AGENTS.md-style review pass) found the following and fixed them:
+- **F1 (HIGH) — duplicated-text render bug in `CodeBlockTextView`**: the original `buildAnnotatedString` used
+  `withStyle(style) { append(codeText.substring(...)) }`, which APPENDS each highlighted token a SECOND time at the
+  end of the string instead of styling the range inside the already-appended literal — the visible/copied text was
+  `codeText` + duplicated tokens, and the code itself received no colors. Fixed by extracting the pure-JVM
+  `buildHighlightedCode(codeText, spans): AnnotatedString` builder (same file) that appends the literal EXACTLY ONCE
+  and applies each span via `AnnotatedString.Builder.addStyle(style, start, end)` (additive styling, bounds-clamped
+  defensively). The composable now delegates to it. Copy/selection is now byte-for-byte the raw fence source as the
+  PROMPT required.
+- **F2 (MED) — test gap**: `Phase179CodeHighlightTest` only covered the span policy, never the rendered
+  `AnnotatedString`; that is exactly why F1 shipped green. Added `buildHighlightedCode` coverage: annotated text
+  equals the literal EXACTLY, every styled range is in-bounds and slices the original literal, no-spans and
+  out-of-range/rogue spans never corrupt the text.
+- **F3 (LOW) — `{.js}` brace-wrapped fence tags resolved to `null`**: `languageForFenceTag` split on `\s+|\{|\}`
+  and took the first element, which for `{.js}` was the empty leading token → honest-plain-text fallback despite the
+  KDoc claiming support. Fixed by skipping empty tokens before taking the first; pinned by new brace-wrapped tests
+  (`{.js}`/`{.kt}`/`{.py}`/`{.sh}`).
+- **F4 (LOW) — `docs/phase-status.md` phase-179 row was a malformed table row** (`179:| phase-179 | ...`, missing
+  leading `|`): fixed to `| phase-179 | ...`.
+- **F5 (LOW) — `docs/ARCHITECTURE.md` phase-174 bullet indentation regression**: continuation lines lost their list
+  indentation during the phase-179 doc edit; restored.
+- **F6/F7 (INFO) — not changed**: the step-1..4 workflow deviation is historical (cannot rewrite commits) and the
+  language auto-detection fallback was deliberately kept as honest plain text (adding auto-detect would contradict the
+  phase's own pinned null→plain-text tests and REPORT decision).
+- Re-verification: `gradle assembleDebug` green; `gradle testDebugUnitTest` green except the pre-existing
+  `Phase148UiFailureTextScrubTest` UNC-path failure (untouched). No schema change, no new deps, `.github/workflows/` untouched.

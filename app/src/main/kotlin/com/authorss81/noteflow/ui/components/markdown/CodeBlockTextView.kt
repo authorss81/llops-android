@@ -11,11 +11,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.authorss81.noteflow.services.CodeHighlightPolicy
@@ -44,21 +44,7 @@ fun CodeBlockTextView(
     val spans = remember(codeText, language, darkTheme) {
         CodeHighlightPolicy.highlightSpans(codeText, language, darkTheme)
     }
-    val annotated = remember(codeText, spans) {
-        buildAnnotatedString {
-            append(codeText)
-            spans.forEach { span ->
-                val style = if (span.bold) {
-                    SpanStyle(fontWeight = FontWeight.Bold)
-                } else {
-                    SpanStyle(color = Color(0xFF000000L or span.rgb.toLong()))
-                }
-                withStyle(style) {
-                    append(codeText.substring(span.start, span.end))
-                }
-            }
-        }
-    }
+    val annotated = remember(codeText, spans) { buildHighlightedCode(codeText, spans) }
     Surface(
         color = scheme.surfaceVariant,
         shape = RoundedCornerShape(8.dp),
@@ -71,5 +57,38 @@ fun CodeBlockTextView(
             color = onSurfaceVariant,
             modifier = Modifier.padding(12.dp)
         )
+    }
+}
+
+/**
+ * Pure-JVM span → [AnnotatedString] builder (tested directly by
+ * `Phase179CodeHighlightTest`). The fence literal is appended EXACTLY ONCE and
+ * every highlight is applied to its own range via
+ * [AnnotatedString.Builder.addStyle] — styles are purely additive, so the
+ * underlying text (and therefore what copy/selection returns) is byte-for-byte
+ * the raw source. Spans are bounds-clamped defensively so a rogue span can
+ * never crash the builder.
+ */
+internal fun buildHighlightedCode(
+    codeText: String,
+    spans: List<CodeHighlightPolicy.CodeSpan>
+): AnnotatedString {
+    return buildAnnotatedString {
+        append(codeText)
+        spans.forEach { span ->
+            val start = span.start.coerceIn(0, codeText.length)
+            val end = span.end.coerceIn(start, codeText.length)
+            if (start < end) {
+                addStyle(spanStyleFor(span), start, end)
+            }
+        }
+    }
+}
+
+private fun spanStyleFor(span: CodeHighlightPolicy.CodeSpan): SpanStyle {
+    return if (span.bold) {
+        SpanStyle(fontWeight = FontWeight.Bold)
+    } else {
+        SpanStyle(color = Color(0xFF000000L or span.rgb.toLong()))
     }
 }

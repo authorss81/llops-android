@@ -1033,10 +1033,10 @@
     bounded search corpus `repository.cachedCorpus()` TITLES ONLY (no per-keystroke DB reads, fail
     closed when locked, surfaced via `NoteflowViewModel.cachedWikiLinkTitles`); `RawBlockEditor`
     (`HybridMarkdownEditor.kt`) shows an in-field popup over the cursor for an unterminated `[[` and
-replaces the whole region; the slash menu (`SlashCommandMenu.kt` `onInsertWikiLink` first entry,
-     `Icons.AutoMirrored.Outlined.ListAlt`) opens the FLAG_SECURE `WikiLinkPickerDialog`
-     (`ui/components/WikiLinkSuggestions.kt`). Tests: `Phase174NoteStatsFormatPolicyTest` (10),
-     `Phase174HeadingScrollIndexTest` (7), `Phase174WikiSuggestionPolicyTest` (13).
+    replaces the whole region; the slash menu (`SlashCommandMenu.kt` `onInsertWikiLink` first entry,
+    `Icons.AutoMirrored.Outlined.ListAlt`) opens the FLAG_SECURE `WikiLinkPickerDialog`
+    (`ui/components/WikiLinkSuggestions.kt`). Tests: `Phase174NoteStatsFormatPolicyTest` (10),
+    `Phase174HeadingScrollIndexTest` (7), `Phase174WikiSuggestionPolicyTest` (13).
   - **Implemented in phase-179** (ROADMAP 21.8 — real syntax highlighting, see
     `workspace/phase-179/REPORT.md`): fenced code blocks in BOTH markdown renderers
     (`MarkdownRenderer.kt` + `MarkdownPreviewScreen.kt`) now render with token colors from the

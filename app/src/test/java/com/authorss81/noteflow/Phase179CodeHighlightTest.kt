@@ -1,6 +1,7 @@
 package com.authorss81.noteflow
 
 import com.authorss81.noteflow.services.CodeHighlightPolicy
+import com.authorss81.noteflow.ui.components.markdown.buildHighlightedCode
 import dev.snipme.highlights.model.SyntaxLanguage
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -74,6 +75,14 @@ class Phase179CodeHighlightTest {
         assertEquals(SyntaxLanguage.PYTHON, CodeHighlightPolicy.languageForFenceTag("  python linenos "))
         assertEquals(SyntaxLanguage.C, CodeHighlightPolicy.languageForFenceTag("objc"))
         assertEquals(SyntaxLanguage.C, CodeHighlightPolicy.languageForFenceTag("C"))
+    }
+
+    @Test
+    fun `brace-wrapped fence tags resolve`() {
+        assertEquals(SyntaxLanguage.JAVASCRIPT, CodeHighlightPolicy.languageForFenceTag("{.js}"))
+        assertEquals(SyntaxLanguage.KOTLIN, CodeHighlightPolicy.languageForFenceTag("{.kt}"))
+        assertEquals(SyntaxLanguage.PYTHON, CodeHighlightPolicy.languageForFenceTag("{.py}"))
+        assertEquals(SyntaxLanguage.SHELL, CodeHighlightPolicy.languageForFenceTag("{.sh}"))
     }
 
     @Test
@@ -164,5 +173,43 @@ class Phase179CodeHighlightTest {
     fun `unknown tag path never invokes the tokenizer`() {
         assertNull(CodeHighlightPolicy.languageForFenceTag("sql"))
         assertNotNull(CodeHighlightPolicy.languageForFenceTag("kotlin"))
+    }
+
+    // --- 5. AnnotatedString builder (CodeBlockTextView's pure core) ---------
+
+    @Test
+    fun `annotated string is byte-for-byte the fence literal with additive styles`() {
+        val code = "fun main() {\n    val message = \"hello\"\n    println(message)\n}"
+        val spans = CodeHighlightPolicy.highlightSpans(code, SyntaxLanguage.KOTLIN, darkTheme = true)
+        assertTrue(spans.isNotEmpty())
+        val annotated = buildHighlightedCode(code, spans)
+        assertEquals(
+            "the AnnotatedString text must equal the fence literal EXACTLY (copy = raw source)",
+            code,
+            annotated.text
+        )
+        assertTrue("highlights must be applied as styles", annotated.spanStyles.isNotEmpty())
+        annotated.spanStyles.forEach { item ->
+            assertTrue("styled start ${item.start} in bounds", item.start in 0..code.length)
+            assertTrue("styled end ${item.end} in bounds", item.end in 0..code.length)
+            assertTrue("styled range non-empty", item.start < item.end)
+            assertTrue("styled range slices the ORIGINAL literal", code.contains(code.substring(item.start, item.end)))
+        }
+    }
+
+    @Test
+    fun `no spans and rogue out-of-range spans never corrupt the literal`() {
+        val code = "val x = 1"
+        assertEquals(code, buildHighlightedCode(code, emptyList()).text)
+        val rogue = buildHighlightedCode(
+            "hi",
+            listOf(CodeHighlightPolicy.CodeSpan(start = -5, end = 99, rgb = 0xFF0000))
+        )
+        assertEquals("hi", rogue.text)
+        rogue.spanStyles.forEach { item ->
+            assertTrue(item.start in 0.."hi".length)
+            assertTrue(item.end in 0.."hi".length)
+            assertTrue(item.start < item.end)
+        }
     }
 }

@@ -81,7 +81,10 @@ object CodeHighlightPolicy {
      */
     fun languageForFenceTag(tag: String?): SyntaxLanguage? {
         if (tag.isNullOrBlank()) return null
-        val firstToken = tag.trim().split(Regex("\\s+|\\{|\\}")).firstOrNull()?.trim()?.trim('.')
+        val firstToken = tag.split(Regex("\\s+|\\{|\\}"))
+            .mapNotNull { it.trim().ifEmpty { null } }
+            .firstOrNull()
+            ?.trim('.')
             ?: return null
         if (firstToken.isEmpty()) return null
         return FENCE_TAG_ALIASES[firstToken.lowercase()]
