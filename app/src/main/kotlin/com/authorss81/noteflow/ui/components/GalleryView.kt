@@ -23,6 +23,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -34,6 +36,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.authorss81.noteflow.data.model.NotePageEntity
 import com.authorss81.noteflow.services.GalleryCardActionsPolicy
+import com.authorss81.noteflow.services.InkCardPaperPolicy
 import com.authorss81.noteflow.services.GalleryCardLayoutPolicy
 import com.authorss81.noteflow.services.GalleryTitleDisplayPolicy
 import com.authorss81.noteflow.ui.viewmodel.NoteflowViewModel
@@ -115,6 +118,21 @@ private fun GalleryCardItem(
     val visibleTags = tags.take(3)
     val hiddenTagCount = tags.size - visibleTags.size
 
+    // Phase 187: ink-note cards whose body is real handwriting (no OCR text to
+    // preview) get an authentic notebook-paper texture instead of the flat
+    // "pencil icon + ink label" stub. The texture is derived ONLY from card
+    // size + policy constants — never from stroke geometry (phase-188 risk #1).
+    // The px pitches/colors are computed once per composition (not per frame);
+    // the drawBehind loop is bounded by InkCardPaperPolicy (≤ 96 dots).
+    val preview = page.extractedText?.trim().orEmpty()
+    val isInkPage = InkCardPaperPolicy.isInkCanvasPage(page.sourceFileType)
+    val showPaperTexture = isInkPage && preview.isEmpty()
+    val density = LocalDensity.current
+    val paperSpacingPx = with(density) { InkCardPaperPolicy.GRID_SPACING_DP.dp.toPx() }
+    val paperDotRadiusPx = with(density) { InkCardPaperPolicy.DOT_RADIUS_DP.dp.toPx() }
+    val paperFill = scheme.surface.copy(alpha = InkCardPaperPolicy.PAPER_BACKGROUND_ALPHA)
+    val paperDotColor = scheme.outlineVariant.copy(alpha = InkCardPaperPolicy.GRID_ALPHA)
+
     Card(
         onClick = { onOpenPage(page) },
         modifier = Modifier
@@ -126,7 +144,22 @@ private fun GalleryCardItem(
         ),
         elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
     ) {
-        Box(modifier = Modifier.wrapContentHeight()) {
+        Box(
+            modifier = Modifier
+                .wrapContentHeight()
+                .then(
+                    if (showPaperTexture) {
+                        Modifier.notebookPaper(
+                            paperFill = paperFill,
+                            dotColor = paperDotColor,
+                            spacingPx = paperSpacingPx,
+                            dotRadiusPx = paperDotRadiusPx
+                        )
+                    } else {
+                        Modifier
+                    }
+                )
+        ) {
             // Subtle primaryContainer wash bleeding down from the top edge. The
             // wash fills whatever the content column measures (matchParentSize);
             // it never drives the card height.
@@ -283,7 +316,6 @@ private fun GalleryCardItem(
                 // scales grow it instead of clipping/overlapping the label
                 // (review fix: was a fixed 84dp-high unyielding box that
                 // overflowed its label at >=2x font scale).
-                val preview = page.extractedText?.trim().orEmpty()
                 if (preview.isNotEmpty()) {
                     Text(
                         text = preview,
@@ -319,7 +351,14 @@ private fun GalleryCardItem(
                             }
                             Spacer(modifier = Modifier.height(8.dp))
                             Text(
-                                text = pageTypeLabel(page),
+                                // Phase 187: ink pages carry the honest policy
+                                // label ("Handwritten note") — never a claim that
+                                // OCR text exists; the other types keep theirs.
+                                text = if (isInkPage) {
+                                    InkCardPaperPolicy.HANDWRITTEN_LABEL
+                                } else {
+                                    pageTypeLabel(page)
+                                },
                                 style = MaterialTheme.typography.labelMedium,
                                 color = scheme.outline
                             )
@@ -409,4 +448,32 @@ private fun pageTypeLabel(page: NotePageEntity): String = when (page.sourceFileT
     "image" -> "Image page"
     "text" -> "Empty page"
     else -> "Ink & canvas page"
+}
+
+/**
+ * Phase 187 — notebook-paper card texture behind ink-note bodies.
+ *
+ * Paints a paper fill ([paperFill]) over the card area, then a dot-grid in
+ * [dotColor] at [spacingPx] pitch. The geometry comes from the bounded
+ * `InkCardPaperPolicy.gridColumns/gridRows` (≤ 12×8 = 96 dots) so the loop is
+ * tiny; [spacingPx]/[dotRadiusPx]/colors are computed once per composition and
+ * captured (no per-frame allocation, no `pointsJson` rasterization — the
+ * texture is pure card-size + constants).
+ */
+private fun Modifier.notebookPaper(
+    paperFill: Color,
+    dotColor: Color,
+    spacingPx: Float,
+    dotRadiusPx: Float
+): Modifier = drawBehind {
+    drawRect(color = paperFill, size = size)
+    val columns = InkCardPaperPolicy.gridColumns(size.width, spacingPx)
+    val rows = InkCardPaperPolicy.gridRows(size.height, spacingPx)
+    for (row in 0 until rows) {
+        val y = spacingPx * (row + 0.5f)
+        for (column in 0 until columns) {
+            val x = spacingPx * (column + 0.5f)
+            drawCircle(color = dotColor, radius = dotRadiusPx, center = Offset(x, y))
+        }
+    }
 }
