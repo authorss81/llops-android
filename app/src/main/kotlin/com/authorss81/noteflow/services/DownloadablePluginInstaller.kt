@@ -85,6 +85,13 @@ class DownloadablePluginInstaller(
                 onProgress(0.9f)
                 return when (val result = registry.installPlugin(loaded.value.plugin, null)) {
                     is PluginInstallResult.Installed -> {
+                        // Phase 175: a verified artifact may carry native/asset
+                        // payloads (ML Kit OCR/translate) — extract them into
+                        // app-private files AFTER the pinned-cert/SHA-256/static-
+                        // scan gates have all passed. A refused extraction keeps
+                        // the plugin installed but honestly unavailable (its
+                        // availability gate reports the missing payloads).
+                        storage.artifactFor(entry)?.let { storage.extractPayload(entry, it) }
                         onProgress(1f)
                         logger.lifecycle("store-remote-download", entry.id, entry.name)
                         PluginStoreController.DownloadOutcome.Installed(entry.id)

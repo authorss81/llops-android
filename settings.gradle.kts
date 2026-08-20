@@ -219,3 +219,10 @@ include(":plugin-sdk")
 // Phase 29: standalone local-LLM plugin module. NOT a dependency of :app — it
 // produces the downloadable, signature-verified artifact for the Plugin Store.
 include(":plugins:llm")
+// Phase 175: standalone ML Kit OCR + translation plugin module. Also NOT a
+// dependency of :app — it produces the downloadable artifact that carries ML Kit
+// out of the base APK (R2-KS-21). Its ML Kit / gms runtime deps resolve from the
+// SAME allow-listed google() + mavenCentral() groups the base app already uses
+// (com.google.mlkit ships from maven.google.com; guava/protobuf/flatbuffers/grpc/
+// netty from the mavenCentral allow-list entries already present above).
+include(":plugins:mlkit")
