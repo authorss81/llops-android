@@ -4709,24 +4709,38 @@ fun updatePageTags(id: String, tags: String) {
         searchVaultJob?.cancel()
         searchVaultJob = null
 
-        repository.zeroizeKey()
-        // B1-DB-8 (phase-88): the session ledger must not survive a lock — the
-        // next unlock recomputes it from fresh reads (and a locked vault never
-        // inflates it: reads record only when a DEK is actually present).
-        repository.resetDecryptFailures()
-        // B1-AUTH-02 (phase-47): the lock boundary must reach the DATA LAYER, not
-        // just the Compose LockScreen boolean. dispose() closes and forgets the
-        // Room/SQLCipher instance so NO keyed SQLCipher handle survives — a stale
-        // coroutine/plugin handle now fails closed ("connection pool has been
-        // closed") instead of reading plaintext, and a fresh open while locked
-        // throws in NoteflowSqlcipherFactory (LockedOpenGuard-driven) instead of
-        // re-deriving the DEK. Observer jobs are dropped so nothing keeps
-        // collecting from the closed vault; the unlock paths
-        // (verifyMasterPassword / verifyBiometricsAndUnlock) reinstate a live
-        // connection + observers. Skipped for passwordless vaults: there is no
-        // lock boundary there (the device-wrapped DEK is the boot credential by
-        // design), so closing the still-active session would only break the UI.
+        // B1-AUTH-02 (phase-47) + phase-181: the ENTIRE session teardown below —
+        // DEK zeroization, decrypt-failure ledger reset, observer cancellation,
+        // DB dispose, and the selection/content StateFlow clears — applies ONLY
+        // to vaults that have a real lock boundary (hasMasterPassword). A
+        // PASSWORDLESS vault has NO lock boundary by design (the device-wrapped
+        // DEK IS the boot credential), so `lock()` there is a session-preserving
+        // no-op: ON_STOP fires on ANY backgrounding (the SAF export picker, the
+        // home button, an app switch — MainActivity.kt:207-210) and must not
+        // clear `_selectedNotebook` nor zeroize the DEK the home flows decrypt
+        // with, otherwise the last-used notebook is lost on every phone-away /
+        // export + home-return and nothing re-runs the phase-168 restore
+        // (`dataInitialized` stays true + `_authenticated` never flips for a
+        // passwordless vault, so `initializeData()` cannot re-boot). Regression
+        // evidence: workspace/phase-181/STEP1_TRACE.md Trace 3.
         if (settings.hasMasterPassword) {
+            // B1-DB-8 (phase-88): the session ledger must not survive a lock — the
+            // next unlock recomputes it from fresh reads (and a locked vault never
+            // inflates it: reads record only when a DEK is actually present).
+            repository.zeroizeKey()
+            repository.resetDecryptFailures()
+            // B1-AUTH-02 (phase-47): the lock boundary must reach the DATA LAYER, not
+            // just the Compose LockScreen boolean. dispose() closes and forgets the
+            // Room/SQLCipher instance so NO keyed SQLCipher handle survives — a stale
+            // coroutine/plugin handle now fails closed ("connection pool has been
+            // closed") instead of reading plaintext, and a fresh open while locked
+            // throws in NoteflowSqlcipherFactory (LockedOpenGuard-driven) instead of
+            // re-deriving the DEK. Observer jobs are dropped so nothing keeps
+            // collecting from the closed vault; the unlock paths
+            // (verifyMasterPassword / verifyBiometricsAndUnlock) reinstate a live
+            // connection + observers. Skipped for passwordless vaults: there is no
+            // lock boundary there (the device-wrapped DEK is the boot credential by
+            // design), so closing the still-active session would only break the UI.
             sectionsJob?.cancel()
             pagesJob?.cancel()
             // R2-B1P-05 (phase-140): the share flow is dropped at the lock
@@ -4764,18 +4778,16 @@ fun updatePageTags(id: String, tags: String) {
             // next successful unlock re-boots the layer via startPluginLifecycle().
             pluginRegistry.pauseLifecycle(appContext)
             pluginLifecycleStarted = false
-        }
-        invalidatePaletteIndex()
-        // B2-DOS-01 (phase-50): a new unlock session may re-notify a capped page.
-        geometryCappedNotifiedPages.clear()
-        layerCappedNotifiedPages.clear()
-        // N6/A1: decrypted content must not stay resident in StateFlows after lock.
-        _pages.value = emptyList()
-        _selectedPage.value = null
-        _sections.value = emptyList()
-        _selectedSection.value = null
-        _selectedNotebook.value = null
-        if (settings.hasMasterPassword) {
+            invalidatePaletteIndex()
+            // B2-DOS-01 (phase-50): a new unlock session may re-notify a capped page.
+            geometryCappedNotifiedPages.clear()
+            layerCappedNotifiedPages.clear()
+            // N6/A1: decrypted content must not stay resident in StateFlows after lock.
+            _pages.value = emptyList()
+            _selectedPage.value = null
+            _sections.value = emptyList()
+            _selectedSection.value = null
+            _selectedNotebook.value = null
             _authenticated.value = false
         }
     }

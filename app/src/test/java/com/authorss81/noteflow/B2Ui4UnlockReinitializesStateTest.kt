@@ -114,19 +114,23 @@ class B2Ui4UnlockReinitializesStateTest {
         }
 
         // Mirror of lock(): for password-protected vaults cancel the observer jobs,
-        // reset dataInitialized, dispose; ALWAYS null the selection StateFlows.
+        // reset dataInitialized, dispose, and null the selection StateFlows. For
+        // passwordless vaults this is a session-preserving no-op (phase-181: there
+        // is no lock boundary, and ON_STOP fires on every backgrounding — SAF
+        // export picker, home button, app switch — so clearing the selection would
+        // lose the last-used notebook with no re-init to restore it).
         fun lock() {
             if (hasMasterPassword) {
                 sectionsJobArmed = false
                 pagesJobArmed = false
                 dataInitialized = false
                 authenticated = false
+                pages = emptyList()
+                selectedPage = null
+                sections = emptyList()
+                selectedSection = null
+                selectedNotebook = null
             }
-            pages = emptyList()
-            selectedPage = null
-            sections = emptyList()
-            selectedSection = null
-            selectedNotebook = null
         }
 
         // Mirror of verifyMasterPassword success: reinstate connection, flip
@@ -222,10 +226,16 @@ class B2Ui4UnlockReinitializesStateTest {
 
         // A "lock" call on a passwordless vault is a no-op session-wise by design
         // (the real lock() only tears down inside if (settings.hasMasterPassword)).
+        // Phase-181 regression fix: the previous code nulled the selection
+        // StateFlows UNCONDITIONALLY, so a passwordless vault lost its last-used
+        // notebook on every ON_STOP (SAF export picker, home button, app switch)
+        // with no re-init to restore it. The fix keeps the whole session intact.
         model.lock()
         assertTrue("passwordless vault stays authenticated (no lock boundary)", model.authenticated)
         assertTrue("dataInitialized unchanged for passwordless", model.dataInitialized)
-        assertTrue("pages must NOT be repopulated from scratch - session kept as-is", model.pages.isEmpty())
+        assertEquals("session kept as-is - pages survive the ON_STOP lock", listOf("pA"), model.pages)
+        assertEquals("the selected notebook survives the ON_STOP lock", "nb1", model.selectedNotebook)
+        assertEquals("the selected section survives the ON_STOP lock", "sec1", model.selectedSection)
     }
 
     @Test

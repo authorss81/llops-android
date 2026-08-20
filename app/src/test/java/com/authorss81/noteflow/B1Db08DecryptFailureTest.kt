@@ -236,18 +236,27 @@ class B1Db08DecryptFailureTest {
 
     @Test
     fun `the viewmodel resets the ledger at every legitimate session boundary`() {
-        // lock(): the reset sits immediately after the DEK zeroization and before
-        // the data-layer teardown (B1-AUTH-02 / phase-47). Bound on stable code
-        // tokens (scrub -> hasMasterPassword teardown), never on comment text.
-        val lockRegion = viewModelSource
-            .substringAfter("ClipboardGuard.scrubUnconditionally(appContext)")
-            .substringBefore("\n        if (settings.hasMasterPassword)")
+        // lock(): the reset sits at the top of the has-master-password teardown,
+        // immediately after the DEK zeroization and before the data-layer
+        // connection drop (B1-AUTH-02 / phase-47). Phase 181: the ENTIRE lock()
+        // session teardown — DEK zeroization, ledger reset, selection clears —
+        // now lives inside `if (settings.hasMasterPassword)` so a passwordless
+        // lock() is a session-preserving no-op (no lock boundary by design).
+        // Bound on stable code tokens, never on comment text.
+        val lockGate = viewModelSource
+            .substringAfter("\n        if (settings.hasMasterPassword) {")
+            .substringBefore("NoteflowDatabase.dispose()")
         assertTrue("lock() zeroizes the DEK before resetting the ledger",
-            lockRegion.contains("repository.zeroizeKey()"))
+            lockGate.contains("repository.zeroizeKey()"))
         assertTrue("lock()'s reset sits at the top of the teardown, before the connection drop",
-            lockRegion.contains("repository.resetDecryptFailures()"))
+            lockGate.contains("repository.resetDecryptFailures()"))
         assertFalse("the lock-region reset must precede the connection drop, not follow it",
-            lockRegion.contains("NoteflowDatabase.dispose()"))
+            lockGate.contains("NoteflowDatabase.dispose()"))
+        // Phase 181: the selection/content StateFlow clears must be gated on the
+        // same has-master-password boundary (passwordless ON_STOP keeps its
+        // last-used notebook open across the SAF export picker).
+        assertTrue("the selection clears live inside the same gate",
+            lockGate.contains("_selectedNotebook.value = null"))
 
         val rekeyRegion = viewModelSource
             .substringAfter("fun changeMasterPassword")
