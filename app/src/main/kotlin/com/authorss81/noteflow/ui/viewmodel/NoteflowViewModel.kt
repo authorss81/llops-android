@@ -3809,6 +3809,11 @@ fun updatePageTags(id: String, tags: String) {
                     repository.createNoteVersion(pageId, title, extractedText, versionNote)
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     throw e
+                } catch (e: com.authorss81.noteflow.services.UnreadableContentWriteException) {
+                    // Phase-182: a version snapshot of an unreadable page's DISPLAYED
+                    // marker must never be stored as real data — same guidance as the
+                    // live body/title guards (phase-169).
+                    showSnackbar(com.authorss81.noteflow.services.DecryptFailurePolicy.UNREADABLE_ROW_GUIDANCE, isLong = true)
                 } catch (e: VaultLockedWriteException) {
                     // vault locked mid-write: rejected, never plaintext, never silent.
                     showSnackbar("Vault is locked — version snapshot not saved")

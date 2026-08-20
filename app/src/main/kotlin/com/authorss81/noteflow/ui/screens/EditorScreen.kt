@@ -1729,7 +1729,17 @@ fun EditorScreen(
                             onClick = {
                                 showOverflowMenu = false
                                 scope.launch {
-                                    val totalPages = maxOf(1, pdfPageBitmaps.size, (strokes.maxOfOrNull { it.pdfPage } ?: 0) + 1)
+                                    // Phase-182: totalPages must reflect the REAL source
+                                    // page count (pdfTotalPages — set via getPdfPageCount
+                                    // for PDFs and pageCountNeeded for tall images), NOT
+                                    // the memory-bounded visible window size
+                                    // pdfPageBitmaps — otherwise every page beyond the
+                                    // visible window was silently dropped and exported
+                                    // blank. sourceFilePath is threaded through so the
+                                    // per-page background fallback re-renders every
+                                    // page's source (PDF page N via renderPdfPageToBitmap,
+                                    // tall images via sampled decode).
+                                    val totalPages = maxOf(1, pdfTotalPages, (strokes.maxOfOrNull { it.pdfPage } ?: 0) + 1)
                                     val androidBgBitmaps = pdfPageBitmaps.mapValues { it.value.asAndroidBitmap() }
                                     val file = ImportExportService.exportDocumentAsPdf(
                                         context = context,
@@ -1740,7 +1750,8 @@ fun EditorScreen(
                                         template = template,
                                         layers = layers,
                                         stickyNotes = stickyNotes,
-                                        mediaEmbeds = mediaEmbeds
+                                        mediaEmbeds = mediaEmbeds,
+                                        sourceFilePath = page.sourceFilePath
                                     )
                                     if (file != null) {
                                         exporter.export(

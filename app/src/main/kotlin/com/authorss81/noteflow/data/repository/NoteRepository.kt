@@ -1576,6 +1576,19 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
     }
 
     suspend fun createNoteVersion(pageId: String, title: String, extractedText: String?, versionNote: String = "Saved version") = withContext(Dispatchers.IO) {
+        // Phase-182: the marker overwrite guard extends to the VERSION SNAPSHOT.
+        // The editor captures the DISPLAYED title/body of an unreadable page into
+        // the version history (and from there into backup/HTML/Obsidian export
+        // metadata), so persisting the literal render marker as a version's real
+        // title/body would be the same data-loss path phase-169 closed for the
+        // live page — the marker becomes real, legitimately-decryptable content.
+        // Refuse loudly (trimmed, matching the updatePageBody guard) and leave the
+        // original ciphertext intact.
+        if (com.authorss81.noteflow.services.DecryptFailurePolicy.isUnreadableMarker(title.trim()) ||
+            (extractedText != null && com.authorss81.noteflow.services.DecryptFailurePolicy.isUnreadableMarker(extractedText.trim()))
+        ) {
+            throw com.authorss81.noteflow.services.UnreadableContentWriteException()
+        }
         val versionId = UUID.randomUUID().toString()
         val rawExtracted = extractedText ?: ""
         // B2-UI-1 (phase-49): fail closed — a note_versions body is encrypted at

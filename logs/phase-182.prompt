@@ -1,0 +1,146 @@
+# PIPELINE CONTEXT (injected by phase_runner.sh — do not delete)
+
+## Hard rules (AGENTS.md)
+## Hard rules
+- **MAJOR ARCHITECTURAL CHANGE → ASK THE USER FIRST.** Any change that restructures packages, replaces the navigation model (e.g., migrating away from `mutableStateOf` navigation to Navigation Compose), adds a new DB schema/migration, introduces SQLCipher, adds new dependencies with broad impact, or rewrites a subsystem (canvas renderer, encryption layer) MUST be proposed to the user and get explicit approval BEFORE writing code. Tell the user what's changing, why, and the risk. Do not silently refactor architecture.
+  - **USER APPROVED (2026-08-14): hybrid downloadable-plugin architecture** — the plugin model change (base-APK-size constraint, downloadable signature-verified plugins for heavy native features, compile-time for lightweight plugins, user-approved dynamic updates) was proposed to the user with risks and explicitly approved (commit `9292978`). Implementation proceeds per phases 22–26; the approved design doc is `docs/plugin-architecture.md`.
+- **Android hardware reality**: this is a native Kotlin app targeting API 26+. Every feature must ship with a fallback for older/lower-end devices (API 33- for AGSL, API 31- for dynamic color, low-RAM behavior for 2-core devices). Never silent degradation — one-time non-alarming message + settings re-enable. See ROADMAP Phase 33 + `docs/COMPATIBILITY.md` (to be created).
+- **Kali Linux pentest findings → write to a FILE immediately, not just the agent reply.** Security/pentest agents (running in opencode on the Kali VM) MUST append findings incrementally to `docs/pentest-findings-<YYYY-MM-DD>.md` as they work (one block per finding: severity, evidence, file/line or command output, reproducer), and commit/push after each agent batch. This prevents detail loss when a report grows long or context is truncated. The pentest plan lives in `docs/pentest-plan.md`; the summary report goes to `docs/pentest-report.md`.
+- `allowBackup="false"` + `data_extraction_rules.xml` — never re-enable backup.
+- **Base-APK size is a hard constraint.** Heavy/native features (ML Kit OCR, ML Kit
+  barcode/QR, the MediaPipe `tasks-genai` LLM) MUST NOT be baked into the base APK.
+  They ship as **downloadable, signature-verified plugins** (Phase 23 runtime:
+  HTTPS download → pinned-cert-hash verify → `DexClassLoader` load → capability
+  facade, never direct DB/keystore handles). Lightweight pure-JVM plugins stay
+  compile-time. Do NOT add large native deps to the base app; use a separate
+  plugin module instead. Plan: Phase 22 = architecture skeleton, Phase 23 =
+  downloadable runtime, Phase 24 = user-approved updates, Phase 25 = ink→shape,
+  Phase 26 = lightweight ecosystem, Phase 29 = move the LLM out of the base APK
+  into a downloadable plugin.
+- PBKDF2WithHmacSHA256 600k iterations, AES-256-GCM (12-byte IV, 128-bit tag), AndroidKeyStore-wrapped DEK, in-memory zeroization on lock (`NoteRepository.kt`, `EncryptionService.kt`, `SecurityService.kt`).
+- Never log keys, passwords, or decrypted note content. Never add `INTERNET` usage without a real feature.
+- Known broken things (do NOT trust ROADMAP [x] claims — see ROADMAP.md "POST-AUDIT TRUTH TABLE" @ commit ac781de):
+  - ~~Checksum hashes `noteflow.db`~~ — FIXED: `DatabaseSecurityHelper` HMACs the real `noteflow.sqlite` (`DatabaseSecurityHelper.kt:26`) and the result is surfaced as the `databaseTampered` banner in MainActivity (`NoteflowViewModel.kt:35-55`). This stale claim was corrected in Phase 09.
+  - `pointsJson` (stroke geometry) is FIELD-ENCRYPTED at rest now — title/extractedText/textContent/pointsJson are all encrypted fields (`saveStrokesForPage`, NoteRepository.kt); the Phase 02 restore re-key gap is closed.
+  - "Sync" = WebDAV upload/download of ENCRYPTED backup archives to/from the user's own server (`WebDavSyncService.kt`, HTTPS enforced, HTTP only with explicit opt-in for local-network hosts), reachable from HomeScreen's ⋮ menu via `WebDavSyncDialog` — Phase 14 FIXED the previously-dead menu trigger; AGSL wet-mixing is WIRED through `WetBrushEngine` in `AnnotationCanvas` (gated by `ShaderCapabilityHelper.isAgslSupported` + the `gpuWetBrushesEnabled` setting, verified in the Phase 14 audit); pressure/tilt/timestamp are captured via the official raw-MotionEvent bridge (`pointerInteropFilter`, no reflection); FLAG_SECURE is applied in non-debug builds; R8 minify is ON in release; baseline profiles are NOT wired (deferred — the dead `baseline-prof.txt` was deleted in the Phase 03 honesty audit).
+  - WAL checkpoint DOES execute — `checkpointWal()` fully steps the cursor (`NoteRepository.kt:136-144`).
+  - **Phase 14 (2026-08-13) production readiness + LocalSend**: full per-phase audit lives in `workspace/phase-14/AUDIT_REPORT.md`. LocalSend sender (Protocol v2.2, sender-only, local-network only, no new permissions) is implemented in `services/localsend/` (`LocalSendProtocol.kt` pure-JVM + `LocalSendSender.kt` network) and reachable from HomeScreen's ⋮ menu → "Send to Nearby Device (LocalSend)". It sends a single note as HTML, the encrypted vault backup, or the Obsidian/HTML vault archives; the receiving device must human-accept before bytes move. Unit tests: `LocalSendProtocolTest` (18 tests, no network). **Release signing (updated 2026-08-17, phase-57/B1-PLAT-1): the release build FAILS CLOSED when `RELEASE_KEYSTORE_B64` (or `KEYSTORE_FILE`) is unset — the old debug-keystore fallback is gone; see `docs/RELEASE.md` + `B1Plat01ReleaseSigningTest`.**
+  - **Phase 21 (2026-08-14) added the Plugin Store + verified the execution path** (see `docs/PLUGINS.md` "Plugin Store — install/uninstall lifecycle"): `PluginStoreCatalog` (bundled catalog, no network) + `PluginStoreController` (pure-JVM download/delete) + `PluginRegistry.installPlugin/uninstallPlugin` (install-aware registry; `compiledPlugins` = full shipped set, `allPlugins` = installed set) + `SettingsPluginInstallStore`/`SettingsManager.plugin_uninstalled_<id>` (default installed = backward compatible). Delete wipes opt-in + ever-enabled + all `plugins.<id>.*` settings and deletes downloaded assets (`NoteflowPlugin.deleteDownloadedAssets`); Disable keeps data. `CaseChangePlugin` is the store's OPTIONAL plugin (not in `defaultPlugins()`). UI: `PluginStoreDialog` reachable from HomeScreen ⋮ menu → "Plugin Store". Tests: `PluginStoreLifecycleTest` (8), `PluginExecutionSimulationTest` (4). Also fixed a pre-existing `PaletteCatalog.familyFor` hue-band bug (curated swatches misclassified) — `PaletteCatalogTest` is green again.
+  - **Phase 10 (2026-08-13) added a REAL plugin framework** (`app/src/main/kotlin/com/authorss81/noteflow/plugins/`): `NoteflowPlugin` + `PluginCapability` sealed type (`TextTransform`, `OCR`, `WebSearch`, `FileTransfer`, `Assistant`, `Export`), compile-time `PluginRegistry` (no dynamic APK loading), `PluginManager` routing that fails loudly via `PluginResult.Failure`, per-plugin opt-in persisted in `SettingsManager` (`plugin_enabled_<id>`, off by default), a Settings → Plugins dialog (`PluginSettingsDialog`, reachable from HomeScreen's ⋮ menu), and `Rot13TransformPlugin` served through the `TextTransformPlugin` interface and wired into the Markdown editor's Plugins menu (`MarkdownPreviewScreen`). Covered by `PluginFrameworkTest` (10 tests). **Phase 12 made OCR + Web Search real**: `OnDeviceOcrPlugin` (ML Kit text-recognition, offline, no API key) and `DuckDuckGoWebSearchPlugin` (HTTPS, keyless) are registered (`PluginRegistry.kt`) and wired into `EditorScreen` (OCR result dialog) and `MarkdownPreviewScreen` (web-search dialog). The still-unserved capabilities are `FileTransfer`, `Assistant`, `Export` — requests for those fail loudly with `NO_PLUGIN_INSTALLED`. See `docs/PLUGINS.md`.
+  - **Phase 09 (2026-08-13) fixed the two Phase-02 data-loss defects that were still live** (see workspace/phase-09/REPORT.md): (1) H2 — a corrupt/wrong-key DB open no longer DELETES the vault files; `SafeSupportSQLiteOpenHelper` now quarantines them as `*.corrupt-<timestamp>` (bytes preserved), sets a persistent corruption flag, and MainActivity shows `CorruptionRecoveryScreen` (restore-from-backup or explicit start-fresh) before any normal vault UI (`NoteflowDatabase.kt` `quarantineCorruptDatabase`, `DatabaseSecurityHelper.kt` corruption flags, `MainActivity.kt` `CorruptionRecoveryScreen`). (2) H1 — a failed restore no longer bricks the app: the backup password is validated BEFORE `closeDatabase()` (`ImportExportService.validateBackupPassword` now called from `HomeScreen.performRestore` and `NoteflowViewModel.attemptRecoveryFromBackup`), and on any post-close failure the Room instance is reopened (`NoteflowDatabase.dispose()` + `NoteRepository.reopenDatabase`) and the process restarts via the existing restart dialog. (3) C1 — `reencryptPlaintextFields` now also re-encrypts `note_versions.{title,extractedText}`, matching the cross-device migrate map.
+  - **Phase 03 (2026-08-13) removed these dead/fake features**: the LibMyPaint C++ stub + whole engine-selector stack (`mypaint_jni.cpp`/`CMakeLists.txt`, `LibMyPaintJni`, `BrushEngine`/`BrushEngineFactory`, `HardwareProfiler`/`RenderingEngineTier`, `BrushEngineSettingsDialog`, `SettingsManager.renderingEngineOverride` — all deleted; the canvas renders via `WetBrushEngine`); `HandwritingRecognitionService` + `HandwritingToTextDialog` (dictionary-hash stub, unreachable — deleted); `FtsSearchEngine` (misnamed in-memory loop — deleted; vault search now uses a cached decrypted corpus in `NoteRepository`). Shape auto-snap is now WIRED (`ShapeRecognitionHelper.trySnapShape` runs on freehand draw-end in `AnnotationCanvas`, gated by the `shapeAutoSnapEnabled` setting; wet tools, LASER, DOTTED and NEON are excluded, and the RECT/ARROW/LINE detectors require real geometry fits so plain handwriting isn't snapped).
+
+## Roadmap state (August 2026)
+
+## Orientation (read these files yourself — do NOT rely on memory)
+- docs/ARCHITECTURE.md = living architecture map (package layout, core
+  subsystem file:line anchors, build/CI essentials, gotchas). READ IT.
+- docs/phase-status.md = phase status truth table. READ IT, then UPDATE
+  your phase's row when you finish.
+- workspace/PHASES.md = full phase table.
+- workspace/SECURITY_FIX_PLAN.md + docs/security-report*.md = security
+  findings status (only if your phase touches security).
+
+## Your task
+Execute the phase described in workspace/phase-182/PROMPT.md. Read that file now and
+complete it fully. The context above is orientation only.
+
+# Phase 182: Re-fix — after export, note titles must NOT become "Unreadable (decryption failed)" [NOT STARTED]
+
+You are working on **InkFlow/Noteflow**. Phase-169 (DONE) hardened the fail-closed
+decryption path, but USER REPORTS it STILL happens: after exporting and returning to the
+home page, note pages show the title "Unreadable (decryption failed)" and the contents
+don't show. This is a REGRESSION re-fix phase.
+
+Read `docs/ARCHITECTURE.md`, `docs/phase-status.md`, and `workspace/phase-169/REPORT.md`
+first.
+
+## WORKFLOW RULE
+Work in small steps; `git add -A && git commit -m "llops: phase-182 step N: <desc>" && git push`
+after EVERY step. Never sit on uncommitted work.
+
+## Step 1 - Reproduce + inventory (commit it)
+- Phase-169 confirmed two real causes: (a) cross-key restore silently strands
+  un-re-keyable rows (`migrateTable` left a decrypt-failing ciphertext row after the
+  SQLCipher re-key) and (b) a marker-overwrite data loss (saving/renaming the
+  displayed `UNREADABLE_MARKER` replaces the still-recoverable original ciphertext).
+  Verify BOTH are actually closed in the current tree:
+  - `ImportExportService.migrateTable` (`:2811-2834` area) — does a decrypt-failing
+    row now fail the restore loudly instead of being left behind?
+  - `DecryptFailurePolicy` (`services/DecryptFailurePolicy.kt:46`) — is the marker
+    never persisted as a real title/body? Do `NoteRepository.updatePageTitleAndTags`
+    (`:837`), `renamePage` (`:816`), `updatePageBody` refuse to persist the marker?
+- Find the SPECIFIC export-return trigger the user still hits: `exportBackup`
+  (`:1390`), `exportVaultToZip` (`:2931`), `exportNoteToHtml` (`:3127`),
+  `exportVaultToHtmlZip` (`:3197`), `exportObsidianVaultZip` (`:3319`),
+  `exportPageToPsd` (`:3384`). Does ANY export path read/re-encrypt/write page
+  fields, or trigger a re-key, that could leave a row decrypt-failing on the NEXT
+  read? Check whether the export completion closes/rebuilds the DB (WAL
+  checkpoint / `closeDatabase` / reopen) and whether the reopen uses a different
+  DEK.
+- COMMIT this step with the full trace (before/after export rows).
+
+## Step 2 - Fix the regression
+- Whatever the specific trigger: after ANY export completes and the app returns to
+  the home page, the SAME DEK + SAME row must decrypt as before the export. If a
+  reopen/checkpoint path can alter the effective DEK or strand a row, fix it so it
+  cannot (fail loudly before any vault mutation, or keep the DEK pinned for the
+  session).
+- Harden the marker-overwrite path: a rename/save of a page whose decrypted value
+  IS the marker must be REFUSED (never persisted as real data), and the UI must
+  surface the recovery/restore guidance per `DecryptFailurePolicy` — never silently
+  overwrite recoverable ciphertext.
+- COMMIT this step.
+
+## Step 3 - Fix "Export Document as PDF" only producing content on page 1
+- USER REPORTED (2026-08-20): "Export Document as PDF" exports the document with
+  the FIRST page having content and every later page BLANK. Root cause (verified):
+  the call site in `EditorScreen.kt:1586-1596` passes `exportDocumentAsPdf` NO
+  `sourceFilePath` (it defaults to `null` in `ImportExportService.kt:296`), so the
+  per-page background fallback `renderPdfPageToBitmap(sourceFilePath, pageIdx)` /
+  `decodeImageSampled(sourceFilePath, ...)` inside the loop NEVER runs for pages
+  beyond the visible window. Additionally, `pdfPageBitmaps` holds only the visible
+  render window (`EditorScreen.kt:727-750`: `neededPages = if (isContinuousMode)
+  visiblePageWindow else setOf(currentPdfPage)`), so `bgBitmaps` covers only the
+  current page(s) and `totalPages = maxOf(1, pdfPageBitmaps.size, ...)` undercounts
+  the real page count.
+- FIX (2 lines, small):
+  - Pass `sourceFilePath = page.sourceFilePath` in the `exportDocumentAsPdf` call
+    so every page re-renders its source background (PDF page N via
+    `renderPdfPageToBitmap`, image via sampled decode).
+  - Compute `totalPages` from the KNOWN real count `pdfTotalPages`
+    (`EditorScreen.kt:650`, set via `getPdfPageCount` at `:717-725` for PDFs and
+    `pageCountNeeded` for tall images) instead of `pdfPageBitmaps.size`:
+    `val totalPages = maxOf(1, pdfTotalPages, (strokes.maxOfOrNull { it.pdfPage }
+    ?: 0) + 1)`. Keep `bgBitmaps = pdfPageBitmaps.mapValues { ... }` — it is a
+    harmless windowed cache; the sourceFilePath fallback covers the rest.
+- SANITY CHECK the other exports were reviewed: single-page exports
+  (`exportAnnotatedPage` paths at `EditorScreen.kt:1409/1443/1477/1513/1550`) pass
+  `bgBitmap = pdfPageBitmaps[currentPdfPage]` directly, so they are correct; the
+  backup/zip/HTML/Obsidian/PSD exports (`ImportExportService.kt:1390/2931/3127/
+  3197/3319/3384`) do not render page bitmaps. Only the document-PDF path is broken.
+- COMMIT this step with the before/after lines.
+
+## Step 4 - Regression proof
+- `gradle assembleDebug` green + `gradle testDebugUnitTest` green (except the
+  pre-existing `Phase148UiFailureTextScrubTest` UNC-path failure + the 2
+  `B1Plat01ReleaseSigningTest` asserts, untouched).
+- Re-run/extend `Phase169ExportImportRoundTripTest` (the pinned reproducer) — the
+  missed-rekey scenario must still fail loudly, and the new export-then-read
+  round-trip test must prove a normal export NEVER turns a readable page into the
+  marker.
+- Add/verify a unit test for the PDF multi-page fix: `exportDocumentAsPdf` must be
+  called with `totalPages` >= the source PDF page count and every page index must
+  produce a non-blank bitmap (background or template + its strokes).
+
+## Definition of done
+- Reproducer identified + fixed; after export + Home return, every previously
+  readable page still reads; marker can never be persisted as real data.
+- "Export Document as PDF" produces content on EVERY page of a multi-page PDF/image
+  note, not just page 1.
+- `workspace/phase-182/REPORT.md`: trigger root-cause, fix, test list.
+- Commit + push.
+
+## Constraints
+- Do NOT edit `.github/workflows/`. No new dependencies. No DB schema change.
+- Never write plaintext while locked. Never log keys or decrypted content.
