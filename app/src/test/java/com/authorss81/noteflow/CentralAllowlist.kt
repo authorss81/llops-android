@@ -21,6 +21,7 @@ internal object CentralAllowlist {
         "org\\.jsoup.*",
         "net\\.zetetic.*",
         "com\\.github\\.pemistahl",
+        "dev\\.snipme.*",
         "junit",
         "org\\.hamcrest.*",
         "org\\.junit.*",

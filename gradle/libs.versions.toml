@@ -32,6 +32,13 @@ coroutines = "1.9.0"
 # Phase 131: junit 4 test runner — single catalog entry so app + downloadable
 # plugin modules (plugins/llm) reference the SAME version through libs.junit.
 junit = "4.13.2"
+# Phase 179: syntax highlighting for fenced code blocks. The name that resolves
+# is dev.snipme:highlights (pure-Kotlin highlight.js-style tokenizer, Apache-2.0,
+# published for jvm/native — Android consumes the jvm variant, kotlin-stdlib
+# 1.9.23 -> upgraded to the project's 2.0.21). 0.9.3 (built on Kotlin 1.9) is
+# deliberately pinned over 1.x: the 1.x line is built on Kotlin 2.2 metadata that
+# this project's pinned Kotlin 2.0.21 cannot read.
+highlights = "0.9.3"
 
 [libraries]
 androidx-ink-authoring = { group = "androidx.ink", name = "ink-authoring", version.ref = "ink" }
@@ -76,6 +83,11 @@ mediapipe-tasks-genai = { group = "com.google.mediapipe", name = "tasks-genai", 
 # Both pure JVM, Apache-2.0, no native code — fully unit-testable in CI.
 lingua = { group = "com.github.pemistahl", name = "lingua", version.ref = "lingua" }
 jsoup = { group = "org.jsoup", name = "jsoup", version.ref = "jsoup" }
+
+# Phase 179: pure-Kotlin syntax highlighting (highlight.js-style grammars) for
+# fenced code blocks in the markdown renderers. Apache-2.0, no native code,
+# no transitive deps beyond kotlin-stdlib — CI-testable and base-APK-lean.
+highlights = { group = "dev.snipme", name = "highlights", version.ref = "highlights" }
 
 # Phase 29: downloadable LLM plugin module — explicit coroutines dependency (the
 # base app gets it transitively via lifecycle; the plugin module declares it).

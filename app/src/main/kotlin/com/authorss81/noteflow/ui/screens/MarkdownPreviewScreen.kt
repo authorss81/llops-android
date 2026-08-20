@@ -79,6 +79,7 @@ import com.authorss81.noteflow.theme.serifBodyStyle
 import com.authorss81.noteflow.ui.components.BacklinksInspectorBottomSheet
 import com.authorss81.noteflow.ui.components.WikiLinkPickerDialog
 import com.authorss81.noteflow.ui.components.markdown.HybridMarkdownEditor
+import com.authorss81.noteflow.ui.components.markdown.CodeBlockTextView
 import com.authorss81.noteflow.ui.viewmodel.NoteflowViewModel
 import java.io.File
 import kotlinx.coroutines.flow.debounce
@@ -1514,19 +1515,8 @@ private fun RenderBlocks(
                     is FencedCodeBlock -> node.literal
                     else -> (node as IndentedCodeBlock).literal
                 }
-                Surface(
-                    color = scheme.surfaceVariant,
-                    shape = RoundedCornerShape(8.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(
-                        text = codeText,
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 13.sp,
-                        color = scheme.onSurfaceVariant,
-                        modifier = Modifier.padding(12.dp)
-                    )
-                }
+                val languageTag = (node as? FencedCodeBlock)?.info
+                CodeBlockTextView(codeText = codeText, languageTag = languageTag)
             }
             is BulletList -> RenderBlocks(node.childrenList(), primaryColor, baseDir, onOpenWikiLink, serif)
             is OrderedList -> {

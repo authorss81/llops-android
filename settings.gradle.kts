@@ -1,7 +1,7 @@
 // R2-b2b2-DEP-04 (phase-146 + review): the one-way mavenCentral() allow-list applies
 // to plugin resolution AND dependency resolution so a poisoned Central index can
 // inject neither an unknown plugin nor an unknown dependency group. pluginManagement
-// is pre-evaluated and cannot reference script-level declarations, so the 51 literal
+// is pre-evaluated and cannot reference script-level declarations, so the 52 literal
 // `includeGroupByRegex("...")` lines are written out TWICE in this file (pluginManagement
 // and dependencyResolutionManagement) — the source-pinning tests
 // (`Phase146BuildIntegrityTest` + `B2Deps03DependencyVerificationTest`, both reading
@@ -32,6 +32,8 @@ pluginManagement {
                 includeGroupByRegex("org\\.jsoup.*")
                 includeGroupByRegex("net\\.zetetic.*")
                 includeGroupByRegex("com\\.github\\.pemistahl")
+                // Phase 179: syntax highlighting (dev.snipme) — exact group only.
+                includeGroupByRegex("dev\\.snipme.*")
                 includeGroupByRegex("junit")
                 includeGroupByRegex("org\\.hamcrest.*")
                 includeGroupByRegex("org\\.junit.*")
@@ -126,6 +128,8 @@ dependencyResolutionManagement {
                 // Lingua (com.github.pemistahl) — exact group only, not the whole
                 // com.github.* namespace (review: no other com.github group resolves).
                 includeGroupByRegex("com\\.github\\.pemistahl")
+                // Phase 179: syntax highlighting (dev.snipme) — exact group only.
+                includeGroupByRegex("dev\\.snipme.*")
                 // Test runners + annotations.
                 includeGroupByRegex("junit")
                 includeGroupByRegex("org\\.hamcrest.*")

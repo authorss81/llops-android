@@ -273,6 +273,11 @@ dependencies {
     implementation(libs.lingua)
     implementation(libs.jsoup)
 
+    // Phase 179: syntax highlighting for fenced code blocks in the markdown
+    // renderers (dev.snipme:highlights, pure Kotlin, jvm variant — base APK
+    // stays lean, no native libs, no new permissions).
+    implementation(libs.highlights)
+
     // Phase 31: JVM unit tests. kotlinx-coroutines-test lets the construction test
     // install a Main dispatcher so NoteflowViewModel's eager stateIn(viewModelScope,..)
     // flows can be built outside Android. junit is the existing test runner.
