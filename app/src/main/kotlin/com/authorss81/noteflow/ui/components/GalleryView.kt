@@ -24,9 +24,12 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.Hyphens
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.authorss81.noteflow.data.model.NotePageEntity
+import com.authorss81.noteflow.services.GalleryTitleDisplayPolicy
 import com.authorss81.noteflow.ui.viewmodel.NoteflowViewModel
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -146,11 +149,14 @@ private fun GalleryCardItem(
                     }
 
                     Text(
-                        text = page.title,
+                        text = GalleryTitleDisplayPolicy.displayTitle(page.title),
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.SemiBold,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
+                        softWrap = true,
+                        hyphens = Hyphens.None,
+                        lineHeight = 18.sp,
                         modifier = Modifier.weight(1f)
                     )
 
@@ -271,7 +277,9 @@ private fun GalleryCardItem(
                         Text(
                             text = dateFormat.format(Date(page.updatedAt)),
                             style = MaterialTheme.typography.labelMedium,
-                            color = scheme.outline
+                            color = scheme.outline,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 }
