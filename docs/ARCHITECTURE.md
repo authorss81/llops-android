@@ -99,6 +99,26 @@
 > updated (`B2Ui4` passwordless branch, `B1Db08` gate-region extraction). Tests:
 > `Phase181ExportReturnNotebookRestoreTest` (8), `B2Ui4` + `B1Db08` updated.
 
+> **Implemented in phase-182** (2026-08-20, export/home-return unreadable-title
+> regression re-fix, see `workspace/phase-182/REPORT.md`): phase-169's two
+> mechanisms re-verified CLOSED (cross-key restore classifies `AuthFailed` per
+> row and throws `RestoreReEncryptionException` before any write-back;
+> `updatePageBody`/`renamePage`/`updatePageTitleAndTags` refuse the render
+> marker with `UnreadableContentWriteException`); every exporter
+> (`exportBackup`/`exportVaultToZip`/`exportNoteToHtml`/`exportVaultToHtmlZip`/
+> `exportObsidianVaultZip`/`exportPageToPsd`) is a read-only passthrough —
+> `ImportExportService` never calls `closeDatabase`/`reopenDatabase`. The
+> residual marker-persist surface was `NoteRepository.createNoteVersion` — it
+> now refuses the trimmed marker too (guard before encrypt,
+> `NoteRepository.kt:1578`), and `NoteflowViewModel.createNoteVersion` surfaces
+> `DecryptFailurePolicy.UNREADABLE_ROW_GUIDANCE`. "Export Document as PDF" no
+> longer undercounts: new pure-JVM `services/DocumentPdfExportPolicy.kt`
+> (`pageCountForExport` = `max(1, sourcePdfTotalPages, strokesBased)`) fed by
+> `pdfTotalPages` — never the memory-bounded `pdfPageBitmaps` window — and the
+> EditorScreen call site passes `sourceFilePath` so the exporter's
+> `renderPdfPageToBitmap`/`decodeImageSampled` fallback draws every page. Tests:
+> `Phase182ExportReadLockBoundaryTest` (9).
+
 > **Implemented in phase-172** (2026-08-19, editor & canvas productivity, see
 > `workspace/phase-172/REPORT.md`): three pure-JVM policies +
 > `services/ColorRecentsPolicy.kt` (persisted recently-used colors + favorites —
