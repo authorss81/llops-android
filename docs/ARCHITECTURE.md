@@ -1917,8 +1917,8 @@
   `filesDir`/`cacheDir` through `UpdateTrustPolicy.isScanSafeDirectory`; public Downloads/external dirs are NEVER
   scanned, B1-PLAT-7), `:60` (`inspectApkFile` — classifies via the policy, trust-neutral copy), `:175`
   (`installApk` — first check is `UpdateTrustPolicy.mayInstall(trust, userConfirmedUntrusted)`, refuses unconfirmed
-  UNTRUSTED files before any staging); `ui/components/Dialogs.kt` `AppUpdateDialog` — "Scan App Storage for APK"
-  + strong untrusted-confirmation gate on "Install Update".
+UNTRUSTED files before any staging); `ui/components/Dialogs.kt` `AppUpdateDialog` — "Scan App Storage for APK"
+    + strong untrusted-confirmation gate on "Install Update".
   - **Implemented in phase-61** (B1-PLAT-7, see `workspace/phase-61/REPORT.md`): new pure-JVM
     `services/UpdateTrustPolicy.kt` owns the trust model — no official channel ⇒ every locally-present APK is
     `UpdateSourceTrust.UNTRUSTED_LOCAL` (`classifySource`/`hasOfficialChannel`), `isPubliclyWritableDirectory`
@@ -1926,6 +1926,18 @@
     UNTRUSTED installs behind explicit user confirmation. The old scan of `getExternalFilesDir` + `/sdcard/Download`
     + `/storage/emulated/0/Download` and the "New update detected in local storage" conditioning wording are gone.
     Tests: `B1Plat07UpdateTrustTest` (11 test methods; review fix 2026-08-15 — see `workspace/phase-61/REPORT.md` "Addendum").
+  - **Implemented in phase-190** (self-update, see `workspace/phase-190/REPORT.md` + `STEP1_TRACE.md`): new pure-JVM
+    `services/UpdateApkDecisionPolicy.kt` owns the NON-trust identity/version decisions — `inspectApkFile` first
+    gates `samePackage(apkInfo.packageName, context.packageName)` (the phase's fix: a same-signer DIFFERENT-package
+    APK is refused honestly, never offered), and install-time re-verify is a UNIFIED `verifyApkIdentity` (one
+    `GET_SIGNING_CERTIFICATES` parse checks package + signers, closing the TOCTOU swap window). versionCode
+    compares flow through the policy in LONG (`longVersionCode`; the old `toInt()` wrap broke codes > 2^31-1),
+    versionName tie-breaker uses each segment's LEADING digit-run (`2.0.0-rc1` ≈ `2.0.0`, not "newer"). The
+    document-picker now STAGES via `ImportExportService.stageApkUriToFile` (bounded 64 KiB stream + 256 MB cap,
+    heap read `readUriBytes`+`writeBytes` removed); `AppUpdateDialog` auto-scans app-private storage ONCE on open.
+    A `.apk` SHARED INTO the app (`MainActivity.readShareIntent`, `UpdateApkDecisionPolicy.isApkStream` = exact
+    package MIME or `.apk` filename via `OpenableColumns.DISPLAY_NAME`) is staged app-privately + a non-secret
+    snackbar, never a note clip. Trust semantics + B1-PLAT-7 gates unchanged.
 - **Onboarding / empty states / home glanceable stats** (Phase 156, see `workspace/phase-156/REPORT.md`):
   pure-JVM `services/OnboardingPolicy.kt` (first-run gate `shouldAutoShow(isFirstRun, hasMasterPassword,
   onboardingCompleted)` + 3 `OnboardingStep`s + privacy-stance copy), `services/HomeStatsMath.kt`

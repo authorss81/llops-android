@@ -51,13 +51,17 @@ object UpdateApkDecisionPolicy {
         apkVersionCode > currentVersionCode
 
     /**
-     * Digit-filtered component-wise versionName compare — "1.0" vs "1.0.0"
-     * compares equal (not newer), "1.0.1" > "1.0.0", malformed/empty segments
-     * count as 0 and can never make a non-numeric name claim "newer".
+     * Digit-led component-wise versionName compare — "1.0" vs "1.0.0" compares
+     * equal (not newer), "1.0.1" > "1.0.0". Only the LEADING digit-run of each
+     * dot-segment counts, so a pre-release suffix like "2.0.0-rc1" compares
+     * equal to "2.0.0" (pre-release < release) instead of leaking the "1" into
+     * "101", and malformed/empty segments count as 0 and can never make a
+     * non-numeric name claim "newer". VersionCode remains the primary signal;
+     * this is the legacy versionName tie-breaker, hardened.
      */
     fun versionNameNewer(newVer: String, currentVer: String): Boolean {
-        val newParts = newVer.split(".").map { it.filter { char -> char.isDigit() }.toIntOrNull() ?: 0 }
-        val currParts = currentVer.split(".").map { it.filter { char -> char.isDigit() }.toIntOrNull() ?: 0 }
+        val newParts = newVer.split(".").map { it.takeWhile { char -> char.isDigit() }.toIntOrNull() ?: 0 }
+        val currParts = currentVer.split(".").map { it.takeWhile { char -> char.isDigit() }.toIntOrNull() ?: 0 }
         val maxLen = maxOf(newParts.size, currParts.size)
         for (i in 0 until maxLen) {
             val p1 = newParts.getOrElse(i) { 0 }
