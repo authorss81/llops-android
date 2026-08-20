@@ -29,7 +29,10 @@
 > were redesigned from the old flat square box to tasteful Material 3 cards — 20 dp
 > rounded corners, tonal `surfaceVariant` container with a subtle `primaryContainer`
 > wash fading from the top edge, 3 dp elevation, fixed portrait 10:16 aspect ratio so
-> `GridCells.Adaptive(168.dp)` keeps balanced proportions on phones AND tablets, and a
+> `GridCells.Adaptive(168.dp)` keeps balanced proportions on phones AND tablets — NOTE:
+> the 10:16 ratio was REMOVED in phase-184 (see below) in favor of a content-driven
+> card with a font-scale-scaled `heightIn` minimum floor; the rest of this card design
+> (rounded corners, wash, elevation, preview blocks, footer) is unchanged, and a
 > rich preview (type badge, ellipsized title, first ~2-3 preview lines, pinned
 > indicator, ≤3 tag chips + "+N", updated date). No canvas rasterization, no heavy
 > shadow/blur (AGENTS.md low-end rule); ripple from the clickable `Card`; the app has
@@ -74,6 +77,26 @@
 > rename dialogs, routing (`MainActivity.kt:601,711`) and export call sites keep the
 > RAW value — display-only everywhere. Tests: `GalleryTitleDisplayPolicyTest.kt` (11)
 > + `Phase183GalleryTypographyTest.kt` (2 source pins). No schema change, no new deps.
+
+> **Implemented in phase-184** (2026-08-20, gallery card proportions — no dead empty
+> band, see `workspace/phase-184/REPORT.md`): user visual review found the fixed
+> portrait `aspectRatio(10f/16f)` card (phase-165) forced a strict **268.8dp-tall tile
+> at the 168dp grid cell** — >60% empty for short notes, and a strict ratio can clip
+> the footer at large font scales. The rigid ratio is GONE: cards are now
+> **content-driven** with a font-scale-scaled minimum floor. New pure-JVM
+> `services/GalleryCardLayoutPolicy.kt` (`minCardHeightDp(fontScale)` =
+> `(180f · fontScale).coerceIn(180f, 288f)`, non-finite/≤0 inputs fail safe to 1.0).
+> `GalleryView.kt` applies it as
+> `heightIn(min = GalleryCardLayoutPolicy.minCardHeightDp(LocalDensity.current.fontScale).dp)`
+> (`GalleryView.kt:96-115`) — a FLOOR, never a strict ratio, so content taller than
+> it still grows the card. The card body was restructured to wrap content: the wash
+> uses `matchParentSize()`, the preview is a plain `maxLines=3` block, and the
+> ink/empty placeholder is a fixed 84dp centered band instead of stretching across the
+> leftover height. Grid stays `LazyVerticalGrid(Adaptive(168.dp))` (staggered grid
+> deliberately NOT chosen — same adaptive outcome, simpler recycling/memory for
+> large galleries); tag/date footer + filter behavior unchanged. Tests:
+> `GalleryCardLayoutPolicyTest.kt` (6, pure JVM) + `Phase184GalleryProportionTest.kt`
+> (5 source pins). No schema change, no new deps.
 
 > **Implemented in phase-167** (2026-08-19, bottom-nav-bar overlay fix — dynamic insets,
 > see `workspace/phase-167/REPORT.md`): the app draws edge-to-edge (`MainActivity.kt:252`),

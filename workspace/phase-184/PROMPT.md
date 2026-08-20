@@ -1,4 +1,4 @@
-# Phase 184: GalleryView card proportions — no dead empty space from rigid 10:16 ratio [NOT STARTED]
+# Phase 184: GalleryView card proportions — no dead empty space from rigid 10:16 ratio [DONE]
 
 You are working on **InkFlow/Noteflow**. User visual review: gallery cards enforce a
 fixed portrait `aspectRatio(10f/16f)` (`ui/components/GalleryView.kt:98-99`), so a short
