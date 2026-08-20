@@ -751,6 +751,17 @@
     explicit choices via the persisted `plugin_enabled_<id>` + `plugin_ever_enabled_<id>`
     flags (`SettingsManager.kt:340-359`). CaseChangePlugin remains the store's OPTIONAL
     plugin (NOT in `defaultPlugins()`, downloaded → REGISTERED/off).
+  - **Implemented in phase-177** (full ecosystem review, see `workspace/phase-177/REPORT.md`):
+    off-by-default re-verified + pinned over the whole compiled set (`SettingsManager.kt:447-448`);
+    store rows + settings switch are driven by the SAME enable store the router reads — single
+    source of truth, `off ⇔ REGISTERED/DISABLED`, `on ⇔ ENABLED/AVAILABLE/UNAVAILABLE`, never
+    both/neither; delete is confirmation-gated on the single delete path
+    (`PluginStoreDialog.kt:535-558`) and `PluginStoreController.delete` runs
+    `deleteDownloadedAssets` before `uninstallPlugin`; rejected plugins show Delete only.
+    New pins: `Phase177PluginEcosystemReviewTest` (3 tests). Bug fix: the phase-146
+    R2-b2b2-DEP-03 lockfile pin was stale after phase-175 made `:plugins:mlkit` resolve
+    `mlkit:translate` → okhttp-3.0.0/okio-1.6.0 as verified jars; the pin now accepts a
+    verified jar (sha256) or a retained POM-only entry (`Phase146BuildIntegrityTest`).
   - **Implemented in phase-129** (see `workspace/phase-129/REPORT.md`): pre-phase-35 floating ink bar
     restored + minimap fixed. Posture is orientation-only via pure-JVM `services/DockPosturePolicy.kt`
     (`InkBarPosture.HORIZONTAL` portrait / `VERTICAL` landscape + default anchors): `FloatingToolDock`
