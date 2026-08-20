@@ -25,6 +25,30 @@
 | `theme/` | `Theme.kt`, `GlassSurfaces.kt`, `GlassThemeMath.kt`, `Motion.kt`, `Type.kt`, `Color.kt` | Material3 + frosted-glass design system |
 | `utils/` | `ConstantTime.kt`, `BitmapPool.kt`, `DeviceCompatibilityManager.kt`, `WikiLinkParser.kt` (dup, see notes) | Pure helpers |
 
+> **Implemented in phase-188** (2026-08-20, GalleryView robustness, see
+> `workspace/phase-188/REPORT.md`): the user visual-review "exploration" set of 4
+> risks, none of which phases 183–187 may regress into — (1) **no stroke
+> rasterization**: the grid preview derives ONLY from `NotePageEntity` metadata
+> (title/extractedText/tags/pinned/sourceFileType/updatedAt); new
+> `Phase188GalleryRobustnessTest` source-pins zero `pointsJson`/`getStrokesForPage`/
+> `deserializeStrokes`/`thumbnail`/`rasterize` in `GalleryView.kt`; (2) **large
+> font scaling (1.3–1.5x)**: the body `Column` now shares the phase-184
+> `heightIn(min = minCardHeight)` floor and both preview paths carry
+> `weight(1f, fill = false)` — the prompt's `Column(weight(1f, fill=false))`
+> slack seat, so the floor's slack lands BETWEEN preview and footer and the
+> date/tags footer is pinned visible (extended `GalleryCardLayoutPolicy` with
+> `measuredCardHeightDp`/`footerAlwaysFits` + line-budget constants); (3) **dark
+> theme**: the card now has an explicit `BorderStroke(1.dp,
+> outlineVariant.copy(alpha = 0.35f))` from policy constants
+> (`GALLERY_CARD_BORDER_WIDTH_DP`/`GALLERY_CARD_BORDER_ALPHA`) so cards stay
+> distinct from near-black surfaces; (4) **tag overflow**: the wrapping `FlowRow`
+> is replaced by a single-line `Row` capped at 2 chips + a `+N` badge via new
+> pure-JVM `services/GalleryTagRowPolicy.kt` (chips `weight(1f, fill=false)`
+> ellipsize, unweighted badge can never be pushed out, the update timestamp stays
+> visible). Tests: `GalleryTagRowPolicyTest` (10) +
+> `Phase188GalleryLayoutBoundsTest` (8) + `Phase188GalleryRobustnessTest` (6).
+> No schema change, no new deps.
+
 > **Implemented in phase-186** (2026-08-20, gallery quick actions, see
 > `workspace/phase-186/REPORT.md`): gallery cards now expose the SAME quick
 > actions as the List view — a compact `MoreVert` overflow menu (`GalleryView.kt`)
