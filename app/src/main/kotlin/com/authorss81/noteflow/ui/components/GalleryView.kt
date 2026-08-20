@@ -195,7 +195,10 @@ private fun GalleryCardItem(
                 // Content-driven height (phase 184): the preview no longer has a
                 // weight(1f) stretch that would soak up the old dead band — the
                 // text block is just its own lines (maxLines = 3) and the
-                // placeholder is a fixed compact band.
+                // placeholder is a compact band with an 84dp FLOOR, so large font
+                // scales grow it instead of clipping/overlapping the label
+                // (review fix: was a fixed 84dp-high unyielding box that
+                // overflowed its label at >=2x font scale).
                 val preview = page.extractedText?.trim().orEmpty()
                 if (preview.isNotEmpty()) {
                     Text(
@@ -209,7 +212,7 @@ private fun GalleryCardItem(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(84.dp),
+                            .heightIn(min = 84.dp),
                         contentAlignment = Alignment.Center
                     ) {
                         Column(

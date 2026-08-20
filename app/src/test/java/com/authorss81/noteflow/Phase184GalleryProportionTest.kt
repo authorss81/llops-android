@@ -82,6 +82,15 @@ class Phase184GalleryProportionTest {
             "footer date maxLines preserved",
             src.contains("maxLines = 1,") && src.contains("overflow = TextOverflow.Ellipsis")
         )
+        assertFalse(
+            "ink/empty placeholder must not be a fixed-height unyielding band " +
+                "(review fix: it overflowed/clipped its label at >=2x font scale)",
+            src.contains(".height(84.dp)")
+        )
+        assertTrue(
+            "ink/empty placeholder band has an 84dp FLOOR so large fonts grow it",
+            src.contains(".heightIn(min = 84.dp)")
+        )
     }
 
     @Test

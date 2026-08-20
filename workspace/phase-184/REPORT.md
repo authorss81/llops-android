@@ -36,8 +36,11 @@ ratio at all**. The card height is now **content-driven with a minimum floor**:
    `fillMaxSize`/`weight(1f)` stretched. The wash uses `matchParentSize()` (fills
    whatever the content measures, never drives height); the content `Column` wraps
    its own height; the text preview is a plain `maxLines=3` block; the ink/empty
-   placeholder is a fixed **84dp compact band** (centered icon + label) instead of
-   stretching across the full leftover height.
+   placeholder is a compact **84dp-minimum band** (`heightIn(min = 84.dp)` —
+   centered icon + label) instead of stretching across the full leftover height,
+   and the band is a FLOOR so large font scales grow it rather than clipping the
+   label (review fix, 2026-08-20: the original fixed `.height(84.dp)` overflowed
+   its label at ≥2× font scale).
 
 ### Justification vs the staggered-grid alternative
 Kept `LazyVerticalGrid` (`GridCells.Adaptive(168.dp)`, `key = { it.id }`) and did NOT
@@ -56,7 +59,7 @@ switch to `LazyVerticalStaggeredGrid`:
 |---|---|---|
 | Card height at 168dp cell, 1.0 font scale | `168 ÷ (10/16) = 268.8dp` fixed | `max(180dp floor, content height)` — short note ≈ 180dp |
 | Short note (title + 2 preview lines), content ≈ 159dp | 268.8dp fixed → **~110dp dead band (~41%)** (user observed >60% on 1-line notes) | 180dp tile → **~21dp slack (~12%)**, no visible dead band |
-| Empty/ink page | placeholder stretched across the whole leftover height | compact centered 84dp placeholder band |
+| Empty/ink page | placeholder stretched across the whole leftover height | compact centered 84dp-min placeholder band (grows at large fonts) |
 | Large-font accessibility (e.g. 1.3×, 2×) | fixed 268.8dp can clip footer | floor scales (234dp at 1.3×, capped 288dp at ≥1.6×); content taller than the floor still grows the card — footer never clipped |
 | Tags/date footer, filter behavior, grid | unchanged | unchanged (`:252-307`, all phase-183/146/165 behavior kept) |
 
@@ -69,7 +72,9 @@ switch to `LazyVerticalStaggeredGrid`:
   `Modifier.aspectRatio` gone from the gallery card, `heightIn(min = minCardHeight)`
   present, floor wired to `GalleryCardLayoutPolicy.minCardHeightDp(LocalDensity...fontScale)`,
   policy constants `180f`/`288f` + `coerceIn`, phase-183 preview `maxLines=3` + footer
-  `maxLines=1`/Ellipsis kept, `GalleryView` signature + Adaptive grid preserved.
+  `maxLines=1`/Ellipsis kept, **placeholder band pinned to `heightIn(min = 84.dp)`**
+  (no `.height(84.dp)` may return — review-fix pin), `GalleryView` signature + Adaptive
+  grid preserved.
 
 ## Verification
 - `gradle assembleDebug` — **green** (app-debug.apk, SHA-256 `1dea66e8…`, built in
@@ -95,3 +100,18 @@ switch to `LazyVerticalStaggeredGrid`:
 - Step 2 (fix): commit `6fef50c` — `GalleryCardLayoutPolicy.kt` + `GalleryView.kt`
   + 2 test classes.
 - Step 3 (proof): this REPORT + docs — commit + push.
+
+## Review fixes (2026-08-20, after the agent review)
+1. `GalleryCardLayoutPolicy.kt` now ends with a final newline (`.editorconfig`
+   `insert_final_newline = true` was violated).
+2. The ink/empty placeholder band is no longer a fixed `.height(84.dp)` (which
+   overflowed its label at ≥2× font scale, contradicting the phase's "large fonts
+   never clip" goal). It is `heightIn(min = 84.dp)` — same 84dp compact floor at
+   1.0 scale, grows with content/font scale above it. Pinned in
+   `Phase184GalleryProportionTest` (no `.height(84.dp)`, must contain
+   `.heightIn(min = 84.dp)`).
+3. Review items 3-6 from the review (footer slack in mixed-height rows = inherent
+   grid row-equalization; wash visual change = intended and documented; full-suite
+   count not re-run; doc claims correct) required no code change.
+4. Commit `…review fixes` — `gradle assembleDebug` green; the 11 phase-184 tests
+   re-run green (`GalleryCardLayoutPolicyTest` + `Phase184GalleryProportionTest`).

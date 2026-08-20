@@ -91,7 +91,9 @@
 > (`GalleryView.kt:96-115`) — a FLOOR, never a strict ratio, so content taller than
 > it still grows the card. The card body was restructured to wrap content: the wash
 > uses `matchParentSize()`, the preview is a plain `maxLines=3` block, and the
-> ink/empty placeholder is a fixed 84dp centered band instead of stretching across the
+> ink/empty placeholder is a compact 84dp-minimum band (`heightIn(min = 84.dp)`,
+> review fix: originally a fixed `.height(84.dp)` that overflowed its label at ≥2×
+> font scale) instead of stretching across the
 > leftover height. Grid stays `LazyVerticalGrid(Adaptive(168.dp))` (staggered grid
 > deliberately NOT chosen — same adaptive outcome, simpler recycling/memory for
 > large galleries); tag/date footer + filter behavior unchanged. Tests:
