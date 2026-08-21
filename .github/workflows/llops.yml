@@ -28,7 +28,7 @@ concurrency:
 
 env:
   OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
-  OPENCODE_MODEL: opencode/deepseek-v4-flash-free,opencode/nemotron-3-ultra-free
+  OPENCODE_MODEL: opencode/nemotron-3-ultra-free,opencode/deepseek-v4-flash-free
 
 jobs:
   select-phase:
