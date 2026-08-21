@@ -28,7 +28,7 @@ concurrency:
 
 env:
   OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
-  OPENCODE_MODEL: openrouter/nvidia/nemotron-3-super-120b-a12b:free,opencode/deepseek-v4-flash-free,opencode/nemotron-3-ultra-free,openrouter/nvidia/nemotron-3-ultra-550b-a55b:free,openrouter/nvidia/nemotron-3.5-lightning:free
+  OPENCODE_MODEL: opencode/nemotron-3-ultra-free, openrouter/nvidia/nemotron-3-super-120b-a12b:free,opencode/deepseek-v4-flash-free,opencode/nemotron-3-ultra-free,openrouter/nvidia/nemotron-3-ultra-550b-a55b:free,openrouter/nvidia/nemotron-3.5-lightning:free
 
 jobs:
   select-phase:
