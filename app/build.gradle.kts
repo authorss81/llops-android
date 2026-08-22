@@ -140,6 +140,8 @@ android {
         // assembled APK while the 24 used languages stay loadable by the detector.
         resources {
             excludes += LINGUA_UNUSED_LANGUAGE_ISOS.map { "language-models/$it/**" }
+            // Phase 176 (R2-KS-27 LOW + R2-KS-24 INFO): exclude debug/dev artifacts from release APK
+            excludes += listOf("DebugProbesKt.bin", "kotlin-tooling-metadata.json", "firebase-*.properties")
         }
     }
 
