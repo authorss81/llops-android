@@ -30,7 +30,24 @@ if [ -z "${PHASE}" ]; then
 fi
 
 # --- Config (override with env) ----------------------------------------------
-MODEL="${OPENCODE_MODEL:-opencode/deepseek-v4-flash-free}"
+# OPENCODE_MODEL accepts a SINGLE model id or a COMMA-SEPARATED FALLBACK CHAIN
+# (e.g. "provider/a,provider/b:free"). Entries are tried one at a time via
+# --model — the raw list is NEVER passed to opencode verbatim (that caused the
+# phase-175/176 "Model not found" incident). On model-level failures (unknown
+# id, rate limit, provider outage) the runner advances to the next entry.
+MODEL_LIST="${OPENCODE_MODEL:-openrouter/nvidia/nemotron-3-super-120b-a12b:free,opencode/nemotron-3-ultra-free}"
+MODELS=()
+while IFS=',' read -r -a _RAW_MODELS; do
+  for _m in "${_RAW_MODELS[@]}"; do
+    _m="${_m#"${_m%%[![:space:]]*}"}"   # ltrim
+    _m="${_m%"${_m##*[![:space:]]}"}"   # rtrim
+    if [ -n "${_m}" ]; then MODELS+=("${_m}"); fi
+  done
+done <<< "${MODEL_LIST}"
+if [ "${#MODELS[@]}" -eq 0 ]; then
+  MODELS=("opencode/nemotron-3-ultra-free")
+fi
+MODEL="${MODELS[0]}"   # first entry = default for anything still referencing $MODEL
 REVIEWER_AGENT="${REVIEWER_AGENT:-reviewer}"
 LOG_DIR="logs"
 PHASE_DIR="workspace/${PHASE}"
@@ -58,9 +75,57 @@ fi
 # --- Strict rate-limit detection ----------------------------------------------
 # Only explicit HTTP/quota markers match. The bare word "retry" is NOT a match
 # so normal agent output about retrying builds never triggers a false deferral.
-is_rate_limited() {
+log_is_rate_limited() {
   grep -qiE "HTTP[ /]?429|429[^0-9]|too many requests|rate[ _-]?limit(ed| exceeded)?|insufficient[ _-]?quota|quota exceeded|(per[ -]?minute|per[ -]?day).*(limit|exceeded)" \
-    "${LOG_DIR}/${PHASE}.log" 2>/dev/null && return 0
+    "$1" 2>/dev/null && return 0
+  return 1
+}
+
+is_rate_limited() {
+  log_is_rate_limited "${LOG_DIR}/${PHASE}.log"
+}
+
+# True when the log shows opencode could not resolve/use THIS model at all
+# (unknown id, provider-side outage) — safe signals for advancing the chain.
+log_is_model_error() {
+  grep -qiE "model not found|unknown model|invalid model|no such model|unexpected server error" \
+    "$1" 2>/dev/null && return 0
+  return 1
+}
+
+ACTIVE_MODEL=""
+# Run `opencode run` once per entry of MODELS until one succeeds. $1 = log file
+# (output APPENDED with a per-model banner so classification still sees earlier
+# models' rate-limit markers); remaining args are passed to opencode verbatim.
+# Advances the chain ONLY on model-level failures (unknown id / rate limit /
+# provider outage / zero output). A real work failure (agent ran but exited
+# non-zero) returns immediately — re-running the whole task with another model
+# inside one tick would double-spend minutes; the attempt cap handles retries.
+run_models() {
+  local logfile="$1"; shift
+  local m code pre post growth
+  : > "${logfile}"
+  for m in "${MODELS[@]}"; do
+    echo "== [models] trying ${m} ==" >> "${logfile}"
+    pre="$(wc -c < "${logfile}" 2>/dev/null || echo 0)"
+    opencode run --model "${m}" "$@" >> "${logfile}" 2>&1
+    code=$?
+    post="$(wc -c < "${logfile}" 2>/dev/null || echo 0)"
+    growth=$((post - pre))
+    if [ "${code}" -eq 0 ]; then
+      ACTIVE_MODEL="${m}"
+      echo "== [models] ${m} succeeded =="
+      return 0
+    fi
+    if log_is_rate_limited "${logfile}" || log_is_model_error "${logfile}" || [ "${growth}" -lt 200 ]; then
+      echo "== [models] ${m} unusable (exit ${code}) — advancing fallback chain =="
+      continue
+    fi
+    echo "== [models] ${m} failed with a real work error (exit ${code}) — keeping result =="
+    ACTIVE_MODEL="${m}"
+    return "${code}"
+  done
+  echo "== [models] every model in the fallback chain was skipped/unusable =="
   return 1
 }
 
@@ -268,16 +333,17 @@ run_phase() {
   } > "${LOG_DIR}/${PHASE}.prompt"
   checkpoint_loop &
   local CHECK_PID=$!
-  opencode run \
-    --model "${MODEL}" \
+  run_models "${LOG_DIR}/${PHASE}.log" \
     --agent build \
     "${SESSION_ARGS[@]}" \
     --title "llops-${PHASE}" \
-    < "${LOG_DIR}/${PHASE}.ctx" \
-    > "${LOG_DIR}/${PHASE}.log" 2>&1
+    < "${LOG_DIR}/${PHASE}.ctx"
   local code=$?
   kill "${CHECK_PID}" 2>/dev/null || true
   set -e
+  if [ -n "${ACTIVE_MODEL}" ]; then
+    echo "== [phase] model used: ${ACTIVE_MODEL} =="
+  fi
   # Stale-session recovery: opencode stores sessions on the CI VM's local disk,
   # which is wiped between runs. A `.session` marker committed by an earlier tick
   # points at an ID that no longer exists -> "Session not found". Clear the stale
@@ -296,9 +362,8 @@ run_phase() {
 run_review() {
   echo "== [review] Running reviewer subagent =="
   set +e
-  opencode run --model "${MODEL}" --agent "${REVIEWER_AGENT}" \
-    "Review all changes made in phase '${PHASE}'. Output numbered FINDINGS." \
-    > "${LOG_DIR}/${PHASE}.review.log" 2>&1
+  run_models "${LOG_DIR}/${PHASE}.review.log" --agent "${REVIEWER_AGENT}" \
+    "Review all changes made in phase '${PHASE}'. Output numbered FINDINGS."
   code=$?
   set -e
   echo "== [review] exit: ${code} =="
@@ -308,10 +373,9 @@ run_review() {
     set +e
     checkpoint_loop &
     local CHECK_PID=$!
-    opencode run --model "${MODEL}" --agent build \
+    run_models "${LOG_DIR}/${PHASE}.fix.log" --agent build \
       --continue \
-      "Apply fixes for the review FINDINGS above. Do not break other code. After applying every fix, commit and push them yourself: git add -A; git commit -m 'llops: ${PHASE} review fixes'; git push (pull --rebase on rejection). If the working tree is clean, push nothing." \
-      > "${LOG_DIR}/${PHASE}.fix.log" 2>&1
+      "Apply fixes for the review FINDINGS above. Do not break other code. After applying every fix, commit and push them yourself: git add -A; git commit -m 'llops: ${PHASE} review fixes'; git push (pull --rebase on rejection). If the working tree is clean, push nothing."
     code=$?
     kill "${CHECK_PID}" 2>/dev/null || true
     set -e
