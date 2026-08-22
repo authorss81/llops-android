@@ -28,8 +28,7 @@ concurrency:
 
 env:
   OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
-  OPENCODE_MODEL: openrouter/nvidia/nemotron-3-super-120b-a12b:free
-
+  OPENCODE_MODEL: opencode/nemotron-3-ultra-free
 jobs:
   select-phase:
     # Fix 4: no checkout — read marker files via the GitHub API (one trees call,
