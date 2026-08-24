@@ -1629,6 +1629,25 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     }
 
     // -----------------------------------------------------------------------
+    // Phase 204: ViewModel-scoped relay for a voice recording that was saved
+    // (`.enc` blob written) but never attached because the editor composition
+    // died mid-recording (rotation — release() finalizes inside stopRecording).
+    // The dying editor publishes here; the NEXT editor instance for the page
+    // consumes it once and attaches the embed. Plain property ⇒ survives
+    // configuration changes; process death keeps the encrypted blob on disk.
+    // -----------------------------------------------------------------------
+    private val pendingVoiceRecordings = com.authorss81.noteflow.services.VoicePendingRecordingSlot()
+
+    /** Editor teardown relays an unattached-but-saved recording for [pageId]. */
+    fun publishPendingVoiceRecording(pageId: String, result: com.authorss81.noteflow.services.VoiceRecordingResult) {
+        pendingVoiceRecordings.publish(pageId, result)
+    }
+
+    /** Next editor instance takes (once) and attaches the recovered recording. */
+    fun consumePendingVoiceRecording(pageId: String): com.authorss81.noteflow.services.VoiceRecordingResult? =
+        pendingVoiceRecordings.consume(pageId)
+
+    // -----------------------------------------------------------------------
     // R2-b2b1-UI-03 (phase-135): ONE shared one-in-flight gate across ALL restore
     // entry points — the recovery screens, the keystore-lost recovery, the
     // HomeScreen local restore and the WebDAV download+restore. A restore is
@@ -2937,11 +2956,27 @@ fun updatePageTags(id: String, tags: String) {
      * `noteflow.sqlite.keystore-lost-<ts>` (nothing deleted, for offline recovery
      * with the original key material), the stale device wrapper is cleared, and a
      * brand-new passwordless vault is booted with a fresh DEK.
+     *
+     * Phase 204: the rename outcomes are now COLLECTED and evaluated by
+     * [com.authorss81.noteflow.services.StartFreshVaultResetPolicy]. If any
+     * existing vault file (main DB or wal/shm/journal sidecar) failed to move
+     * aside, start-fresh ABORTS with a surfaced error and leaves the recovery
+     * screen up — pre-fix a failed rename was swallowed and the fresh vault was
+     * booted on top of the OLD ciphertext, bricking the escape hatch exactly
+     * when it was needed. Nothing is cleared and no new DEK is minted on abort.
      */
     fun startFreshAfterKeystoreKeyLoss() {
         viewModelScope.launch {
+            _startFreshError.value = null
+            val outcomes = withContext(Dispatchers.IO) { quarantineVaultFiles("keystore-lost") }
+            if (com.authorss81.noteflow.services.StartFreshVaultResetPolicy.decide(outcomes) !=
+                com.authorss81.noteflow.services.StartFreshVaultResetPolicy.Decision.Proceed
+            ) {
+                _startFreshError.value =
+                    com.authorss81.noteflow.services.StartFreshVaultResetPolicy.ABORT_MESSAGE
+                return@launch
+            }
             withContext(Dispatchers.IO) {
-                quarantineVaultFiles("keystore-lost")
                 security.clearDek()
             }
             _keystoreKeyLost.value = false
@@ -2957,17 +2992,42 @@ fun updatePageTags(id: String, tags: String) {
         }
     }
 
+    /**
+     * Phase 204: surfaced on KeystoreKeyLostScreen when "start fresh" aborts
+     * because a vault file rename failed (fixed policy text — never raw errors).
+     */
+    private val _startFreshError = MutableStateFlow<String?>(null)
+    val startFreshError: StateFlow<String?> = _startFreshError.asStateFlow()
+
+    fun clearStartFreshError() {
+        _startFreshError.value = null
+    }
+
     /** Renames the live vault DB (+wal/shm/journal) aside, preserving its bytes. */
-    private fun quarantineVaultFiles(suffixTag: String) {
+    private fun quarantineVaultFiles(suffixTag: String): List<com.authorss81.noteflow.services.StartFreshVaultResetPolicy.VaultFileRename> {
         val context: android.content.Context = getApplication()
         val baseFile = context.getDatabasePath("noteflow.sqlite")
-        val dir = baseFile.parentFile ?: return
+        val dir = baseFile.parentFile ?: return emptyList()
         val timestamp = System.currentTimeMillis()
         val suffix = ".$suffixTag-$timestamp"
-        for (name in listOf("noteflow.sqlite", "noteflow.sqlite-wal", "noteflow.sqlite-shm", "noteflow.sqlite-journal")) {
+        return com.authorss81.noteflow.services.StartFreshVaultResetPolicy.QUARANTINE_FILES.map { (name, role) ->
             val source = File(dir, name)
-            if (source.exists()) {
-                runCatching { source.renameTo(File(dir, name + suffix)) }
+            if (!source.exists()) {
+                com.authorss81.noteflow.services.StartFreshVaultResetPolicy.VaultFileRename(
+                    fileName = name, role = role, sourceExisted = false, moved = false
+                )
+            } else {
+                // Phase 204: collect the outcome instead of swallowing it —
+                // StartFreshVaultResetPolicy.decide turns a failed move into an
+                // ABORT so a fresh vault is never booted over old ciphertext.
+                val moved = try {
+                    source.renameTo(File(dir, name + suffix))
+                } catch (e: Exception) {
+                    false
+                }
+                com.authorss81.noteflow.services.StartFreshVaultResetPolicy.VaultFileRename(
+                    fileName = name, role = role, sourceExisted = true, moved = moved
+                )
             }
         }
     }

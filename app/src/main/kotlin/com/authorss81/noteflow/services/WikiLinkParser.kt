@@ -295,7 +295,8 @@ object WikiLinkParser {
                             // B2-DOS-05 (phase-81): legacy body reads are head-bounded
                             // so a multi-GB plaintext file can never be fully
                             // `readText()`-ed into heap during vault scans.
-                            sb.append(AttachmentIngestPolicy.readTextHead(f))
+                            // Phase 204: a null read failure contributes no text.
+                            sb.append(AttachmentIngestPolicy.readTextHead(f) ?: "")
                         } catch (e: Exception) {
                             // Safe read fallback
                         }

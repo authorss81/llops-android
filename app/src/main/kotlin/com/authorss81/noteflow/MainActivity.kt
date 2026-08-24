@@ -1528,6 +1528,9 @@ private fun KeystoreKeyLostScreen(viewModel: NoteflowViewModel) {
     var errorMessage by rememberSaveable { mutableStateOf<String?>(null) }
     var confirmStartFresh by rememberSaveable { mutableStateOf(false) }
     val isRestoring by viewModel.isRestoring.collectAsState()
+    // Phase 204: fixed-text abort message when "start fresh" could not move the
+    // vault files aside (the reset is refused — the screen stays up unchanged).
+    val startFreshError by viewModel.startFreshError.collectAsState()
 
     val pickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -1623,6 +1626,12 @@ private fun KeystoreKeyLostScreen(viewModel: NoteflowViewModel) {
             }
         }
         errorMessage?.let {
+            Spacer(Modifier.height(12.dp))
+            Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+        }
+        // Phase 204: start-fresh was REFUSED (a vault file could not be moved
+        // aside) — the old vault is untouched and the escape hatch stays usable.
+        startFreshError?.let {
             Spacer(Modifier.height(12.dp))
             Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
         }

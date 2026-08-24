@@ -493,6 +493,29 @@
 > `Phase203SymmetryCaptureBakeTest` (12 source pins); phase-202/198 pins updated.
 > No schema change, no new deps.
 
+> **Implemented in phase-204** (2026-08-24, silent data-loss batch — voice
+> relay + migration guard + start-fresh abort + picker notices, see
+> `workspace/phase-204/REPORT.md`): four verified paths where the app silently
+> destroyed or lost user input. (1) **Voice**: rotation mid-recording finalized
+> a recording inside `release()` (blob written) and dropped the result; new
+> pure-JVM `services/VoicePendingRecordingSlot.kt` held by `NoteflowViewModel`
+> relays an unattached success (`VoiceNoteManager.release()` captures it,
+> one-shot `takeUnattachedRecordingForRelay()`, attach sites ack via
+> `markRecordingAttached()`) and the next editor instance attaches post-load
+> with a fixed recovered notice. (2) **Migration**:
+> `AttachmentIngestPolicy.readTextHead` returns `String?` — null = read failed
+> (partial never returned); `migrateLegacyPlaintextNoteBodies` skips BOTH
+> overwrite and delete on null (retry next unlock) instead of encrypting ""
+> over a good column then deleting the source. (3) **Start-fresh**: pure-JVM
+> `services/StartFreshVaultResetPolicy.kt` outcome matrix gates
+> `startFreshAfterKeystoreKeyLoss` BEFORE clearDek/new-DEK boot; any unmoved
+> vault file aborts with fixed text on KeystoreKeyLostScreen (`startFreshError`
+> flow). (4) **Pickers**: all bare `openInputStream(uri)?.use {}` picker sites
+> surface fixed per-kind snackbars via `UiFailureTextPolicy.
+> pickerSourceUnavailable`. Tests: `Phase204VoicePendingSlotTest` (12),
+> `Phase204LegacyBodyMigrationGuardTest` (7), `Phase204StartFreshRenamePolicyTest`
+> (11), `Phase204PickerNoOpTest` (5). No schema change, no new deps.
+
 ## Core subsystem anchors (file:line)
 
 - **Encryption/vault**: `services/EncryptionService.kt:18` (PBKDF2 600k, AES-256-GCM, NFKC-normalized password);

@@ -95,7 +95,10 @@ class B2Dos05AttachmentIngestTest {
         val budget = 64L * 1024
         big.writeBytes(ByteArray(1024 * 1024) { ('a'.code + (it % 26)).toByte() })
 
+        // Phase 204: null now means READ ERROR; a healthy file must still yield
+        // its bounded (non-null) head.
         val head = AttachmentIngestPolicy.readTextHead(big, maxBytes = budget)
+            ?: error("a readable non-empty file must never produce a null (error) head")
         assertTrue(
             "the read must be bounded to the budget, never the file length",
             head.length <= budget.toInt()

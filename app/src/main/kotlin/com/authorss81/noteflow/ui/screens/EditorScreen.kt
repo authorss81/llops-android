@@ -277,6 +277,15 @@ fun EditorScreen(
             if (voiceNoteManager.release()) {
                 viewModel.notifyVoiceRecordDiscarded()
             }
+            // Phase 204: release() may have SUCCESSFULLY finalized a recording
+            // (rotation mid-recording — the `.enc` blob is written but the
+            // embed was never attached and the observer died with this
+            // composition). Relay the unattached result to the ViewModel-scoped
+            // slot so the NEXT editor instance for this page attaches it
+            // instead of orphaning the saved audio.
+            voiceNoteManager.takeUnattachedRecordingForRelay()?.let { recovered ->
+                viewModel.publishPendingVoiceRecording(page.id, recovered)
+            }
         }
     }
 
@@ -332,6 +341,15 @@ fun EditorScreen(
                                 com.authorss81.noteflow.services.AttachmentIngestPolicy.boundedReadBytes(stream)
                             }
                     }
+                    // Phase 204: bytes == null ⇔ openInputStream returned null
+                    // (e.g. cloud provider offline). Surface it — never a dead tap.
+                    if (bytes == null) {
+                        viewModel.showSnackbar(
+                            com.authorss81.noteflow.services.UiFailureTextPolicy.pickerSourceUnavailable(
+                                com.authorss81.noteflow.services.UiFailureTextPolicy.PickerSourceKind.CUSTOM_BACKGROUND
+                            )
+                        )
+                    }
                     if (bytes != null) {
                         val fileName = "custom_bg_${System.currentTimeMillis()}.png"
                         val savedPath = com.authorss81.noteflow.services.ImportExportService.persistFile(context, fileName, bytes)
@@ -361,6 +379,15 @@ fun EditorScreen(
                             ?.use { stream ->
                                 com.authorss81.noteflow.services.AttachmentIngestPolicy.boundedReadBytes(stream)
                             }
+                    }
+                    // Phase 204: bytes == null ⇔ openInputStream returned null.
+                    // Surface it — never a dead tap.
+                    if (bytes == null) {
+                        viewModel.showSnackbar(
+                            com.authorss81.noteflow.services.UiFailureTextPolicy.pickerSourceUnavailable(
+                                com.authorss81.noteflow.services.UiFailureTextPolicy.PickerSourceKind.PAPER_TEXTURE
+                            )
+                        )
                     }
                     if (bytes != null) {
                         val ext = paperTextureExtensionFromUri(context, uri)
@@ -1024,6 +1051,22 @@ fun EditorScreen(
     LaunchedEffect(completedVoiceRecording) {
         val result = completedVoiceRecording ?: return@LaunchedEffect
         attachVoiceRecording(result)
+        // Phase 204: acknowledge the attach so a later teardown never relays
+        // this already-attached recording into the pending slot.
+        voiceNoteManager.markRecordingAttached()
+    }
+
+    // Phase 204: adopt a recording finalized by a PREVIOUS editor instance that
+    // died mid-recording (rotation). The blob was saved; its embed never made
+    // it. Once THIS instance's canvas data has finished loading (the embed list
+    // is populated — attaching earlier would be clobbered by the initial load),
+    // consume the pending result once and attach it, with an honest recovered
+    // notice. Consume-once semantics mean it can never double-attach.
+    LaunchedEffect(page.id, isInitialLoadComplete) {
+        if (!isInitialLoadComplete || !viewModel.authenticated.value) return@LaunchedEffect
+        val recovered = viewModel.consumePendingVoiceRecording(page.id) ?: return@LaunchedEffect
+        attachVoiceRecording(recovered)
+        viewModel.showSnackbar(com.authorss81.noteflow.services.VoicePendingRecordingSlot.RECOVERED_NOTICE, isLong = true)
     }
 
     // Phase 13: STICKER tool tap → persist an emoji sticker as a media_embeds row
@@ -1182,6 +1225,15 @@ fun EditorScreen(
                             com.authorss81.noteflow.services.AttachmentIngestPolicy.boundedReadBytes(stream)
                         }
                     }
+                    // Phase 204: bytes == null ⇔ openInputStream returned null
+                    // (e.g. cloud provider offline). Surface it — never a dead tap.
+                    if (bytes == null) {
+                        viewModel.showSnackbar(
+                            com.authorss81.noteflow.services.UiFailureTextPolicy.pickerSourceUnavailable(
+                                com.authorss81.noteflow.services.UiFailureTextPolicy.PickerSourceKind.PHOTO_EMBED
+                            )
+                        )
+                    }
                     if (bytes != null) {
                         val fileName = "photo_${System.currentTimeMillis()}.jpg"
                         val savedFile = ImportExportService.persistFile(context, fileName, bytes)
@@ -1229,6 +1281,16 @@ fun EditorScreen(
                         context.contentResolver.openInputStream(uri)?.use { stream ->
                             com.authorss81.noteflow.services.AttachmentIngestPolicy.boundedReadBytes(stream)
                         }
+                    }
+                    // Phase 204: bytes == null ⇔ openInputStream returned null.
+                    // Surface it — never a dead tap (same failure class as the
+                    // photo/background/texture pickers).
+                    if (bytes == null) {
+                        viewModel.showSnackbar(
+                            com.authorss81.noteflow.services.UiFailureTextPolicy.pickerSourceUnavailable(
+                                com.authorss81.noteflow.services.UiFailureTextPolicy.PickerSourceKind.REFERENCE_UNDERLAY
+                            )
+                        )
                     }
                     if (bytes != null) {
                         val savedFile = ImportExportService.persistFile(
@@ -1425,6 +1487,9 @@ fun EditorScreen(
                                 val result = voiceNoteManager.stopRecording()
                                 if (result != null) {
                                     attachVoiceRecording(result)
+                                    // Phase 204: acknowledge the attach so a later
+                                    // teardown never relays it into the pending slot.
+                                    voiceNoteManager.markRecordingAttached()
                                 }
                             } else {
                                 val hasPermission = androidx.core.content.ContextCompat.checkSelfPermission(

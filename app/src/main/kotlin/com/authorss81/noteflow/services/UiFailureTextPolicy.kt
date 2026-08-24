@@ -103,6 +103,30 @@ object UiFailureTextPolicy {
         "Restore rejected: some notes in this backup could not be re-encrypted for this device. " +
             "Your vault was left unchanged — restore a backup created on this device instead."
 
+    /**
+     * Phase 204: which media-picker source failed to open. The output text is
+     * always one of the FIXED sentences below — never exception text.
+     */
+    enum class PickerSourceKind { PHOTO_EMBED, CUSTOM_BACKGROUND, PAPER_TEXTURE, REFERENCE_UNDERLAY }
+
+    /**
+     * Phase 204: fixed non-alarming text for a media picker whose
+     * `contentResolver.openInputStream(uri)` returned null (e.g. a cloud
+     * provider that is offline) — pre-fix these sites silently no-oped and the
+     * user's tap appeared dead. Same fixed-text discipline as every other
+     * surface in this policy.
+     */
+    fun pickerSourceUnavailable(kind: PickerSourceKind): String = when (kind) {
+        PickerSourceKind.PHOTO_EMBED ->
+            "Couldn't attach the photo — the app providing it didn't respond. Try again."
+        PickerSourceKind.CUSTOM_BACKGROUND ->
+            "Couldn't load the custom background — the app providing it didn't respond. Try again."
+        PickerSourceKind.PAPER_TEXTURE ->
+            "Couldn't load the paper texture — the app providing it didn't respond. Try again."
+        PickerSourceKind.REFERENCE_UNDERLAY ->
+            "Couldn't load the reference underlay — the app providing it didn't respond. Try again."
+    }
+
     private val PATH_TOKEN_REGEX = Regex(
         // Android app-private + shared/unix roots — group 1 keeps a short label.
         "((?:/data/(?:user/\\d+|data|app))|/(?:storage|sdcard|home|tmp))" +

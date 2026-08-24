@@ -69,6 +69,17 @@ class VoiceNoteManager(private val context: Context) {
     // instead of the disposed editor's short-lived error banner.
     private var discardOnRelease = false
 
+    // Phase 204: last SUCCESSFULLY finalized recording and whether the editor
+    // attached its embed. A rotation mid-recording finalizes inside release()
+    // (blob written) with no observer left to attach — pre-fix the result was
+    // returned into release() and dropped: orphaned `.enc` blob, no embed, no
+    // notice. Now release() captures any UNATTACHED success so the editor
+    // teardown can relay it to the ViewModel-scoped pending slot
+    // (`VoicePendingRecordingSlot`) and the next editor instance attaches it.
+    private var lastFinishedResult: VoiceRecordingResult? = null
+    private var lastFinishedResultAttached = true
+    private var unpublishedResultForRelay: VoiceRecordingResult? = null
+
     // B2-DOS-03 (phase-79): fixed-budget live waveform accumulator. Appends are
     // O(1) amortized into a preallocated FloatArray and the emitted StateFlow view
     // never exceeds `WaveformPeakMath.recordingLiveBuckets` (160) entries — the
@@ -110,6 +121,9 @@ class VoiceNoteManager(private val context: Context) {
 
         _recordingError.value = null
         _completedRecordingResult.value = null
+        // Phase 204: a new session invalidates any prior finished result.
+        lastFinishedResult = null
+        lastFinishedResultAttached = true
         discardOnRelease = false
         waveformBuckets = LiveWaveformBuckets(WaveformPeakMath.recordingLiveBuckets)
         _waveformAmplitudes.value = emptyList()
@@ -306,6 +320,11 @@ class VoiceNoteManager(private val context: Context) {
             durationMs = duration,
             waveformAmplitudes = amplitudes
         )
+        // Phase 204: remember the success as UNATTACHED until the editor
+        // confirms it built the embed (manual stop path or ceiling observer
+        // both call [markRecordingAttached]).
+        lastFinishedResult = result
+        lastFinishedResultAttached = false
         if (limitMessage != null) {
             // B2-DOS-03: a ceiling abort STOPS the recorder and saves what was
             // recorded (the audio is the user's — never discard it silently). A
@@ -475,6 +494,29 @@ class VoiceNoteManager(private val context: Context) {
     }
 
     /**
+     * Phase 204: the editor acknowledges that a finished recording's audio
+     * embed was ATTACHED (manual chip-tap stop or the ceiling-abort observer).
+     * Without this ack, `release()` would treat the save as unattached and
+     * relay it to the pending slot, double-attaching on the next editor open.
+     */
+    fun markRecordingAttached() {
+        lastFinishedResultAttached = true
+    }
+
+    /**
+     * One-shot relay accessor: the recording that was finalized and SAVED but
+     * never attached before [release] tore this manager down (rotation /
+     * composition disposal). Null after the first call or when nothing was
+     * pending. The editor publishes the result into the ViewModel-scoped
+     * `VoicePendingRecordingSlot` so the NEXT editor instance attaches it.
+     */
+    fun takeUnattachedRecordingForRelay(): VoiceRecordingResult? {
+        val result = unpublishedResultForRelay
+        unpublishedResultForRelay = null
+        return result
+    }
+
+    /**
      * Stops any in-flight recording/playback, cancels the manager scope and
      * sweeps plaintext temps.
      *
@@ -482,9 +524,18 @@ class VoiceNoteManager(private val context: Context) {
      * recording was destroyed on this teardown (the DEK-null / lock path), so
      * the editor can publish the honest discard notice over the persistent
      * snackbar pipeline — the fail-closed at-rest behavior is unchanged.
+     *
+     * Phase 204: a teardown-triggered stopRecording() may SUCCESSFULLY save a
+     * finished recording (rotation mid-recording) — the success used to be
+     * dropped here, orphaning the `.enc` blob. It is now captured as the
+     * unattached result retrievable via [takeUnattachedRecordingForRelay].
      */
     fun release(): Boolean {
         stopRecording()
+        unpublishedResultForRelay =
+            if (lastFinishedResultAttached) null else lastFinishedResult
+        lastFinishedResult = null
+        lastFinishedResultAttached = true
         stopPlayback()
         scope.cancel()
         VoiceNoteCrypto.sweepPlaintextTemps(context.cacheDir)

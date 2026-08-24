@@ -68,8 +68,11 @@ object NoteBodyVaultPolicy {
                     // also refuses to read/delete oversized legacy bodies), so no
                     // content is silently lost.
                     if (file.length() <= AttachmentIngestPolicy.MAX_ATTACHMENT_BYTES) {
+                        // Phase 204: readTextHead returns null on a FAILED read —
+                        // fall through to the encrypted column, never surface a
+                        // guessed/partial body.
                         val fileBody = AttachmentIngestPolicy.readTextHead(file)
-                        if (fileBody.isNotBlank()) return fileBody
+                        if (!fileBody.isNullOrEmpty()) return fileBody
                     }
                 }
             } catch (e: Exception) {

@@ -52,14 +52,33 @@ object AttachmentIngestPolicy {
      * 0 yields "". The read is head-bounded so a multi-GB file can never pin its
      * full size in heap; any multi-byte UTF-8 sequence split at the boundary
      * decodes lossily.
+     *
+     * Phase 204 null contract — `""` vs `null`:
+     *  - `""` (empty string) means a BENIGN no-content case: missing file,
+     *    unreadable file, empty file, or [maxBytes] == 0.
+     *  - `null` means the read STARTED and FAILED mid-way ([Exception] during
+     *    open/read). A partial head is NEVER returned: callers must treat `null`
+     *    as "content unknown" and MUST NOT persist it as a body nor delete the
+     *    source file. This is what lets the legacy-body migration
+     *    (`NoteRepository.migrateLegacyPlaintextNoteBodies`) skip BOTH the
+     *    column overwrite AND the source delete on a transient I/O error
+     *    instead of silently overwriting a good encrypted column with "" and
+     *    destroying the only plaintext copy (the phase-204 data-loss bug).
+     *
+     * [open] injects the stream factory for pure-JVM tests (default opens a
+     * real [FileInputStream]); production callers never pass it.
      */
-    fun readTextHead(file: File, maxBytes: Long = MAX_ATTACHMENT_BYTES): String {
+    fun readTextHead(
+        file: File,
+        maxBytes: Long = MAX_ATTACHMENT_BYTES,
+        open: (File) -> InputStream = { FileInputStream(it) }
+    ): String? {
         if (!file.exists() || !file.canRead()) return ""
         require(maxBytes >= 0L) { "maxBytes must be non-negative" }
         if (maxBytes == 0L || file.length() <= 0L) return ""
         val out = ByteArrayOutputStream()
         try {
-            FileInputStream(file).use { input ->
+            open(file).use { input ->
                 val buf = ByteArray(READ_BUFFER_BYTES)
                 var remaining = minOf(file.length(), maxBytes)
                 while (remaining > 0L) {
@@ -70,7 +89,10 @@ object AttachmentIngestPolicy {
                 }
             }
         } catch (e: Exception) {
-            return ""
+            // Phase 204: a failed read is UNKNOWN content — never "" (which the
+            // migration used to persist over a good column before deleting the
+            // source), and never a partial string.
+            return null
         }
         return String(out.toByteArray(), Charsets.UTF_8)
     }

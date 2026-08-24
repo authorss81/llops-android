@@ -686,11 +686,18 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
 
             // B2-DOS-05 (phase-81 review fix): the legacy body is read through the
             // same bounded policy decision table as the display path — never a raw
-            // file.readText() that slurps the whole file into heap (the migration
-            // flag stays unset so an unreadable file is retried next unlock).
-            val fileBody = try {
-                AttachmentIngestPolicy.readTextHead(file)
-            } catch (e: Exception) {
+            // file.readText() that slurps the whole file into heap.
+            // Phase 204: readTextHead now returns null when the read FAILS
+            // mid-way. Pre-fix it swallowed I/O errors into "", so this flow
+            // overwrote the GOOD encrypted column with an encrypted "" and then
+            // deleted the only plaintext copy — a transient read error during
+            // unlock-time migration was permanent silent data loss. Null means
+            // content UNKNOWN: skip BOTH the overwrite and the delete, count the
+            // file as remaining, and let the sweep retry on the next unlock
+            // (the migration flag stays unset whenever filesRemaining > 0).
+            val fileBody = AttachmentIngestPolicy.readTextHead(file)
+            if (fileBody == null) {
+                filesRemaining++
                 return@forEach
             }
             if (fileBody != dbBody) {
