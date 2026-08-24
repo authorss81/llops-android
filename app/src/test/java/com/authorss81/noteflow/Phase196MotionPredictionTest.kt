@@ -14,8 +14,9 @@ import org.junit.Test
  *
  * Behavioral half: exercises the pure-JVM decision table
  * ([MotionPredictionPolicy]) — the API-29 capability gate, the preview-extension
- * guards, the window->world coordinate mapping (identical clamp semantics to
- * the real drag path), the fail-safe rejection of non-finite/degenerate inputs,
+ * guards, the window->world coordinate mapping (identical page policy to the
+ * real drag path: out-of-page dropped, in-page boundary-inclusive), the
+ * fail-safe rejection of non-finite/degenerate inputs,
  * and the predicted-tail tracker whose strip-before-append/commit contract
  * guarantees stored stroke geometry never contains a predicted point.
  *
@@ -141,16 +142,27 @@ class Phase196MotionPredictionTest {
     }
 
     @Test
-    fun `predicted points are clamped to the active page bounds like real ones`() {
-        val p = MotionPredictionPolicy.predictedWorldPoint(
-            predictedViewX = -9999f, predictedViewY = 99999f,
-            canvasWindowX = 0f, canvasWindowY = 0f,
-            zoomScale = 1f, panX = 0f, panY = 0f,
-            pageWidthPx = 1080f, pageTopY = 100f, pageBottomY = 1628f,
-            pressure = 1f, tilt = 0f, timestampMs = 0L
-        )!!
-        assertEquals(0f, p.x, 0f)
-        assertEquals(1628f, p.y, 0f)
+    fun `predictions outside the active page are dropped like the real drag path`() {
+        fun predict(x: Float, y: Float, top: Float = 100f, bottom: Float = 1628f) =
+            MotionPredictionPolicy.predictedWorldPoint(
+                predictedViewX = x, predictedViewY = y,
+                canvasWindowX = 0f, canvasWindowY = 0f,
+                zoomScale = 1f, panX = 0f, panY = 0f,
+                pageWidthPx = 1080f, pageTopY = top, pageBottomY = bottom,
+                pressure = 1f, tilt = 0f, timestampMs = 0L
+            )
+        // Outside any bound -> null (the real path early-returns; it never
+        // clamps out-of-page samples onto the edge).
+        assertNull(predict(-0.5f, 500f))
+        assertNull(predict(1080.5f, 500f))
+        assertNull(predict(500f, 99.9f))
+        assertNull(predict(500f, 1628.1f))
+        // Boundary-inclusive parity with `rawX < 0f || rawX > width || ...`:
+        // values ON a bound are NOT outside and are kept.
+        val onLeftBound = predict(0f, 500f)!!
+        assertEquals(0f, onLeftBound.x, 1e-4f)
+        val onBottomBound = predict(500f, 1628f)!!
+        assertEquals(1628f, onBottomBound.y, 1e-4f)
     }
 
     @Test
@@ -295,20 +307,48 @@ class Phase196MotionPredictionTest {
         val src = canvasSource()
         // record/predict split: predict happens in the per-frame loop...
         assertTrue(src.contains("predictor.predict()"))
-        assertTrue(src.contains("LaunchedEffect(motionPredictor, currentTool, pressureCurve)"))
+        // Review-fix: the loop is re-keyed on page geometry too, so a
+        // mid-session orientation/continuous-mode change can never leave stale
+        // bounds captured in its closure.
+        assertTrue(
+            src.contains(
+                "LaunchedEffect(motionPredictor, currentTool, pressureCurve, " +
+                    "pageWidthPx, pageHeightPx, isContinuousMode)"
+            )
+        )
         // ...and the tail is reconciled: frame loop (!extend + replace),
-        // onDrag (before any real append) and onDragEnd (before commit).
+        // top of onDrag and top of onDragEnd — both BEFORE any early-return.
         val expectedDropCallSites = 4
         assertEquals(
             "dropPredictedTail() must be called exactly at the $expectedDropCallSites reconcile hops",
             expectedDropCallSites + 1, // +1 = the definition itself
             src.countOccurrences("dropPredictedTail()")
         )
+        // Ordering pin (review-fix): in onDrag, reconcile precedes the FIRST
+        // early-return (isDraggingCard). The first `onDrag = {` in the file is
+        // the freehand detectDragGestures handler; every other one comes later.
+        val dragStart = src.indexOf("onDrag = { change, dragAmount ->")
+        assertTrue(dragStart >= 0)
+        val dragStrip = src.indexOf("dropPredictedTail()", dragStart)
+        val dragEarlyReturn = src.indexOf("return@detectDragGestures", dragStart)
+        assertTrue(
+            "onDrag must strip the predicted tail BEFORE its early-returns",
+            dragStrip in 0 until dragEarlyReturn
+        )
+        // Same for onDragEnd: strip first, then any early-return, then commit.
+        val dragEndStart = src.indexOf("onDragEnd = {")
+        assertTrue(dragEndStart > dragStart)
+        val endStrip = src.indexOf("dropPredictedTail()", dragEndStart)
+        val endEarlyReturn = src.indexOf("return@detectDragGestures", dragEndStart)
+        assertTrue(
+            "onDragEnd must strip the predicted tail BEFORE its early-returns",
+            endStrip in 0 until endEarlyReturn
+        )
+        // Commit-time guarantee: strip runs before the geometry snapshot.
+        assertTrue(src.indexOf("val pointsToSimplify") > endStrip)
         // Every wholesale clear of the preview resets the flag so a future
         // stroke's first REAL point can never be wrongly stripped.
         assertEquals(4, src.countOccurrences("predictedTailTracker.clear()"))
-        // Commit-time guarantee: strip runs before the geometry snapshot.
-        assertTrue(src.indexOf("Phase 196: strip any predicted preview tail") < src.indexOf("val pointsToSimplify"))
     }
 
     @Test

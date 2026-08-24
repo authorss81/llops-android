@@ -74,12 +74,16 @@ object MotionPredictionPolicy {
      *
      *   local  = predicted - canvasBoxWindowOffset   (view space -> box space)
      *   world  = (local - pan) / zoom                (box space -> world space)
-     *   clamped into [0, pageWidth] x [pageTop, pageBottom]
      *
-     * The clamp mirrors the real drag path (`AnnotationCanvas.onDrag`) exactly,
-     * so a predicted point obeys the same page-boundary rule as a real one.
-     * Returns null when any input is non-finite or the zoom is degenerate —
-     * fail-safe: the caller drops the prediction rather than drawing garbage.
+     * Parity with the real drag path (`AnnotationCanvas.onDrag`): a sample that
+     * maps OUTSIDE the active page bounds is DROPPED (null) — exactly like the
+     * real path, which early-returns on out-of-page positions instead of
+     * adding them. Boundary-inclusive rule matches too: `< 0f || > bound` is
+     * outside, so a value ON a bound is kept (the remaining coerceIn calls are
+     * a defensive no-op kept identical to the real path).
+     * Returns null when any input is non-finite or the zoom/page geometry is
+     * degenerate — fail-safe: the caller drops the prediction rather than
+     * drawing garbage.
      */
     fun predictedWorldPoint(
         predictedViewX: Float,
@@ -108,6 +112,14 @@ object MotionPredictionPolicy {
 
         val worldX = ((predictedViewX - canvasWindowX) - panX) / zoomScale
         val worldY = ((predictedViewY - canvasWindowY) - panY) / zoomScale
+        // Same outside-page rule as AnnotationCanvas.onDrag: drop, never clamp
+        // into the page (a clamped preview tail would show ink the committed
+        // stroke will not have).
+        if (worldX < 0f || worldX > pageWidthPx ||
+            worldY < pageTopY || worldY > pageBottomY
+        ) {
+            return null
+        }
         return PointF(
             x = worldX.coerceIn(0f, pageWidthPx),
             y = worldY.coerceIn(pageTopY, pageBottomY),

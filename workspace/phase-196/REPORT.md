@@ -52,14 +52,16 @@ display refreshes (60 Hz finger on a 120 Hz panel; batching Bluetooth styluses).
   handlers work in box-local space (the editor hosts the canvas inside Scaffold padding —
   they are NOT equal). `.onGloballyPositioned { canvasBoxWindowOffset = positionInWindow() }`
   captures the offset; `MotionPredictionPolicy.predictedWorldPoint(...)` then inverts
-  pan/zoom and clamps into the active page bounds with the SAME coercion as `onDrag`.
+  pan/zoom and applies the SAME page policy as `onDrag` (review-fix: out-of-page samples
+  are DROPPED like the real path's early-return, not clamped onto the edge; in-page
+  samples keep the boundary-inclusive rule).
 - **Reconcile:** `PredictedTailTracker.stripFrom(activePoints)` runs at exactly four hops,
   pinned by test: (1) frame-loop `!extend` branch, (2) frame-loop tail replacement,
-  (3) top of `onDrag` before ANY early-return, (4) `onDragEnd` BEFORE
-  `pointsToSimplify = activePoints.toList()`. Every wholesale `activePoints.clear()`
-  (drag-start ×2, drag-end, drag-cancel) also resets the flag, so a future stroke's first
-  REAL point can never be wrongly stripped. **Committed stroke geometry can never contain a
-  predicted point.**
+  (3) top of `onDrag` before ANY early-return, (4) top of `onDragEnd` before ANY
+  early-return and BEFORE `pointsToSimplify = activePoints.toList()`. Every wholesale
+  `activePoints.clear()` (drag-start ×2, drag-end, drag-cancel) also resets the flag, so a
+  future stroke's first REAL point can never be wrongly stripped. **Committed stroke
+  geometry can never contain a predicted point.**
 
 ## 4. Recomposition-regression analysis (DoD #3)
 
@@ -91,12 +93,14 @@ the non-snapshot bookkeeping in place.
     at `PaparazziSdk.kt:562`, a phase-195 paparazzi/layoutlib environment issue).
   - `Phase151MarkdownMainThreadPerfTest` — known timing flake (AGENTS.md phase-177 note);
     passes in isolation (`BUILD SUCCESSFUL`).
-- New `Phase196MotionPredictionTest` (16): SDK gate truth table, all five extension guards,
-  identity/pan+zoom+window-offset mapping exactness, page-bound clamping, fail-safe nulls
+- New `Phase196MotionPredictionTest` (19): SDK gate truth table, all five extension guards,
+  identity/pan+zoom+window-offset mapping exactness, out-of-page DROPPED + in-page
+  boundary-inclusive parity with the real drag path, fail-safe nulls
   (NaN/Inf/zoom≤0/degenerate page rect), pressure sanitization, tracker strip/idempotence/
   reconcile-cycle contract, and source pins (newInstance behind gate, record-in-filter +
-  intact passive bridge, predict-per-frame, 4 reconcile hops + 4 clear sites, strip-before-
-  commit ordering, stabilizer untouched, both Gradle catalog pins).
+  intact passive bridge, predict-per-frame with page-geometry re-keying, 4 reconcile hops
+  ordered before every drag early-return + 4 clear sites, strip-before-commit ordering,
+  stabilizer untouched, both Gradle catalog pins).
 - `StrokeStabilizerTest` — still green (stabilizer code untouched).
 
 ## 6. `gfxinfo` jank before/after (DoD #4) — DEFERRED, honestly
@@ -122,3 +126,32 @@ instead:
   reconciled by the next real event — never persisted (strip-before-commit).
 - If a future phase adds a settings surface for canvas input, exposing a
   "motion prediction" toggle there would be trivial (gate `motionPredictor` creation).
+
+## 8. Review fixes (2026-08-24, same day)
+
+Post-commit review produced four actionable findings; all fixed in this commit:
+
+1. **False "before ANY early-return" invariant (LOW)** — `dropPredictedTail()` sat AFTER
+   the `isDraggingCard` early-returns in both `onDrag` and `onDragEnd`. Both strips now
+   run at the TOP of their handlers, before every early-return, so the documented
+   reconcile ordering is literally true. Occurrence count unchanged (4 hops), and the
+   source-pin test now asserts the strip-before-early-return ORDER for both handlers.
+2. **Stale page geometry in the frame loop (LOW)** — the loop captured plain
+   per-composition vals (`pageWidthPx`, `pageHeightPx`, the `calculatePageYOffset`
+   closure) but was keyed only on `(motionPredictor, currentTool, pressureCurve)`; a
+   mid-session orientation-tag/background-image or continuous-mode change would have
+   left stale bounds. Keys are now
+   `(motionPredictor, currentTool, pressureCurve, pageWidthPx, pageHeightPx, isContinuousMode)`.
+3. **Out-of-page divergence from the real path (LOW)** — predictions were CLAMPED onto
+   the page edge while real out-of-page samples are DROPPED (`onDrag` early-return), so
+   the preview could show ink the committed stroke never has. `predictedWorldPoint` now
+   returns null outside the active page bounds (boundary-inclusive, same `< || >` rule),
+   matching the committed-geometry policy exactly; the clamp test was replaced with an
+   out-of-page-drop + boundary-inclusive parity test.
+4. **Test count misstated (DOC)** — REPORT/ARCHITECTURE/phase-status said 16 tests; the
+   class has 19. Corrected everywhere.
+
+Verification after fixes: `gradle :app:testDebugUnitTest` — full suite 2585 tests /
+3 failures, all pre-existing/environmental (`Phase148UiFailureTextScrubTest` UNC-path,
+`PaparazziSmokeTest` ×2 layoutlib env); `Phase196MotionPredictionTest` 19/19 green;
+`StrokeStabilizerTest` green. No schema change; dependency set untouched.

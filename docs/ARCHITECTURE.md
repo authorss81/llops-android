@@ -289,13 +289,17 @@
 > and predicts ONCE PER RENDERED FRAME via a Compose frame-clock loop while a freehand
 > stroke is live. The predicted sample is a temporary TAIL of `activePoints`, drawn through
 > the unchanged preview paths and mapped window→world via an `onGloballyPositioned`
-> box-offset capture + drag-path-identical page clamps (`predictedWorldPoint`). Reconcile:
-> `PredictedTailTracker.stripFrom()` at exactly 4 hops incl. BEFORE commit — committed
-> geometry never contains predicted points. Bookkeeping is deliberately NON-snapshot state;
+> box-offset capture + drag-path-identical page policy (`predictedWorldPoint`:
+> out-of-page samples DROPPED like the real path, in-page boundary-inclusive). Reconcile:
+> `PredictedTailTracker.stripFrom()` at exactly 4 hops — frame loop ×2 + TOP of onDrag and
+> TOP of onDragEnd BEFORE every early-return (review-fixed) incl. before commit — committed
+> geometry never contains predicted points. The frame loop is keyed on page geometry too
+> (pageWidthPx/pageHeightPx/isContinuousMode) so orientation/continuous-mode changes can
+> never leave stale bounds captured. Bookkeeping is deliberately NON-snapshot state;
 > zero composition-phase reads added (no whole-canvas recomposition regression). Dep pinned
 > in both Gradle catalogs + sha256-pinned in `verification-metadata.xml` (signing key not
 > downloadable); 32 KB Java-only AAR, no natives/perms — base-APK rule intact. Tests:
-> `Phase196MotionPredictionTest` (16).
+> `Phase196MotionPredictionTest` (19).
 
 > **Implemented in phase-194** (2026-08-20, Undo/Redo dim + Canvas & Paper Options
 > sheet clipping, see `workspace/phase-194/REPORT.md`): the canvas Undo/Redo

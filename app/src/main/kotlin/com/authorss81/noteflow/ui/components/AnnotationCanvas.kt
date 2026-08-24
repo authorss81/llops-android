@@ -584,9 +584,11 @@ fun AnnotationCanvas(
 
     // Per-frame predict loop (API 29+ only): mirrors the existing Choreographer
     // loop above — one cheap guard pass per frame when idle. Re-keyed on the
-    // tool/curve so a mid-session switch can never leave stale gating values
-    // captured in the loop closure (the predictor/tracker objects survive).
-    LaunchedEffect(motionPredictor, currentTool, pressureCurve) {
+    // tool/curve AND on the page geometry (review-fix: pageWidthPx/pageHeightPx/
+    // isContinuousMode are plain per-composition vals, so without keying them a
+    // mid-session orientation/continuous-mode change would leave stale bounds
+    // captured in the loop closure; the predictor/tracker objects survive).
+    LaunchedEffect(motionPredictor, currentTool, pressureCurve, pageWidthPx, pageHeightPx, isContinuousMode) {
         val predictor = motionPredictor ?: return@LaunchedEffect
         while (true) {
             withFrameNanos { }
@@ -1177,13 +1179,15 @@ fun AnnotationCanvas(
                             }
                         },
                         onDrag = { change, dragAmount ->
-                            if (isDraggingCard) return@detectDragGestures
-                            change.consume()
                             // Phase 196: reconcile — the real sample supersedes
                             // any predicted preview tail the frame loop drew.
-                            // Runs BEFORE every early-return so a stale tail can
-                            // never outlive the real event that replaces it.
+                            // Runs BEFORE every early-return (review-fix: was
+                            // previously after the isDraggingCard check) so a
+                            // stale tail can never outlive the real event that
+                            // replaces it.
                             dropPredictedTail()
+                            if (isDraggingCard) return@detectDragGestures
+                            change.consume()
 
                             val rawCanvasX = (change.position.x - internalPanOffset.x) / internalZoomScale
                             val rawCanvasY = (change.position.y - internalPanOffset.y) / internalZoomScale
@@ -1265,6 +1269,11 @@ fun AnnotationCanvas(
                              }
                         },
                         onDragEnd = {
+                            // Phase 196: reconcile BEFORE every early-return
+                            // (review-fix) so no predicted tail can outlive this
+                            // gesture — and so COMMITTED geometry below contains
+                            // only real samples.
+                            dropPredictedTail()
                             if (isDraggingCard) {
                                 isDraggingCard = false
                                 return@detectDragGestures
@@ -1274,9 +1283,6 @@ fun AnnotationCanvas(
                                 eyedropperPosition = null
                                 sampledColorPreview = null
                             } else if (currentTool != StrokeTool.ERASER && currentTool != StrokeTool.SELECT) {
-                                // Phase 196: strip any predicted preview tail so
-                                // COMMITTED geometry contains only real samples.
-                                dropPredictedTail()
                                 if (activePoints.isNotEmpty() || (activeStart != null && activeEnd != null)) {
                                     val pointsToSimplify = activePoints.toList()
                                     val startPoint = activeStart
