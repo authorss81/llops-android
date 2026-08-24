@@ -3627,13 +3627,15 @@ private fun DrawScope.drawCompositedLayersStrokes(
         // a page whose layer row was never created). Phase 08: route committed
         // strokes through the same page-local bitmap cache as the layer path so we
         // do NOT re-vectorize every committed stroke every frame. The cache is
-        // keyed per page+mode and cleared whenever `strokes` changes (the
-        // LaunchedEffect(strokes, layers) above), so this stays pixel-identical.
+        // keyed per page (phase 203, review fixes: the symmetry mode is OUT of
+        // the key — committed ink renders identically in every mode) and cleared
+        // whenever `strokes` changes (the LaunchedEffect(strokes, layers) above),
+        // so this stays pixel-identical.
         if (layerBitmapCache != null && canvasDrawScope != null && density != null && layoutDirection != null &&
             pageWidth > 0f && pageHeight > 0f
         ) {
             val defaultLayerId = "layer_default"
-            val cacheKey = "${pageIdx}_${defaultLayerId}_${symmetryMode}_v${vibrancyBoost}"
+            val cacheKey = "${pageIdx}_${defaultLayerId}_v${vibrancyBoost}"
             val strokesHash = strokes.hashCode()
             var cache = layerBitmapCache.get(cacheKey)
             val pw = pageWidth.toInt().coerceAtLeast(1)
@@ -3758,13 +3760,14 @@ private fun DrawScope.drawCompositedLayersStrokes(
             continue
         }
 
-        val cacheKey = "${pageIdx}_${layer.id}_${symmetryMode}_v${vibrancyBoost}"
+        val cacheKey = "${pageIdx}_${layer.id}_v${vibrancyBoost}"
         val strokesHash = layerStrokes.hashCode()
 
-        // Phase 203: symmetry no longer participates in the committed-layer cache
-        // key's MEANING — committed strokes are baked rows and render once; the
-        // key keeps the mode only to preserve the established budget/format
-        // contract (LayerRenderBudgetPolicy) and force one rebuild on toggle.
+        // Phase 203 (review fixes): symmetry is fully OUT of the committed-layer
+        // cache key — committed strokes are baked rows that render identically in
+        // every mode, so a toggle must NOT invalidate these bitmaps anymore.
+        // (LayerRenderBudgetPolicy.pageKeyOf keys off the leading page token and
+        // is unaffected by the shorter format.)
         if (layerBitmapCache != null && canvasDrawScope != null && density != null && layoutDirection != null && pageWidth > 0f && pageHeight > 0f) {
             var cache = layerBitmapCache.get(cacheKey)
             val pw = pageWidth.toInt().coerceAtLeast(1)

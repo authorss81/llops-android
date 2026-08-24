@@ -128,9 +128,9 @@ object LayerRenderBudgetPolicy {
 
     /**
      * The page token embedded in a layer-raster cache key
-     * (`"${pageIdx}_${layer.id}_${symmetryMode}_v${vibrancyBoost}"`,
-     * AnnotationCanvas cache keys). The LRU's active-page protection keys off
-     * this token.
+     * (`"${pageIdx}_${layer.id}_v${vibrancyBoost}"` — phase-203 review fixes
+     * dropped the symmetry segment; AnnotationCanvas cache keys). The LRU's
+     * active-page protection keys off this token.
      */
     fun pageKeyOf(cacheKey: String): String = cacheKey.substringBefore('_')
 

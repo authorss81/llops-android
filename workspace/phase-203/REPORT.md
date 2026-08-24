@@ -74,7 +74,9 @@ With real twin rows on disk, per-stroke hit-testing finds each copy independentl
 - `erasesStroke` lambda (`AnnotationCanvas.kt:1106-1108`) — view-time mirror-the-
   query-point special-case REMOVED; always plain `strokeContainsPoint(stroke, offset)`.
   Erasing a copy deletes exactly that row; **the other twin remains** (independent rows).
-  PARTIAL-mode segmentation composes identically — twins segment like any other strokes.
+  PARTIAL-mode segmentation composes identically — twins segment like any other
+  strokes; note a PARTIAL pass through one copy leaves the OTHER copy fully intact
+  (they are independent rows — expected under this contract).
 - STROKE-eraser cursor highlight in `LiveStrokePreview` (`AnnotationCanvas.kt:2963`) —
   same simplification; the highlight now predicts exactly the row(s) the eraser deletes.
 - Note: `StrokeSegmenter.hitStrokeAt` retains opt-in mirror params but has ZERO
@@ -153,11 +155,39 @@ Updated (mechanism changed, invariant preserved):
 
 ## 6. Known scope notes
 
+- **One-time migration consequence for pre-existing notes (review fix — now
+  documented):** ink drawn while a symmetry mode was active BEFORE this phase was
+  mirrored only at VIEW time; the mirror was never stored data. After upgrading,
+  such notes show only their original strokes — the perceived mirrored half is
+  gone for good. Originals are untouched (no data loss), and every stroke drawn
+  FROM this phase on persists real twin rows, so the regression cannot recur.
+  This is inherent to the requested semantics ("toggling never rewrites history"
+  — there is no stored mirror to keep); flagged here because it is a silent,
+  one-time visual change for existing content.
 - Laser strokes gain expiring twins like any other tool (they were mirrored before);
-  both rows expire independently within one 40 ms sweep tick — visually simultaneous.
+  original + twin share the same `timestampMs`, so they expire together in ONE
+  40 ms sweep tick and leave via a single `onStrokesChanged`.
 - Wet tools under symmetry keep their pre-existing behavior (AGSL path is gated to
   `symmetryMode == OFF`; vector fallback renders), now with baked twins so disabling
   symmetry no longer hides half of what was painted.
 - Seamless (non-divided) continuous mode mirrors about the computed world centre —
   a twin can extend the derived page count downward exactly as far as the mirrored
   ink the user already saw while drawing; bounded by `CanvasPageBudgetPolicy` as before.
+
+## 7. Review fixes (2026-08-24)
+
+- **Cache-key decoupling** — both raster cache keys dropped the `symmetryMode`
+  segment (`"${pageIdx}_${layer.id}_v${vibrancyBoost}"`): committed strokes render
+  identically in every mode now that twins are real rows, so toggling must not
+  invalidate those bitmaps (it previously forced a full rebuild of every cached
+  page/layer bitmap). `LayerRenderBudgetPolicy.pageKeyOf` doc updated — it keys
+  off the leading page token and is unaffected by the shorter format. Pinned by
+  `Phase203SymmetryCaptureBakeTest` (new section 6).
+- **pointerInput keys examined, KEPT** — review flagged `symmetryMode` in the
+  gesture-handler key list (`AnnotationCanvas.kt:1099`) as stale coupling;
+  re-examination shows it is LOAD-BEARING: the drag-end freeze
+  (`shouldBakeMirror(symmetryMode, tool)`, `:1380`) reads the captured function
+  parameter, so dropping the key would bake twins with a STALE mode after a
+  toggle. Kept as-is; anti-regression pin added.
+- REPORT wording corrections: laser-twin expiry sentence above; PARTIAL-erase
+  asymmetry made explicit in §2.4; migration scope note added to §6.

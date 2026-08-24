@@ -256,4 +256,34 @@ class Phase203SymmetryCaptureBakeTest {
         assertTrue(src.contains("fun shouldBakeMirror(mode: SymmetryMode, tool: StrokeTool): Boolean"))
         assertTrue(src.contains("fun bakedTwin(stroke: Stroke, mode: SymmetryMode, centerX: Float, centerY: Float): Stroke"))
     }
+
+    // ---- 6. Cache-key decoupling (phase-203 review fixes) ----------------------------
+
+    @Test
+    fun `committed-raster cache keys no longer embed the symmetry mode`() {
+        val src = canvas()
+        assertFalse(
+            "a toggle must not invalidate committed-stroke bitmaps - the mode is out of every cache key",
+            src.contains("_\${symmetryMode}_v")
+        )
+        assertEquals(
+            "both raster caches (no-layers + per-layer) keep the page_layer_v format",
+            2,
+            count(src, "cacheKey = \"\${pageIdx}")
+        )
+    }
+
+    @Test
+    fun `pointerInput keys RETAIN symmetryMode - the drag-end freeze reads the captured param`() {
+        val src = canvas()
+        val keyLine = src.lineSequence().firstOrNull {
+            it.trimStart().startsWith(".pointerInput(currentTool, currentColor")
+        }
+        assertTrue("the freehand gesture pointerInput block must exist", keyLine != null)
+        assertTrue(
+            "symmetryMode must stay in the pointerInput keys: shouldBakeMirror(symmetryMode, tool) at drag end " +
+                "reads the CAPTURED parameter, so dropping the key would bake twins with a stale mode after a toggle",
+            keyLine!!.contains("symmetryMode")
+        )
+    }
 }
