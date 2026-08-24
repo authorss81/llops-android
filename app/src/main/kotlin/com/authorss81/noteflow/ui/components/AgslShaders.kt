@@ -415,8 +415,13 @@ object AgslShaders {
 
     /**
      * Reusable wet-mixing effect: owns one RuntimeShader + RenderEffect so uniforms
-     * can be updated per frame without per-frame shader/effect allocation.
-     * Requires API 33+ (AGSL) — guard instantiation with [ShaderCapabilityHelper.isAgslSupported].
+     * can be updated per frame without per-frame shader/effect allocation, plus the
+     * reusable [renderNode] that CARRIES the effect (phase-201/PERF 2.7):
+     * `android.graphics.Paint` has NO setRenderEffect API — the only public
+     * carriers are View/RenderNode (`RenderNode.setRenderEffect`, API 31+), so the
+     * wet pass records its strokes into this node and composites it onto the
+     * hardware canvas. Requires API 33+ (AGSL) — guard instantiation with
+     * [ShaderCapabilityHelper.isAgslSupported].
      */
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     class WetMixingEffect {
@@ -425,6 +430,9 @@ object AgslShaders {
             android.graphics.RenderEffect.createRuntimeShaderEffect(runtimeShader, "contents").asComposeRenderEffect()
         val androidEffect: android.graphics.RenderEffect =
             android.graphics.RenderEffect.createRuntimeShaderEffect(runtimeShader, "contents")
+
+        /** GPU carrier for the wet pass (reused every frame; never re-allocated). */
+        val renderNode: android.graphics.RenderNode = android.graphics.RenderNode("inkflow-wet-mix")
 
         fun update(
             prevX: Float,

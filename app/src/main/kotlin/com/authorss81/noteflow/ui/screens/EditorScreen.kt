@@ -5402,20 +5402,21 @@ private fun CanvasSettingsBottomSheet(
                             }
                         }
                     }
+                    // Phase 201: four curves now — the row is horizontally
+                    // scrollable so the chips never clip on 360dp screens
+                    // (phase-166 discipline) instead of shrinking each chip.
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         PressureCurve.entries.forEach { curve ->
                             FilterChip(
                                 selected = pressureCurve == curve,
                                 onClick = { onPressureCurveSelect(curve) },
-                                label = { Text(curve.label, style = MaterialTheme.typography.labelSmall) },
-                                modifier = Modifier.weight(1f)
+                                label = { Text(curve.label, style = MaterialTheme.typography.labelSmall) }
                             )
-                            if (curve != PressureCurve.entries.last()) {
-                                Spacer(modifier = Modifier.width(4.dp))
-                            }
                         }
                     }
 

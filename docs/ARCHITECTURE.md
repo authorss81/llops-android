@@ -408,6 +408,30 @@
 > nav-request seq). No schema change, no new deps. Tests: `ColorRecentsPolicyTest`
 > (13), `CanvasNavigationPolicyTest` (13), `LayerBlendPresetPolicyTest` (7).
 
+> **Implemented in phase-201** (2026-08-24, pressure gamma + per-brush RDP +
+> GPU-carrier fix — PERF 1.3+1.4+2.7, see `workspace/phase-201/REPORT.md`):
+> (1) `PressureCurve.SMOOTH` ("smooth" setting key) = gamma blend
+> `p ^ (2.0 − 0.5·p)` that flattens low-pressure (0–10%) width jitter while staying
+> between LINEAR and HEAVY mid-range; capture-time-only semantics unchanged;
+> curve chips row is horizontally scrollable (4th chip). (2)
+> `services/StrokeSimplifyPolicy.kt` owns the commit-time RDP epsilon: hairline
+> fine-tip tools (PEN/FOUNTAIN_PEN/PENCIL/FINELINER at ≤3px) get 0.6→0.8 px
+> interpolated by width, everything else keeps the legacy 1.3 px; simplification
+> runs ONLY inside `onDragEnd` (source-pinned single call site). (3) VERIFY STEP
+> FOUND A REAL DEFECT: `android.graphics.Paint` has NO `setRenderEffect` at any API
+> level, so the pre-201 reflective attach threw+swallowed every frame and the AGSL
+> wet-mixing shader NEVER ran on any device. Fixed: reusable
+> `RenderNode("inkflow-wet-mix")` in `WetMixingEffect` carries the effect
+> (`node.setRenderEffect`, API 31+) and composites via
+> `nativeCanvas.drawRenderNode(node)` inside the dirty-rect saveLayer; software
+> canvas ⇒ plain fallback; tiers in pure fns `ShaderCapabilityHelper.
+> agslSupportedFor/renderEffectCompositingFor` (33+/31+), both canvas gates routed
+> through them. Tests: `Phase201StrokeInputPipelineTest` (10) + goldens added to
+> `PressureCurveHelperTest`/`StrokeStabilizerTest`/`B2Dos01StrokeGeometryTest`/
+> `StrokePersistenceRoundTripTest`. 2700 tests / 4 failures all reproduced on a
+> clean stash; `assembleDebug` green. dumpsys gfxinfo runtime check documented in
+> REPORT §4.3 (needs a device). No schema change, no new deps.
+
 ## Core subsystem anchors (file:line)
 
 - **Encryption/vault**: `services/EncryptionService.kt:18` (PBKDF2 600k, AES-256-GCM, NFKC-normalized password);

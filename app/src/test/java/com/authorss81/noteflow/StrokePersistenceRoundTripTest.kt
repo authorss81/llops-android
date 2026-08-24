@@ -7,6 +7,7 @@ import com.authorss81.noteflow.data.model.StrokeTool
 import com.authorss81.noteflow.services.EncryptionService
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -102,5 +103,76 @@ class StrokePersistenceRoundTripTest {
         assertEquals(StrokeColorMode.SOLID, plain.colorMode)
         assertEquals(0, plain.colorSeed)
         assertNull(plain.gradientToColorInt)
+    }
+
+    // ---- Phase 201 goldens: the simplified stroke IS the persisted artifact ----
+    //
+    // Since PERF 1.4 the canvas commits RamerDouglasPeucker.simplify output at a
+    // PER-BRUSH epsilon; whatever survives simplification is exactly what
+    // pointsJson stores. These pin that the kept geometry (including per-point
+    // pressure, which now flows through the SMOOTH gamma curve at capture time)
+    // round-trips byte-faithfully.
+
+    private fun wiggleStroke(tool: StrokeTool, width: Float): Stroke {
+        val raw = (0 until 80).map { i ->
+            PointF(
+                x = i.toFloat(),
+                y = 50f + kotlin.math.sin(i * 0.4f),
+                pressure = 0.05f + 0.01f * (i % 10)
+            )
+        }
+        val epsilon = com.authorss81.noteflow.services.StrokeSimplifyPolicy.epsilonFor(tool, width)
+        return Stroke(
+            id = "wiggle",
+            tool = tool,
+            colorInt = 0xFF111111.toInt(),
+            width = width,
+            points = com.authorss81.noteflow.utils.RamerDouglasPeucker.simplify(raw, epsilon),
+            start = PointF(raw.first().x, raw.first().y),
+            end = PointF(raw.last().x, raw.last().y),
+            pdfPage = 0
+        )
+    }
+
+    @Test
+    fun `hairline-epsilon simplified stroke round-trips every kept point and pressure`() {
+        val committed = wiggleStroke(StrokeTool.FINELINER, 1.5f)
+        // The hairline commit really did simplify something.
+        assertTrue(committed.points.size in 2 until 80)
+        val epsilon = com.authorss81.noteflow.services.StrokeSimplifyPolicy.epsilonFor(StrokeTool.FINELINER, 1.5f)
+        assertTrue(
+            "FINELINER @1.5px must use the tight hairline band, was $epsilon",
+            epsilon >= com.authorss81.noteflow.services.StrokeSimplifyPolicy.HAIRLINE_MIN_EPSILON_PX &&
+                epsilon <= com.authorss81.noteflow.services.StrokeSimplifyPolicy.HAIRLINE_MAX_EPSILON_PX
+        )
+
+        val restored = EncryptionService.deserializeStrokes(
+            EncryptionService.serializeStrokes(listOf(committed))
+        ).single()
+
+        assertEquals(committed.points.size, restored.points.size)
+        for ((i, expected) in committed.points.withIndex()) {
+            val actual = restored.points[i]
+            assertEquals("x@$i", expected.x, actual.x, 1e-5f)
+            assertEquals("y@$i", expected.y, actual.y, 1e-5f)
+            assertEquals("pressure@$i", expected.pressure!!, actual.pressure!!, 1e-6f)
+        }
+    }
+
+    @Test
+    fun `coarse-epsilon legacy behaviour still round-trips unchanged`() {
+        // MARKER is not a fine-tip tool -> the legacy 1.3 px path, unchanged by 201.
+        val committed = wiggleStroke(StrokeTool.MARKER, 12f)
+        assertEquals(
+            com.authorss81.noteflow.services.StrokeSimplifyPolicy.DEFAULT_EPSILON_PX,
+            com.authorss81.noteflow.services.StrokeSimplifyPolicy.epsilonFor(StrokeTool.MARKER, 12f),
+            0f
+        )
+        val restored = EncryptionService.deserializeStrokes(
+            EncryptionService.serializeStrokes(listOf(committed))
+        ).single()
+        assertEquals(committed.points.size, restored.points.size)
+        assertEquals(committed.points.first(), restored.points.first())
+        assertEquals(committed.points.last(), restored.points.last())
     }
 }

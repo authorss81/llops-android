@@ -10,7 +10,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
-
 /**
  * Phase 50 (B2-DOS-01): there is now a size gate everywhere stroke geometry
  * flows between DB bytes and the composable. This test pins the pure-JVM
@@ -293,6 +292,91 @@ class B2Dos01StrokeGeometryTest {
         assertTrue(
             "the horizontal band guard must skip the whole world when panned past the edges",
             source.contains("(size.width - internalPanOffset.x) / internalZoomScale) < 0f")
+        )
+    }
+
+    // ---------- phase-201 (PERF 1.4): per-brush RDP, pointer-up only ----------
+
+    @Test
+    fun `simplification commits exactly once and ONLY inside onDragEnd`() {
+        val source = readAnnotationCanvasSource()
+        val occurrences = Regex("""RamerDouglasPeucker\.simplify\(""").findAll(source).count()
+        assertEquals(
+            "stroke simplification must have exactly ONE call site (the commit path)",
+            1,
+            occurrences
+        )
+        val dragEndBlock = source.substringAfter("onDragEnd = {", "END").substringBefore("onDragCancel")
+        assertTrue(
+            "the one simplify call site must live inside the onDragEnd (pointer-up) handler",
+            dragEndBlock.contains("RamerDouglasPeucker.simplify(")
+        )
+        // Mid-stroke handlers must never simplify: everything before onDragEnd.
+        val preDragEnd = source.substringBefore("onDragEnd = {")
+        assertFalse(
+            "no simplification may run mid-stroke (before onDragEnd)",
+            preDragEnd.contains("RamerDouglasPeucker.simplify(")
+        )
+    }
+
+    @Test
+    fun `commit epsilon comes from the per-brush policy, not a hardcoded constant`() {
+        val source = readAnnotationCanvasSource()
+        assertTrue(
+            "the commit path must derive its epsilon from StrokeSimplifyPolicy.epsilonFor",
+            source.contains("StrokeSimplifyPolicy.epsilonFor(tool, width)")
+        )
+        assertFalse(
+            "the legacy hardcoded coarse epsilon must be gone",
+            source.contains("epsilon = 1.3f")
+        )
+    }
+
+    // ---------- phase-201 (PERF 2.7): GPU compositing tier gating ----------
+
+    @Test
+    fun `wet-layer AGSL gates read ShaderCapabilityHelper instead of raw SDK checks`() {
+        val source = readAnnotationCanvasSource()
+        assertTrue(
+            "useAgslWetMixing must gate on ShaderCapabilityHelper.isAgslSupported (single tier table)",
+            source.contains("val useAgslWetMixing = ShaderCapabilityHelper.isAgslSupported")
+        )
+        val wetPassBlock =
+            source.substringAfter("private fun DrawScope.drawWetLayerPass", "END")
+                .substringBefore("private fun DrawScope.drawRibbonStroke")
+        assertTrue(
+            "drawWetLayerPass must exist",
+            wetPassBlock != "END"
+        )
+        assertTrue(
+            "drawWetLayerPass must gate the shader body on ShaderCapabilityHelper",
+            wetPassBlock.contains("if (ShaderCapabilityHelper.isAgslSupported && wetMixingEffect != null)")
+        )
+        // Phase 201 (PERF 2.7): android.graphics.Paint has NO setRenderEffect at
+        // any API level — the only public RenderEffect carriers are View and
+        // RenderNode. The effect MUST ride the reusable RenderNode
+        // (RenderNode.setRenderEffect -> hardware-canvas GPU composite), guarded by
+        // a software-canvas fallback.
+        assertTrue(
+            "the effect must be attached to the RenderNode (RenderNode.setRenderEffect)",
+            wetPassBlock.contains("node.setRenderEffect(wetMixingEffect.androidEffect)")
+        )
+        assertTrue(
+            "the node must be composited via Canvas.drawRenderNode (GPU path)",
+            wetPassBlock.contains("nativeCanvas.drawRenderNode(node)")
+        )
+        assertTrue(
+            "software canvases must fall back instead of attempting the GPU path",
+            wetPassBlock.contains("nativeCanvas.isHardwareAccelerated")
+        )
+        assertFalse(
+            "no Paint-carrier reflection may return (Paint has no setRenderEffect)",
+            source.contains("""getMethod("setRenderEffect"""")
+        )
+        assertTrue(
+            "the shader body must be RequiresApi(TIRAMISU)-annotated",
+            Regex("""@androidx\.annotation\.RequiresApi\(android\.os\.Build\.VERSION_CODES\.TIRAMISU\)\s*\nprivate fun DrawScope\.drawWetLayerPass""")
+                .containsMatchIn(source)
         )
     }
 

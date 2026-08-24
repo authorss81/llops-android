@@ -235,4 +235,60 @@ class StrokeStabilizerTest {
         }
         assertTrue("retune(0) must behave like the minimum window", clampedSamples <= 6)
     }
+
+    // ---- Phase 201 (PERF 1.4) goldens: stabilized ink + per-brush RDP ----------
+    //
+    // The committed stroke is simplify(stabilize(raw)). These pin that a
+    // hairline brush's tighter epsilon keeps strictly more of the stabilized
+    // geometry than the legacy coarse epsilon, and that the RDP contract
+    // (exact start/end, never more points than the input) holds on the exact
+    // artifact the canvas commits on pointer-up.
+
+    /** A gentle 1px-amplitude wiggle — the detail a hairline nib must survive commit. */
+    private fun hairlineWiggle(n: Int = 120): List<StabilizerPoint> =
+        (0 until n).map { i ->
+            val x = i.toFloat()
+            StabilizerPoint(x = x, y = 100f + kotlin.math.sin(i * 0.35f))
+        }
+
+    @Test
+    fun `golden hairline epsilon keeps strictly more stabilized detail than the coarse one`() {
+        val raw = hairlineWiggle()
+        val stabilized = StrokeStabilizer.smooth(raw).map {
+            com.authorss81.noteflow.data.model.PointF(it.x, it.y, pressure = 0.08f)
+        }
+        val policy = com.authorss81.noteflow.services.StrokeSimplifyPolicy
+        // FINELINER at 1.5 px is hairline -> inside the 0.6..0.8 band.
+        val hairlineEps = policy.epsilonFor(com.authorss81.noteflow.data.model.StrokeTool.FINELINER, 1.5f)
+        assertTrue("hairline epsilon must sit in the tight band, was $hairlineEps", hairlineEps in policy.HAIRLINE_MIN_EPSILON_PX..policy.HAIRLINE_MAX_EPSILON_PX)
+
+        val hairline = com.authorss81.noteflow.utils.RamerDouglasPeucker.simplify(stabilized, hairlineEps)
+        val coarse = com.authorss81.noteflow.utils.RamerDouglasPeucker.simplify(
+            stabilized,
+            com.authorss81.noteflow.services.StrokeSimplifyPolicy.DEFAULT_EPSILON_PX
+        )
+        assertTrue(
+            "hairline commit must keep more inflections ($hairline kept ${hairline.size}, coarse kept ${coarse.size})",
+            hairline.size > coarse.size
+        )
+        // The 1 px-amplitude wiggle collapses almost entirely at 1.3 px...
+        assertTrue("coarse epsilon should flatten this detail", coarse.size < stabilized.size / 4)
+        // ...yet the hairline result still preserves real structure.
+        assertTrue("hairline epsilon should keep structure, kept ${hairline.size}", hairline.size >= 8)
+    }
+
+    @Test
+    fun `golden simplified stabilized stroke preserves endpoints and can only shrink`() {
+        val raw = noisyLine(n = 200)
+        val stabilized = StrokeStabilizer.smooth(raw).map {
+            com.authorss81.noteflow.data.model.PointF(it.x, it.y, pressure = 0.5f)
+        }
+        for (tool in com.authorss81.noteflow.data.model.StrokeTool.entries) {
+            val eps = com.authorss81.noteflow.services.StrokeSimplifyPolicy.epsilonFor(tool, 2f)
+            val out = com.authorss81.noteflow.utils.RamerDouglasPeucker.simplify(stabilized, eps)
+            assertTrue("output can never exceed the input ($tool)", out.size <= stabilized.size)
+            assertEquals("$tool start preserved exactly", stabilized.first(), out.first())
+            assertEquals("$tool end preserved exactly", stabilized.last(), out.last())
+        }
+    }
 }

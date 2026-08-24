@@ -5,6 +5,7 @@ import com.authorss81.noteflow.services.PressureCurveHelper
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlin.math.pow
 
 class PressureCurveHelperTest {
 
@@ -72,5 +73,74 @@ class PressureCurveHelperTest {
         assertEquals(PressureCurve.HEAVY, PressureCurve.fromSettingKey("heavy"))
         assertEquals(PressureCurve.LINEAR, PressureCurve.fromSettingKey("nonsense"))
         assertEquals(PressureCurve.LINEAR, PressureCurve.fromSettingKey(null))
+    }
+
+    // ---- Phase 201 (PERF 1.3) goldens: SMOOTH gamma curve ----------------------
+
+    @Test
+    fun `smooth setting key round-trips`() {
+        assertEquals(PressureCurve.SMOOTH, PressureCurve.fromSettingKey("smooth"))
+    }
+
+    @Test
+    fun `golden smooth remap matches the p^(2-0_5p) gamma blend exactly`() {
+        // p = 0.05 -> exponent ~1.975 -> 0.05^1.975
+        val g05 = PressureCurveHelper.SMOOTH_GAMMA_AT_ZERO -
+            (PressureCurveHelper.SMOOTH_GAMMA_AT_ZERO - PressureCurveHelper.SMOOTH_GAMMA_AT_ONE) * 0.05f
+        assertEquals(
+            0.05f.pow(g05),
+            PressureCurveHelper.remapPressure(0.05f, PressureCurve.SMOOTH),
+            1e-6f
+        )
+        // Mid-range golden: 0.5^1.75.
+        assertEquals(
+            0.5f.pow(1.75f),
+            PressureCurveHelper.remapPressure(0.5f, PressureCurve.SMOOTH),
+            1e-6f
+        )
+    }
+
+    @Test
+    fun `smooth sits between linear and heavy across the whole range`() {
+        var p = 0.02f
+        while (p <= 1.0f) {
+            val smooth = PressureCurveHelper.remapPressure(p, PressureCurve.SMOOTH)
+            assertTrue(
+                "SMOOTH must compress vs LINEAR at p=$p ($smooth)",
+                smooth < PressureCurveHelper.remapPressure(p, PressureCurve.LINEAR)
+            )
+            assertTrue(
+                "SMOOTH must stay more responsive than HEAVY at p=$p ($smooth)",
+                smooth > PressureCurveHelper.remapPressure(p, PressureCurve.HEAVY)
+            )
+            p += 0.02f
+        }
+    }
+
+    @Test
+    fun `golden smooth flattens width variation inside the low-end band`() {
+        // Total width travel across the 0-10% band: SMOOTH must move far less
+        // than LINEAR for the same raw-pressure span — that is the jitter fix.
+        fun widthTravel(curve: PressureCurve): Float {
+            val steps = 20
+            var total = 0f
+            var prev = PressureCurveHelper.widthFactor(0f, curve)
+            for (i in 1..steps) {
+                val w = PressureCurveHelper.widthFactor(0.10f * i / steps, curve)
+                total += kotlin.math.abs(w - prev)
+                prev = w
+            }
+            return total
+        }
+        val linearTravel = widthTravel(PressureCurve.LINEAR)
+        val smoothTravel = widthTravel(PressureCurve.SMOOTH)
+        assertTrue(
+            "low-band width travel must shrink (smooth=$smoothTravel linear=$linearTravel)",
+            smoothTravel < linearTravel * 0.25f
+        )
+        // Golden: the whole 0-10% band moves the width factor by less than 0.01.
+        val bandSpan = PressureCurveHelper.widthFactor(0.10f, PressureCurve.SMOOTH) -
+            PressureCurveHelper.widthFactor(0f, PressureCurve.SMOOTH)
+        assertTrue("band span must stay under 0.01, was $bandSpan", bandSpan < 0.01f)
     }
 }

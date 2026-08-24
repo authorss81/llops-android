@@ -1404,8 +1404,16 @@ fun AnnotationCanvas(
                                         val newStroke = if (snappedShape != null) {
                                             snappedShape.snappedStroke
                                         } else if (pointsToSimplify.size > 2) {
+                                            // Phase 201 (PERF 1.4): per-brush epsilon —
+                                            // hairline nibs keep their fine inflections
+                                            // (0.6-0.8 px), everything else stays at the
+                                            // legacy 1.3 px. Runs ONLY here, on pointer-up;
+                                            // the live preview never simplifies mid-stroke.
                                             candidateStroke.copy(
-                                                points = com.authorss81.noteflow.utils.RamerDouglasPeucker.simplify(pointsToSimplify, epsilon = 1.3f)
+                                                points = com.authorss81.noteflow.utils.RamerDouglasPeucker.simplify(
+                                                    pointsToSimplify,
+                                                    epsilon = com.authorss81.noteflow.services.StrokeSimplifyPolicy.epsilonFor(tool, width)
+                                                )
                                             )
                                         } else {
                                             candidateStroke
@@ -3662,7 +3670,10 @@ private fun DrawScope.drawCompositedLayersStrokes(
         // layer) the wet layer renders through the normal path — pixel-identical
         // but with ZERO shader/saveLayer work instead of a full-page per-frame
         // offscreen passes (phase-04 audit item 3).
-        val useAgslWetMixing = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU &&
+        // Phase 201 (PERF 2.7): the tier gate reads ShaderCapabilityHelper (the
+        // single decision table): AGSL RuntimeShader→RenderEffect compositing is
+        // API 33+ only; API 26-32 fall through to the vector/CPU paths below.
+        val useAgslWetMixing = ShaderCapabilityHelper.isAgslSupported &&
                 gpuWetBrushesEnabled &&
                 graphicsLayer != null &&
                 wetBrushEngine != null &&
@@ -3691,6 +3702,9 @@ private fun DrawScope.drawCompositedLayersStrokes(
                 activeStart = activeStart,
                 wetCanvasEngine = wetCanvasEngine ?: com.authorss81.noteflow.services.WetCanvasEngine(),
                 wetBrushEngine = wetBrushEngine,
+                canvasDrawScope = canvasDrawScope,
+                density = density,
+                layoutDirection = layoutDirection,
                 strokeRenderOpts = strokeRenderOpts,
                 liveStrokeSeed = liveStrokeSeed,
                 vibrancyBoost = vibrancyBoost
@@ -3787,6 +3801,10 @@ private fun DrawScope.drawCompositedLayersStrokes(
     }
 }
 
+// Phase 201 (PERF 2.7): AGSL-only body — every RenderEffect/RuntimeShader
+// reference below is guarded by this annotation AND the caller-side
+// ShaderCapabilityHelper.isAgslSupported gate.
+@androidx.annotation.RequiresApi(android.os.Build.VERSION_CODES.TIRAMISU)
 private fun DrawScope.drawWetLayerPass(
     layerStrokes: List<Stroke>,
     previewStroke: Stroke?,
@@ -3806,11 +3824,14 @@ private fun DrawScope.drawWetLayerPass(
     activeStart: PointF?,
     wetCanvasEngine: com.authorss81.noteflow.services.WetCanvasEngine,
     wetBrushEngine: com.authorss81.noteflow.services.WetBrushEngine,
+    canvasDrawScope: androidx.compose.ui.graphics.drawscope.CanvasDrawScope? = null,
+    density: androidx.compose.ui.unit.Density? = null,
+    layoutDirection: androidx.compose.ui.unit.LayoutDirection? = null,
     strokeRenderOpts: StrokeRenderOpts = StrokeRenderOpts(),
     liveStrokeSeed: Float = 0f,
     vibrancyBoost: Float = 0f
 ) {
-    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU && wetMixingEffect != null) {
+    if (ShaderCapabilityHelper.isAgslSupported && wetMixingEffect != null) {
         val brushPos = activePoints.lastOrNull() ?: activeStart
         val prevPos = if (activePoints.size >= 2) activePoints[activePoints.size - 2] else activeStart
 
@@ -3847,24 +3868,32 @@ private fun DrawScope.drawWetLayerPass(
             alpha = (layer.opacity * 255f).coerceIn(0f, 255f).toInt()
             applyLayerBlend(layer.blendMode)
         }
-        val effectPaint = if (hasEffect && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-            val p = android.graphics.Paint(plainPaint)
-            try {
-                val method = android.graphics.Paint::class.java.getMethod("setRenderEffect", android.graphics.RenderEffect::class.java)
-                method.invoke(p, wetMixingEffect.androidEffect)
-            } catch (_: Exception) {}
-            p
-        } else {
-            null
-        }
+        // Phase 201 (PERF 2.7) — GPU carrier FIX. The pre-201 code attached the
+        // RenderEffect through a reflective lookup on android.graphics.Paint, but
+        // Paint has NO such method at ANY API level (verified against the API-36
+        // android.jar: zero RenderEffect references in Paint.class; the only
+        // public carriers are View/RenderNode). That lookup threw
+        // NoSuchMethodException every frame and the catch swallowed it, so
+        // "effectPaint" was a plain copy and the AGSL shader NEVER ran on any
+        // device. The effect now rides a reusable RenderNode
+        // (RenderNode.setRenderEffect, API 31+) whose display list is composited
+        // by the hardware canvas — the actual RenderNode GPU path.
+        val canUseGpuEffect = hasEffect &&
+            nativeCanvas.isHardwareAccelerated &&
+            wetMixingEffect != null &&
+            canvasDrawScope != null &&
+            density != null &&
+            layoutDirection != null
 
         val pageBounds = android.graphics.RectF(0f, offsetY, pageWidth, offsetY + pageHeight)
 
         // Dirty-rect scoping (phase-04 audit item 3): only re-run the AGSL effect
         // over the rect the active brush segment can alter, so the offscreen layer
-        // drops from a full-page raster (~1.65M px) to the stroke area. saveLayer
-        // keeps the canvas (absolute) coordinate space, so shader/Paint uniforms
-        // stay in page coordinates and no translate is required.
+        // drops from a full-page raster (~1.65M px) to the stroke area.
+        // Coordinate note: saveLayer keeps the canvas (absolute) coordinate space,
+        // so shader uniforms stay in page coordinates; the RenderNode is positioned
+        // at the dirty rect and its recording canvas is translated by -origin for
+        // the same reason.
         val dirty = if (hasEffect && brushPos != null) {
             val baseX = prevPos?.x ?: brushPos.x
             val baseY = prevPos?.y ?: brushPos.y
@@ -3889,9 +3918,9 @@ private fun DrawScope.drawWetLayerPass(
             }
         }
 
-        if (effectPaint == null || dirty == null) {
-            // No active effect region (idle fallback): keep the existing full-page
-            // plain layer so layer opacity/blend still apply unchanged.
+        if (!canUseGpuEffect || dirty == null || wetMixingEffect == null) {
+            // Idle fallback / software canvas: keep the existing full-page plain
+            // layer so layer opacity/blend still apply unchanged.
             val saveCount = nativeCanvas.saveLayer(pageBounds, plainPaint)
             try {
                 drawStrokes()
@@ -3899,6 +3928,33 @@ private fun DrawScope.drawWetLayerPass(
                 nativeCanvas.restoreToCount(saveCount)
             }
         } else {
+            val node = wetMixingEffect.renderNode
+            val left = dirty.left.toInt()
+            val top = dirty.top.toInt()
+            val right = kotlin.math.ceil(dirty.right).toInt().coerceAtLeast(left + 1)
+            val bottom = kotlin.math.ceil(dirty.bottom).toInt().coerceAtLeast(top + 1)
+
+            // Record THIS pass's strokes into the node's dirty-bounds display list.
+            node.setPosition(left, top, right, bottom)
+            val recordingCanvas = node.beginRecording()
+            try {
+                val composeNodeCanvas = androidx.compose.ui.graphics.Canvas(recordingCanvas)
+                composeNodeCanvas.translate(-left.toFloat(), -top.toFloat())
+                canvasDrawScope.draw(
+                    density = density!!,
+                    layoutDirection = layoutDirection!!,
+                    canvas = composeNodeCanvas,
+                    size = androidx.compose.ui.geometry.Size(pageWidth, pageHeight)
+                ) {
+                    drawStrokes()
+                }
+            } finally {
+                node.endRecording()
+            }
+            // Attach the AGSL RuntimeShader RenderEffect to the NODE — the real
+            // RenderNode GPU-compositing carrier (API 31+).
+            node.setRenderEffect(wetMixingEffect.androidEffect)
+
             // 1) Full-layer plain pass with the dirty (effect) region punched out,
             //    so the effect pass below supplies the ONLY pixels there and the
             //    stroke alpha is not double-blended.
@@ -3912,14 +3968,13 @@ private fun DrawScope.drawWetLayerPass(
                 nativeCanvas.restoreToCount(baseSave)
             }
 
-            // 2) Effect pass sized to the dirty rect only; shader coords stay
-            //    absolute because saveLayer preserves the canvas coordinate space.
-            val effectSave = nativeCanvas.saveLayer(dirty, effectPaint)
+            // 2) Effect pass sized to the dirty rect only: the hardware canvas
+            //    composites the RenderNode's shader-applied output inside this
+            //    saveLayer, whose paint still applies the layer opacity/blend to
+            //    the final result exactly as before.
+            val effectSave = nativeCanvas.saveLayer(dirty, plainPaint)
             try {
-                nativeCanvas.save()
-                nativeCanvas.clipRect(dirty)
-                drawStrokes()
-                nativeCanvas.restore()
+                nativeCanvas.drawRenderNode(node)
             } finally {
                 nativeCanvas.restoreToCount(effectSave)
             }
