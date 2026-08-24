@@ -204,16 +204,21 @@ object ImportExportService {
      * each page to its own image makes every created page a correct, standalone
      * slice with no schema change — and deleting one page can no longer delete
      * the shared source out from under its siblings.
+     *
+     * Phase 202 review-fix: the raster adopts the PAGE's own aspect ratio
+     * ([PdfSliceFitPolicy]) inside the same width/height budget box. The
+     * first cut rendered everything into one fixed portrait bitmap, which made
+     * PdfRenderer letterbox landscape pages into permanently-baked white bars.
      */
     fun renderPdfPageToPngFile(
         context: Context,
         pdfFilePath: String,
         pageIndex: Int,
         baseName: String,
-        targetWidth: Int = 1080,
-        targetHeight: Int = 1528
+        targetWidth: Int = PdfSliceFitPolicy.DEFAULT_MAX_WIDTH,
+        targetHeight: Int = PdfSliceFitPolicy.DEFAULT_MAX_HEIGHT
     ): String? {
-        val bitmap = renderPdfPageToBitmap(pdfFilePath, pageIndex, targetWidth, targetHeight) ?: return null
+        val bitmap = renderPdfPageToFittedBitmap(pdfFilePath, pageIndex, targetWidth, targetHeight) ?: return null
         return try {
             val importsDir = getImportsDir(context)
             // Short random token: two imports of same-named documents must never
@@ -238,6 +243,42 @@ object ImportExportService {
 
     /** Split-import cap: beyond this the import truncates honestly (see HomeScreen). */
     const val PDF_SPLIT_MAX_PAGES = 50
+
+    /**
+     * Renders [pageIndex] at the page's OWN aspect ratio, bounded by
+     * ([maxWidth] x [maxHeight]) via [PdfSliceFitPolicy] — no letterboxing.
+     * Null on the same conditions as [renderPdfPageToBitmap] (missing file,
+     * out-of-range index, render failure); that function's fixed-size contract
+     * is untouched for its export callers.
+     */
+    private fun renderPdfPageToFittedBitmap(
+        pdfFilePath: String,
+        pageIndex: Int,
+        maxWidth: Int,
+        maxHeight: Int
+    ): android.graphics.Bitmap? {
+        return try {
+            val file = File(pdfFilePath)
+            if (!file.exists()) return null
+            android.os.ParcelFileDescriptor.open(file, android.os.ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
+                android.graphics.pdf.PdfRenderer(pfd).use { renderer ->
+                    if (pageIndex < 0 || pageIndex >= renderer.pageCount) return null
+                    renderer.openPage(pageIndex).use { pdfPage ->
+                        val dims = PdfSliceFitPolicy.fit(pdfPage.width, pdfPage.height, maxWidth, maxHeight)
+                        val bitmap = android.graphics.Bitmap.createBitmap(
+                            dims.width, dims.height, android.graphics.Bitmap.Config.ARGB_8888
+                        )
+                        val canvas = android.graphics.Canvas(bitmap)
+                        canvas.drawColor(android.graphics.Color.WHITE)
+                        pdfPage.render(bitmap, null, null, android.graphics.pdf.PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                        bitmap
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
 
     /**
      * Decodes an image with an inSampleSize so the resulting bitmap's long edge

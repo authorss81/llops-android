@@ -13,4 +13,5 @@
     <string name="share_confirm_expired">The share confirmation expired — nothing was clipped.</string>
     <string name="share_captured_previous_session">A shared clip from a previous session wasn\'t captured.</string>
     <string name="reader_history_restore_disabled">Restore is disabled while reading — focus mode is read-only.</string>
+    <string name="import_pdf_split_truncated">Imported the first %1$d of %2$d PDF pages.</string>
 </resources>

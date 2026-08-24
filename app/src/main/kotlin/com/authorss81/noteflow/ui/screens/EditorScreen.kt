@@ -5537,8 +5537,16 @@ private fun renderPdfPageToRawBitmap(filePath: String, pageIndex: Int, targetWid
 
                     val height = (width * (pdfPage.height.toFloat() / pdfPage.width.toFloat())).toInt()
                     val bitmap = com.authorss81.noteflow.utils.BitmapPool.acquire(width, height)
-                    bitmap.eraseColor(android.graphics.Color.WHITE)
-                    pdfPage.render(bitmap, null, null, android.graphics.pdf.PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                    try {
+                        bitmap.eraseColor(android.graphics.Color.WHITE)
+                        pdfPage.render(bitmap, null, null, android.graphics.pdf.PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                    } catch (t: Throwable) {
+                        // Phase 202 review-fix: a failed render must hand the bitmap
+                        // back to the pool — pre-fix it silently dropped out of the
+                        // pool's accounting on every exception path.
+                        com.authorss81.noteflow.utils.BitmapPool.release(bitmap)
+                        throw t
+                    }
                     bitmap
                 }
             }

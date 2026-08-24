@@ -365,238 +365,290 @@ fun HomeScreen(
                     val fileName = ImportExportService.getUriFileName(context, uri)
                     val ext = ImportExportService.extensionOf(fileName)
 
-                // Phase 202 (bug batch): fail-fast gate — an auto-lock that landed
-                // before this file's turn must SKIP it with one honest notice.
-                // Pre-fix the html/zip runCatching blocks silently swallowed
-                // VaultLockedWriteException (page == null, no notice at all), and
-                // the plain addPage paths only noticed per page AFTER artifacts
-                // were persisted.
-                if (viewModel.repository.encryptionKey == null) {
-                    viewModel.showSnackbar(UiFailureTextPolicy.IMPORT_LOCKED_TEXT, isLong = true)
-                    continue
-                }
-
-                // Phase 202 (bug batch): one malformed entry must no longer take
-                // the WHOLE import down. Pre-fix any unexpected exception here
-                // (corrupt PDF, bad docx, IO error) escaped this coroutine
-                // uncaught — crashing via viewModelScope or silently ending the
-                // run with zero feedback. Every failure now degrades to an honest
-                // skip notice, sweeps THIS file's tracked artifacts, and lets the
-                // remaining selected files continue.
-                try {
-                if (ext == "html" || ext == "htm") {
-                    val activeNb = viewModel.selectedNotebook.value?.id ?: "nb_default"
-                    val activeSec = viewModel.selectedSection.value?.id ?: "sec_default"
-                    val page = runCatching {
-                        ImportExportService.importHtmlFile(context, uri, viewModel.repository, activeNb, activeSec)
-                    }.getOrElse { e ->
-                        if (e is ImportArchivePolicy.ImportSizeLimitException) {
-                            viewModel.showSnackbar(UiFailureTextPolicy.importSkippedMessage(e), isLong = true)
-                        } else {
-                            // Phase 202 (bug batch): a real failure must reach the
-                            // per-entry guard below — never a silent null.
-                            throw e
-                        }
-                        null
+                    // Phase 202 (bug batch): fail-fast gate — an auto-lock that landed
+                    // before this file's turn must SKIP it with one honest notice.
+                    // Pre-fix the html/zip runCatching blocks silently swallowed
+                    // VaultLockedWriteException (page == null, no notice at all), and
+                    // the plain addPage paths only noticed per page AFTER artifacts
+                    // were persisted.
+                    // Phase 202 review-fix: BREAK, not continue — once locked, every
+                    // remaining URI would reject identically and fire one duplicate
+                    // snackbar per file into the bounded FIFO.
+                    if (viewModel.repository.encryptionKey == null) {
+                        viewModel.showSnackbar(UiFailureTextPolicy.IMPORT_LOCKED_TEXT, isLong = true)
+                        break
                     }
-                    if (page != null) {
-                        viewModel.selectedSection.value?.let { viewModel.selectSection(it) }
-                        if (isSingleImport) onOpenPage(page)
+
+                    // Phase 202 (bug batch): one malformed entry must no longer take
+                    // the WHOLE import down. Pre-fix any unexpected exception here
+                    // (corrupt PDF, bad docx, IO error) escaped this coroutine
+                    // uncaught — crashing via viewModelScope or silently ending the
+                    // run with zero feedback. Every failure now degrades to an honest
+                    // skip notice, sweeps THIS file's tracked artifacts, and lets the
+                    // remaining selected files continue.
+                    try {
+                    if (ext == "html" || ext == "htm") {
+                        val activeNb = viewModel.selectedNotebook.value?.id ?: "nb_default"
+                        val activeSec = viewModel.selectedSection.value?.id ?: "sec_default"
+                        val page = runCatching {
+                            ImportExportService.importHtmlFile(context, uri, viewModel.repository, activeNb, activeSec)
+                        }.getOrElse { e ->
+                            if (e is ImportArchivePolicy.ImportSizeLimitException) {
+                                viewModel.showSnackbar(UiFailureTextPolicy.importSkippedMessage(e), isLong = true)
+                            } else {
+                                // Phase 202 (bug batch): a real failure must reach the
+                                // per-entry guard below — never a silent null.
+                                throw e
+                            }
+                            null
+                        }
+                        if (page != null) {
+                            viewModel.selectedSection.value?.let { viewModel.selectSection(it) }
+                            if (isSingleImport) onOpenPage(page)
+                            importedCount++
+                        }
+                    } else if (ext == "zip") {
+                        val activeNb = viewModel.selectedNotebook.value?.id ?: "nb_default"
+                        val activeSec = viewModel.selectedSection.value?.id ?: "sec_default"
+                        var count = runCatching {
+                            val c = ImportExportService.importObsidianVaultZip(context, uri, viewModel.repository, activeNb, activeSec)
+                            if (c == 0) {
+                                ImportExportService.importHtmlZipOrFolder(context, uri, viewModel.repository, activeNb, activeSec)
+                            } else c
+                        }.getOrElse { e ->
+                            // B1-DB-5: a zip bomb (entry/total/ratio/count breach)
+                            // must fail the import with a clean, visible error.
+                            if (e is ImportArchivePolicy.ImportSizeLimitException) {
+                                viewModel.showSnackbar(UiFailureTextPolicy.importSkippedMessage(e), isLong = true)
+                            } else {
+                                // Phase 202 (bug batch): a real failure must reach the
+                                // per-entry guard below — never a silent 0.
+                                throw e
+                            }
+                            0
+                        }
+                        if (count > 0) {
+                            viewModel.selectedSection.value?.let { viewModel.selectSection(it) }
+                            importedCount += count
+                        }
+                    } else if (ext == "docx") {
+                        val markdownText = ImportExportService.convertDocxToMarkdown(bytes)
+                        val mdTitle = fileName.replace(".docx", ".md")
+                        // phase-44 (B1-DB-4): the note body is stored ONLY in the
+                        // field-encrypted extractedText column — never persisted as a
+                        // plaintext .md/.txt file under filesDir/noteflow/imports.
+                        viewModel.addPage(
+                            title = mdTitle,
+                            sourceFilePath = null,
+                            sourceFileType = "text",
+                            extractedText = markdownText,
+                            onCreated = if (isSingleImport) onOpenPage else null
+                        )
                         importedCount++
-                    }
-                } else if (ext == "zip") {
-                    val activeNb = viewModel.selectedNotebook.value?.id ?: "nb_default"
-                    val activeSec = viewModel.selectedSection.value?.id ?: "sec_default"
-                    var count = runCatching {
-                        val c = ImportExportService.importObsidianVaultZip(context, uri, viewModel.repository, activeNb, activeSec)
-                        if (c == 0) {
-                            ImportExportService.importHtmlZipOrFolder(context, uri, viewModel.repository, activeNb, activeSec)
-                        } else c
-                    }.getOrElse { e ->
-                        // B1-DB-5: a zip bomb (entry/total/ratio/count breach)
-                        // must fail the import with a clean, visible error.
-                        if (e is ImportArchivePolicy.ImportSizeLimitException) {
-                            viewModel.showSnackbar(UiFailureTextPolicy.importSkippedMessage(e), isLong = true)
-                        } else {
-                            // Phase 202 (bug batch): a real failure must reach the
-                            // per-entry guard below — never a silent 0.
-                            throw e
-                        }
-                        0
-                    }
-                    if (count > 0) {
-                        viewModel.selectedSection.value?.let { viewModel.selectSection(it) }
-                        importedCount += count
-                    }
-                } else if (ext == "docx") {
-                    val markdownText = ImportExportService.convertDocxToMarkdown(bytes)
-                    val mdTitle = fileName.replace(".docx", ".md")
-                    // phase-44 (B1-DB-4): the note body is stored ONLY in the
-                    // field-encrypted extractedText column — never persisted as a
-                    // plaintext .md/.txt file under filesDir/noteflow/imports.
-                    viewModel.addPage(
-                        title = mdTitle,
-                        sourceFilePath = null,
-                        sourceFileType = "text",
-                        extractedText = markdownText,
-                        onCreated = if (isSingleImport) onOpenPage else null
-                    )
-                    importedCount++
-                } else if (ext == "md" || ext == "txt") {
-                    // phase-44 (B1-DB-4): body goes to the field-encrypted
-                    // extractedText column only — no plaintext companion file.
-                    val textContent = String(bytes, Charsets.UTF_8)
-                    viewModel.addPage(
-                        title = fileName,
-                        sourceFilePath = null,
-                        sourceFileType = "text",
-                        extractedText = textContent,
-                        onCreated = if (isSingleImport) onOpenPage else null
-                    )
-                    importedCount++
-                } else {
-                    val type = if (ImportExportService.isPdf(ext)) "pdf" else if (ImportExportService.isImage(ext)) "image" else "text"
-                    // phase-44 review fix (B1-DB-4): unknown text-like extensions
-                    // (e.g. .markdown/.rst) must NOT land as a plaintext body file at
-                    // rest — same column-only contract as .md/.txt. Only genuine
-                    // PDF/image sources are persisted as binary artifacts.
-                    val isTextBodyType = type == "text"
-                    val path: String? = if (isTextBodyType) null else ImportExportService.persistFile(context, fileName, bytes)
-                    // B2-UI-6 (phase-96): track this persisted artifact until its
-                    // DB page row commits below — a cancellation between this write
-                    // and the page create would otherwise leave an orphaned file in
-                    // imports/ with no row referencing it.
-                    path?.let { orphanRun.trackPersisted(it) }
+                    } else if (ext == "md" || ext == "txt") {
+                        // phase-44 (B1-DB-4): body goes to the field-encrypted
+                        // extractedText column only — no plaintext companion file.
+                        val textContent = String(bytes, Charsets.UTF_8)
+                        viewModel.addPage(
+                            title = fileName,
+                            sourceFilePath = null,
+                            sourceFileType = "text",
+                            extractedText = textContent,
+                            onCreated = if (isSingleImport) onOpenPage else null
+                        )
+                        importedCount++
+                    } else {
+                        val type = if (ImportExportService.isPdf(ext)) "pdf" else if (ImportExportService.isImage(ext)) "image" else "text"
+                        // phase-44 review fix (B1-DB-4): unknown text-like extensions
+                        // (e.g. .markdown/.rst) must NOT land as a plaintext body file at
+                        // rest — same column-only contract as .md/.txt. Only genuine
+                        // PDF/image sources are persisted as binary artifacts.
+                        val isTextBodyType = type == "text"
+                        val path: String? = if (isTextBodyType) null else ImportExportService.persistFile(context, fileName, bytes)
+                        // B2-UI-6 (phase-96): track this persisted artifact until its
+                        // DB page row commits below — a cancellation between this write
+                        // and the page create would otherwise leave an orphaned file in
+                        // imports/ with no row referencing it.
+                        path?.let { orphanRun.trackPersisted(it) }
 
-                    val (extractedText, pageCount, isLandscapeFormat) = withContext(Dispatchers.IO) {
-                        val extracted = if (isTextBodyType) {
-                            String(bytes, Charsets.UTF_8)
-                        } else {
-                            DocumentTextExtractor.extractText(File(path!!), type)
-                        }
-                        val count = if (isTextBodyType) 1 else ImportExportService.getPdfPageCount(path!!)
-                        var landscapeFormat = false
-                        try {
-                            if (type == "image") {
-                                val options = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                                android.graphics.BitmapFactory.decodeFile(path!!, options)
-                                landscapeFormat = options.outWidth > options.outHeight
-                            } else if (type == "pdf") {
-                                // Phase 202 (bug batch): `use{}` on the descriptor and
-                                // renderer — the pre-fix sequential close leaked both
-                                // FDs whenever openPage/width read threw.
-                                android.os.ParcelFileDescriptor.open(File(path!!), android.os.ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
-                                    android.graphics.pdf.PdfRenderer(pfd).use { renderer ->
-                                        if (renderer.pageCount > 0) {
-                                            renderer.openPage(0).use { pdfPage ->
-                                                landscapeFormat = pdfPage.width > pdfPage.height
+                        val (extractedText, pageCount, isLandscapeFormat) = withContext(Dispatchers.IO) {
+                            val extracted = if (isTextBodyType) {
+                                String(bytes, Charsets.UTF_8)
+                            } else {
+                                DocumentTextExtractor.extractText(File(path!!), type)
+                            }
+                            val count = if (isTextBodyType) 1 else ImportExportService.getPdfPageCount(path!!)
+                            var landscapeFormat = false
+                            try {
+                                if (type == "image") {
+                                    val options = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                                    android.graphics.BitmapFactory.decodeFile(path!!, options)
+                                    landscapeFormat = options.outWidth > options.outHeight
+                                } else if (type == "pdf") {
+                                    // Phase 202 (bug batch): `use{}` on the descriptor and
+                                    // renderer — the pre-fix sequential close leaked both
+                                    // FDs whenever openPage/width read threw.
+                                    android.os.ParcelFileDescriptor.open(File(path!!), android.os.ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
+                                        android.graphics.pdf.PdfRenderer(pfd).use { renderer ->
+                                            if (renderer.pageCount > 0) {
+                                                renderer.openPage(0).use { pdfPage ->
+                                                    landscapeFormat = pdfPage.width > pdfPage.height
+                                                }
                                             }
                                         }
                                     }
                                 }
+                            } catch (e: Exception) {
+                                landscapeFormat = false
                             }
-                        } catch (e: Exception) {
-                            landscapeFormat = false
+                            Triple(extracted, count, landscapeFormat)
                         }
-                        Triple(extracted, count, landscapeFormat)
-                    }
 
-                    // Determine format / orientation tag
-                    val orientationTag = when (orientationChoice) {
-                        "LANDSCAPE" -> "orientation_landscape"
-                        "PORTRAIT" -> "orientation_portrait"
-                        else -> if (isLandscapeFormat) "orientation_landscape" else "orientation_portrait"
-                    }
-
-                    if (type == "pdf" && pageCount > 1 && importAsSeparatePages) {
-                        // Option A: Split into Separate Note Pages.
-                        // Phase 202 (bug batch): every split page used to reference
-                        // the SAME full multi-page PDF, and since the page row has no
-                        // per-source-index column, EVERY created page rendered slice
-                        // 0 in the editor ("Page 3" showed PDF page 1). Each page now
-                        // gets its OWN rasterized slice persisted in imports/ — a
-                        // correct standalone page with no DB schema change — and the
-                        // shared source PDF is removed once every page committed
-                        // (deleting one split page can also no longer delete the file
-                        // under its siblings).
-                        val baseTitle = fileName.substringBeforeLast('.')
-                        val splitCount = minOf(pageCount, ImportExportService.PDF_SPLIT_MAX_PAGES)
-                        var createdSplits = 0
-                        var renderFailed = false
-                        for (i in 0 until splitCount) {
-                            val slicePath = withContext(Dispatchers.IO) {
-                                ImportExportService.renderPdfPageToPngFile(context, path!!, i, baseTitle)
-                            }
-                            if (slicePath == null) {
-                                renderFailed = true
-                                break
-                            }
-                            // B2-UI-6: track each slice until its page row commits.
-                            orphanRun.trackPersisted(slicePath)
-                            viewModel.addPage(
-                                title = "$baseTitle - Page ${i + 1}",
-                                sourceFilePath = slicePath,
-                                sourceFileType = "image",
-                                extractedText = if (i == 0) extractedText else "",
-                                tags = orientationTag
-                            )
-                            orphanRun.markCommitted(slicePath)
-                            createdSplits++
+                        // Determine format / orientation tag
+                        val orientationTag = when (orientationChoice) {
+                            "LANDSCAPE" -> "orientation_landscape"
+                            "PORTRAIT" -> "orientation_portrait"
+                            else -> if (isLandscapeFormat) "orientation_landscape" else "orientation_portrait"
                         }
-                        importedCount += createdSplits
-                        if (createdSplits > 0) {
-                            // The original multi-page PDF is no longer referenced by
-                            // any row once at least one standalone slice exists and
-                            // the split completed for the pages we keep.
-                            runCatching { File(path!!).delete() }
-                            path?.let { orphanRun.markCommitted(it) }
+
+                        if (type == "pdf" && pageCount > 1 && importAsSeparatePages) {
+                            // Option A: Split into Separate Note Pages.
+                            // Phase 202 (bug batch): every split page used to reference
+                            // the SAME full multi-page PDF, and since the page row has no
+                            // per-source-index column, EVERY created page rendered slice
+                            // 0 in the editor ("Page 3" showed PDF page 1). Each page now
+                            // gets its OWN rasterized slice persisted in imports/ — a
+                            // correct standalone page with no DB schema change — and the
+                            // shared source PDF is removed once every page committed
+                            // (deleting one split page can also no longer delete the file
+                            // under its siblings).
+                            val baseTitle = fileName.substringBeforeLast('.')
+                            val splitCount = minOf(pageCount, ImportExportService.PDF_SPLIT_MAX_PAGES)
+                            var createdSplits = 0
+                            var renderFailed = false
+                            var lockRejected = false
+                            for (i in 0 until splitCount) {
+                                val slicePath = withContext(Dispatchers.IO) {
+                                    ImportExportService.renderPdfPageToPngFile(context, path!!, i, baseTitle)
+                                }
+                                if (slicePath == null) {
+                                    renderFailed = true
+                                    break
+                                }
+                                // Phase 202 review-fix: orientation derives from EACH
+                                // slice's real dimensions — the page-0 probe tagged every
+                                // slice identically wrong on mixed-orientation PDFs.
+                                val sliceTag = when (orientationChoice) {
+                                    "LANDSCAPE" -> "orientation_landscape"
+                                    "PORTRAIT" -> "orientation_portrait"
+                                    else -> {
+                                        val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                                        android.graphics.BitmapFactory.decodeFile(slicePath, bounds)
+                                        if (bounds.outWidth > bounds.outHeight) "orientation_landscape" else "orientation_portrait"
+                                    }
+                                }
+                                // B2-UI-6: track each slice until its page row commits.
+                                orphanRun.trackPersisted(slicePath)
+                                // Phase 202 review-fix: addPage is FIRE-AND-FORGET — the old
+                                // flow marked the slice committed and counted it BEFORE any
+                                // row existed, so a lock-rejected or never-run create left an
+                                // unsweepable orphan PNG and inflated "Imported N page(s)".
+                                // Joining the returned Job makes the commit point honest;
+                                // a REAL create failure (non-lock) rethrows into this file's
+                                // guard below via join().
+                                var sliceCommitted = false
+                                val createJob = viewModel.addPage(
+                                    title = "$baseTitle - Page ${i + 1}",
+                                    sourceFilePath = slicePath,
+                                    sourceFileType = "image",
+                                    extractedText = if (i == 0) extractedText else "",
+                                    tags = sliceTag,
+                                    onCreated = { sliceCommitted = true }
+                                )
+                                createJob.join()
+                                if (!sliceCommitted) {
+                                    // writeGuardedAgainstLock rejected the row create
+                                    // (vault locked at entry or raced mid-create); every
+                                    // further slice would reject the same way.
+                                    lockRejected = true
+                                    break
+                                }
+                                orphanRun.markCommitted(slicePath)
+                                createdSplits++
+                            }
+                            importedCount += createdSplits
+                            val fullySplit = !renderFailed && !lockRejected && createdSplits == splitCount
+                            when {
+                                createdSplits == 0 -> {
+                                    // Nothing was created (every render failed / lock won
+                                    // the race before slice 1): the tracked slices AND the
+                                    // still-unreferenced source PDF are swept.
+                                    orphanRun.sweepOrphans()
+                                }
+                                else -> {
+                                    if (fullySplit) {
+                                        // The original multi-page PDF is referenced by no row —
+                                        // consume it so backups stop packing dead bytes.
+                                        runCatching { File(path!!).delete() }
+                                    }
+                                    // Deleted (fully consumed) or deliberately KEPT after a
+                                    // partial split — keeping it lets the user re-import to
+                                    // recover pages a failed render/lock skipped, instead of
+                                    // destroying the document (phase-202 review-fix).
+                                    path?.let { orphanRun.markCommitted(it) }
+                                    // Drop only slices whose page row never committed (the
+                                    // lock-rejection above); committed slices are protected.
+                                    orphanRun.sweepOrphans()
+                                }
+                            }
+                            if (renderFailed) {
+                                viewModel.showSnackbar(UiFailureTextPolicy.IMPORT_PDF_UNREADABLE_TEXT, isLong = true)
+                            }
+                            if (lockRejected) {
+                                viewModel.showSnackbar(UiFailureTextPolicy.IMPORT_LOCKED_TEXT, isLong = true)
+                            }
+                            if (fullySplit && pageCount > splitCount) {
+                                viewModel.showSnackbar(
+                                    context.getString(
+                                        com.authorss81.noteflow.R.string.import_pdf_split_truncated,
+                                        splitCount,
+                                        pageCount
+                                    ),
+                                    isLong = true
+                                )
+                            }
                         } else {
-                            // Nothing was created (every render failed): the tracked
-                            // source PDF would linger unreferenced — sweep it now so
-                            // a normal-path failure leaves no orphan behind either.
-                            orphanRun.sweepOrphans()
-                        }
-                        if (renderFailed) {
-                            viewModel.showSnackbar(UiFailureTextPolicy.IMPORT_PDF_UNREADABLE_TEXT, isLong = true)
-                        }
-                        if (pageCount > splitCount) {
-                            viewModel.showSnackbar(
-                                "Imported the first $splitCount of $pageCount PDF pages.",
-                                isLong = true
+                            // Option B: Continuous Infinite Canvas (single entry displaying infinite canvas)
+                            viewModel.addPage(
+                                title = fileName,
+                                sourceFilePath = path,
+                                sourceFileType = type,
+                                extractedText = extractedText,
+                                tags = orientationTag,
+                                onCreated = if (isSingleImport) onOpenPage else null
                             )
+                            importedCount++
                         }
-                    } else {
-                        // Option B: Continuous Infinite Canvas (single entry displaying infinite canvas)
-                        viewModel.addPage(
-                            title = fileName,
-                            sourceFilePath = path,
-                            sourceFileType = type,
-                            extractedText = extractedText,
-                            tags = orientationTag,
-                            onCreated = if (isSingleImport) onOpenPage else null
-                        )
-                        importedCount++
+                        // B2-UI-6 (phase-96): every page-create for this file has been
+                        // issued — from here on the artifact is referenced by a page row
+                        // and must never be swept.
+                        path?.let { orphanRun.markCommitted(it) }
                     }
-                    // B2-UI-6 (phase-96): every page-create for this file has been
-                    // issued — from here on the artifact is referenced by a page row
-                    // and must never be swept.
-                    path?.let { orphanRun.markCommitted(it) }
-                }
-                } catch (e: ImportExportService.PdfImportException) {
-                    // Phase 202 (bug batch): a corrupt/encrypted PDF no longer
-                    // degrades into a silent blank template-only page — the count
-                    // read throws, the persisted artifact is swept, and a FIXED
-                    // (never raw-message) skip notice is shown.
-                    orphanRun.sweepOrphans()
-                    viewModel.showSnackbar(UiFailureTextPolicy.importSkippedMessage(e), isLong = true)
-                } catch (e: kotlinx.coroutines.CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    // Phase 202 (bug batch): classify through the fixed-text policy;
-                    // e.message may carry vault paths and never reaches the UI.
-                    orphanRun.sweepOrphans()
-                    viewModel.showSnackbar(UiFailureTextPolicy.importSkippedMessage(e), isLong = true)
-                }
+                    } catch (e: ImportExportService.PdfImportException) {
+                        // Phase 202 (bug batch): a corrupt/encrypted PDF no longer
+                        // degrades into a silent blank template-only page — the count
+                        // read throws, the persisted artifact is swept, and a FIXED
+                        // (never raw-message) skip notice is shown.
+                        orphanRun.sweepOrphans()
+                        viewModel.showSnackbar(UiFailureTextPolicy.importSkippedMessage(e), isLong = true)
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        // Phase 202 (bug batch): classify through the fixed-text policy;
+                        // e.message may carry vault paths and never reaches the UI.
+                        orphanRun.sweepOrphans()
+                        viewModel.showSnackbar(UiFailureTextPolicy.importSkippedMessage(e), isLong = true)
+                    }
 
                 if (importedCount > 0) {
                     viewModel.showSnackbar("Imported $importedCount page(s)")
