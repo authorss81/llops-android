@@ -47,6 +47,7 @@ import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.LocalViewConfiguration
@@ -731,6 +732,22 @@ fun AnnotationCanvas(
     }
     val isDarkPaper = remember(parsedPaperColor) {
         (0.299f * parsedPaperColor.red + 0.587f * parsedPaperColor.green + 0.114f * parsedPaperColor.blue) < 0.5f
+    }
+
+    // Phase 200 (PERF 3.3): premium paper feel. A tileable noise tile is
+    // generated once per process per paper family and drawn as a single
+    // REPEAT-tiled BitmapShader round-rect over the flat paper fill (strictly
+    // UNDER the ink pass). Low-end devices skip the grain entirely — it is a
+    // cosmetic overlay, and skipping it keeps their draw path unchanged.
+    val grainContext = LocalContext.current
+    val paperGrainEnabled = remember(grainContext) {
+        com.authorss81.noteflow.services.PaperGrainPolicy.enabled(
+            com.authorss81.noteflow.utils.DeviceCompatibilityManager.detectDeviceTier(grainContext) ==
+                com.authorss81.noteflow.utils.DeviceTier.LOW_END
+        )
+    }
+    val paperGrainBrush = remember(paperGrainEnabled, isDarkPaper) {
+        PaperGrainTileCache.brushFor(isDarkPaper, paperGrainEnabled)
     }
 
     // R2-b2b4-DOS-02 (phase-150): the reusable layer rasters live in a BOUNDED
@@ -1844,7 +1861,7 @@ fun AnnotationCanvas(
 
                 if (!isContinuousMode) {
                     // Single Page Canvas
-                    drawPaperCard(0f, 0f, size.width, size.height, paperColor = parsedPaperColor, isDarkPaper = isDarkPaper)
+                    drawPaperCard(0f, 0f, size.width, size.height, paperColor = parsedPaperColor, isDarkPaper = isDarkPaper, grainBrush = paperGrainBrush)
                     drawPaperTemplate(template, 0f, 0f, size.width, size.height, isDarkPaper = isDarkPaper, paperTexture = paperTexture)
 
                     val bg = pdfPageBitmaps[pdfPageFilter] ?: backgroundImage
@@ -1916,7 +1933,7 @@ fun AnnotationCanvas(
                     // Continuous Infinite Canvas (Seamless, without page division gaps)
                     val (canvasW, infiniteH) = computeCanvasWorld(size.width)
 
-                    drawPaperCard(0f, 0f, canvasW, infiniteH, paperColor = parsedPaperColor, isDarkPaper = isDarkPaper, pageLabel = null)
+                    drawPaperCard(0f, 0f, canvasW, infiniteH, paperColor = parsedPaperColor, isDarkPaper = isDarkPaper, pageLabel = null, grainBrush = paperGrainBrush)
                     drawPaperTemplate(template, 0f, 0f, canvasW, infiniteH, isDarkPaper = isDarkPaper, paperTexture = paperTexture)
 
                     // Phase 178: reference-image underlay (seamless world coords).
@@ -2011,7 +2028,7 @@ fun AnnotationCanvas(
                         val pageTopY = pageIdx * (pageHeightPx + pageGapPx)
 
                         // 1. Differentiated Page Paper Container with Card Shadow & Page Badge
-                        drawPaperCard(0f, pageTopY, canvasW, pageHeightPx, paperColor = parsedPaperColor, isDarkPaper = isDarkPaper, pageLabel = "Page ${pageIdx + 1}", showPageLabel = showPageIndicator)
+                        drawPaperCard(0f, pageTopY, canvasW, pageHeightPx, paperColor = parsedPaperColor, isDarkPaper = isDarkPaper, pageLabel = "Page ${pageIdx + 1}", showPageLabel = showPageIndicator, grainBrush = paperGrainBrush)
                         drawPaperTemplate(template, 0f, pageTopY, canvasW, pageHeightPx, isDarkPaper = isDarkPaper, paperTexture = paperTexture)
 
                         // 2. Render Page Bitmap (if in window)
@@ -2853,12 +2870,37 @@ private fun LiveStrokePreview(
             if (cursorPos != null) {
                 if (eraserMode == com.authorss81.noteflow.services.EraserMode.PARTIAL) {
                     val previewR = com.authorss81.noteflow.services.EraserGeometryPolicy.previewRadius(currentWidth, currentWidth)
-                    drawCircle(currentColor.copy(alpha = 0.22f), radius = previewR, center = cursorPos)
+                    // Phase 200 (PERF 3.5): AA parity with ink. The flat fill
+                    // becomes a radial gradient whose falloff is SAMPLED from
+                    // EraserGeometryPolicy.cursorFillAlphaAt — the exact
+                    // BrushColorModeMath.edgeFeather(hardness=1) curve the wet
+                    // shader uses — so the cursor edge has the same guaranteed
+                    // >=1.5px penumbra as real ink instead of a hard aliased
+                    // rim. Linear interpolation between the sampled stops
+                    // approximates the hermite to sub-1% alpha error.
+                    val fillColor =
+                        currentColor.copy(alpha = com.authorss81.noteflow.services.EraserGeometryPolicy.CURSOR_FILL_ALPHA)
+                    val stops = ArrayList<Pair<Float, Color>>(com.authorss81.noteflow.services.EraserGeometryPolicy.CURSOR_FEATHER_STOP_COUNT + 1)
+                    val n = com.authorss81.noteflow.services.EraserGeometryPolicy.CURSOR_FEATHER_STOP_COUNT
+                    for (i in 0..n) {
+                        val nd = i.toFloat() / n
+                        val a = com.authorss81.noteflow.services.EraserGeometryPolicy.cursorFillAlphaAt(nd, previewR)
+                        stops.add(nd to fillColor.copy(alpha = fillColor.alpha * a))
+                    }
                     drawCircle(
-                        currentColor.copy(alpha = 0.6f),
+                        brush = Brush.radialGradient(
+                            colorStops = stops.toTypedArray(),
+                            center = cursorPos,
+                            radius = previewR
+                        ),
+                        radius = previewR,
+                        center = cursorPos
+                    )
+                    drawCircle(
+                        currentColor.copy(alpha = com.authorss81.noteflow.services.EraserGeometryPolicy.CURSOR_RING_ALPHA),
                         radius = previewR,
                         center = cursorPos,
-                        style = DrawStrokeStyle(width = 2f)
+                        style = DrawStrokeStyle(width = com.authorss81.noteflow.services.EraserGeometryPolicy.CURSOR_RING_WIDTH_PX)
                     )
                 } else {
                     val axisCenter = symmetryCenterResolver(size.width, cursorPos.y)
@@ -3088,7 +3130,8 @@ private fun DrawScope.drawPaperCard(
     paperColor: Color = Color.White,
     isDarkPaper: Boolean = false,
     pageLabel: String? = null,
-    showPageLabel: Boolean = true
+    showPageLabel: Boolean = true,
+    grainBrush: Brush? = null
 ) {
     val borderColor = if (isDarkPaper) Color(0xFF475569) else Color.LightGray.copy(alpha = 0.6f)
 
@@ -3099,6 +3142,17 @@ private fun DrawScope.drawPaperCard(
         size = Size(width, height),
         cornerRadius = CornerRadius(8f, 8f)
     )
+    // Phase 200 (PERF 3.3): tileable paper-grain noise, REPEAT-tiled by a
+    // cached BitmapShader — ONE textured quad per page card, drawn over the
+    // flat tint and strictly UNDER everything else (template/background/ink).
+    if (grainBrush != null) {
+        drawRoundRect(
+            brush = grainBrush,
+            topLeft = Offset(x, y),
+            size = Size(width, height),
+            cornerRadius = CornerRadius(8f, 8f)
+        )
+    }
     // Page Border Line
     drawRoundRect(
         color = borderColor,

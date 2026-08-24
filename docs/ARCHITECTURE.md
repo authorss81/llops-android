@@ -280,6 +280,27 @@
 > `Phase193ResizeHandleVisibilityTest` (10, pure JVM + source pins). No schema
 > change, no new deps.
 
+> **Implemented in phase-200** (2026-08-24, linear wet-mix + paper grain +
+> eraser AA parity — PERF 3.2+3.3+3.5, see `workspace/phase-200/REPORT.md`):
+> (1) `services/WetMixingMath.kt` mixes pigment in LINEAR light via a
+> `ColorSpace` param defaulting to `ColorSpaces.LinearSrgb`
+> (`srgbToLinear`/`linearToSrgb` piecewise EOTF; `ColorSpaces.Srgb` = legacy
+> parity, unknown spaces fail safe to linear) and `AgslShaders.WET_MIXING_SHADER`
+> mirrors it exactly (`srgbToLinear3`/`linearToSrgb3` around the pigment branch
+> only — alpha math untouched); (2) `services/PaperGrainPolicy.kt` (pure JVM,
+> deterministic TILE-modulo tileable noise + alpha envelope + low-end gate) +
+> static `ui/components/PaperGrainTileCache.kt` (once-per-process tiles +
+> REPEAT `BitmapShader` brushes) draw ONE textured round-rect over the paper
+> fill at every `drawPaperCard` call site, strictly UNDER the ink pass
+> (LOW_END devices skip); (3) `EraserGeometryPolicy.cursorFillAlphaAt` =
+> exact `BrushColorModeMath.edgeFeather` at hardness 1 — the PARTIAL eraser
+> aim cursor fills through a 13-stop radial gradient sampled from it, giving
+> the cursor the same >=1.5px AA penumbra as ink. Tests: `WetMixingMathTest`
+> (10), `PaperGrainPolicyTest` (9), `Phase200EraserCursorAAParityTest` (7),
+> `Phase200CanvasRenderParityTest` (10 source pins). DoD visual:
+> `workspace/phase-200/before-after.png` (rendered from the real compiled
+> policy classes; no emulator on CI). No schema change, no new deps.
+
 > **Implemented in phase-198** (2026-08-24, live-stroke invalidation isolation +
 > O(visible) culling — PERF 2.1+2.5, see `workspace/phase-198/REPORT.md`): pen samples
 > no longer re-run the whole canvas draw pass. The live ink + eraser aim cursor render

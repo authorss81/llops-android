@@ -73,6 +73,24 @@ object AgslShaders {
             return length(pa - ba * h);
         }
 
+        // Phase 200 (PERF 3.2): standard piecewise sRGB transfer functions so the
+        // pigment mixing below happens in LINEAR light — mirrors exactly
+        // WetMixingMath.srgbToLinear / linearToSrgb / channelToMixSpace /
+        // channelFromMixSpace (ColorSpaces.LinearSrgb). Mixing gamma-encoded
+        // sRGB directly collapsed bright complementary washes into muddy dark
+        // browns; linear-light absorbance keeps equal-energy mixes luminous.
+        half3 srgbToLinear3(half3 c) {
+            half3 lo = c / 12.92;
+            half3 hi = pow((c + 0.055) / 1.055, half3(2.4));
+            return mix(lo, hi, step(half3(0.04045), c));
+        }
+
+        half3 linearToSrgb3(half3 c) {
+            half3 lo = c * 12.92;
+            half3 hi = pow(c, half3(1.0 / 2.4)) * 1.055 - 0.055;
+            return mix(lo, hi, step(half3(0.0031308), c));
+        }
+
         half4 main(float2 coord) {
             float dist = distToSegment(coord, uPrevPos, uBrushPos);
             
@@ -171,7 +189,11 @@ object AgslShaders {
             // Pigment-space (subtractive) mixing: absorbances multiply
             // (1-(1-base)(1-brush)) per channel instead of a linear-RGB lerp,
             // which keeps overlapping complementary colors clean instead of muddy.
-            // Mirrors WetMixingMath.pigmentMix / pigmentMixRgb.
+            // Phase 200: the absorbance product is evaluated in LINEAR LIGHT — the
+            // sRGB-encoded inputs are linearized first and the mixed result is
+            // re-encoded back to sRGB for write-back. This is the physically
+            // correct Beer–Lambert model and keeps equal-energy mixes luminous.
+            // Mirrors WetMixingMath.pigmentMix / pigmentMixRgb(…, LinearSrgb).
             float pigmentFactor;
             if (uBrushStyle == 8.0) {
                 // GOUACHE: near-100% pigment coverage, matte flat coat.
@@ -179,12 +201,15 @@ object AgslShaders {
             } else {
                 pigmentFactor = clamp(uPigmentLoad * falloff * uMixStrength * granulation * styleCoverage, 0.0, 1.0);
             }
-            half3 mixedRgb;
+            half3 linBase = srgbToLinear3(base.rgb);
+            half3 linBrush = srgbToLinear3(vibBrushColor);
+            half3 mixedLin;
             if (base.a > 0.0) {
-                mixedRgb = base.rgb + (1.0 - (1.0 - base.rgb) * (1.0 - vibBrushColor) - base.rgb) * pigmentFactor;
+                mixedLin = linBase + (1.0 - (1.0 - linBase) * (1.0 - linBrush) - linBase) * pigmentFactor;
             } else {
-                mixedRgb = vibBrushColor;
+                mixedLin = linBrush;
             }
+            half3 mixedRgb = linearToSrgb3(mixedLin);
 
             // Impasto: Thick paint 3D relief with bristle lines and lighting
             if (uImpasto > 0.0) {

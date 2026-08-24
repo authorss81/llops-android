@@ -77,4 +77,52 @@ object EraserGeometryPolicy {
      */
     fun legacyRadius(strokeWidth: Float, extraRadius: Float): Float =
         max(strokeWidth + extraRadius, 1f)
+
+    // ---- Phase 200 (PERF 3.5): aim-cursor AA parity ------------------------
+    //
+    // The pre-200 PARTIAL aim cursor was a hard-edged flat fill + crisp ring,
+    // visually harsher than every ink stroke (whose falloff is the AGSL
+    // feather band). The cursor now renders through the SAME guaranteed-AA
+    // rule as ink: a penumbra at least [BrushColorModeMath.MIN_FEATHER_PX]
+    // pixels wide, capped at half the radius, sampled from
+    // [BrushColorModeMath.edgeFeather] at hardness 1.0 (a precise aim disk —
+    // but never aliasing into a sub-pixel ring at small radii).
+
+    /** Flat fill alpha of the aim disk (unchanged from the pre-200 look). */
+    const val CURSOR_FILL_ALPHA = 0.22f
+
+    /** Alpha of the crisp guide ring drawn over the soft fill. */
+    const val CURSOR_RING_ALPHA = 0.6f
+
+    /** Guide ring width in px. */
+    const val CURSOR_RING_WIDTH_PX = 2f
+
+    /**
+     * Radial-gradient stops sampled across the penumbra when rendering the
+     * soft fill — enough to approximate the hermite falloff to sub-1% alpha
+     * error while staying a single small allocation per cursor draw.
+     */
+    const val CURSOR_FEATHER_STOP_COUNT = 12
+
+    /**
+     * Penumbra width of the aim disk: exactly the ink falloff band rule
+     * (`min(MIN_FEATHER_PX, radius/2)`), so small radii still keep a real
+     * anti-aliased edge instead of a sub-pixel ring.
+     */
+    fun cursorFeatherBand(radiusPx: Float): Float =
+        min(
+            BrushColorModeMath.MIN_FEATHER_PX,
+            radiusPx.coerceAtLeast(1f) * 0.5f
+        )
+
+    /**
+     * Fill alpha multiplier of the aim disk at normalized distance [nd]
+     * (0 = center, 1 = rim) for a disk of [radiusPx] — EXACTLY
+     * [BrushColorModeMath.edgeFeather] at hardness 1.0, i.e. the same edge
+     * quality the wet-brush ink path draws with. Monotonic non-increasing:
+     * 1.0 inside the band, smooth hermite falloff across the penumbra, 0 at
+     * and beyond the rim.
+     */
+    fun cursorFillAlphaAt(nd: Float, radiusPx: Float): Float =
+        BrushColorModeMath.edgeFeather(nd, 1f, radiusPx)
 }
