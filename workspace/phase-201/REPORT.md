@@ -177,3 +177,39 @@ pre-existing behavior preserved; nothing degrades silently.
 - `gradle :app:assembleDebug`: green (only pre-existing deprecation warnings).
 - Targeted phase-201 set (6 classes incl. `B2Dos09RdpRecursionTest` RDP parity):
   green.
+
+## 8. Review fixes (2026-08-24)
+
+The post-commit review confirmed §4's Paint finding but found the NEW carrier
+still could not produce visible wet mixing, plus two lower-severity issues:
+
+1. **HIGH — uniform/coordinate-space mismatch (wet mixing silently invisible).**
+   A RenderNode-carried RenderEffect evaluates the AGSL shader in NODE-LOCAL
+   coordinates (the space `beginRecording` + `translate(-origin)` create), but
+   `WetMixingEffect.update()` was fed raw page/canvas coords. For every pixel,
+   `distToSegment(coord, uPrevPos, uBrushPos) > uBrushRadius`, so the shader
+   early-outed via `contents.eval(coord)` and output degraded to plain strokes.
+   Fix: the positional uniforms are now rebased onto the node origin — one
+   shared `(nodeOriginX, nodeOriginY)` pair (`candidate.left/top.toInt()`) is
+   used by BOTH the uniform rebase (`prevX - nodeOriginX`,
+   `brushY - nodeOriginY`, …) and the recording translate / `setPosition`.
+2. **MEDIUM — dirty rect mixed coordinate spaces (GPU path dead on pages ≥ 2).**
+   The segment rect was built from PAGE-LOCAL brush coords then intersected with
+   canvas-space `pageBounds = RectF(0, offsetY, …)`; on every page past the
+   first the intersection degenerated → `dirty = null` → silent plain-paint
+   fallback. Fix: segment coords are converted to CANVAS space (`+ offsetY` on
+   Y) before building/intersecting the rect.
+3. **LOW — shared-carrier exclusivity.** `Canvas.drawRenderNode` stores a live
+   reference to the single reusable RenderNode; a second wet pass in one frame
+   would retroactively rewrite an earlier composite. An explicit
+   `gpuWetCarrierClaimed` guard now reserves the carrier for exactly one pass
+   per frame (today only the preview-host layer can reach it — belt-and-braces).
+4. **LOW — dead tier API removed.** `ShaderCapabilityHelper.renderEffectCompositingSupported/renderEffectCompositingFor`
+   had zero production consumers; deleted (31-32 fall back because AGSL itself
+   requires 33). Anti-resurrection source pin added.
+
+New pins: `Phase201StrokeInputPipelineTest.wet GPU pass keeps dirty rect…` and
+`.no unconsumed tier functions…`. Verification: targeted phase-201 classes +
+`gradle :app:assembleDebug` green after the fixes; full-suite numbers unchanged
+(§7 set is pre-existing/environmental). On-device `dumpsys gfxinfo` confirmation
+of the NOW-coordinate-correct shader remains owed to the next device session.

@@ -431,6 +431,24 @@
 > `StrokePersistenceRoundTripTest`. 2700 tests / 4 failures all reproduced on a
 > clean stash; `assembleDebug` green. dumpsys gfxinfo runtime check documented in
 > REPORT §4.3 (needs a device). No schema change, no new deps.
+>
+> **Review fixes (2026-08-24):** the review found the NEW GPU carrier still could
+> not produce wet mixing: (a) HIGH — a RenderNode-carried RenderEffect evaluates
+> AGSL in NODE-LOCAL coordinates while `drawWetLayerPass` fed it raw page/canvas
+> uniforms, so `distToSegment(coord, uPrevPos, uBrushPos)` exceeded `uBrushRadius`
+> everywhere and the shader early-outed to a plain `contents.eval()` pass-through;
+> fixed by rebasing the positional uniforms onto the node origin
+> (`nodeOriginX/Y` in `AnnotationCanvas.kt`, shared by `update()` and the
+> recording translate). (b) MEDIUM — the dirty rect mixed PAGE-LOCAL segment
+> coords with the canvas-space `pageBounds`, degenerating on every page past the
+> first (GPU path silently off there); the rect is now built with `+offsetY`.
+> (c) LOW — exactly one wet pass per frame may claim the shared carrier RenderNode
+> (`gpuWetCarrierClaimed` guard). (d) LOW — dead `ShaderCapabilityHelper.
+> renderEffectCompositingSupported/renderEffectCompositingFor` deleted (zero
+> consumers; anti-resurrection pin in `Phase201StrokeInputPipelineTest`). The tier
+> table is now `agslSupportedFor` only (33+); 31-32 keep the vector fallback by
+> virtue of the AGSL gate itself. Runtime gfxinfo verification STILL owed to a
+> device session.
 
 ## Core subsystem anchors (file:line)
 

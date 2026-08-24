@@ -95,16 +95,23 @@ class Phase201StrokeInputPipelineTest {
     }
 
     @Test
-    fun `renderEffect compositing tier is exactly API 31+ with the AGSL-only caveat below 33`() {
-        for (sdk in 26..30) {
-            assertFalse("API $sdk has no RenderEffect compositing", ShaderCapabilityHelper.renderEffectCompositingFor(sdk))
-        }
-        for (sdk in 31..36) {
-            assertTrue("API $sdk composites RenderEffects via RenderNode", ShaderCapabilityHelper.renderEffectCompositingFor(sdk))
-        }
-        // The wet-mix shader itself still requires AGSL: on 31-32 the canvas
-        // falls back to WetBrushEngine's vector path even though RenderEffect exists.
-        for (sdk in 31..32) {
+    fun `no unconsumed tier functions - the removed 31+ RenderEffect-compositing fn stays gone`() {
+        // Phase-201 review fix (LOW): ShaderCapabilityHelper.renderEffectCompositing*
+        // had zero production callers — nothing routes a 31-32 decision through it
+        // (31-32 fall to the vector path because AGSL itself requires 33). Deleted;
+        // this pin keeps it from coming back without a real consumer.
+        val source = readSource("ui/components/ShaderCapabilityHelper.kt")
+        assertFalse(
+            "the dead 31+ compositing tier API must not return without a consumer",
+            source.contains("renderEffectCompositing")
+        )
+        assertTrue(
+            "the helper must still own the single AGSL tier table",
+            source.contains("fun agslSupportedFor(sdkInt: Int)")
+        )
+        // The wet-mix shader itself still requires AGSL: on 26-32 the canvas
+        // falls back to WetBrushEngine's vector/software paths.
+        for (sdk in 26..32) {
             assertFalse(ShaderCapabilityHelper.agslSupportedFor(sdk))
         }
     }
@@ -161,6 +168,30 @@ class Phase201StrokeInputPipelineTest {
             "exactly one simplify call site",
             1,
             Regex("""RamerDouglasPeucker\.simplify\(""").findAll(canvasSource).count()
+        )
+    }
+
+    @Test
+    fun `wet GPU pass keeps dirty rect, shader uniforms and node recording in ONE coordinate space`() {
+        val canvasSource = readSource("ui/components/AnnotationCanvas.kt")
+        // MEDIUM fix: the dirty rect is built in CANVAS space (+ offsetY on Y),
+        // so it intersects pageBounds on every page, not just page 1.
+        assertTrue(canvasSource.contains("val brushY = brushPos.y + offsetY"))
+        assertTrue(canvasSource.contains("val segBaseY = (prevPos?.y ?: brushPos.y) + offsetY"))
+        // HIGH fix: positional uniforms are rebased into NODE-LOCAL space using
+        // the exact int origin the node records with.
+        assertTrue(canvasSource.contains("nodeOriginX = candidate.left.toInt()"))
+        assertTrue(canvasSource.contains("prevX = segBaseX - nodeOriginX"))
+        assertTrue(canvasSource.contains("brushX = brushX - nodeOriginX"))
+        assertTrue(canvasSource.contains("brushY = brushY - nodeOriginY"))
+        // The recording translate uses that same single-source origin.
+        assertTrue(canvasSource.contains("val left = nodeOriginX"))
+        assertTrue(canvasSource.contains("val top = nodeOriginY"))
+        // LOW fix: exactly one wet pass may claim the shared carrier per frame.
+        assertTrue(canvasSource.contains("var gpuWetCarrierClaimed = false"))
+        assertTrue(
+            Regex("""useAgslWetMixing && graphicsLayer != null && wetBrushEngine != null && !gpuWetCarrierClaimed""")
+                .containsMatchIn(canvasSource)
         )
     }
 

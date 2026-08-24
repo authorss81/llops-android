@@ -3654,6 +3654,15 @@ private fun DrawScope.drawCompositedLayersStrokes(
         if (lid != null && lid in layerIds) lid else firstLayerId
     }
 
+    // Phase-201 REVIEW FIX (LOW): the wet carrier RenderNode is a SINGLE reusable
+    // instance (AgslShaders.WetMixingEffect.renderNode), and Canvas.drawRenderNode
+    // stores a live REFERENCE to it — recording into the node again would
+    // retroactively rewrite any earlier composite of the same node in this frame.
+    // Only one wet pass per frame may claim it; every other layer takes the plain
+    // path. (Today only the preview-host layer can even reach the pass, so this
+    // is an explicit guard, not a behavior change.)
+    var gpuWetCarrierClaimed = false
+
     for (layer in sortedLayers) {
         if (!layer.visible) continue
 
@@ -3682,7 +3691,8 @@ private fun DrawScope.drawCompositedLayersStrokes(
                 isWetLayer &&
                 isPreviewOnThisLayer
 
-        if (useAgslWetMixing && graphicsLayer != null && wetBrushEngine != null) {
+        if (useAgslWetMixing && graphicsLayer != null && wetBrushEngine != null && !gpuWetCarrierClaimed) {
+            gpuWetCarrierClaimed = true
             drawWetLayerPass(
                 layerStrokes = layerStrokes,
                 previewStroke = previewStroke,
@@ -3835,39 +3845,75 @@ private fun DrawScope.drawWetLayerPass(
         val brushPos = activePoints.lastOrNull() ?: activeStart
         val prevPos = if (activePoints.size >= 2) activePoints[activePoints.size - 2] else activeStart
 
-        var hasEffect = false
-        if (brushPos != null && isPreviewOnThisLayer) {
-            val preset = AgslShaders.PRESETS[currentTool] ?: AgslShaders.ToolPreset(0.5f, 0.5f, 0.5f, 0f, 0.5f)
-            
-            wetMixingEffect.update(
-                prevX = prevPos?.x ?: brushPos.x,
-                prevY = prevPos?.y ?: brushPos.y,
-                brushX = brushPos.x,
-                brushY = brushPos.y,
-                radius = currentWidth * 1.5f,
-                color = currentColor,
-                wetness = preset.wetness,
-                pigmentLoad = preset.pigmentLoad,
-                mixStrength = preset.mixStrength,
-                impasto = preset.impasto,
-                hardness = preset.hardness,
-                paperGrain = wetCanvasEngine.brushParams.paperGrain,
-                seed = com.authorss81.noteflow.services.BrushStrokeMath.strokeSeedFromId(
-                    previewStroke?.id ?: "preview"
-                ),
-                strokeSeed = liveStrokeSeed,
-                brushStyle = preset.brushStyle,
-                vibrancy = vibrancyBoost
-            )
-            hasEffect = true
-        }
-
         val nativeCanvas = drawContext.canvas.nativeCanvas
         val plainPaint = android.graphics.Paint().apply {
             isAntiAlias = true
             alpha = (layer.opacity * 255f).coerceIn(0f, 255f).toInt()
             applyLayerBlend(layer.blendMode)
         }
+        val pageBounds = android.graphics.RectF(0f, offsetY, pageWidth, offsetY + pageHeight)
+
+        // Phase-201 REVIEW FIXES (HIGH + MEDIUM coordinate spaces):
+        //  - MEDIUM: the dirty rect is built in CANVAS space now. Strokes are
+        //    drawn at (x, y + offsetY), but the old rect mixed PAGE-LOCAL segment
+        //    coords with the canvas-space pageBounds, so `intersect` degenerated
+        //    on every page past the first and silently disabled the GPU path
+        //    there.
+        //  - HIGH: a RenderNode-carried RenderEffect evaluates the AGSL shader in
+        //    NODE-LOCAL coordinates (the space the recording below creates via
+        //    translate(-origin)). Feeding it raw page/canvas coords made
+        //    distToSegment(coord, uPrevPos, uBrushPos) exceed uBrushRadius for
+        //    every pixel, so the shader early-outed to a plain contents.eval()
+        //    pass-through and wet mixing stayed silently invisible. The positional
+        //    uniforms are therefore re-expressed relative to the EXACT int origin
+        //    the node records with — one shared (nodeOriginX, nodeOriginY) pair
+        //    keeps uniforms and recording in the same space.
+        var hasEffect = false
+        var dirty: android.graphics.RectF? = null
+        var nodeOriginX = 0
+        var nodeOriginY = 0
+        if (brushPos != null && isPreviewOnThisLayer) {
+            val preset = AgslShaders.PRESETS[currentTool] ?: AgslShaders.ToolPreset(0.5f, 0.5f, 0.5f, 0f, 0.5f)
+
+            val brushX = brushPos.x
+            val brushY = brushPos.y + offsetY
+            val segBaseX = prevPos?.x ?: brushPos.x
+            val segBaseY = (prevPos?.y ?: brushPos.y) + offsetY
+            val pad = currentWidth * 1.5f + 8f
+            val candidate = android.graphics.RectF(
+                minOf(segBaseX, brushX) - pad,
+                minOf(segBaseY, brushY) - pad,
+                maxOf(segBaseX, brushX) + pad,
+                maxOf(segBaseY, brushY) + pad
+            )
+            if (candidate.intersect(pageBounds)) {
+                nodeOriginX = candidate.left.toInt()
+                nodeOriginY = candidate.top.toInt()
+                wetMixingEffect.update(
+                    prevX = segBaseX - nodeOriginX,
+                    prevY = segBaseY - nodeOriginY,
+                    brushX = brushX - nodeOriginX,
+                    brushY = brushY - nodeOriginY,
+                    radius = currentWidth * 1.5f,
+                    color = currentColor,
+                    wetness = preset.wetness,
+                    pigmentLoad = preset.pigmentLoad,
+                    mixStrength = preset.mixStrength,
+                    impasto = preset.impasto,
+                    hardness = preset.hardness,
+                    paperGrain = wetCanvasEngine.brushParams.paperGrain,
+                    seed = com.authorss81.noteflow.services.BrushStrokeMath.strokeSeedFromId(
+                        previewStroke?.id ?: "preview"
+                    ),
+                    strokeSeed = liveStrokeSeed,
+                    brushStyle = preset.brushStyle,
+                    vibrancy = vibrancyBoost
+                )
+                hasEffect = true
+                dirty = candidate
+            }
+        }
+
         // Phase 201 (PERF 2.7) — GPU carrier FIX. The pre-201 code attached the
         // RenderEffect through a reflective lookup on android.graphics.Paint, but
         // Paint has NO such method at ANY API level (verified against the API-36
@@ -3884,30 +3930,6 @@ private fun DrawScope.drawWetLayerPass(
             canvasDrawScope != null &&
             density != null &&
             layoutDirection != null
-
-        val pageBounds = android.graphics.RectF(0f, offsetY, pageWidth, offsetY + pageHeight)
-
-        // Dirty-rect scoping (phase-04 audit item 3): only re-run the AGSL effect
-        // over the rect the active brush segment can alter, so the offscreen layer
-        // drops from a full-page raster (~1.65M px) to the stroke area.
-        // Coordinate note: saveLayer keeps the canvas (absolute) coordinate space,
-        // so shader uniforms stay in page coordinates; the RenderNode is positioned
-        // at the dirty rect and its recording canvas is translated by -origin for
-        // the same reason.
-        val dirty = if (hasEffect && brushPos != null) {
-            val baseX = prevPos?.x ?: brushPos.x
-            val baseY = prevPos?.y ?: brushPos.y
-            val radius = currentWidth * 1.5f + 8f
-            val rect = android.graphics.RectF(
-                minOf(baseX, brushPos.x) - radius,
-                minOf(baseY, brushPos.y) - radius,
-                maxOf(baseX, brushPos.x) + radius,
-                maxOf(baseY, brushPos.y) + radius
-            )
-            if (rect.intersect(pageBounds)) rect else null
-        } else {
-            null
-        }
 
         fun drawStrokes() {
             for (stroke in layerStrokes) {
@@ -3929,8 +3951,10 @@ private fun DrawScope.drawWetLayerPass(
             }
         } else {
             val node = wetMixingEffect.renderNode
-            val left = dirty.left.toInt()
-            val top = dirty.top.toInt()
+            // Same int origin the uniforms were rebased to above — single source
+            // of truth so shader coords and recorded pixels stay aligned.
+            val left = nodeOriginX
+            val top = nodeOriginY
             val right = kotlin.math.ceil(dirty.right).toInt().coerceAtLeast(left + 1)
             val bottom = kotlin.math.ceil(dirty.bottom).toInt().coerceAtLeast(top + 1)
 
