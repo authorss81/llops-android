@@ -280,6 +280,23 @@
 > `Phase193ResizeHandleVisibilityTest` (10, pure JVM + source pins). No schema
 > change, no new deps.
 
+> **Implemented in phase-196** (2026-08-24, stylus motion prediction — PERF 1.1, see
+> `workspace/phase-196/REPORT.md`): the ink canvas now records every raw `MotionEvent`
+> with `androidx.input:input-motionprediction:1.0.0` (`MotionEventPredictor.newInstance`,
+> API-29-gated by pure-JVM `services/MotionPredictionPolicy.kt`, try/catch fail-closed ⇒
+> pre-196 stabilizer-only behavior below 29) inside the EXISTING passive
+> `pointerInteropFilter` (still returns false; pressure/tilt/timestamp bridge untouched),
+> and predicts ONCE PER RENDERED FRAME via a Compose frame-clock loop while a freehand
+> stroke is live. The predicted sample is a temporary TAIL of `activePoints`, drawn through
+> the unchanged preview paths and mapped window→world via an `onGloballyPositioned`
+> box-offset capture + drag-path-identical page clamps (`predictedWorldPoint`). Reconcile:
+> `PredictedTailTracker.stripFrom()` at exactly 4 hops incl. BEFORE commit — committed
+> geometry never contains predicted points. Bookkeeping is deliberately NON-snapshot state;
+> zero composition-phase reads added (no whole-canvas recomposition regression). Dep pinned
+> in both Gradle catalogs + sha256-pinned in `verification-metadata.xml` (signing key not
+> downloadable); 32 KB Java-only AAR, no natives/perms — base-APK rule intact. Tests:
+> `Phase196MotionPredictionTest` (16).
+
 > **Implemented in phase-194** (2026-08-20, Undo/Redo dim + Canvas & Paper Options
 > sheet clipping, see `workspace/phase-194/REPORT.md`): the canvas Undo/Redo
 > buttons are no longer perpetually bright — on BOTH ink bars

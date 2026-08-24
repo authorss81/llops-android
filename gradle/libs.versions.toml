@@ -51,6 +51,12 @@ junit = "4.13.2"
 # deliberately pinned over 1.x: the 1.x line is built on Kotlin 2.2 metadata that
 # this project's pinned Kotlin 2.0.21 cannot read.
 highlights = "0.9.3"
+# Phase 196: OS-level stylus/touch motion prediction (androidx.input).
+# input-motionprediction 1.0.0 is the stable release; it is plain-Java AndroidX
+# (no Kotlin metadata, no native code, ~tens of KB of dex), so it does NOT trip
+# the base-APK heavy-dep rule (ML Kit / MediaPipe class) and is safe with the
+# pinned Kotlin 2.0.21 toolchain.
+motionPrediction = "1.0.0"
 
 [libraries]
 androidx-ink-authoring = { group = "androidx.ink", name = "ink-authoring", version.ref = "ink" }
@@ -100,6 +106,11 @@ jsoup = { group = "org.jsoup", name = "jsoup", version.ref = "jsoup" }
 # fenced code blocks in the markdown renderers. Apache-2.0, no native code,
 # no transitive deps beyond kotlin-stdlib — CI-testable and base-APK-lean.
 highlights = { group = "dev.snipme", name = "highlights", version.ref = "highlights" }
+
+# Phase 196: stylus motion prediction (androidx.input:input-motionprediction).
+# Pure-Java AndroidX, no native libs, no permissions — a latency feature for the
+# ink canvas, not a heavy downloadable-plugin-class dependency.
+androidx-input-motionprediction = { group = "androidx.input", name = "input-motionprediction", version.ref = "motionPrediction" }
 
 # Phase 29: downloadable LLM plugin module — explicit coroutines dependency (the
 # base app gets it transitively via lifecycle; the plugin module declares it).

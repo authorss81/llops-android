@@ -45,7 +45,10 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke as DrawStrokeStyle
 import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
@@ -518,6 +521,122 @@ fun AnnotationCanvas(
         }
     }
 
+    // ---------------------------------------------------------------------
+    // Phase 196: OS-level stylus motion prediction (PERF 1.1).
+    //
+    // The ink path only draws when a real input event lands, so on devices
+    // whose digitizer reports slower than the display refreshes (60 Hz finger
+    // on a 120 Hz panel; BT styluses that batch samples) the live stroke
+    // freezes for a frame — perceived pen lag. `MotionEventPredictor`
+    // extrapolates the next sample from the recorded raw MotionEvents; the
+    // extrapolated point is drawn as a temporary TAIL of `activePoints` so the
+    // EXISTING preview path renders it (no new render pipeline), and is
+    // stripped again before each real sample lands / before commit, so stored
+    // stroke geometry never contains predicted points.
+    //
+    // Wiring:
+    //   record() — inside the passive pointerInteropFilter below, for EVERY
+    //              event (documented usage); it consumes nothing and the
+    //              pressure/tilt/timestamp bridge above it is untouched.
+    //   predict() — once per rendered frame while a freehand stroke is live
+    //               (Compose frame clock loop below), which is exactly the
+    //               empty-frame case prediction exists to fill.
+    //   reconcile — PredictedTailTracker.stripFrom() at the top of onDrag,
+    //               before the commit in onDragEnd, and alongside every
+    //               activePoints.clear().
+    //
+    // Gate: API >= 29 AND newInstance success; otherwise predictor == null and
+    // behavior is byte-identical to pre-196 (stabilizer-only). Prediction is an
+    // additive preview enhancement, not a degraded feature, so no settings
+    // surface or nag message is warranted for older devices.
+    val hostView = LocalView.current
+    val motionPredictor = remember(hostView) {
+        if (!com.authorss81.noteflow.services.MotionPredictionPolicy.isSupported(
+                android.os.Build.VERSION.SDK_INT
+            )
+        ) {
+            null
+        } else {
+            try {
+                androidx.input.motionprediction.MotionEventPredictor.newInstance(hostView)
+            } catch (t: Throwable) {
+                null
+            }
+        }
+    }
+    // Plain (non-snapshot) bookkeeping: marking/stripping must never invalidate
+    // composition — only the draw reads the preview list.
+    val predictedTailTracker = remember {
+        com.authorss81.noteflow.services.MotionPredictionPolicy.PredictedTailTracker()
+    }
+    // Pointer count of the LAST recorded MotionEvent (UI-thread-only access):
+    // two pointers means pinch/undo territory — never predict then.
+    val predictionPointerCount = remember { java.util.concurrent.atomic.AtomicInteger(0) }
+    // Window-space origin of this canvas box. Raw MotionEvents are relative to
+    // the hosting view/window while the drag handlers work in box-local space;
+    // subtracting this offset makes both spaces agree (the editor hosts the
+    // canvas inside Scaffold padding, so they are NOT equal by default).
+    var canvasBoxWindowOffset by remember { mutableStateOf(Offset.Zero) }
+
+    fun dropPredictedTail() {
+        predictedTailTracker.stripFrom(activePoints)
+    }
+
+    // Per-frame predict loop (API 29+ only): mirrors the existing Choreographer
+    // loop above — one cheap guard pass per frame when idle. Re-keyed on the
+    // tool/curve so a mid-session switch can never leave stale gating values
+    // captured in the loop closure (the predictor/tracker objects survive).
+    LaunchedEffect(motionPredictor, currentTool, pressureCurve) {
+        val predictor = motionPredictor ?: return@LaunchedEffect
+        while (true) {
+            withFrameNanos { }
+            val extend = com.authorss81.noteflow.services.MotionPredictionPolicy.shouldExtendPreview(
+                predictorAvailable = true,
+                freehandTool = currentTool.isFreehandTool,
+                strokeInProgress = activePoints.isNotEmpty(),
+                singlePointerStream = predictionPointerCount.get() == 1,
+                panningWhiteSpace = isPanningBlackSpace
+            )
+            if (!extend) {
+                dropPredictedTail()
+                continue
+            }
+            val predicted = try {
+                predictor.predict()
+            } catch (t: Throwable) {
+                null
+            }
+            // Reconcile: replace whatever tail the previous frame drew.
+            dropPredictedTail()
+            if (predicted != null) {
+                val pageTopY = calculatePageYOffset(activeTargetPage)
+                val remappedPressure = PressureCurveHelper.remapPressure(
+                    if (predicted.pressure > 0f) predicted.pressure else lastPressure,
+                    pressureCurve
+                )
+                val point = com.authorss81.noteflow.services.MotionPredictionPolicy.predictedWorldPoint(
+                    predictedViewX = predicted.x,
+                    predictedViewY = predicted.y,
+                    canvasWindowX = canvasBoxWindowOffset.x,
+                    canvasWindowY = canvasBoxWindowOffset.y,
+                    zoomScale = internalZoomScale,
+                    panX = internalPanOffset.x,
+                    panY = internalPanOffset.y,
+                    pageWidthPx = pageWidthPx,
+                    pageTopY = pageTopY,
+                    pageBottomY = pageTopY + pageHeightPx,
+                    pressure = remappedPressure,
+                    tilt = lastTilt,
+                    timestampMs = predicted.eventTime
+                )
+                if (point != null) {
+                    activePoints.add(point)
+                    predictedTailTracker.mark()
+                }
+            }
+        }
+    }
+
     // Color sampling helper for Eyedropper tool
     // Phase 27: samples the ACTUAL rendered pixel (stroked ink composited over the
     // page background) instead of guessing via a loose point-in-+18px radius. The
@@ -688,6 +807,13 @@ fun AnnotationCanvas(
     BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
+            // Phase 196: capture this box's window-space origin so raw
+            // MotionEvent coordinates (host-view relative) can be mapped into
+            // the same local space the Compose drag handlers see. The offset is
+            // read only by the prediction loop — never during composition.
+            .onGloballyPositioned { coords ->
+                canvasBoxWindowOffset = coords.positionInWindow()
+            }
             .background(
                 if (divideIntoPages) {
                     if (isDarkTheme) Color(0xFF0F172A) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
@@ -702,6 +828,13 @@ fun AnnotationCanvas(
                 val tiltRad = motionEvent.getAxisValue(android.view.MotionEvent.AXIS_TILT)
                 lastTilt = if (tiltRad != 0f) Math.toDegrees(tiltRad.toDouble()).toFloat() else 0f
                 lastTimestampMs = motionEvent.eventTime
+                // Phase 196: record the REAL event with the OS motion predictor
+                // before anything else reacts to it (documented usage). This
+                // stays strictly passive — it consumes nothing, and the frame
+                // loop above does all predicting; pressure/tilt/timestamp
+                // bridging for pointerInteropFilter consumers is unchanged.
+                predictionPointerCount.set(motionEvent.pointerCount)
+                motionPredictor?.record(motionEvent)
                 false
             }
             // Phase 155: two-finger undo/redo gestures (pure-JVM classifier).
@@ -1009,6 +1142,7 @@ fun AnnotationCanvas(
                                 activeStart = null
                                 activeEnd = null
                                 activePoints.clear()
+                                predictedTailTracker.clear()
                                 return@detectDragGestures
                             }
                             isPanningBlackSpace = false
@@ -1038,13 +1172,19 @@ fun AnnotationCanvas(
                                 activeStart = startPoint
                                 activeEnd = startPoint
                                 activePoints.clear()
+                                predictedTailTracker.clear()
                                 activePoints.add(startPoint)
                             }
                         },
                         onDrag = { change, dragAmount ->
                             if (isDraggingCard) return@detectDragGestures
                             change.consume()
-                            
+                            // Phase 196: reconcile — the real sample supersedes
+                            // any predicted preview tail the frame loop drew.
+                            // Runs BEFORE every early-return so a stale tail can
+                            // never outlive the real event that replaces it.
+                            dropPredictedTail()
+
                             val rawCanvasX = (change.position.x - internalPanOffset.x) / internalZoomScale
                             val rawCanvasY = (change.position.y - internalPanOffset.y) / internalZoomScale
 
@@ -1134,6 +1274,9 @@ fun AnnotationCanvas(
                                 eyedropperPosition = null
                                 sampledColorPreview = null
                             } else if (currentTool != StrokeTool.ERASER && currentTool != StrokeTool.SELECT) {
+                                // Phase 196: strip any predicted preview tail so
+                                // COMMITTED geometry contains only real samples.
+                                dropPredictedTail()
                                 if (activePoints.isNotEmpty() || (activeStart != null && activeEnd != null)) {
                                     val pointsToSimplify = activePoints.toList()
                                     val startPoint = activeStart
@@ -1206,6 +1349,7 @@ fun AnnotationCanvas(
                                 }
                             }
                             activePoints.clear()
+                            predictedTailTracker.clear()
                             activeStart = null
                             activeEnd = null
                             onDrawingEnd()
@@ -1215,6 +1359,7 @@ fun AnnotationCanvas(
                             eyedropperPosition = null
                             sampledColorPreview = null
                             activePoints.clear()
+                            predictedTailTracker.clear()
                             activeStart = null
                             activeEnd = null
                             onDrawingEnd()

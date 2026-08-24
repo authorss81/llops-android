@@ -272,6 +272,13 @@ dependencies {
     implementation(libs.androidx.ink.geometry)
     implementation(libs.androidx.ink.strokes)
 
+    // Phase 196: OS-level stylus/touch motion prediction for the ink canvas.
+    // Pure-Java AndroidX (no native code, no permissions, ~tens of KB of dex) —
+    // NOT in the heavy downloadable-plugin class (ML Kit / MediaPipe); the
+    // base-APK size constraint is unaffected. Gated to API 29+ at runtime by
+    // MotionPredictionPolicy; older devices keep the existing stabilizer path.
+    implementation(libs.androidx.input.motionprediction)
+
     // Coil & Utilities
     implementation(libs.coil.compose)
     implementation(libs.androidx.biometric)
