@@ -18,6 +18,15 @@ android {
 
     defaultConfig {
         minSdk = 26
+
+        // Phase 199 (PERF 2.3): the shared plugin ABI (FrameworkPlugin,
+        // PluginCapability, PluginEntry, PluginVersion, PluginContext, …) must
+        // keep its binary names in every R8-minified consumer — the host APK's
+        // classloader is the PARENT of each downloadable plugin's DexClassLoader,
+        // so renamed SDK types would break plugin linkage at runtime. The rules
+        // ship WITH the module (consumer-rules.pro) so they can never drift from
+        // the surface they protect.
+        consumerProguardFiles("consumer-rules.pro")
     }
 
     compileOptions {

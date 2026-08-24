@@ -57,6 +57,20 @@ highlights = "0.9.3"
 # the base-APK heavy-dep rule (ML Kit / MediaPipe class) and is safe with the
 # pinned Kotlin 2.0.21 toolchain.
 motionPrediction = "1.0.0"
+# Phase 199 (PERF 2.2+2.3): baseline-profile toolchain. Pinned to the 1.3.4
+# STABLE line (not 1.4+/1.5-alpha) for the same reason as paparazzi/highlights
+# above: newer lines are built against newer Kotlin metadata that the pinned
+# Kotlin 2.0.21 compiler cannot read. 1.3.4 supports AGP 8.4+ (we are on
+# 8.7.3) and carries the consumer/producer baseline-profile Gradle plugins.
+androidxBenchmark = "1.3.4"
+# Phase 199: explicit profileinstaller pin (was transitive 1.3.1 via
+# androidx.activity) so the on-device profile install path is deterministic.
+profileinstaller = "1.4.1"
+# Phase 199: :baselineprofile module test-toolchain deps (UiAutomator drives
+# cold-start/open-note/first-stroke flows on a device; ext-junit provides the
+# instrumentation runner). Both plain-Java-heavy, both google()-hosted.
+uiAutomator = "2.3.0"
+androidxTestExtJunit = "1.2.1"
 
 [libraries]
 androidx-ink-authoring = { group = "androidx.ink", name = "ink-authoring", version.ref = "ink" }
@@ -112,6 +126,16 @@ highlights = { group = "dev.snipme", name = "highlights", version.ref = "highlig
 # ink canvas, not a heavy downloadable-plugin-class dependency.
 androidx-input-motionprediction = { group = "androidx.input", name = "input-motionprediction", version.ref = "motionPrediction" }
 
+# Phase 199 (PERF 2.2+2.3): baseline-profile toolchain. profileinstaller is a
+# tiny (~tens of KB) runtime lib that installs assets/dexopt/baseline.prof on
+# API < 33 devices at first run (API 33+ reads it natively during install);
+# benchmark-macro-junit4 + uiautomator + ext-junit live ONLY in the
+# :baselineprofile test module — never in either APK.
+androidx-profileinstaller = { group = "androidx.profileinstaller", name = "profileinstaller", version.ref = "profileinstaller" }
+androidx-benchmark-macro-junit4 = { group = "androidx.benchmark", name = "benchmark-macro-junit4", version.ref = "androidxBenchmark" }
+androidx-test-uiautomator = { group = "androidx.test.uiautomator", name = "uiautomator", version.ref = "uiAutomator" }
+androidx-test-ext-junit = { group = "androidx.test.ext", name = "junit", version.ref = "androidxTestExtJunit" }
+
 # Phase 29: downloadable LLM plugin module — explicit coroutines dependency (the
 # base app gets it transitively via lifecycle; the plugin module declares it).
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
@@ -135,3 +159,9 @@ ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
 # base APK. Autowired runtime deps (layoutlib native, paparazzi-agent, moshi…)
 # exist on the unit-test classpath only.
 paparazzi = { id = "app.cash.paparazzi", version.ref = "paparazzi" }
+# Phase 199: androidx baseline-profile Gradle plugin (consumer on :app,
+# producer on :baselineprofile). Resolves from google() (androidx.* group).
+androidx-baselineprofile = { id = "androidx.baselineprofile", version.ref = "androidxBenchmark" }
+# Phase 199: com.android.test plugin for the :baselineprofile device-test module
+# (part of AGP, same version as the application plugin).
+android-test = { id = "com.android.test", version.ref = "agp" }

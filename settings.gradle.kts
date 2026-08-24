@@ -244,6 +244,11 @@ dependencyResolutionManagement {
 rootProject.name = "InkFlow"
 include(":app")
 include(":plugin-sdk")
+// Phase 199 (PERF 2.2): macrobenchmark module that PRODUCES the baseline
+// profile (cold start → open note → first stroke) consumed by :app release
+// builds. Device-only: `gradle :app:generateBaselineProfile` with a connected
+// device/emulator. Its benchmark/uiautomator deps never enter any APK.
+include(":baselineprofile")
 // Phase 29: standalone local-LLM plugin module. NOT a dependency of :app — it
 // produces the downloadable, signature-verified artifact for the Plugin Store.
 include(":plugins:llm")

@@ -28,6 +28,12 @@ plugins {
     // `app.cash.paparazzi:paparazzi` lib into the unit-test configuration only.
     // It adds zero bytes to the base APK (no runtime/compile dependency).
     alias(libs.plugins.paparazzi)
+    // Phase 199 (PERF 2.2): baseline-profile CONSUMER — merges profiles from
+    // `:baselineprofile` generation runs (and src/main/baseline-prof.txt)
+    // into every release build's assets/dexopt/baseline.prof. The plugin adds
+    // no runtime code of its own; profile INSTALLATION is done by
+    // androidx.profileinstaller (dependency below).
+    alias(libs.plugins.androidx.baselineprofile)
 }
 
 android {
@@ -102,6 +108,16 @@ android {
         }
         release {
             isMinifyEnabled = true
+            // Phase 199 (PERF 2.3): strip resources that R8 proved unreachable.
+            // Requires minify (above). Verified safe: no getIdentifier()/dynamic
+            // resource lookup exists in the app source; fonts are static
+            // R.font.* references (theme/Fonts.kt); stickers are emoji glyphs
+            // drawn via the platform font (StickerCatalog — zero image assets);
+            // manifest-referenced xml (file_paths, data_extraction_rules,
+            // widget info) is kept automatically. The Phase-170 lingua
+            // packaging excludes below are INDEPENDENT of this flag (packaging
+            // excludes vs shrinker) and stay authoritative for java resources.
+            isShrinkResources = true
             // B1-PLAT-1: the release variant is ALWAYS bound to `releaseConfig`.
             // When its storeFile is null (KEYSTORE_FILE/credentials unset), AGP's
             // `:app:validateSigningRelease` task throws "Keystore file not set for
@@ -191,16 +207,6 @@ android {
     }
 }
 
-// Stopgap: AGP 8.7.3's profile compiler crashes with "String index out of range: 62"
-// on the GitHub Actions runner (Gradle 9.6.1). Baseline profiles are NOT wired
-// (ROADMAP Phase 21.3 / 32.9) and the old baseline-prof.txt was a dead file that has
-// now been deleted — skip profile compilation until release engineering wires them.
-tasks.configureEach {
-    if (name.startsWith("compile") && name.endsWith("ArtProfile")) {
-        enabled = false
-    }
-}
-
 // B1-PLAT-1 (phase-57) fail-fast gate: whenever a task that produces a SIGNED
 // RELEASE artifact is requested while the release keystore is not configured,
 // abort before R8/minify burns minutes. Only release signing/packaging task names
@@ -278,6 +284,13 @@ dependencies {
     // base-APK size constraint is unaffected. Gated to API 29+ at runtime by
     // MotionPredictionPolicy; older devices keep the existing stabilizer path.
     implementation(libs.androidx.input.motionprediction)
+
+    // Phase 199 (PERF 2.2): installs assets/dexopt/baseline.prof on API < 33
+    // at first run (API 33+ consumes it natively at install time). Tiny pure-
+    // AndroidX lib; was already present transitively (1.3.1 via androidx.
+    // activity) — pinned explicitly so the cold-start install path is a
+    // declared, versioned contract rather than a transitive accident.
+    implementation(libs.androidx.profileinstaller)
 
     // Coil & Utilities
     implementation(libs.coil.compose)
