@@ -1,40 +1,8 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "model": "opencode/deepseek-v4-flash-free",
-  "small_model": "opencode/deepseek-v4-flash-free",
-  "default_agent": "build",
-  "autoupdate": "notify",
-  "snapshot": true,
-
-  "provider": {
-    "opencode-zen": {
-      "options": {
-        "apiKey": "{env:OPENCODE_API_KEY}",
-        "baseURL": "https://opencode.ai/zen/v1"
-      }
-    }
-  },
-
-  "agent": {
-    "reviewer": {
-      "mode": "subagent",
-      "model": "opencode/deepseek-v4-flash-free",
-      "description": "Reviews code changes, finds bugs, security issues, and quality problems.",
-      "permission": {
-        "edit": "deny",
-        "bash": "deny"
-      },
-      "prompt": "You are a strict senior code reviewer. Analyze the provided diff or files. Report: (1) bugs and correctness issues with file:line references, (2) security problems, (3) maintainability/style problems, (4) anything that will break the build. Be concrete and actionable. Output a numbered findings list."
-    },
-    "test-checker": {
-      "mode": "subagent",
-      "model": "opencode/deepseek-v4-flash-free",
-      "description": "Verifies the project builds and tests pass, reports failures.",
-      "permission": {
-        "edit": "allow",
-        "bash": "allow"
-      },
-      "prompt": "You are a CI verification agent. Build the project and run tests. Report pass/fail with error output if it fails."
+  "permission": {
+    "external_directory": {
+      "**": "allow"
     }
   }
 }
