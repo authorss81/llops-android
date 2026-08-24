@@ -27,15 +27,26 @@ import java.security.MessageDigest
  *    proof the source held the copied state for the entire copy window, so a torn
  *    byte can never be silently shipped in an archive. A source that keeps
  *    changing (a concurrent writer auto-checkpointing) is retried up to
- *    [MAX_VERIFY_ATTEMPTS] and then FAILS CLOSED with the torn staging deleted —
- *    a backup is never quietly broken.
+ *    [MAX_VERIFY_ATTEMPTS] — spaced [retryBackoffMillis] apart so a short
+ *    autosave burst (the ~500ms stroke-persist window) can settle between
+ *    attempts — and then FAILS CLOSED with the torn staging deleted; a backup
+ *    is never quietly broken.
  *
  * Pure JVM (`java.io` + `java.security`) so the whole contract is unit-testable.
  */
 object VaultSnapshotCopyPolicy {
 
-    /** Bounded retries for a racing source; exhaustion fails the backup loudly. */
-    const val MAX_VERIFY_ATTEMPTS: Int = 3
+    /**
+     * Bounded retries for a racing source; exhaustion fails the backup loudly.
+     * Phase 202 (bug batch): raised 3 → 5 — a real device showed that a ~500ms
+     * autosave burst could hold the DB busy past all three tight retries,
+     * failing backups with KEEP_CHANGING_ERROR even though a fourth attempt a
+     * beat later would have succeeded.
+     */
+    const val MAX_VERIFY_ATTEMPTS: Int = 5
+
+    /** Default pause between verify attempts so a racing writer can settle. */
+    const val DEFAULT_RETRY_BACKOFF_MILLIS: Long = 150L
 
     /** Suffix of the transient staged DB snapshot; deleted once the archive is built. */
     const val SNAPSHOT_SUFFIX: String = ".sqlite-snapshot"
@@ -71,18 +82,30 @@ object VaultSnapshotCopyPolicy {
      * Runs [checkpoint] (when supplied) then produces a VERIFIED copy of [source]
      * at [destination]. Returns true only when the destination is byte-identical to
      * a source state that held for the whole copy window; false after
-     * [maxAttempts] racing retries, with any torn staging deleted.
+     * [maxAttempts] racing retries — spaced [retryBackoffMillis] apart (0 disables
+     * the pause; tests pass 0) — with any torn staging deleted.
      */
     fun checkpointThenCopy(
         source: File,
         destination: File,
         checkpoint: DbCheckpoint? = null,
         copy: DbCopy = DbCopy { src, dst -> src.copyTo(dst) },
-        maxAttempts: Int = MAX_VERIFY_ATTEMPTS
+        maxAttempts: Int = MAX_VERIFY_ATTEMPTS,
+        retryBackoffMillis: Long = DEFAULT_RETRY_BACKOFF_MILLIS
     ): Boolean {
         checkpoint?.checkpointFull()
         var attempts = 0
         while (attempts < maxAttempts) {
+            if (attempts > 0 && retryBackoffMillis > 0L) {
+                // Give the racing writer (autosave / WAL auto-checkpoint) room to
+                // finish before re-reading the source. Bounded and total-bounded:
+                // at most (maxAttempts - 1) pauses of retryBackoffMillis each.
+                try {
+                    Thread.sleep(retryBackoffMillis)
+                } catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                }
+            }
             attempts++
             val before = sha256Digest(source)
             copy.copy(source, destination)

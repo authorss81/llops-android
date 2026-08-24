@@ -3623,9 +3623,16 @@ private fun DrawScope.drawCompositedLayersStrokes(
                     size = androidx.compose.ui.geometry.Size(pageWidth, pageHeight)
                 ) {
                     for (stroke in strokes) {
-                        // Cache-local center: the bitmap is page-local, so the mirror
-                        // axis must be shifted by the page offset too.
-                        drawStrokeWithSymmetry(stroke, offsetY - pageTopY, symmetryMode, symmetryCenterX, symmetryCenterY - pageTopY)
+                        // Phase 202 (bug batch): the mirror runs on the RAW stored
+                        // points, which are WORLD coordinates — only the final
+                        // drawSingleStroke translation (-pageTopY) moves them into
+                        // the page-local bitmap. The axis center must therefore stay
+                        // in WORLD space too: passing the local centre here made
+                        // HORIZONTAL/RADIAL mirrors reflect about the PAGE-0 centre
+                        // and land off-bitmap on every later page (mirror worked
+                        // only on page 0). Vertical mode was unaffected (x does not
+                        // shift between world and local).
+                        drawStrokeWithSymmetry(stroke, offsetY - pageTopY, symmetryMode, symmetryCenterX, symmetryCenterY)
                     }
                 }
                 cache.hash = strokesHash
@@ -3754,9 +3761,11 @@ private fun DrawScope.drawCompositedLayersStrokes(
                     size = androidx.compose.ui.geometry.Size(pageWidth, pageHeight)
                 ) {
                     for (stroke in layerStrokes) {
-                        // Cache-local center: the bitmap is page-local, so the mirror
-                        // axis must be shifted by the page offset too.
-                        drawStrokeWithSymmetry(stroke, offsetY - pageTopY, symmetryMode, symmetryCenterX, symmetryCenterY - pageTopY)
+                        // Phase 202 (bug batch): WORLD centre — the mirror runs on the
+                        // raw world points before drawSingleStroke's -pageTopY
+                        // translation into this page-local bitmap (see the no-layers
+                        // branch above for the full rationale).
+                        drawStrokeWithSymmetry(stroke, offsetY - pageTopY, symmetryMode, symmetryCenterX, symmetryCenterY)
                     }
                 }
                 cache.hash = strokesHash

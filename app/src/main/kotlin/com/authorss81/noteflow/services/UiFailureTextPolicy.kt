@@ -42,6 +42,14 @@ object UiFailureTextPolicy {
     const val IMPORT_SKIPPED_GENERIC: String =
         "Import skipped — the file is too large or is not a supported archive."
 
+    /** Fixed "unreadable PDF" import-skip text (Phase 202 bug batch). */
+    const val IMPORT_PDF_UNREADABLE_TEXT: String =
+        "Import skipped — the PDF appears corrupted or is password-protected."
+
+    /** Fixed "vault locked mid-import" import-skip text (Phase 202 bug batch). */
+    const val IMPORT_LOCKED_TEXT: String =
+        "Import skipped — the vault locked during the import. Unlock the vault and try again."
+
     /** Fixed "wrong/needed backup password" restore text. */
     const val RESTORE_PASSWORD_TEXT: String =
         "Restore failed: the backup password is incorrect or was not entered."
@@ -197,6 +205,12 @@ object UiFailureTextPolicy {
     fun importSkippedMessage(e: Throwable): String {
         val lower = messageOf(e).lowercase()
         return when {
+            lower.contains("corrupted or is password-protected") ||
+                lower.contains("could not be read") && lower.contains("pdf") ->
+                IMPORT_PDF_UNREADABLE_TEXT
+            lower.contains("vault locked") ||
+                lower.contains("vault is locked") ->
+                IMPORT_LOCKED_TEXT
             lower.contains("too large") ||
                 lower.contains("single file is too large") ||
                 lower.contains("size exceeds") ||

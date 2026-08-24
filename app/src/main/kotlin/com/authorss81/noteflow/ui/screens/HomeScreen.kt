@@ -365,6 +365,25 @@ fun HomeScreen(
                     val fileName = ImportExportService.getUriFileName(context, uri)
                     val ext = ImportExportService.extensionOf(fileName)
 
+                // Phase 202 (bug batch): fail-fast gate — an auto-lock that landed
+                // before this file's turn must SKIP it with one honest notice.
+                // Pre-fix the html/zip runCatching blocks silently swallowed
+                // VaultLockedWriteException (page == null, no notice at all), and
+                // the plain addPage paths only noticed per page AFTER artifacts
+                // were persisted.
+                if (viewModel.repository.encryptionKey == null) {
+                    viewModel.showSnackbar(UiFailureTextPolicy.IMPORT_LOCKED_TEXT, isLong = true)
+                    continue
+                }
+
+                // Phase 202 (bug batch): one malformed entry must no longer take
+                // the WHOLE import down. Pre-fix any unexpected exception here
+                // (corrupt PDF, bad docx, IO error) escaped this coroutine
+                // uncaught — crashing via viewModelScope or silently ending the
+                // run with zero feedback. Every failure now degrades to an honest
+                // skip notice, sweeps THIS file's tracked artifacts, and lets the
+                // remaining selected files continue.
+                try {
                 if (ext == "html" || ext == "htm") {
                     val activeNb = viewModel.selectedNotebook.value?.id ?: "nb_default"
                     val activeSec = viewModel.selectedSection.value?.id ?: "sec_default"
@@ -373,6 +392,10 @@ fun HomeScreen(
                     }.getOrElse { e ->
                         if (e is ImportArchivePolicy.ImportSizeLimitException) {
                             viewModel.showSnackbar(UiFailureTextPolicy.importSkippedMessage(e), isLong = true)
+                        } else {
+                            // Phase 202 (bug batch): a real failure must reach the
+                            // per-entry guard below — never a silent null.
+                            throw e
                         }
                         null
                     }
@@ -394,6 +417,10 @@ fun HomeScreen(
                         // must fail the import with a clean, visible error.
                         if (e is ImportArchivePolicy.ImportSizeLimitException) {
                             viewModel.showSnackbar(UiFailureTextPolicy.importSkippedMessage(e), isLong = true)
+                        } else {
+                            // Phase 202 (bug batch): a real failure must reach the
+                            // per-entry guard below — never a silent 0.
+                            throw e
                         }
                         0
                     }
@@ -455,15 +482,18 @@ fun HomeScreen(
                                 android.graphics.BitmapFactory.decodeFile(path!!, options)
                                 landscapeFormat = options.outWidth > options.outHeight
                             } else if (type == "pdf") {
-                                val pfd = android.os.ParcelFileDescriptor.open(File(path!!), android.os.ParcelFileDescriptor.MODE_READ_ONLY)
-                                val renderer = android.graphics.pdf.PdfRenderer(pfd)
-                                if (renderer.pageCount > 0) {
-                                    val pdfPage = renderer.openPage(0)
-                                    landscapeFormat = pdfPage.width > pdfPage.height
-                                    pdfPage.close()
+                                // Phase 202 (bug batch): `use{}` on the descriptor and
+                                // renderer — the pre-fix sequential close leaked both
+                                // FDs whenever openPage/width read threw.
+                                android.os.ParcelFileDescriptor.open(File(path!!), android.os.ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
+                                    android.graphics.pdf.PdfRenderer(pfd).use { renderer ->
+                                        if (renderer.pageCount > 0) {
+                                            renderer.openPage(0).use { pdfPage ->
+                                                landscapeFormat = pdfPage.width > pdfPage.height
+                                            }
+                                        }
+                                    }
                                 }
-                                renderer.close()
-                                pfd.close()
                             }
                         } catch (e: Exception) {
                             landscapeFormat = false
@@ -479,17 +509,61 @@ fun HomeScreen(
                     }
 
                     if (type == "pdf" && pageCount > 1 && importAsSeparatePages) {
-                        // Option A: Split into Separate Note Pages
+                        // Option A: Split into Separate Note Pages.
+                        // Phase 202 (bug batch): every split page used to reference
+                        // the SAME full multi-page PDF, and since the page row has no
+                        // per-source-index column, EVERY created page rendered slice
+                        // 0 in the editor ("Page 3" showed PDF page 1). Each page now
+                        // gets its OWN rasterized slice persisted in imports/ — a
+                        // correct standalone page with no DB schema change — and the
+                        // shared source PDF is removed once every page committed
+                        // (deleting one split page can also no longer delete the file
+                        // under its siblings).
                         val baseTitle = fileName.substringBeforeLast('.')
-                        for (i in 0 until pageCount) {
+                        val splitCount = minOf(pageCount, ImportExportService.PDF_SPLIT_MAX_PAGES)
+                        var createdSplits = 0
+                        var renderFailed = false
+                        for (i in 0 until splitCount) {
+                            val slicePath = withContext(Dispatchers.IO) {
+                                ImportExportService.renderPdfPageToPngFile(context, path!!, i, baseTitle)
+                            }
+                            if (slicePath == null) {
+                                renderFailed = true
+                                break
+                            }
+                            // B2-UI-6: track each slice until its page row commits.
+                            orphanRun.trackPersisted(slicePath)
                             viewModel.addPage(
                                 title = "$baseTitle - Page ${i + 1}",
-                                sourceFilePath = path,
-                                sourceFileType = "pdf",
+                                sourceFilePath = slicePath,
+                                sourceFileType = "image",
                                 extractedText = if (i == 0) extractedText else "",
                                 tags = orientationTag
                             )
-                            importedCount++
+                            orphanRun.markCommitted(slicePath)
+                            createdSplits++
+                        }
+                        importedCount += createdSplits
+                        if (createdSplits > 0) {
+                            // The original multi-page PDF is no longer referenced by
+                            // any row once at least one standalone slice exists and
+                            // the split completed for the pages we keep.
+                            runCatching { File(path!!).delete() }
+                            path?.let { orphanRun.markCommitted(it) }
+                        } else {
+                            // Nothing was created (every render failed): the tracked
+                            // source PDF would linger unreferenced — sweep it now so
+                            // a normal-path failure leaves no orphan behind either.
+                            orphanRun.sweepOrphans()
+                        }
+                        if (renderFailed) {
+                            viewModel.showSnackbar(UiFailureTextPolicy.IMPORT_PDF_UNREADABLE_TEXT, isLong = true)
+                        }
+                        if (pageCount > splitCount) {
+                            viewModel.showSnackbar(
+                                "Imported the first $splitCount of $pageCount PDF pages.",
+                                isLong = true
+                            )
                         }
                     } else {
                         // Option B: Continuous Infinite Canvas (single entry displaying infinite canvas)
@@ -507,6 +581,21 @@ fun HomeScreen(
                     // issued — from here on the artifact is referenced by a page row
                     // and must never be swept.
                     path?.let { orphanRun.markCommitted(it) }
+                }
+                } catch (e: ImportExportService.PdfImportException) {
+                    // Phase 202 (bug batch): a corrupt/encrypted PDF no longer
+                    // degrades into a silent blank template-only page — the count
+                    // read throws, the persisted artifact is swept, and a FIXED
+                    // (never raw-message) skip notice is shown.
+                    orphanRun.sweepOrphans()
+                    viewModel.showSnackbar(UiFailureTextPolicy.importSkippedMessage(e), isLong = true)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    // Phase 202 (bug batch): classify through the fixed-text policy;
+                    // e.message may carry vault paths and never reaches the UI.
+                    orphanRun.sweepOrphans()
+                    viewModel.showSnackbar(UiFailureTextPolicy.importSkippedMessage(e), isLong = true)
                 }
 
                 if (importedCount > 0) {

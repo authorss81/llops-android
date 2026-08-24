@@ -5521,28 +5521,28 @@ private fun renderPdfPageToRawBitmap(filePath: String, pageIndex: Int, targetWid
     return try {
         val file = File(filePath)
         if (!file.exists()) return null
-        val pfd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
-        val renderer = android.graphics.pdf.PdfRenderer(pfd)
-        if (pageIndex < 0 || pageIndex >= renderer.pageCount) {
-            renderer.close()
-            pfd.close()
-            return null
+        // Phase 202 (bug batch): `use{}` on descriptor/renderer/page — this runs
+        // for EVERY visible page in continuous mode, so one throw mid-render
+        // used to leak an FD each time until the process hit the fd limit.
+        ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
+            android.graphics.pdf.PdfRenderer(pfd).use { renderer ->
+                if (pageIndex < 0 || pageIndex >= renderer.pageCount) {
+                    return null
+                }
+                renderer.openPage(pageIndex).use { pdfPage ->
+                    // 32.8: Bound PDF texture to max 1.5x of the device's screen width to prevent OOM
+                    val displayWidth = context?.resources?.displayMetrics?.widthPixels ?: 1080
+                    val maxAllowedWidth = (displayWidth * 1.5f).toInt().coerceAtMost(2048)
+                    val width = targetWidth.coerceAtMost(maxAllowedWidth)
+
+                    val height = (width * (pdfPage.height.toFloat() / pdfPage.width.toFloat())).toInt()
+                    val bitmap = com.authorss81.noteflow.utils.BitmapPool.acquire(width, height)
+                    bitmap.eraseColor(android.graphics.Color.WHITE)
+                    pdfPage.render(bitmap, null, null, android.graphics.pdf.PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                    bitmap
+                }
+            }
         }
-        val pdfPage = renderer.openPage(pageIndex)
-
-        // 32.8: Bound PDF texture to max 1.5x of the device's screen width to prevent OOM
-        val displayWidth = context?.resources?.displayMetrics?.widthPixels ?: 1080
-        val maxAllowedWidth = (displayWidth * 1.5f).toInt().coerceAtMost(2048)
-        val width = targetWidth.coerceAtMost(maxAllowedWidth)
-
-        val height = (width * (pdfPage.height.toFloat() / pdfPage.width.toFloat())).toInt()
-        val bitmap = com.authorss81.noteflow.utils.BitmapPool.acquire(width, height)
-        bitmap.eraseColor(android.graphics.Color.WHITE)
-        pdfPage.render(bitmap, null, null, android.graphics.pdf.PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-        pdfPage.close()
-        renderer.close()
-        pfd.close()
-        bitmap
     } catch (e: Exception) {
         null
     }
@@ -5613,12 +5613,13 @@ private fun getPdfPageCount(filePath: String): Int {
     return try {
         val file = File(filePath)
         if (!file.exists()) return 0
-        val pfd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
-        val renderer = android.graphics.pdf.PdfRenderer(pfd)
-        val count = renderer.pageCount
-        renderer.close()
-        pfd.close()
-        count
+        // Phase 202 (bug batch): `use{}` on descriptor + renderer — the pre-fix
+        // sequential close leaked both FDs when pageCount/openPage threw.
+        ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
+            android.graphics.pdf.PdfRenderer(pfd).use { renderer ->
+                renderer.pageCount
+            }
+        }
     } catch (e: Exception) {
         0
     }

@@ -127,45 +127,117 @@ object ImportExportService {
     fun isPdf(ext: String) = ext.lowercase() == "pdf"
     fun isImage(ext: String) = ext.lowercase() in listOf("png", "jpg", "jpeg", "webp", "gif", "bmp", "svg", "heic", "heif")
 
+    /**
+     * Phase 202 (bug batch): raised when a PDF source cannot be opened at all
+     * (missing file, corrupt xref, encrypted document). Pre-fix the page count
+     * silently degraded to 0 and the import produced a blank template-only page
+     * with NO user-facing explanation. The import loop catches this and skips
+     * the file with an honest snackbar instead.
+     */
+    class PdfImportException(message: String) : java.io.IOException(message)
+
+    /**
+     * Page count of [filePath]. Throws [PdfImportException] when the document
+     * cannot be opened — a corrupt PDF must never masquerade as a 0/1-page note.
+     *
+     * Phase 202 (bug batch): renderer + file descriptor are closed via `use{}`
+     * so an exception mid-open can no longer leak the ParcelFileDescriptor FD
+     * (the pre-fix sequential close only ran on the success path).
+     */
     fun getPdfPageCount(filePath: String): Int {
+        val file = File(filePath)
+        if (!file.exists()) {
+            throw PdfImportException("PDF import failed: the selected document could not be read.")
+        }
         return try {
-            val file = File(filePath)
-            if (!file.exists()) return 0
-            val pfd = android.os.ParcelFileDescriptor.open(file, android.os.ParcelFileDescriptor.MODE_READ_ONLY)
-            val renderer = android.graphics.pdf.PdfRenderer(pfd)
-            val count = renderer.pageCount
-            renderer.close()
-            pfd.close()
-            count
+            android.os.ParcelFileDescriptor.open(file, android.os.ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
+                android.graphics.pdf.PdfRenderer(pfd).use { renderer ->
+                    renderer.pageCount
+                }
+            }
+        } catch (e: PdfImportException) {
+            throw e
+        } catch (e: java.io.IOException) {
+            throw PdfImportException("PDF import failed: the document appears corrupted or is password-protected.")
         } catch (e: Exception) {
-            0
+            throw PdfImportException("PDF import failed: the document appears corrupted or is password-protected.")
         }
     }
 
+    /**
+     * Renders [pageIndex] of [pdfFilePath] to a bitmap, or null when the index is
+     * out of range / the page cannot be rendered (callers fall back to the paper
+     * template — rendering one bad page must not fail a whole export).
+     *
+     * Phase 202 (bug batch): `use{}` on both the descriptor and the renderer so
+     * a render failure cannot leak FDs across a long continuous-mode session.
+     */
     fun renderPdfPageToBitmap(pdfFilePath: String, pageIndex: Int, targetWidth: Int = 1080, targetHeight: Int = 1528): android.graphics.Bitmap? {
         return try {
             val file = File(pdfFilePath)
             if (!file.exists()) return null
-            val pfd = android.os.ParcelFileDescriptor.open(file, android.os.ParcelFileDescriptor.MODE_READ_ONLY)
-            val renderer = android.graphics.pdf.PdfRenderer(pfd)
-            if (pageIndex < 0 || pageIndex >= renderer.pageCount) {
-                renderer.close()
-                pfd.close()
-                return null
+            android.os.ParcelFileDescriptor.open(file, android.os.ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
+                android.graphics.pdf.PdfRenderer(pfd).use { renderer ->
+                    if (pageIndex < 0 || pageIndex >= renderer.pageCount) return null
+                    val pdfPage = renderer.openPage(pageIndex)
+                    pdfPage.use { page ->
+                        val bitmap = android.graphics.Bitmap.createBitmap(targetWidth, targetHeight, android.graphics.Bitmap.Config.ARGB_8888)
+                        val canvas = android.graphics.Canvas(bitmap)
+                        canvas.drawColor(android.graphics.Color.WHITE)
+                        page.render(bitmap, null, null, android.graphics.pdf.PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                        bitmap
+                    }
+                }
             }
-            val pdfPage = renderer.openPage(pageIndex)
-            val bitmap = android.graphics.Bitmap.createBitmap(targetWidth, targetHeight, android.graphics.Bitmap.Config.ARGB_8888)
-            val canvas = android.graphics.Canvas(bitmap)
-            canvas.drawColor(android.graphics.Color.WHITE)
-            pdfPage.render(bitmap, null, null, android.graphics.pdf.PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-            pdfPage.close()
-            renderer.close()
-            pfd.close()
-            bitmap
         } catch (e: Exception) {
             null
         }
     }
+
+    /**
+     * Phase 202 (bug batch): renders ONE PDF page to a standalone PNG inside the
+     * app-private imports dir, for the split-into-separate-pages import path.
+     *
+     * Pre-fix every split page entity referenced the SAME full multi-page PDF,
+     * and since no per-page index exists on the page row, EVERY created page
+     * rendered slice 0 in the editor ("Page 3" showed PDF page 1). Rasterizing
+     * each page to its own image makes every created page a correct, standalone
+     * slice with no schema change — and deleting one page can no longer delete
+     * the shared source out from under its siblings.
+     */
+    fun renderPdfPageToPngFile(
+        context: Context,
+        pdfFilePath: String,
+        pageIndex: Int,
+        baseName: String,
+        targetWidth: Int = 1080,
+        targetHeight: Int = 1528
+    ): String? {
+        val bitmap = renderPdfPageToBitmap(pdfFilePath, pageIndex, targetWidth, targetHeight) ?: return null
+        return try {
+            val importsDir = getImportsDir(context)
+            // Short random token: two imports of same-named documents must never
+            // clobber each other's page images (persistFile's plain-name rule is
+            // intentionally untouched for single-file imports).
+            val token = UUID.randomUUID().toString().substring(0, 8)
+            val safeName = sanitizeImportFileName("${baseName}_p${pageIndex + 1}_$token.png")
+            val outFile = File(importsDir, safeName)
+            FileOutputStream(outFile).use { compressBitmap(ExportImageFormat.PNG, bitmap, it) }
+            if (!outFile.exists() || outFile.length() == 0L) {
+                runCatching { outFile.delete() }
+                null
+            } else {
+                outFile.absolutePath
+            }
+        } catch (e: Exception) {
+            null
+        } finally {
+            bitmap.recycle()
+        }
+    }
+
+    /** Split-import cap: beyond this the import truncates honestly (see HomeScreen). */
+    const val PDF_SPLIT_MAX_PAGES = 50
 
     /**
      * Decodes an image with an inSampleSize so the resulting bitmap's long edge
@@ -1452,11 +1524,34 @@ object ImportExportService {
      * snapshot (a concurrent WAL auto-checkpoint can never tear the staged copy).
      * Every exporter — HomeScreen backup / password backup, WebDAV, LocalSend —
      * routes through this one checkpoint-then-copy, so [repository] is REQUIRED.
+     *
+     * Phase 202 (bug batch): the handed DEK ([vaultDek]) is SNAPSHOT-COPIED at
+     * entry and that copy — zeroized at exit — is what the whole export uses.
+     * The callers hand over the LIVE [VaultKeyHolder.dek] array; an auto-lock
+     * landing mid-export (screen-off, ON_STOP) fills that array with zeros in
+     * place, which previously poisoned the prune key AND the archive-encryption
+     * key mid-run. The copy keeps the export on the SAME key it started with;
+     * its lifetime is bounded to this call and it is zeroized in the finally,
+     * preserving the lock-time zeroization discipline.
      */
     suspend fun exportBackup(
         context: Context,
-        key: ByteArray?,
+        vaultDek: ByteArray?,
         backupPassword: String? = null,
+        repository: com.authorss81.noteflow.data.repository.NoteRepository
+    ): File = withContext(Dispatchers.IO) {
+        val key = vaultDek?.copyOf()
+        try {
+            exportBackupInternal(context, key, backupPassword, repository)
+        } finally {
+            ExportSessionPolicy.zeroize(key)
+        }
+    }
+
+    private suspend fun exportBackupInternal(
+        context: Context,
+        key: ByteArray?,
+        backupPassword: String?,
         repository: com.authorss81.noteflow.data.repository.NoteRepository
     ): File = withContext(Dispatchers.IO) {
         val dbFile = context.getDatabasePath("noteflow.sqlite")

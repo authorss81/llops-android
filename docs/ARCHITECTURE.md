@@ -450,6 +450,28 @@
 > virtue of the AGSL gate itself. Runtime gfxinfo verification STILL owed to a
 > device session.
 
+> **Implemented in phase-202** (2026-08-24, bug-fix batch from the audit
+> `docs/report-2026-08-24.md` §6, see `workspace/phase-202/REPORT.md`):
+> (1) Canvas symmetry: both page-local bitmap-cache recording sites in
+> `AnnotationCanvas.kt` (no-layers + per-layer) now pass the WORLD mirror centre —
+> the pre-fix local-centre form mirrored raw world points about the page-0 axis so
+> HORIZONTAL/RADIAL mirrors landed off-bitmap on every page ≥ 1; pinned by a
+> translate/mirror identity sweep in `SymmetryHelperTest` (+5). (2) PDF split import
+> rasterizes each page into its own standalone PNG (`ImportExportService.
+> renderPdfPageToPngFile`, cap 50 + truncation notice; consumed source deleted after
+> commit) — pre-fix every split row referenced the same multi-page PDF and rendered
+> slice 0 because no per-page index column exists; corrupt PDFs now throw
+> `PdfImportException` → fixed skip notice instead of a silent blank page, and the
+> HomeScreen import loop has a per-entry guard (fixed-text snackbars, artifact sweep,
+> lock gate, cancellation passthrough). (3) Backup: `exportBackup` pins a copy of the
+> handed DEK (`vaultDek?.copyOf()`, zeroized at exit) against mid-export auto-lock;
+> `VaultSnapshotCopyPolicy` retries 3→5 with 150ms inter-attempt backoff. The audit's
+> SaFExporter "rememberSaveable File crash" claim was verified FALSE at HEAD (File is
+> Serializable; state is saveable by phase-141 design) and left untouched. (4) All
+> five PdfRenderer/PDF-document open sites close via `use{}` (FD-leak fix).
+> Tests: `Phase202BugFixBatchTest` (12) + SymmetryHelperTest 8→13; 2718 tests / 3
+> failures all pre-existing on clean HEAD. No schema change, no new deps.
+
 ## Core subsystem anchors (file:line)
 
 - **Encryption/vault**: `services/EncryptionService.kt:18` (PBKDF2 600k, AES-256-GCM, NFKC-normalized password);

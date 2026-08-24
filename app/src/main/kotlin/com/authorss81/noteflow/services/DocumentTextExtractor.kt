@@ -101,14 +101,16 @@ object DocumentTextExtractor {
 
         // 2. Add structural page info
         try {
-            val pfd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
-            val renderer = android.graphics.pdf.PdfRenderer(pfd)
-            if (sb.isBlank()) {
-                sb.append("Document: ").append(file.nameWithoutExtension).append("\n")
-                sb.append("Total Pages: ").append(renderer.pageCount).append("\n")
+            // Phase 202 (bug batch): `use{}` — the sequential close leaked both
+            // FDs when pageCount read threw.
+            ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
+                android.graphics.pdf.PdfRenderer(pfd).use { renderer ->
+                    if (sb.isBlank()) {
+                        sb.append("Document: ").append(file.nameWithoutExtension).append("\n")
+                        sb.append("Total Pages: ").append(renderer.pageCount).append("\n")
+                    }
+                }
             }
-            renderer.close()
-            pfd.close()
         } catch (e: Exception) {
             // Ignore
         }

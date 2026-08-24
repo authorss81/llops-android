@@ -88,4 +88,112 @@ class SymmetryHelperTest {
         assertEquals(SymmetryMode.OFF, SymmetryMode.fromSettingKey("nonsense"))
         assertEquals(SymmetryMode.OFF, SymmetryMode.fromSettingKey(null))
     }
+
+    // -----------------------------------------------------------------------
+    // Phase 202 (bug batch) — cached-render mirror contract, PAGE 1.
+    //
+    // AnnotationCanvas stores stroke points in WORLD coordinates. In the
+    // page-local bitmap cache the stroke is recorded as
+    //   drawStrokeWithSymmetry(stroke, offsetY - pageTopY, mode, cx, cyArg)
+    // i.e. mirrorPoint runs on the RAW WORLD points and only the final
+    // drawSingleStroke translation (-pageTopY) moves them into local space.
+    // The centre argument must therefore be the WORLD centre; passing the
+    // LOCAL centre (the pre-fix form) reflected HORIZONTAL/RADIAL copies
+    // about the PAGE-0 axis so they landed off-bitmap on every later page
+    // ("mirror only works on page 0").
+    //
+    // The math these tests pin:
+    //   renderedLocal(world y) = mirrorPoint(x, worldY, mode, cx, cyArg).y - top
+    //   identity: 2*(C - top) - (y - top)  ==  2*C - y - top
+    // -----------------------------------------------------------------------
+
+    private val PAGE_HEIGHT = 1528f
+    private val PAGE_GAP = 64f
+    private val stride = PAGE_HEIGHT + PAGE_GAP
+    private val page1Top = stride // page index 1
+    private val worldCentreY = page1Top + PAGE_HEIGHT / 2f // 2356
+    private val localCentreY = PAGE_HEIGHT / 2f // 764 — the PRE-FIX (wrong) argument
+
+    /** Exactly what AnnotationCanvas renders into the page-local cache bitmap. */
+    private fun renderedMirrorLocalY(
+        worldY: Float,
+        centreYArgument: Float,
+        mode: SymmetryMode = SymmetryMode.HORIZONTAL
+    ): Float {
+        val worldX = 540f
+        val centreX = 540f
+        val mirrored = SymmetryHelper.mirrorPoint(worldX, worldY, mode, centreX, centreYArgument)
+        // drawSingleStroke's translation of the mirrored copy by -pageTopY:
+        return mirrored.y - page1Top
+    }
+
+    @Test
+    fun `page1 horizontal mirror stays on its own page when the centre is WORLD`() {
+        val worldPointY = page1Top + 100f
+        val rendered = renderedMirrorLocalY(worldPointY, worldCentreY)
+        // Translate-then-mirror about the local centre is the ground truth.
+        val expected = 2f * (worldCentreY - page1Top) - (worldPointY - page1Top)
+        assertEquals(expected, rendered, 1e-3f)
+        assertTrue(
+            "the mirrored copy must land INSIDE the page bitmap",
+            rendered in 0f..PAGE_HEIGHT
+        )
+    }
+
+    @Test
+    fun `pre-fix local-centre argument threw the page1 mirror off-page`() {
+        val worldPointY = page1Top + 100f
+        val rendered = renderedMirrorLocalY(worldPointY, localCentreY)
+        val expected = 2f * (worldCentreY - page1Top) - (worldPointY - page1Top)
+        assertTrue(
+            "local centre + world points must violate the translate/mirror identity",
+            kotlin.math.abs(rendered - expected) > 1f
+        )
+        assertTrue(
+            "pre-fix behaviour: the mirrored copy fell OUTSIDE the page bitmap",
+            rendered < 0f || rendered > PAGE_HEIGHT
+        )
+    }
+
+    @Test
+    fun `page1 radial mirror obeys the same world-centre contract`() {
+        val worldPointY = page1Top + 200f
+        val renderedWithWorld = renderedMirrorLocalY(worldPointY, worldCentreY, SymmetryMode.RADIAL)
+        val expected = 2f * (worldCentreY - page1Top) - (worldPointY - page1Top)
+        assertEquals(expected, renderedWithWorld, 1e-3f)
+        assertTrue(renderedWithWorld in 0f..PAGE_HEIGHT)
+
+        val renderedWithLocal = renderedMirrorLocalY(worldPointY, localCentreY, SymmetryMode.RADIAL)
+        assertTrue(
+            "radial with the local centre must break the identity too",
+            kotlin.math.abs(renderedWithLocal - expected) > 1f
+        )
+    }
+
+    @Test
+    fun `vertical mode was never affected because x does not shift between world and local`() {
+        val worldX = 300f
+        val viaWorldCentre = SymmetryHelper.mirrorPoint(worldX, 0f, SymmetryMode.VERTICAL, 540f, worldCentreY)
+        val viaLocalCentre = SymmetryHelper.mirrorPoint(worldX, 0f, SymmetryMode.VERTICAL, 540f, localCentreY)
+        assertEquals(viaWorldCentre.x, viaLocalCentre.x, 0f)
+        assertEquals(780f, viaWorldCentre.x, 1e-4f)
+    }
+
+    @Test
+    fun `mirror-then-translate equals translate-then-mirror for every page and y-mirroring mode`() {
+        // The invariant that makes BOTH render paths (cached local bitmap vs
+        // direct world-space draw) agree — a regression here re-breaks pages>0.
+        for (page in 0..3) {
+            val top = page * stride
+            val centreWorld = top + PAGE_HEIGHT / 2f
+            for (mode in listOf(SymmetryMode.HORIZONTAL, SymmetryMode.RADIAL)) {
+                val worldY = top + 37f * (page + 1)
+                val mirroredWorld = SymmetryHelper.mirrorPoint(540f, worldY, mode, 540f, centreWorld).y
+                val thenTranslate = mirroredWorld - top
+                val localY = worldY - top
+                val thenMirror = SymmetryHelper.mirrorPoint(540f, localY, mode, 540f, PAGE_HEIGHT / 2f).y
+                assertEquals("page=$page mode=$mode", thenMirror, thenTranslate, 1e-3f)
+            }
+        }
+    }
 }
