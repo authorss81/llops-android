@@ -66,6 +66,15 @@ painting engine, free features).
 | phase-194 | **Dim Undo/Redo buttons on canvas when stack is empty** - disabled/dimmed appearance when nothing to undo/redo, bright when available | user-reported |
 | phase-195 | **Screenshot render suite** - Paparazzi (JVM, no emulator) PNGs for every screen x state x theme, saved to `visual-qa/screenshots/` curated baseline + documented artifact-upload path | user-reported |
 | phase-203 | **Symmetry = capture-time drawing aid** - strokes drawn while mirror is ON persist a real mirrored twin; toggling ON/OFF never adds/removes/changes existing content (kills the render-time global mirror flip-flop) | user-reported |
+| phase-204 | **Silent data-loss batch** - voice recording orphaned on rotation; legacy migration readTextHead swallows IO errors → overwrites good column with "" + deletes source; start-fresh proceeds on failed renames; media pickers silent no-op (4-agent audit 2026-08-24) | audit |
+| phase-205 | **Canvas commit integrity** - stroke-commit race (lost/out-of-order/resurrected strokes), LASER fade 25 Hz poll driving undo+Room churn, AGSL reflection silent fallback → direct setRenderEffect (audit) | audit |
+| phase-206 | **Kill perpetual pollers** - Choreographer frame pump leaks & stacks per editor open, auto-lock 1 s poll runs when OFF, voice playback 20 Hz StateFlow, lockout 1 Hz ticker → event-driven/coarse schedules (audit) | audit |
+| phase-207 | **Crypto/DB efficiency** - memoize page decryption vs Room table-level fan-out re-decrypting all rows per keystroke save; lazy search-corpus invalidation w/ hash reuse; BitmapPool byte budget + clear-on-lock (audit) | audit |
+| phase-208 | **Page management UX** - CRITICAL: Trash-tab search renders live notes as trash cards (permanent-delete risk); sort control; Move-to-section + Duplicate UI for existing backend; multi-select bulk actions; palm-rejection persisted + surfaced (audit) | audit |
+| phase-209 | **Search quality & discovery** - recent-search chips, shared pure-JVM fuzzy/subsequence tier in VaultSearchPolicy + CommandPaletteMath, Plugin Store deep-links from empty capability menus + palette action (audit) | audit |
+| phase-210 | **Knowledge graph depth** - neighborhood focus via the imported-but-unused GraphSubgraphFilter, search auto-pan/cycle, TalkBack semantics overlay for nodes + Backlinks sheet entry (audit) | audit |
+| phase-211 | **Release hygiene** - remove blanket androidx.ink keep + stale protobuf keep, drop dead deps (navigation-compose/coil/window-size-class), delete unused lora_italic.ttf (221 KB), Compose compiler metrics, gradle parallel/cache/nonFinalResIds (+config-cache trial) (audit) | audit |
+| phase-212 | **JVM test hardening** - first tests for OrphanImportCleanupPolicy (deletes files!), ShapeRecognitionHelper (runs every freehand commit), 6 plugin stores, plugin installer/updater atomicity, HtmlToMarkdownConverter, wet-engine boundaries (audit) | audit |
 
 ## How phases run
 

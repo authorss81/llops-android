@@ -1,0 +1,15 @@
+# Phase 205: Canvas Commit Integrity — Synchronous Stroke Commits, Event-Driven Laser Fade, Direct AGSL Call [BUG/PERF]
+
+**Goal:** Three verified canvas-pipeline defects: a lost-stroke race, a 25 Hz poll driving DB writes + undo churn, and a silent reflection fallback violating the no-silent-degradation rule.
+
+1. **Stroke commit races** — commit launches async: `coroutineScope.launch(Dispatchers.Default)` (`AnnotationCanvas.kt:1361`, scope `rememberCoroutineScope()` `:244`) then hops Main to mutate + emit (`:1396-1399`); meanwhile ANY parent-side change fully refills the list (`LaunchedEffect(filteredStrokes) { activeStrokeList.clear(); addAll(...) }` `:439-441`). Failure modes: (a) editor disposed before the Main hop ⇒ committed stroke silently lost (autosave never sees it); (b) two fast strokes complete out of order ⇒ z-order/undo corruption; (c) `strokes` captured at drag-end is re-filtered at commit time ⇒ stale snapshot RESURRECTS erased strokes via `onStrokesChanged`.
+   **Fix:** single-writer pending-commit queue drained by a `DisposableEffect` flush that survives disposal (or synchronous Main commit — RDP/snap are cheap); derive `otherStrokes` from CURRENT state at apply time, never capture time. Tests: cancellation-before-flush still delivers the stroke; ordering preserved under rapid multi-stroke; erase+commit interleaving never resurrects deleted strokes.
+
+2. **LASER trail expiry is a 25 Hz full-list poll that drives undo pushes + Room transactions per fade wave.** `AnnotationCanvas.kt:315-327`: `while(true) { …filter…; delay(40) }`; each expiry calls `onStrokesChanged` → `EditorScreen.handleStrokesChange` (`EditorScreen.kt:831-838`) copies the FULL list into the 30-deep undo stack, recomposes, re-hashes layer caches, and arms the 1 s autosave → `saveStrokesForPage` Room tx (`NoteRepository.kt:1181-1232`).
+   **Fix:** fade lasers RENDER-SIDE only (draw-pass alpha clock / single frame clock while lasers exist); commit ONE batched removal per fade wave; exclude laser fades from the undo stack entirely (they are ephemeral by design). Tests: undo stack untouched by laser expiry; exactly one persistence write per wave.
+
+3. **AGSL wet-mix applied via reflection catch-all that fails silently.** `AnnotationCanvas.kt:3779-3785`: `Paint::class.java.getMethod("setRenderEffect", …).invoke(p, …)` inside `catch (_: Exception) {}` — on any ROM quirk wet brushes render flat with zero notice (violates AGENTS.md never-silent-degradation), plus a fresh reflection lookup per layer draw.
+   **Fix:** `setRenderEffect` is public since API 28 — call directly behind the existing SDK_INT gate, delete the reflection, log once via StartupLogPolicy on failure. Source-pin test: no `getMethod("setRenderEffect")` remains.
+
+## DoD
+`gradle assembleDebug` green; `testDebugUnitTest` green incl. commit-queue race tests + laser-fade policy tests; `workspace/phase-205/REPORT.md` documenting the three before/after behaviors with file:line. No schema change, no workflow edits, base-APK rule intact.
