@@ -88,7 +88,7 @@ is_rate_limited() {
 # True when the log shows opencode could not resolve/use THIS model at all
 # (unknown id, provider-side outage) — safe signals for advancing the chain.
 log_is_model_error() {
-  grep -qiE "model not found|unknown model|invalid model|no such model|unexpected server error" \
+  grep -qiE "model not found|unknown model|invalid model|no such model|unexpected server error|upstream error|service temporarily overloaded|temporarily overloaded|streaming response failed|502|503|504|overloaded" \
     "$1" 2>/dev/null && return 0
   return 1
 }
