@@ -165,6 +165,10 @@ fun AnnotationCanvas(
     shapeAutoSnapEnabled: Boolean = false,
     hapticsEnabled: Boolean = true,
     stabilizerEnabled: Boolean = false,
+    // Phase 197 (PERF 1.2): user strength trim 0–100 over the per-brush
+    // smoothing baseline. 100 (= default) is neutral, preserving the pre-197
+    // window-8 behavior for stylus + no-preset sessions exactly.
+    stabilizerStrengthPercent: Int = com.authorss81.noteflow.services.StrokeSmoothingPolicy.DEFAULT_SLIDER_PERCENT,
     pressureCurve: PressureCurve = PressureCurve.LINEAR,
     symmetryMode: SymmetryMode = SymmetryMode.OFF,
     // Phase 13: rich canvas content.
@@ -348,7 +352,18 @@ fun AnnotationCanvas(
     var eraserCursorCanvas by remember { mutableStateOf<androidx.compose.ui.geometry.Offset?>(null) }
 
     // Phase 07: stroke stabilizer (one filter instance per continuous stroke).
+    // Phase 197: the instance is RE-TUNED at each stroke start (see onDragStart)
+    // with the per-brush / per-input window from StrokeSmoothingPolicy — the
+    // create() call itself keeps the legacy defaults so an un-tuned session is
+    // byte-identical to pre-197.
     val stabilizerFilter = remember { StrokeStabilizer.create() }
+
+    // Phase 197: input source of the LAST raw MotionEvent (UI-thread-only, same
+    // passive bridge as pressure/tilt/timestamp below). STYLUS/ERASER → stylus
+    // tuning baseline; FINGER (or unknown) → +2 extra smoothing windows. Starts
+    // true so a first stroke that somehow skips ACTION_DOWN keeps the exact
+    // legacy stylus behavior; every real touch reports a tool type anyway.
+    var lastInputIsStylus by remember { mutableStateOf(true) }
 
     // Eyedropper Magnifying Loupe State
     var sampledColorPreview by remember { mutableStateOf<Color?>(null) }
@@ -830,6 +845,14 @@ fun AnnotationCanvas(
                 val tiltRad = motionEvent.getAxisValue(android.view.MotionEvent.AXIS_TILT)
                 lastTilt = if (tiltRad != 0f) Math.toDegrees(tiltRad.toDouble()).toFloat() else 0f
                 lastTimestampMs = motionEvent.eventTime
+                // Phase 197: passive input-source capture (same bridge, still
+                // consumes nothing) — finger vs stylus drives the stabilizer's
+                // per-input smoothing adjustment at the next stroke start.
+                when (motionEvent.getToolType(0)) {
+                    android.view.MotionEvent.TOOL_TYPE_STYLUS,
+                    android.view.MotionEvent.TOOL_TYPE_ERASER -> lastInputIsStylus = true
+                    else -> lastInputIsStylus = false
+                }
                 // Phase 196: record the REAL event with the OS motion predictor
                 // before anything else reacts to it (documented usage). This
                 // stays strictly passive — it consumes nothing, and the frame
@@ -1043,7 +1066,11 @@ fun AnnotationCanvas(
             // the stroke-commit closure below kept capturing the PREVIOUS layer
             // until some other key (tool/colour/width) forced a restart — i.e.
             // the "new layer only takes effect after switching pens" bug.
-            .pointerInput(currentTool, currentColor, currentWidth, pdfPageFilter, isContinuousMode, activeRawBitmapMap, isLayerLocked, symmetryMode, stabilizerEnabled, eraserMode, activeLayerId, layers) {
+            // Phase 197: stabilizerStrengthPercent / activeBrushPresetId /
+            // importedBrushPresets join the keys so the drag handler always
+            // captures the CURRENT smoothing inputs (same pattern as
+            // stabilizerEnabled).
+            .pointerInput(currentTool, currentColor, currentWidth, pdfPageFilter, isContinuousMode, activeRawBitmapMap, isLayerLocked, symmetryMode, stabilizerEnabled, eraserMode, activeLayerId, layers, stabilizerStrengthPercent, activeBrushPresetId, importedBrushPresets) {
                 // Phase 07: with a view-time mirror active, erasing a stroke must
                 // also work through the mirrored copy — the user sees a mirrored
                 // stroke and expects to erase it in place. Uses the SAME axis as the
@@ -1154,6 +1181,27 @@ fun AnnotationCanvas(
                             // Reset unconditionally so stale smoothing state can never leak into a
                             // new stroke if the toggle changed mid-stroke.
                             stabilizerFilter.reset()
+                            // Phase 197: re-tune the EWMA window for THIS stroke from
+                            // the active brush preset's smoothing, the user strength
+                            // slider, and the pointer input source (finger gets extra
+                            // smoothing; stylus is the design baseline). With no preset,
+                            // slider at 100% and a stylus this resolves to the legacy
+                            // window 8 — pre-197 parity. Runs BEFORE the first point so
+                            // the very first filtered sample already uses the new tuning.
+                            if (stabilizerEnabled) {
+                                val activePreset = activeBrushPresetId?.let { id ->
+                                    com.authorss81.noteflow.services.BrushPresetPack.byId(id)
+                                        ?: importedBrushPresets.firstOrNull { it.id == id }
+                                }
+                                stabilizerFilter.retune(
+                                    windowSize = com.authorss81.noteflow.services.StrokeSmoothingPolicy.effectiveWindowSize(
+                                        presetSmoothing = activePreset?.smoothing,
+                                        sliderPercent = stabilizerStrengthPercent,
+                                        isStylus = lastInputIsStylus
+                                    ),
+                                    prediction = com.authorss81.noteflow.services.StrokeSmoothingPolicy.PREDICTION
+                                )
+                            }
                             val startPressure = PressureCurveHelper.remapPressure(lastPressure, pressureCurve)
                             val startPoint = PointF(
                                 x = canvasOffset.x.coerceIn(0f, pageWidthPx),

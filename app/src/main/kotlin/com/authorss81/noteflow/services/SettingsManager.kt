@@ -164,6 +164,19 @@ class SettingsManager(context: Context) {
         get() = prefs.getBoolean("stroke_stabilizer_enabled", false)
         set(value) = prefs.edit().putBoolean("stroke_stabilizer_enabled", value).apply()
 
+    // Phase 197: stabilizer strength trim, 0–100 (%). 100 = each brush uses its
+    // own designed smoothing (the pre-197 default window 8 when no preset is
+    // active); 0 = raw input. Sanitized through the policy on read AND write so
+    // a hand-edited pref can never put the EWMA window out of range. Prefs only,
+    // no DB schema impact; applied to the NEXT stroke (no mid-stroke retune).
+    var strokeStabilizerStrengthPercent: Int
+        get() = StrokeSmoothingPolicy.sanitizeSliderPercent(
+            prefs.getInt("stroke_stabilizer_strength_percent", StrokeSmoothingPolicy.DEFAULT_SLIDER_PERCENT)
+        )
+        set(value) = prefs.edit()
+            .putInt("stroke_stabilizer_strength_percent", StrokeSmoothingPolicy.sanitizeSliderPercent(value))
+            .apply()
+
     // Pressure-response curve (LINEAR = identity, so default behaviour is unchanged).
     var pressureCurveKey: String
         get() = prefs.getString("pressure_curve_key", "linear") ?: "linear"

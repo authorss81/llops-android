@@ -75,6 +75,10 @@ object BrushPresetFileCodec {
         root.addProperty("size", preset.size.toDouble())
         root.addProperty("colorHex", preset.colorHex)
         root.addProperty("pressureCurveKey", preset.pressureCurveKey)
+        // Phase 197: per-brush stabilizer smoothing. OPTIONAL on decode —
+        // bundles written before phase 197 lack the key and fall back to the
+        // policy default, so old files keep importing unchanged.
+        root.addProperty("smoothing", preset.smoothing.toDouble())
 
         val params = JsonObject()
         params.addProperty("dilution", preset.brushParams.dilution.toDouble())
@@ -171,6 +175,11 @@ object BrushPresetFileCodec {
 
         if (size == null || size !in 0.5f..120f) return DecodeResult.Invalid("brush size out of range")
         val color = colorHex?.takeIf { it.startsWith("#") && it.length in 4..9 } ?: return DecodeResult.Invalid("brush color invalid")
+        // Optional (phase 197); out-of-range or non-numeric values fail safe to
+        // the neutral baseline instead of rejecting an otherwise-valid bundle.
+        val smoothing = StrokeSmoothingPolicy.sanitizeSmoothing(
+            root.get("smoothing")?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }?.asFloat
+        )
 
         return DecodeResult.Preset(
             BrushPreset(
@@ -180,7 +189,8 @@ object BrushPresetFileCodec {
                 brushParams = params,
                 size = size,
                 colorHex = color,
-                pressureCurveKey = pressureCurveKey?.takeIf { BrushPresetImportPolicy.isKnownPressureCurve(it) } ?: "linear"
+                pressureCurveKey = pressureCurveKey?.takeIf { BrushPresetImportPolicy.isKnownPressureCurve(it) } ?: "linear",
+                smoothing = smoothing
             )
         )
     }

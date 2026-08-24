@@ -1,6 +1,7 @@
 package com.authorss81.noteflow
 
 import com.authorss81.noteflow.services.StabilizerPoint
+import com.authorss81.noteflow.services.StrokeSmoothingPolicy
 import com.authorss81.noteflow.services.StrokeStabilizer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -113,5 +114,125 @@ class StrokeStabilizerTest {
         val inMinX = raw.minOf { it.x }
         val inMaxX = raw.maxOf { it.x }
         assertTrue("output x must stay near input bounds", out.all { it.x >= inMinX - 2f && it.x <= inMaxX + 2f })
+    }
+
+    // ---- Phase 197 goldens: explicit window sizes 2 / 8 / 12 -------------------
+    //
+    // These pin the three tuning corners the smoothing policy can produce:
+    // window 2 = raw-feeling (finger-off / slider 0%), window 8 = legacy default,
+    // window 12 = maximum smoothing (slider 100% + smoothing 1.0).
+
+    /** Samples needed until a unit step settles within [tolerance]. */
+    private fun stepSettleSamples(windowSize: Int, tolerance: Float = 5f, cap: Int = 60): Int {
+        val stabilizer = StrokeStabilizer.create(
+            windowSize = windowSize,
+            prediction = StrokeStabilizer.DEFAULT_PREDICTION
+        )
+        stabilizer.next(0f, 0f)
+        var p = stabilizer.next(0f, 0f)
+        var samples = 0
+        while (abs(p.x - 100f) > tolerance) {
+            p = stabilizer.next(100f, 0f)
+            samples++
+            if (samples > cap) return cap + 1
+        }
+        return samples
+    }
+
+    @Test
+    fun `golden window 2 tracks a step almost immediately`() {
+        val settle = stepSettleSamples(windowSize = 2)
+        assertTrue("window 2 must settle within 6 samples, took $settle", settle <= 6)
+    }
+
+    @Test
+    fun `golden window 8 matches the legacy default exactly`() {
+        // Same seed → same input; the parameterless create() must remain
+        // byte-identical to the explicit legacy tuning (pre-197 parity).
+        val raw = noisyLine(n = 120)
+        val legacy = StrokeStabilizer.create()
+        val explicit = StrokeStabilizer.create(
+            windowSize = StrokeStabilizer.DEFAULT_WINDOW_SIZE,
+            prediction = StrokeStabilizer.DEFAULT_PREDICTION
+        )
+        for (point in raw) {
+            val a = legacy.next(point.x, point.y)
+            val b = explicit.next(point.x, point.y)
+            assertEquals(a.x, b.x, 0f)
+            assertEquals(a.y, b.y, 0f)
+        }
+    }
+
+    @Test
+    fun `golden window 12 lags far behind the same step`() {
+        val settleFast = stepSettleSamples(windowSize = 2)
+        val settleSlow = stepSettleSamples(windowSize = 12)
+        assertTrue(
+            "window 12 must react visibly slower than window 2 ($settleSlow vs $settleFast)",
+            settleSlow > settleFast * 2
+        )
+        // After 5 samples window 12 is still far from the target while window 2
+        // has essentially arrived.
+        val w12 = StrokeStabilizer.create(windowSize = 12, prediction = StrokeStabilizer.DEFAULT_PREDICTION)
+        w12.next(0f, 0f)
+        var p = w12.next(0f, 0f)
+        repeat(5) { p = w12.next(100f, 0f) }
+        assertTrue("window 12 must still lag after 5 samples, was ${p.x}", abs(p.x - 100f) > 20f)
+    }
+
+    @Test
+    fun `jitter suppression increases monotonically with window size`() {
+        val raw = noisyLine(n = 300)
+        fun varianceFor(windowSize: Int): Double =
+            residualVariance(
+                run {
+                    val f = StrokeStabilizer.create(windowSize = windowSize, prediction = StrokeStabilizer.DEFAULT_PREDICTION)
+                    raw.map { f.next(it.x, it.y) }
+                },
+                2f, 50f
+            )
+        val v2 = varianceFor(2)
+        val v8 = varianceFor(8)
+        val v12 = varianceFor(12)
+        val rawVar = residualVariance(raw, 2f, 50f)
+        assertTrue("raw input must be noisy", rawVar > 10.0)
+        assertTrue("window 12 must beat window 8 ($v12 vs $v8)", v12 < v8)
+        assertTrue("window 8 must beat window 2 ($v8 vs $v2)", v8 < v2)
+        assertTrue("every window must reduce jitter ($v2 vs $rawVar)", v2 < rawVar)
+    }
+
+    @Test
+    fun `retune changes the live filter between strokes`() {
+        val filter = com.authorss81.noteflow.services.StabilizerFilter(
+            StrokeSmoothingPolicy.MAX_WINDOW_SIZE,
+            StrokeStabilizer.DEFAULT_PREDICTION
+        )
+        // Converge somewhere off-origin, then re-tune DOWN to window 2 and
+        // verify the very next steps move with window-2 responsiveness.
+        repeat(40) { filter.next(-500f, -500f) }
+        filter.reset()
+        filter.retune(StrokeSmoothingPolicy.MIN_WINDOW_SIZE, StrokeStabilizer.DEFAULT_PREDICTION)
+        filter.next(0f, 0f)
+        var p = filter.next(0f, 0f)
+        var samples = 0
+        while (abs(p.x - 100f) > 5f) {
+            p = filter.next(100f, 0f)
+            samples++
+            assertTrue("retuned filter must not stall (>$samples samples)", samples < 20)
+        }
+        assertTrue(samples <= 6)
+
+        // Sub-window sizes clamp up to the minimum instead of dividing by ~0.
+        val clamped = StrokeStabilizer.create(windowSize = 12, prediction = StrokeStabilizer.DEFAULT_PREDICTION)
+        clamped.retune(0, StrokeStabilizer.DEFAULT_PREDICTION)
+        clamped.next(0f, 0f)
+        var q = clamped.next(0f, 0f)
+        var clampedSamples = 0
+        while (abs(q.x - 100f) > 5f) {
+            q = clamped.next(100f, 0f)
+            clampedSamples++
+            if (clampedSamples > 20) break
+        }
+        assertTrue("retune(0) must behave like the minimum window", clampedSamples <= 6)
     }
 }

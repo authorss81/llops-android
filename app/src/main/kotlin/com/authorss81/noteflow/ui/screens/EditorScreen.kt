@@ -465,6 +465,8 @@ fun EditorScreen(
 
     // Phase 07 painting features: stabilizer / pressure curve / symmetry mode.
     var stabilizerEnabled by remember { mutableStateOf(viewModel.settings.strokeStabilizerEnabled) }
+    // Phase 197: user strength trim 0–100 over the per-brush smoothing baseline.
+    var stabilizerStrengthPercent by remember { mutableIntStateOf(viewModel.settings.strokeStabilizerStrengthPercent) }
     var pressureCurve by remember { mutableStateOf(PressureCurve.fromSettingKey(viewModel.settings.pressureCurveKey)) }
 
 
@@ -2076,6 +2078,7 @@ fun EditorScreen(
                 shapeAutoSnapEnabled = shapeAutoSnapEnabled,
                 hapticsEnabled = hapticsEnabled,
                 stabilizerEnabled = stabilizerEnabled,
+                stabilizerStrengthPercent = stabilizerStrengthPercent,
                 pressureCurve = pressureCurve,
                 symmetryMode = symmetryMode,
                 onZoomScaleChanged = { zoomScale = it },
@@ -2562,6 +2565,13 @@ fun EditorScreen(
                 onStabilizerToggle = { enabled ->
                     stabilizerEnabled = enabled
                     viewModel.settings.strokeStabilizerEnabled = enabled
+                },
+                stabilizerStrengthPercent = stabilizerStrengthPercent,
+                onStabilizerStrengthChange = { percent ->
+                    // Immediate apply: state recomposes AnnotationCanvas, and the
+                    // next stroke start resolves its window from this value.
+                    stabilizerStrengthPercent = percent
+                    viewModel.settings.strokeStabilizerStrengthPercent = percent
                 },
                 pressureCurve = pressureCurve,
                 onPressureCurveSelect = { curve ->
@@ -4664,6 +4674,8 @@ private fun CanvasSettingsBottomSheet(
     onConvertToShape: () -> Unit = {},
     stabilizerEnabled: Boolean = false,
     onStabilizerToggle: (Boolean) -> Unit = {},
+    stabilizerStrengthPercent: Int = com.authorss81.noteflow.services.StrokeSmoothingPolicy.DEFAULT_SLIDER_PERCENT,
+    onStabilizerStrengthChange: (Int) -> Unit = {},
     pressureCurve: PressureCurve = PressureCurve.LINEAR,
     onPressureCurveSelect: (PressureCurve) -> Unit = {},
     symmetryMode: SymmetryMode = SymmetryMode.OFF,
@@ -5334,6 +5346,42 @@ private fun CanvasSettingsBottomSheet(
                             checked = stabilizerEnabled,
                             onCheckedChange = onStabilizerToggle
                         )
+                    }
+
+                    // Phase 197: smoothing-strength slider (0–100%). 100% = each
+                    // brush uses its own designed smoothing (window 8 when no
+                    // preset is active — the pre-197 default); 0% = raw input.
+                    // Finger input adds extra smoothing automatically; this dial
+                    // is the user's global trim. 5% steps keep persisted values
+                    // stable; applies to the NEXT stroke, no mid-stroke retune.
+                    if (stabilizerEnabled) {
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    "Smoothing strength",
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                                Text(
+                                    "$stabilizerStrengthPercent%",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                            Slider(
+                                value = stabilizerStrengthPercent.toFloat(),
+                                onValueChange = { onStabilizerStrengthChange(Math.round(it).toInt().coerceIn(0, 100)) },
+                                valueRange = 0f..100f,
+                                steps = 19
+                            )
+                            Text(
+                                "Higher = steadier lines, more lag · Lower = more responsive",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
 
                     // Pressure response curve selector.

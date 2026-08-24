@@ -280,6 +280,25 @@
 > `Phase193ResizeHandleVisibilityTest` (10, pure JVM + source pins). No schema
 > change, no new deps.
 
+> **Implemented in phase-197** (2026-08-24, per-brush stabilizer tuning + smoothing
+> slider — PERF 1.2, see `workspace/phase-197/REPORT.md`): every `BrushPreset` now
+> carries a `smoothing: Float` in [0..1] (`BrushPreset.kt`; calligraphy/chalk 0.30
+> tighter than marker 0.70, pencil 0.15 tightest, watercolor 0.90 loosest; optional
+> `.inkbrush` codec key, old bundles decode unchanged) and a new pure-JVM
+> `services/StrokeSmoothingPolicy.kt` folds preset + user slider + input source into
+> one EWMA window: base = preset→2..12, FINGER baseline +2 (folded in BEFORE the trim,
+> so slider 0% always means raw input), window = 2 + round((baseline−2)·slider%).
+> Legacy parity golden: stylus + no preset + 100% ⇒ window **8** = pre-197 exactly.
+> The canvas keeps its pinned `remember { StrokeStabilizer.create() }` and re-tunes at
+> each drag START via new `StrokeStabilizer/StabilizerFilter.retune()` reading the
+> passive `getToolType(0)` capture (`lastInputIsStylus`) in the existing
+> `pointerInteropFilter`; `stabilizerStrengthPercent` (pref
+> `stroke_stabilizer_strength_percent`, default 100, sanitized both ways) is exposed as
+> a "Smoothing strength" 0–100% slider in CanvasSettingsBottomSheet, persisted +
+> applied next stroke. Tests: goldens for windows 2/8/12 + retune in
+> `StrokeStabilizerTest` (10), `Phase197StrokeSmoothingTest` (17 behavior+source pins).
+> No schema change, no new deps.
+
 > **Implemented in phase-196** (2026-08-24, stylus motion prediction — PERF 1.1, see
 > `workspace/phase-196/REPORT.md`): the ink canvas now records every raw `MotionEvent`
 > with `androidx.input:input-motionprediction:1.0.0` (`MotionEventPredictor.newInstance`,

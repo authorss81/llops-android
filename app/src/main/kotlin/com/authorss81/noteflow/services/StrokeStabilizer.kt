@@ -28,6 +28,13 @@ class StrokeStabilizer private constructor(private val filter: StabilizerFilter)
     fun reset() = filter.reset()
     fun next(x: Float, y: Float) = filter.next(x, y)
 
+    /**
+     * Phase 197: live re-tune between strokes (delegates to [StabilizerFilter.retune]).
+     * The canvas calls this at stroke start with the per-brush/per-input window
+     * from [StrokeSmoothingPolicy].
+     */
+    fun retune(windowSize: Int, prediction: Float) = filter.retune(windowSize, prediction)
+
     companion object {
         /** Creates a stabilizer; pass the same instance for one continuous stroke. */
         fun create(windowSize: Int = DEFAULT_WINDOW_SIZE, prediction: Float = DEFAULT_PREDICTION): StrokeStabilizer =
@@ -53,8 +60,8 @@ class StrokeStabilizer private constructor(private val filter: StabilizerFilter)
  * tested directly; callers normally use [StrokeStabilizer.create].
  */
 class StabilizerFilter(
-    private val windowSize: Int = StrokeStabilizer.DEFAULT_WINDOW_SIZE,
-    private val prediction: Float = StrokeStabilizer.DEFAULT_PREDICTION
+    private var windowSize: Int = StrokeStabilizer.DEFAULT_WINDOW_SIZE,
+    private var prediction: Float = StrokeStabilizer.DEFAULT_PREDICTION
 ) {
     private var initialized = false
     private var smoothedX = 0f
@@ -64,6 +71,18 @@ class StabilizerFilter(
 
     fun reset() {
         initialized = false
+    }
+
+    /**
+     * Phase 197: live re-tune between strokes. The EWMA alpha is derived from
+     * [windowSize] on EVERY [next] call, so updating it here takes effect from
+     * the next sample without discarding the instance (the canvas calls this at
+     * stroke start, right after [reset], with the per-brush/per-input window
+     * from [StrokeSmoothingPolicy]).
+     */
+    fun retune(windowSize: Int, prediction: Float) {
+        this.windowSize = windowSize.coerceAtLeast(2)
+        this.prediction = prediction
     }
 
     fun next(x: Float, y: Float): StabilizerPoint {

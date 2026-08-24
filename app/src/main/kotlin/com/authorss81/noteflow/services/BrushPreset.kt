@@ -16,7 +16,15 @@ data class BrushPreset(
     val brushParams: BrushStudioParams,
     val size: Float,
     val colorHex: String,
-    val pressureCurveKey: String
+    val pressureCurveKey: String,
+    /**
+     * Phase 197: per-brush stroke-stabilizer smoothing fraction in [0..1]
+     * (mapped to EWMA window 2..12 by [StrokeSmoothingPolicy]). Fast/precise
+     * brushes (calligraphy, pencil) sit LOW; broad forgiving brushes (marker,
+     * watercolor) sit HIGH. Default = the no-preset baseline so imported
+     * presets and pre-197 call sites behave exactly like the legacy tuning.
+     */
+    val smoothing: Float = StrokeSmoothingPolicy.DEFAULT_SMOOTHING
 )
 
 /**
@@ -38,7 +46,8 @@ object BrushPresetPack {
             ),
             size = 3.5f,
             colorHex = "#334155",
-            pressureCurveKey = "linear"
+            pressureCurveKey = "linear",
+            smoothing = 0.15f
         ),
         BrushPreset(
             id = "fountain_pen",
@@ -50,7 +59,8 @@ object BrushPresetPack {
             ),
             size = 4.0f,
             colorHex = "#1B365D",
-            pressureCurveKey = "heavy"
+            pressureCurveKey = "heavy",
+            smoothing = 0.30f
         ),
         BrushPreset(
             id = "marker",
@@ -62,7 +72,8 @@ object BrushPresetPack {
             ),
             size = 9.0f,
             colorHex = "#9333EA",
-            pressureCurveKey = "linear"
+            pressureCurveKey = "linear",
+            smoothing = 0.70f
         ),
         BrushPreset(
             id = "soft_watercolor",
@@ -74,7 +85,8 @@ object BrushPresetPack {
             ),
             size = 14.0f,
             colorHex = "#3B82F6",
-            pressureCurveKey = "light"
+            pressureCurveKey = "light",
+            smoothing = 0.90f
         ),
         BrushPreset(
             id = "dry_oil",
@@ -86,7 +98,8 @@ object BrushPresetPack {
             ),
             size = 12.0f,
             colorHex = "#B45309",
-            pressureCurveKey = "heavy"
+            pressureCurveKey = "heavy",
+            smoothing = 0.60f
         ),
         BrushPreset(
             id = "chalk",
@@ -98,7 +111,10 @@ object BrushPresetPack {
             ),
             size = 10.0f,
             colorHex = "#E2E8F0",
-            pressureCurveKey = "light"
+            pressureCurveKey = "light",
+            // Calligraphy is a fast, deliberate stroke tool — tighter than the
+            // broad marker so quick flicks stay crisp (phase-197 requirement).
+            smoothing = 0.30f
         ),
         BrushPreset(
             id = "highlighter",
@@ -110,7 +126,8 @@ object BrushPresetPack {
             ),
             size = 18.0f,
             colorHex = "#FBBF24",
-            pressureCurveKey = "linear"
+            pressureCurveKey = "linear",
+            smoothing = 0.45f
         ),
         BrushPreset(
             id = "eraser",
@@ -122,7 +139,10 @@ object BrushPresetPack {
             ),
             size = 22.0f,
             colorHex = "#475569",
-            pressureCurveKey = "linear"
+            pressureCurveKey = "linear",
+            // The eraser path never routes through the stabilizer; a neutral
+            // value keeps every pack member valid all the same.
+            smoothing = 0.50f
         )
     )
 
@@ -157,6 +177,17 @@ object BrushPresetPack {
     fun validatePresetSizes(): List<Pair<String, String>> {
         return ALL.mapNotNull { preset ->
             if (preset.size !in 0.5f..120f) preset.id to "size ${preset.size} out of [0.5,120]" else null
+        }
+    }
+
+    /** Every preset must carry an in-range stabilizer smoothing fraction (phase 197). */
+    fun validatePresetSmoothing(): List<Pair<String, String>> {
+        return ALL.mapNotNull { preset ->
+            if (preset.smoothing.isNaN() || preset.smoothing !in 0f..1f) {
+                preset.id to "smoothing ${preset.smoothing} out of [0,1]"
+            } else {
+                null
+            }
         }
     }
 
