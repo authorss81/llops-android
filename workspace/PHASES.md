@@ -65,6 +65,7 @@ painting engine, free features).
 | phase-193 | **Hide resize handles on code blocks / sticky notes / photo attachments until dragging** - corner resize symbols only visible while dragging/resizing, still resizable from item body | user-reported |
 | phase-194 | **Dim Undo/Redo buttons on canvas when stack is empty** - disabled/dimmed appearance when nothing to undo/redo, bright when available | user-reported |
 | phase-195 | **Screenshot render suite** - Paparazzi (JVM, no emulator) PNGs for every screen x state x theme, saved to `visual-qa/screenshots/` curated baseline + documented artifact-upload path | user-reported |
+| phase-203 | **Symmetry = capture-time drawing aid** - strokes drawn while mirror is ON persist a real mirrored twin; toggling ON/OFF never adds/removes/changes existing content (kills the render-time global mirror flip-flop) | user-reported |
 
 ## How phases run
 
