@@ -294,10 +294,17 @@
 > fill at every `drawPaperCard` call site, strictly UNDER the ink pass
 > (LOW_END devices skip); (3) `EraserGeometryPolicy.cursorFillAlphaAt` =
 > exact `BrushColorModeMath.edgeFeather` at hardness 1 — the PARTIAL eraser
-> aim cursor fills through a 13-stop radial gradient sampled from it, giving
-> the cursor the same >=1.5px AA penumbra as ink. Tests: `WetMixingMathTest`
-> (10), `PaperGrainPolicyTest` (9), `Phase200EraserCursorAAParityTest` (7),
-> `Phase200CanvasRenderParityTest` (10 source pins). DoD visual:
+> aim cursor fills through a radial gradient with an opaque plateau out to
+> `cursorBandStartNd` and all 12 sampling segments concentrated across the
+> feather band, giving the cursor the same >=1.5px AA penumbra as ink
+> (review-fix: uniform stops under-sampled the band on large radii; the shipped
+> interpolation is pinned to sub-1% alpha error). Tests: `WetMixingMathTest`
+> (9), `PaperGrainPolicyTest` (9), `Phase200EraserCursorAAParityTest` (9),
+> `Phase200CanvasRenderParityTest` (11 source pins). Review fixes (2026-08-24):
+> band-concentrated cursor stops + `cursorBandStartNd` (consumed by the renderer,
+> drift-guarded against `edgeFeather`'s internal band), GLSL knee direction
+> aligned with the Kotlin `c <= threshold` comparison, bit-exact zero-pigment
+> passthrough in the shader, doc count corrections. DoD visual:
 > `workspace/phase-200/before-after.png` (rendered from the real compiled
 > policy classes; no emulator on CI). No schema change, no new deps.
 

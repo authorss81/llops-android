@@ -31,6 +31,36 @@ public class RenderBeforeAfter {
             (int) (sb * a + bb * (1 - a)));
     }
 
+    /**
+     * Review-fix honesty change: evaluates the alpha of what the app ACTUALLY
+     * ships — the piecewise-linear interpolation over the exact radial-gradient
+     * stop list built by AnnotationCanvas.LiveStrokePreview (opaque plateau out
+     * to cursorBandStartNd, then CURSOR_FEATHER_STOP_COUNT samples across
+     * [bandStart, 1]) — not the raw hermite curve. Uses the real policy
+     * functions for both the band start and the sampled falloff.
+     */
+    static float shippedCursorAlpha(float dist, float radius) {
+        int n = EraserGeometryPolicy.CURSOR_FEATHER_STOP_COUNT;
+        float bandStart = EraserGeometryPolicy.INSTANCE.cursorBandStartNd(radius);
+        int count = n + 2;
+        float[] pos = new float[count], alp = new float[count];
+        pos[0] = 0f;
+        alp[0] = EraserGeometryPolicy.INSTANCE.cursorFillAlphaAt(0f, radius);
+        for (int i = 0; i <= n; i++) {
+            float nd = bandStart + (1f - bandStart) * i / (float) n;
+            pos[i + 1] = Math.min(nd, 1f);
+            alp[i + 1] = EraserGeometryPolicy.INSTANCE.cursorFillAlphaAt(Math.min(nd, 1f), radius);
+        }
+        if (dist <= pos[0]) return alp[0];
+        for (int i = 1; i < count; i++) {
+            if (dist <= pos[i]) {
+                float t = (pos[i] == pos[i - 1]) ? 0f : (dist - pos[i - 1]) / (pos[i] - pos[i - 1]);
+                return alp[i - 1] + (alp[i] - alp[i - 1]) * t;
+            }
+        }
+        return alp[count - 1];
+    }
+
     public static void main(String[] args) throws Exception {
         int panelW = 420, panelH = 240, pad = 16;
         BufferedImage img = new BufferedImage((panelW + pad) * 2 + pad, (panelH + 34) * 3 + pad, BufferedImage.TYPE_INT_ARGB);
@@ -113,7 +143,7 @@ public class RenderBeforeAfter {
                     float fill;
                     if (after) {
                         fill = (dist >= 1f) ? 0f
-                            : EraserGeometryPolicy.INSTANCE.cursorFillAlphaAt(Math.min(dist, 1f), radius) * EraserGeometryPolicy.CURSOR_FILL_ALPHA;
+                            : shippedCursorAlpha(Math.min(dist, 1f), radius) * EraserGeometryPolicy.CURSOR_FILL_ALPHA;
                     } else {
                         fill = dist <= 1f ? EraserGeometryPolicy.CURSOR_FILL_ALPHA : 0f;
                     }
@@ -127,14 +157,14 @@ public class RenderBeforeAfter {
             for (int px = 0; px < stripW; px++) {
                 float nd = 1f - (float) px / stripW + 0.02f; // rim -> center
                 float a = after
-                    ? EraserGeometryPolicy.INSTANCE.cursorFillAlphaAt(Math.min(nd, 1f), radius) * EraserGeometryPolicy.CURSOR_FILL_ALPHA
+                    ? shippedCursorAlpha(Math.min(nd, 1f), radius) * EraserGeometryPolicy.CURSOR_FILL_ALPHA
                     : (nd <= 1f ? EraserGeometryPolicy.CURSOR_FILL_ALPHA : 0f);
                 int barH = (int) (a * 10f);
                 g.setColor(new java.awt.Color(0xFF3366E8));
                 g.fillRect(stripX + px, stripY + 10 - barH, 1, barH);
             }
             g.setColor(col == 1 ? new java.awt.Color(0xFF7CE38B) : new java.awt.Color(0xFFF28B82));
-            g.drawString(after ? "AFTER: soft edge sampled from edgeFeather (ink AA parity)" : "BEFORE: hard-edged flat fill (aliased rim)", x0 + 4, y + panelH + 20);
+            g.drawString(after ? "AFTER: shipped gradient — plateau + band-sampled edgeFeather" : "BEFORE: hard-edged flat fill (aliased rim)", x0 + 4, y + panelH + 20);
         }
 
         File out = new File(args.length > 0 ? args[0] : ".");

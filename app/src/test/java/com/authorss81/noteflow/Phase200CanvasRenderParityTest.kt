@@ -51,12 +51,40 @@ class Phase200CanvasRenderParityTest {
         assertTrue(shader.contains("half3 linearToSrgb3(half3 c)"))
         val linBase = shader.indexOf("half3 linBase = srgbToLinear3(base.rgb);")
         val linBrush = shader.indexOf("half3 linBrush = srgbToLinear3(vibBrushColor);")
-        val writeBack = shader.indexOf("half3 mixedRgb = linearToSrgb3(mixedLin);")
+        val writeBack = shader.indexOf("mixedRgb = linearToSrgb3(mixedLin);")
         assertTrue("shader must linearize base", linBase > 0)
         assertTrue("shader must linearize brush", linBrush > 0)
         assertTrue("shader must re-encode the mixed result", writeBack > linBase)
         // the OLD gamma-space product is gone from the shader
         assertEquals(-1, shader.indexOf("(1.0 - base.rgb) * (1.0 - vibBrushColor)"))
+    }
+
+    @Test
+    fun `shader knees match the Kotlin reference comparison direction exactly`() {
+        // Review-fix (phase-200): Kotlin takes the LINEAR segment when
+        // c <= threshold (`if (c <= 0.04045f)`), so the GLSL step must select lo
+        // at equality too — `step(c, threshold)` — not `step(threshold, c)`.
+        val shader = shaderSource()
+        assertTrue(shader.contains("step(c, half3(0.04045))"))
+        assertTrue(shader.contains("step(c, half3(0.0031308))"))
+        assertEquals(-1, shader.indexOf("step(half3(0.04045), c)"))
+        assertEquals(-1, shader.indexOf("step(half3(0.0031308), c)"))
+    }
+
+    @Test
+    fun `zero-pigment pixels stay bit-exact with the pre-200 write-back`() {
+        // Review-fix (phase-200): only REAL mixes pay the fp16 EOTF round trip;
+        // zero-pigment-over-paint passes base.rgb through and empty canvas
+        // passes the vibrancy brush color through — exactly like pre-200.
+        val shader = shaderSource()
+        val condIdx = shader.indexOf("if (base.a > 0.0 && pigmentFactor > 0.0) {")
+        val passBase = shader.indexOf("mixedRgb = base.rgb;")
+        val passBrush = shader.indexOf("mixedRgb = vibBrushColor;")
+        val linBase = shader.indexOf("half3 linBase = srgbToLinear3(base.rgb);")
+        assertTrue(condIdx > 0)
+        assertTrue(passBase > condIdx)
+        assertTrue(passBrush > passBase)
+        assertTrue(linBase > 0 && condIdx > linBase)
     }
 
     @Test
@@ -157,6 +185,10 @@ class Phase200CanvasRenderParityTest {
         assertTrue(region.contains("EraserGeometryPolicy.cursorFillAlphaAt(nd, previewR)"))
         assertTrue(region.contains("EraserGeometryPolicy.CURSOR_FILL_ALPHA"))
         assertTrue(region.contains("EraserGeometryPolicy.CURSOR_RING_ALPHA"))
+        // review-fix (phase-200): stops are concentrated across the feather
+        // band (opaque plateau out to cursorBandStartNd), not spread uniformly
+        assertTrue(region.contains("EraserGeometryPolicy.cursorBandStartNd(previewR)"))
+        assertEquals(-1, region.indexOf("val nd = i.toFloat() / n"))
         // the pre-200 hard flat fill is gone
         assertEquals(-1, region.indexOf("drawCircle(currentColor.copy(alpha = 0.22f), radius = previewR"))
     }

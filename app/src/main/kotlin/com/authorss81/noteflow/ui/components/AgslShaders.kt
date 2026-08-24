@@ -79,16 +79,20 @@ object AgslShaders {
         // channelFromMixSpace (ColorSpaces.LinearSrgb). Mixing gamma-encoded
         // sRGB directly collapsed bright complementary washes into muddy dark
         // browns; linear-light absorbance keeps equal-energy mixes luminous.
+        // Review-fix (phase-200): the knee comparison matches the Kotlin
+        // reference EXACTLY — `step(c, threshold)` selects the linear segment
+        // at c <= threshold, same as the Kotlin `if (c <= …)` (the previous
+        // `step(threshold, c)` flipped one ulp early at exactly the knee).
         half3 srgbToLinear3(half3 c) {
             half3 lo = c / 12.92;
             half3 hi = pow((c + 0.055) / 1.055, half3(2.4));
-            return mix(lo, hi, step(half3(0.04045), c));
+            return mix(hi, lo, step(c, half3(0.04045)));
         }
 
         half3 linearToSrgb3(half3 c) {
             half3 lo = c * 12.92;
             half3 hi = pow(c, half3(1.0 / 2.4)) * 1.055 - 0.055;
-            return mix(lo, hi, step(half3(0.0031308), c));
+            return mix(hi, lo, step(c, half3(0.0031308)));
         }
 
         half4 main(float2 coord) {
@@ -209,7 +213,19 @@ object AgslShaders {
             } else {
                 mixedLin = linBrush;
             }
-            half3 mixedRgb = linearToSrgb3(mixedLin);
+            // Review-fix (phase-200): pixels where NOTHING mixes stay BIT-EXACT
+            // with the pre-200 write-back instead of paying an fp16 EOTF round
+            // trip: a zero-pigment deposit over existing paint passes base.rgb
+            // straight through, and an empty canvas passes the vibrancy-adjusted
+            // brush color straight through. Only real mixes are re-encoded.
+            half3 mixedRgb;
+            if (base.a > 0.0 && pigmentFactor > 0.0) {
+                mixedRgb = linearToSrgb3(mixedLin);
+            } else if (base.a > 0.0) {
+                mixedRgb = base.rgb;
+            } else {
+                mixedRgb = vibBrushColor;
+            }
 
             // Impasto: Thick paint 3D relief with bristle lines and lighting
             if (uImpasto > 0.0) {

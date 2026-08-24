@@ -2876,14 +2876,31 @@ private fun LiveStrokePreview(
                     // BrushColorModeMath.edgeFeather(hardness=1) curve the wet
                     // shader uses — so the cursor edge has the same guaranteed
                     // >=1.5px penumbra as real ink instead of a hard aliased
-                    // rim. Linear interpolation between the sampled stops
-                    // approximates the hermite to sub-1% alpha error.
+                    // rim.
+                    //
+                    // Review-fix (phase-200): the stops are NOT uniform across
+                    // [0,1] — that under-sampled the penumbra on large radii
+                    // (at r=96px the whole 1.5px hermite fell inside one stop
+                    // interval and rendered ~8px wide). The layout now holds an
+                    // opaque plateau out to cursorBandStartNd(previewR) — the
+                    // exact edgeFeather band start — and spends ALL sampling
+                    // stops uniformly across [bandStart, 1]. Piecewise-linear
+                    // interpolation of the hermite over n segments has max
+                    // error ≈ 0.75/n² of full scale (≈0.5% at n=12), so the
+                    // shipped gradient tracks the ink curve to sub-1% alpha.
                     val fillColor =
                         currentColor.copy(alpha = com.authorss81.noteflow.services.EraserGeometryPolicy.CURSOR_FILL_ALPHA)
-                    val stops = ArrayList<Pair<Float, Color>>(com.authorss81.noteflow.services.EraserGeometryPolicy.CURSOR_FEATHER_STOP_COUNT + 1)
                     val n = com.authorss81.noteflow.services.EraserGeometryPolicy.CURSOR_FEATHER_STOP_COUNT
+                    val bandStart =
+                        com.authorss81.noteflow.services.EraserGeometryPolicy.cursorBandStartNd(previewR)
+                    val stops = ArrayList<Pair<Float, Color>>(n + 2)
+                    stops.add(
+                        0f to fillColor.copy(
+                            alpha = fillColor.alpha * com.authorss81.noteflow.services.EraserGeometryPolicy.cursorFillAlphaAt(0f, previewR)
+                        )
+                    )
                     for (i in 0..n) {
-                        val nd = i.toFloat() / n
+                        val nd = bandStart + (1f - bandStart) * i.toFloat() / n
                         val a = com.authorss81.noteflow.services.EraserGeometryPolicy.cursorFillAlphaAt(nd, previewR)
                         stops.add(nd to fillColor.copy(alpha = fillColor.alpha * a))
                     }

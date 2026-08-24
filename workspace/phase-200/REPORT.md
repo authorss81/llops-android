@@ -2,7 +2,12 @@
 
 **Date:** 2026-08-24 · **Status:** DONE (code + tests + `gradle assembleDebug` green;
 full `gradle testDebugUnitTest` 2674 tests / 4 failures, ALL reproduced on a clean
-stash — see §7)
+stash — see §7). **Review fixes (2026-08-24, see §9):** eraser-cursor stop layout
+concentrated across the feather band, shader knee direction aligned with the Kotlin
+reference, bit-exact zero-pigment passthrough restored, doc/test-count corrections.
+Review-fix verification: `gradle assembleDebug` green; full
+`gradle testDebugUnitTest` 2678 / 3 failures (same pre-existing environmental set;
+the `WikiLinkParserCacheUnitTest` timing flake passed this run).
 
 ## 1. What shipped
 
@@ -86,9 +91,17 @@ the ink falloff uses:
 - `cursorFillAlphaAt(nd, radiusPx)` = **exactly** `BrushColorModeMath.edgeFeather(nd,
   hardness = 1f, radiusPx)` — pinned to 0 tolerance across nd ∈ [0,1] × 10 radii.
 - `LiveStrokePreview` PARTIAL branch: the flat `drawCircle` is replaced by a
-  `Brush.radialGradient` with `CURSOR_FEATHER_STOP_COUNT + 1 = 13` stops sampled from
-  that curve (linear interpolation between stops approximates the hermite to sub-1 %
-  alpha error); the crisp guide ring stays (`CURSOR_RING_ALPHA` 0.6, width 2 px) for
+  `Brush.radialGradient`. **Review-fix:** the stop layout is NOT uniform across
+  [0,1] — uniform stops put the whole 1.5px hermite inside ONE stop interval on
+  large radii (at `previewR` = 96px the penumbra rendered ≈8px wide, local
+  interpolation error ≈75 alpha points, so the original "sub-1% error" claim was
+  false). The shipped layout holds an opaque plateau out to
+  `EraserGeometryPolicy.cursorBandStartNd(previewR)` — the exact `edgeFeather`
+  band start — and spends all `CURSOR_FEATHER_STOP_COUNT = 12` sampling segments
+  across `[bandStart, 1]`, where piecewise-linear interpolation of the hermite
+  has max error ≈ 0.75/n² ≈ 0.5% of full scale (sub-1% claim now TRUE, pinned by
+  `shipped gradient stop layout tracks the ink curve to sub-1 percent alpha`).
+  The crisp guide ring stays (`CURSOR_RING_ALPHA` 0.6, width 2 px) for
   aim precision. `CURSOR_FILL_ALPHA` 0.22 keeps the pre-200 look inside the band.
   The phase-198 structural pin expression
   `EraserGeometryPolicy.previewRadius(currentWidth, currentWidth)` is preserved.
@@ -135,9 +148,9 @@ visible on both families), select the PARTIAL eraser and observe the cursor rim.
 
 | Check | Result |
 |---|---|
-| `gradle :app:testDebugUnitTest` (targeted: WetMixingMathTest, PaperGrainPolicyTest, Phase200EraserCursorAAParityTest, Phase200CanvasRenderParityTest) | 34 / 34 green |
-| `gradle testDebugUnitTest` (full) | **2674 completed / 4 failed — all four reproduced on a clean stash** (§7) |
-| `gradle assembleDebug` | **BUILD SUCCESSFUL** |
+| `gradle :app:testDebugUnitTest` (targeted: WetMixingMathTest, PaperGrainPolicyTest, Phase200EraserCursorAAParityTest, Phase200CanvasRenderParityTest) | 34 / 34 green at phase commit; **38 / 38 green after review fixes** (9+9+9+11) |
+| `gradle testDebugUnitTest` (full) | **2674 completed / 4 failed — all four reproduced on a clean stash** (§7); review-fix re-run: 2678 / 3 (same environmental set, WikiLink flake passed) |
+| `gradle assembleDebug` | **BUILD SUCCESSFUL** (phase commit + review-fix re-run) |
 | Shader ↔ Kotlin mirror | source-pinned (`Phase200CanvasRenderParityTest`): both sides carry the piecewise EOTF; old gamma product absent from shader; `sourceOverAlpha` slice contains no "linear" |
 | Blending regression | alpha accumulation untouched (test); `ColorSpaces.Srgb` path byte-equal to the pre-200 formula (test); impasto/wet-edge/vibrancy math unchanged |
 
@@ -145,27 +158,35 @@ visible on both families), select the PARTIAL eraser and observe the cursor rim.
 
 - `WetMixingMathTest` — 3 legacy tests kept (all still valid under the new default;
   the complementary test's assertions hold in linear space: R = 0.9 exactly,
-  G/B ≈ 0.5845) **+ 5 new**: piecewise-EOTF known values + full-range round trip +
+  G/B ≈ 0.5845) **+ 6 new**: piecewise-EOTF known values + full-range round trip +
   out-of-range fail-safe; default==LinearSrgb and ≠ Srgb on mid-tones; SRGB-space
   legacy bit-parity; endpoint identities in any space (factor 0 → base, black base +
   full deposit → brush); **chroma-preservation anti-mud property** (linear result
   keeps more channel spread than gamma for bright complements) + goldens; unknown
-  space fails safe to linear.
+  space fails safe to linear. **Total 9** (the phase commit's REPORT originally said
+  "+5 new / (10)" — corrected in review: 6 new, 9 total).
 - `PaperGrainPolicyTest` (9) — determinism, structural tileability at the wrap seam,
   full-range noise + family separation, alpha envelope incl. NaN/∞, fleck-vs-tooth
   dominance + monotonic curve, low-end gate, cache-key stability, byte budget,
   speckle tints per family.
-- `Phase200EraserCursorAAParityTest` (7) — band ≥ MIN_FEATHER_PX for usable radii and
-  ≤ half-radius for tiny disks (0 px disk → 0.5 px band, matching `edgeFeather`'s
-  floored radius), EXACT equality with `edgeFeather(·, 1f, ·)`, opaque center /
-  transparent rim, monotonic non-increasing falloff, band strictly inside (0,1) +
-  stop count, pre-200 look constants.
-- `Phase200CanvasRenderParityTest` (10 source pins) — shader linearization order +
-  old-product absence; `ColorSpace` param default; `sourceOverAlpha` slice purity;
-  `drawPaperCard` grain param + fill-before-grain order; exactly 3 call sites wired;
-  low-end gate wiring; tile-cache LRU structure + REPEAT + no-`recycle()`; eraser
-  branch uses the sampled feather gradient (phase-198 pin preserved, old flat fill
-  absent); eraser policy constants + `edgeFeather` routing.
+- `Phase200EraserCursorAAParityTest` (**9** — 7 at phase commit + 2 review-fix) —
+  band ≥ MIN_FEATHER_PX for usable radii and ≤ half-radius for tiny disks (0 px disk
+  → 0.5 px band, matching `edgeFeather`'s floored radius), EXACT equality with
+  `edgeFeather(·, 1f, ·)`, opaque center / transparent rim, monotonic non-increasing
+  falloff, band strictly inside + stop count, pre-200 look constants; review-fix
+  additions: `cursorFeatherBand` derived-from-the-`edgeFeather`-curve drift guard
+  (kills the duplicate-band-rule divergence risk), and the shipped stop-layout
+  sub-1% interpolation-error pin.
+- `Phase200CanvasRenderParityTest` (**11 source pins** — 9 at phase commit + 2
+  review-fix) — shader linearization order + old-product absence; `ColorSpace` param
+  default; `sourceOverAlpha` slice purity; `drawPaperCard` grain param + fill-before-grain
+  order; exactly 3 call sites wired; low-end gate wiring; tile-cache LRU structure +
+  REPEAT + no-`recycle()`; eraser branch uses the sampled feather gradient
+  (phase-198 pin preserved, old flat fill absent, band-concentrated stop layout
+  pinned, uniform-sampling expression absent); eraser policy constants +
+  `edgeFeather` routing; review-fix additions: shader knee comparison direction
+  (`step(c, threshold)`, old direction absent) and the bit-exact zero-pigment
+  passthrough branches.
 
 ## 6. Performance accounting (no device on CI — static, like 196–198)
 
@@ -189,6 +210,9 @@ visible on both families), select the PARTIAL eraser and observe the cursor rim.
 rendersLightTheme/rendersDarkTheme (runner layoutlib env, documented since
 phase-195/196), plus `WikiLinkParserCacheUnitTest` timing flake in the full run
 (documented; passes in isolation). **Zero failures introduced by phase-200.**
+Review-fix re-run: 2678 completed / 3 failed — the identical environmental set
+(`Phase148UiFailureTextScrubTest` + `PaparazziSmokeTest` ×2); the
+`WikiLinkParserCacheUnitTest` flake passed this time. Still zero new failures.
 
 ## 8. Constraints honored
 
@@ -196,3 +220,47 @@ No schema change · no new dependencies (compose `colorspace` classes were alrea
 the classpath) · `.github/workflows/` untouched · base-APK-size rule intact · no
 keys/passwords/content logged · low-end fallback per AGENTS.md hardware rule ·
 changes left uncommitted for maintainer review per repo workflow.
+
+## 9. Review fixes (2026-08-24)
+
+The 2026-08-24 review returned 6 findings + 1 accepted observation. All defects
+fixed in this commit; per-finding:
+
+1. **MEDIUM — eraser-cursor "AA parity" false on large radii** (`AnnotationCanvas.kt`
+   `LiveStrokePreview`): uniform 13-stop sampling put the whole 1.5px hermite inside
+   one stop interval at `previewR` = 96px (rendered penumbra ≈8px, local error ≈75
+   alpha points). Fixed: opaque plateau out to the NEW
+   `EraserGeometryPolicy.cursorBandStartNd(radius)` (the exact `edgeFeather` band
+   start) and all 12 sampling segments spent across `[bandStart, 1]` — max
+   interpolation error ≈0.5% of full scale, pinned by a new test that simulates the
+   shipped stop list. The DoD driver now renders the SHIPPED interpolated ramp (not
+   the ideal curve) and `before-after.png` was regenerated.
+2. **LOW — doc/test-count errors**: REPORT §5 said "+5 new" WetMixingMathTest tests
+   (actual 6 new / 9 total) and "(10 source pins)" (actual 9); ARCHITECTURE.md said
+   "WetMixingMathTest (10)". All corrected here (and re-updated for the +4
+   review-fix tests: 9/9/9/11 = 38 targeted).
+3. **LOW — `cursorFeatherBand()` was dead in production**: it is now CONSUMED by the
+   renderer via `cursorBandStartNd`, and a new test derives the band from the
+   `edgeFeather` curve itself and asserts equality (tolerance = 2 scan steps — the
+   hermite is flat to one float ulp for ~1.4e-4 of nd past the knee), so the
+   duplicate band rules can no longer silently drift.
+4. **INFO — shader knee direction**: GLSL used `step(threshold, c)` (pow branch at
+   exactly the knee) while Kotlin uses `if (c <= threshold)` (linear branch);
+   flipped to `mix(hi, lo, step(c, threshold))` in both transfer functions and
+   pinned by a new source-pin test (old direction asserted absent).
+5. **INFO — `PaperGrainTileCache.clear()` implied memory-trim wiring that doesn't
+   exist**: KDoc rewritten as an honest test-hook note explaining why `onTrimMemory`
+   wiring is unnecessary at the 576KB cap (and when to add it). No behavior change.
+6. **INFO — fp16 EOTF round-trip on zero-pigment pixels**: the shader now keeps
+   pre-200 bit-exactness where nothing mixes (`mixedRgb = base.rgb` over existing
+   paint at `pigmentFactor == 0`; `mixedRgb = vibBrushColor` on empty canvas); only
+   real mixes pay the linear→sRGB re-encode. Kotlin reference unchanged (double
+   precision makes its factor-0 round trip exact to <1e-7); mirror note added to
+   `pigmentMixRgb` KDoc. Two new source pins.
+7. **OBSERVATION (accepted, no code change)** — the linear wet-mix ships without a
+   user-facing opt-out; the review itself judged this acceptable (the PROMPT
+   explicitly requested the fix, and the only escape hatch is the dev-level
+   `ColorSpaces.Srgb` parameter). Revisit only if users report a preference.
+
+Review-fix verification: targeted 38/38 green; `gradle testDebugUnitTest` full run
+2678 / 3 (pre-existing environmental set, §7); `gradle assembleDebug` green.

@@ -108,12 +108,30 @@ object EraserGeometryPolicy {
      * Penumbra width of the aim disk: exactly the ink falloff band rule
      * (`min(MIN_FEATHER_PX, radius/2)`), so small radii still keep a real
      * anti-aliased edge instead of a sub-pixel ring.
+     *
+     * Review-fix (phase-200): this is no longer a dangling duplicate of
+     * [BrushColorModeMath.edgeFeather]'s internal band rule — it is CONSUMED by
+     * the renderer (`cursorBandStartNd`, used to place the cursor gradient's
+     * stops), and `Phase200EraserCursorAAParityTest` derives the band from the
+     * [BrushColorModeMath.edgeFeather] curve itself and asserts equality, so
+     * the two copies cannot silently drift.
      */
     fun cursorFeatherBand(radiusPx: Float): Float =
         min(
             BrushColorModeMath.MIN_FEATHER_PX,
             radiusPx.coerceAtLeast(1f) * 0.5f
         )
+
+    /**
+     * Normalized distance where the aim disk's penumbra STARTS for a disk of
+     * [radiusPx]: `1 - featherBand / radius`, i.e. the exact `bandStart` inside
+     * [BrushColorModeMath.edgeFeather] at hardness 1. The cursor renderer uses
+     * this to hold an opaque plateau out to the band and spend ALL of its
+     * gradient stops across `[cursorBandStartNd, 1]` (review-fix phase-200:
+     * uniform stops under-sampled the penumbra on large radii).
+     */
+    fun cursorBandStartNd(radiusPx: Float): Float =
+        1f - cursorFeatherBand(radiusPx) / radiusPx.coerceAtLeast(1f)
 
     /**
      * Fill alpha multiplier of the aim disk at normalized distance [nd]

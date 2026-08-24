@@ -94,6 +94,12 @@ object WetMixingMath {
      * performed in [mixSpace] (default [ColorSpaces.LinearSrgb]) and returned
      * re-encoded to sRGB. Passing [ColorSpaces.Srgb] reproduces the legacy
      * pre-200 gamma-space behaviour bit-for-bit.
+     *
+     * Mirror note (phase-200 review-fix): the AGSL shader additionally routes
+     * zero-pigment pixels through a BIT-EXACT passthrough (`base.rgb` /
+     * `vibBrushColor`) instead of paying an fp16 EOTF round trip; this Kotlin
+     * reference stays purely algebraic — in double precision the factor-0 round
+     * trip is already exact to <1e-7, so no branch is needed here.
      */
     fun pigmentMixRgb(
         baseR: Float, baseG: Float, baseB: Float,

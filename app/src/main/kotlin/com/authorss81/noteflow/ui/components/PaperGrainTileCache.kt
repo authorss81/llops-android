@@ -67,7 +67,14 @@ object PaperGrainTileCache {
         return brush
     }
 
-    /** Test hook / memory-trim hook: drops every cached tile + brush. */
+    /**
+     * Test hook: drops every cached tile + brush.
+     *
+     * Review-fix (phase-200) honesty note: this is deliberately NOT wired to
+     * `onTrimMemory` — the LRU is hard-capped at [PaperGrainPolicy.MAX_CACHED_TILES]
+     * tiles (≈576 KB worst case), so a trim callback would have nothing to add.
+     * Wire it only if `TILE_SIZE_PX` or `MAX_CACHED_TILES` ever grow meaningfully.
+     */
     fun clear() {
         tiles.clear()
         brushes.clear()
