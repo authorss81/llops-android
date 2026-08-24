@@ -153,6 +153,48 @@ device only downloads/native-loads its own ABI. The output directory is
 A ".aab" (Android App Bundle) is not produced yet — generating one needs
 `bundleRelease`. Do that when actually onboarding to Play.
 
+## R8 mapping retention (phase-176, R2-KS-24)
+
+`assembleRelease` runs R8 with `isMinifyEnabled = true`
+(`app/build.gradle.kts:104`), which writes the deobfuscation map to:
+
+```
+app/build/outputs/mapping/release/mapping.txt
+```
+
+(alongside `configuration.txt`, `seeds.txt`, `usage.txt`). There is no explicit
+`-printmapping` directive in `app/proguard-rules.pro` — AGP collects the map at
+that path by default; keep it that way.
+
+- **Every shipped release needs its own mapping.txt.** R8's obfuscated names
+  shift between code versions (e.g. phase-160's forensic pass saw
+  `w2/C3694b0.java`; current builds map
+  `com.authorss81.noteflow.services.EncryptionService -> v2.l0:` instead), so an
+  old mapping can only back-map the build it was produced from.
+- The file is deterministic: consecutive clean `assembleRelease` builds of
+  the same commit produce byte-identical `mapping.txt` (verified across three
+  clean builds, `sha256 b76afe6c…bad45e7`, `workspace/phase-176/REPORT.md`).
+- **Never commit it** (and never commit a keystore): mapping.txt is
+  secrets-adjacent build output — it lives on the build runner only.
+- **Deferred CI task (needs user approval — workflow edits are gated):** the
+  release workflow should archive `app/build/outputs/mapping/release/` as a
+  versioned artifact alongside each signed APK (`actions/upload-artifact` on
+  the `mapping/release/` dir, named per `git sha + versionName`). Until that is
+  approved and wired, a maintainer must copy mapping.txt off the runner manually
+  for any release that may later need crash-deobfuscation or a forensic pass.
+
+## Release packaging hygiene (phase-176, R2-KS-27)
+
+The release payload excludes three dev/debug artifacts via
+`packaging.resources.excludes` (`app/build.gradle.kts:143-160`):
+`DebugProbesKt.bin`, `kotlin-tooling-metadata.json`, `firebase-*.properties`.
+Origins and evidence are documented in `workspace/phase-176/REPORT.md`. Note
+the operative control for native-lib extraction is the manifest attribute
+`android:extractNativeLibs="true"` (`app/src/main/AndroidManifest.xml:14`) — it
+OVERRIDES `useLegacyPackaging` when they disagree; both stay `true` (measured:
+flipping to `false` grows every APK download, e.g. universal 50.8 → 64.6 MB,
+while re-exposing the SDK-36 16KB-page dlopen crash).
+
 ## Plugin update channel (operator action — Phase-32-NEW-04)
 
 The hosted plugin-update manifest (`plugin-updates.inkflow.app`) is fetched over

@@ -2134,6 +2134,7 @@ androidx.biometric 1.1.0 · coroutines 1.9.0.
 4. **Base-APK size is a hard constraint**: heavy native libs (tasks-genai LLM, heavy OCR) MUST stay
    downloadable plugins. Never add them to the base app.
 5. `extractNativeLibs="true"` (`useLegacyPackaging=true`) required for SQLCipher `.so` on SDK 36 (16KB pages).
+   - **Implemented in phase-176**: measured — extractNativeLibs=false grows every download (universal +13.7 MB) AND re-exposes the dlopen crash, so extraction stays ON. Operative control is the manifest attr (`AndroidManifest.xml:14`), which overrides `useLegacyPackaging`; both stay true. Release payload also excludes `DebugProbesKt.bin` / `kotlin-tooling-metadata.json` / `firebase-*.properties` (R2-KS-27); R8 `mapping.txt` retention + deferred CI archival documented in `docs/RELEASE.md`.
 6. `allowBackup="false"` + data-extraction rules — never re-enable. FLAG_SECURE in non-debug.
 7. Baseline profiles disabled (AGP bug); unit tests use `isReturnDefaultValues = true` (no Robolectric).
 8. `INTERNET` used only by WebDAV sync + LocalSend. WebDAV HTTPS-only unless local-network opt-in.

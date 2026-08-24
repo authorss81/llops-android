@@ -126,9 +126,14 @@ android {
     // Phase 31 Part C2: force native-lib EXTRACTION at install time. The previous
     // `android:extractNativeLibs="false"` (memory-map .so straight from the APK)
     // causes dlopen/UnsatisfiedLinkError cold-start crashes on SDK 36 devices with
-    // strict 16KB/4KB page alignment (SQLCipher .so). useLegacyPackaging=true makes
-    // AGP emit extractNativeLibs=true in the merged manifest, so AGP can never
-    // re-inject the false value behind our back.
+    // strict 16KB/4KB page alignment (SQLCipher .so). Phase 176 measured the
+    // alternative: extractNativeLibs=false STORES every .so uncompressed, growing
+    // each download (~+3.8 MB arm64 / +13.7 MB universal) while re-exposing the
+    // 16KB-page dlopen crash — so extraction stays ON. Operative control note:
+    // the explicit `android:extractNativeLibs="true"` in AndroidManifest.xml
+    // OVERRIDES this DSL flag when they disagree (phase-176 evidence: flipping
+    // ONLY `useLegacyPackaging` to false changed nothing in the payload; both
+    // sites are kept = true so there is no disagreement to hide).
     packaging {
         jniLibs {
             useLegacyPackaging = true
@@ -140,7 +145,18 @@ android {
         // assembled APK while the 24 used languages stay loadable by the detector.
         resources {
             excludes += LINGUA_UNUSED_LANGUAGE_ISOS.map { "language-models/$it/**" }
-            // Phase 176 (R2-KS-27 LOW + R2-KS-24 INFO): exclude debug/dev artifacts from release APK
+            // Phase 176 (R2-KS-27 LOW + R2-KS-24 INFO): exclude debug/dev artifacts
+            // from the release APK payload. Verified origins (BEFORE build evidence,
+            // workspace/phase-176/REPORT.md):
+            //  - DebugProbesKt.bin — root-level resource bundled inside
+            //    kotlinx-coroutines-core-jvm 1.8.1 (a REQUIRED runtime dep; NOT from a
+            //    removable debug dependency). Stripping it removes the coroutine-debug
+            //    agent attach path + its debug logging hooks from production.
+            //  - kotlin-tooling-metadata.json — INJECTED AT BUILD TIME by the Kotlin
+            //    Gradle plugin (describes Gradle/KGP versions); never used at runtime.
+            //  - firebase-*.properties — defense-in-depth only: post-phase-175 the base
+            //    APK has NO Firebase deps (verified empty in the BEFORE payload), so this
+            //    glob is a guard against a future dep accidentally re-shipping them.
             excludes += listOf("DebugProbesKt.bin", "kotlin-tooling-metadata.json", "firebase-*.properties")
         }
     }
