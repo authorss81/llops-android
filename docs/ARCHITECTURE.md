@@ -280,6 +280,24 @@
 > `Phase193ResizeHandleVisibilityTest` (10, pure JVM + source pins). No schema
 > change, no new deps.
 
+> **Implemented in phase-198** (2026-08-24, live-stroke invalidation isolation +
+> O(visible) culling — PERF 2.1+2.5, see `workspace/phase-198/REPORT.md`): pen samples
+> no longer re-run the whole canvas draw pass. The live ink + eraser aim cursor render
+> in a NEW isolated `LiveStrokePreview` node (`AnnotationCanvas.kt`) stacked above the
+> main pass with the identical zoom/pan `graphicsLayer` transform; the composition gate
+> is `remember(currentTool) { derivedStateOf { … } }` (flips twice per stroke), volatile
+> state crosses as provider lambdas read only in draw scope, and per-sample data flows
+> through draw-phase reads — so a sample invalidates ONLY that small node. The main pass
+> builds a preview ONLY for wet tools (`liveWetPreviewStroke`; AGSL mix-input exception,
+> documented). The blanket `LaunchedEffect(strokes, layers, vibrancyBoost)
+> { layerBitmapCache.clear() }` is GONE — layer rasters now invalidate incrementally via
+> their existing per-entry content-hash gates (structural `data class` hash contract).
+> The paginated loop iterates `services/ViewportPageWindowPolicy.visiblePageRange(...)`
+> (closed-form slab window, exhaustively parity-pinned vs the old skip predicate;
+> degenerate inputs fail safe to over-draw) — O(visiblePages), not O(totalPages).
+> Tests: `ViewportPageWindowPolicyTest` (12) + `Phase198LiveStrokeIsolationTest` (12);
+> B2-DOS-01 culling source pin updated to the new mechanism.
+
 > **Implemented in phase-197** (2026-08-24, per-brush stabilizer tuning + smoothing
 > slider — PERF 1.2, see `workspace/phase-197/REPORT.md`): every `BrushPreset` now
 > carries a `smoothing: Float` in [0..1] (`BrushPreset.kt`; calligraphy/chalk 0.30

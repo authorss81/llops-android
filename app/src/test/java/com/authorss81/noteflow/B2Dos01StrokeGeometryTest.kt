@@ -278,9 +278,17 @@ class B2Dos01StrokeGeometryTest {
             "the paginated renderer must derive the visible world rect from pan/zoom",
             source.contains("internalPanOffset") && source.contains("internalZoomScale")
         )
+        // Phase 198 (PERF 2.5): the visible window is resolved in closed form by
+        // ViewportPageWindowPolicy BEFORE the loop — O(visiblePages) iterations,
+        // not iterate-every-page-and-`continue` — with identical skip semantics
+        // (parity pinned exhaustively in ViewportPageWindowPolicyTest).
         assertTrue(
-            "the paginated renderer must skip pages outside the visible world rect",
-            source.contains("if (pageBottomY < visibleTop || pageTopY > visibleBottom) continue")
+            "the paginated renderer must resolve the visible page window in closed form",
+            source.contains("com.authorss81.noteflow.services.ViewportPageWindowPolicy.visiblePageRange(")
+        )
+        assertTrue(
+            "the paginated loop must touch only the pages in that window",
+            source.contains("for (pageIdx in visiblePageWindow) {")
         )
         assertTrue(
             "the horizontal band guard must skip the whole world when panned past the edges",

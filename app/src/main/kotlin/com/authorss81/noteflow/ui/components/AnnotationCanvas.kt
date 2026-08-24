@@ -739,12 +739,21 @@ fun AnnotationCanvas(
     // how many layers × pages the viewport touches. Evicted entries go back to
     // BitmapPool, never orphaned.
     val layerBitmapCache = remember { com.authorss81.noteflow.ui.components.LayerBitmapLruCache() }
-    // Phase 19: vibrancy is baked into the layer bitmaps, so a vibe change
-    // invalidates the cache the same way a stroke/layer change does. The LRU's
-    // clear() releases every cached bitmap back to the pool.
-    LaunchedEffect(strokes, layers, vibrancyBoost) {
-        layerBitmapCache.clear()
-    }
+    // Phase 198 (PERF 2.1): the layer rasters invalidate INCREMENTALLY now.
+    // The pre-198 blanket clear-on-commit effect wiped EVERY page×layer raster
+    // on every stroke commit (and on every partial-eraser sample, which
+    // rewrites the stroke list per move), forcing a full re-rasterization of
+    // all visible pages on the next frame. That blanket clear is redundant:
+    // each cache entry is already keyed by
+    // `pageIdx_layerId_symmetryMode_vibrancy` and gated by a CONTENT hash
+    // (`cache.hash != strokes.hashCode()`), so only entries whose page+layer
+    // content actually changed re-rasterize — lazily, at next draw. Vibrancy
+    // and symmetry are key components, so changing them naturally orphans old
+    // entries (the LRU releases them to BitmapPool); Stroke/PointF/List are
+    // structural data classes, so equal content keeps its raster even when the
+    // parent hands down a fresh List instance. The DisposableEffect below
+    // still clears everything on unmount; LayerRenderBudgetPolicy bounds the
+    // resident bytes in between.
     val wetMixingEffect = remember {
         if (ShaderCapabilityHelper.isAgslSupported) AgslShaders.WetMixingEffect() else null
     }
@@ -1780,11 +1789,47 @@ fun AnnotationCanvas(
             ) {
                 val activeInkRenderer = if (advancedBrushesEnabled) inkRenderer else null
 
+                // Phase 198 (PERF 2.1): the LIVE ink preview no longer renders in this
+                // draw block — every pen sample mutated `activePoints`, and any read of
+                // that list here re-invalidated THIS whole canvas node per sample
+                // (paper, templates, page bitmaps, groupBy, layer blits all re-ran).
+                // The classic live preview moved to the isolated `LiveStrokePreview`
+                // overlay sibling below (same world transform), which is the ONLY node
+                // subscribed to the per-sample state.
+                //
+                // The ONE deliberate exception is the AGSL wet-mixing pass: its shader
+                // mixes the committed strokes of the active layer WITH the live preview
+                // inside a single saveLayer, so for wet tools the preview must stay in
+                // THIS draw scope or the shader's mix input changes (visual regression).
+                // Wet-tool strokes therefore still invalidate this block per sample
+                // (their pass is already dirty-rect scoped); every other tool isolates.
+                val liveWetPreviewStroke = if (
+                    com.authorss81.noteflow.services.BrushStrokeMath.isWetRenderedTool(currentTool) &&
+                    (activePoints.isNotEmpty() || (activeStart != null && activeEnd != null))
+                ) {
+                    Stroke(
+                        id = "preview",
+                        tool = currentTool,
+                        colorInt = currentColor.toArgb(),
+                        width = currentWidth,
+                        points = activePoints,
+                        start = activeStart,
+                        end = activeEnd,
+                        pdfPage = activeTargetPage,
+                        isAdvanced = advancedBrushesEnabled,
+                        colorMode = currentColorMode,
+                        colorSeed = currentColorSeed,
+                        gradientToColorInt = currentGradientToColor.toArgb()
+                    )
+                } else null
+
                 // Phase 27: the AGSL wet-mixing shader takes a single color uniform, so
                 // for multi-color modes we feed it the color derived at the CURRENT brush
                 // position — the live preview sweeps the rainbow/gradient as it draws,
                 // and the committed stroke re-derives its own per-point colors.
-                val wetEffectColor = if (currentColorMode.isMultiColor && activePoints.isNotEmpty()) {
+                // Phase 198: computed only while a WET preview is actually live, so
+                // multi-color dry tools no longer read `activePoints` here either.
+                val wetEffectColor = if (liveWetPreviewStroke != null && currentColorMode.isMultiColor && activePoints.isNotEmpty()) {
                     val progress = com.authorss81.noteflow.services.BrushColorModeMath.strokeProgress(activePoints, activePoints.size - 1)
                     Color(
                         com.authorss81.noteflow.services.BrushColorModeMath.colorForProgress(
@@ -1831,26 +1876,12 @@ fun AnnotationCanvas(
                         )
                     }
 
-                    // Render Strokes for single page
-                    val previewStroke = if (activePoints.isNotEmpty() || (activeStart != null && activeEnd != null)) {
-                        Stroke(
-                            id = "preview",
-                            tool = currentTool,
-                            colorInt = currentColor.toArgb(),
-                            width = currentWidth,
-                            points = activePoints,
-                            start = activeStart,
-                            end = activeEnd,
-                            pdfPage = pdfPageFilter,
-                            isAdvanced = advancedBrushesEnabled,
-                            colorMode = currentColorMode,
-                            colorSeed = currentColorSeed,
-                            gradientToColorInt = currentGradientToColor.toArgb()
-                        )
-                    } else null
+                    // Render Strokes for single page.
+                    // Phase 198: `previewStroke` is the wet-only live stroke — the
+                    // classic live preview draws in the LiveStrokePreview overlay.
                     drawCompositedLayersStrokes(
                         strokes = activeStrokeList,
-                        previewStroke = previewStroke,
+                        previewStroke = liveWetPreviewStroke,
                         layers = layers,
                         activeLayerId = activeLayerId,
                         offsetY = 0f,
@@ -1897,25 +1928,11 @@ fun AnnotationCanvas(
                         )
                     }
 
-                    val previewStroke = if (activePoints.isNotEmpty() || (activeStart != null && activeEnd != null)) {
-                        Stroke(
-                            id = "preview",
-                            tool = currentTool,
-                            colorInt = currentColor.toArgb(),
-                            width = currentWidth,
-                            points = activePoints,
-                            start = activeStart,
-                            end = activeEnd,
-                            pdfPage = activeTargetPage,
-                            isAdvanced = advancedBrushesEnabled,
-                            colorMode = currentColorMode,
-                            colorSeed = currentColorSeed,
-                            gradientToColorInt = currentGradientToColor.toArgb()
-                        )
-                    } else null
+                    // Phase 198: wet-only live preview here too — see the single-page
+                    // branch above.
                     drawCompositedLayersStrokes(
                         strokes = activeStrokeList,
-                        previewStroke = previewStroke,
+                        previewStroke = liveWetPreviewStroke,
                         layers = layers,
                         activeLayerId = activeLayerId,
                         offsetY = 0f,
@@ -1959,26 +1976,39 @@ fun AnnotationCanvas(
                     // lookup.
                     val strokesByPage = activeStrokeList.groupBy { it.pdfPage }
 
-                    for (pageIdx in 0 until renderPageCount) {
-                        val pageTopY = pageIdx * (pageHeightPx + pageGapPx)
+                    // Phase 198 (PERF 2.5): the visible window is computed in closed
+                    // form BEFORE the loop. The pre-198 culling was correct but still
+                    // ITERATED all `renderPageCount` indices, doing per-page band
+                    // arithmetic + a `continue` for every off-screen page —
+                    // O(totalPages) frames on long documents. Pages are fixed-stride
+                    // slabs, so ViewportPageWindowPolicy resolves the inclusive
+                    // first..last visible range in O(1) and the loop below touches
+                    // ONLY visible pages: O(visiblePages), not O(totalPages).
+                    val visibleTop = (0f - internalPanOffset.y) / internalZoomScale
+                    val visibleBottom = (size.height - internalPanOffset.y) / internalZoomScale
 
-                        // B2-DOS-01 (phase-50): viewport culling. The graphicsLayer
-                        // scales/translates this whole canvas, so the on-screen
-                        // rect maps back to world/page coordinates as
-                        // (screen - pan) / zoom. A page whose slab does not
-                        // intersect that rect is skipped ENTIRELY (paper, template,
-                        // page bitmap, stroke filter + layer raster) — a long
-                        // document never pays O(strokes) per off-screen page, and
-                        // spot-zoom never scales per-frame work by total points.
-                        val visibleTop = (0f - internalPanOffset.y) / internalZoomScale
-                        val visibleBottom = (size.height - internalPanOffset.y) / internalZoomScale
-                        val pageBottomY = pageTopY + pageHeightPx
-                        if (pageBottomY < visibleTop || pageTopY > visibleBottom) continue
-                        // Horizontal band: when panned/zoomed so the whole world is
-                        // off the left/right edges, nothing on this document draws.
-                        if (canvasW <= 0f) continue
-                        if (((0f - internalPanOffset.x) / internalZoomScale) > canvasW) continue
-                        if (((size.width - internalPanOffset.x) / internalZoomScale) < 0f) continue
+                    // Horizontal band: when panned/zoomed so the whole world is
+                    // off the left/right edges, nothing on this document draws.
+                    // (Hoisted out of the page loop — it never depended on the
+                    // page index.)
+                    val horizontallyOffscreen = canvasW <= 0f ||
+                        (((0f - internalPanOffset.x) / internalZoomScale) > canvasW) ||
+                        (((size.width - internalPanOffset.x) / internalZoomScale) < 0f)
+
+                    val visiblePageWindow = if (horizontallyOffscreen) {
+                        IntRange.EMPTY
+                    } else {
+                        com.authorss81.noteflow.services.ViewportPageWindowPolicy.visiblePageRange(
+                            viewportTop = visibleTop,
+                            viewportBottom = visibleBottom,
+                            pageStride = pageHeightPx + pageGapPx,
+                            pageSlabHeight = pageHeightPx,
+                            pageCount = renderPageCount
+                        )
+                    }
+
+                    for (pageIdx in visiblePageWindow) {
+                        val pageTopY = pageIdx * (pageHeightPx + pageGapPx)
 
                         // 1. Differentiated Page Paper Container with Card Shadow & Page Badge
                         drawPaperCard(0f, pageTopY, canvasW, pageHeightPx, paperColor = parsedPaperColor, isDarkPaper = isDarkPaper, pageLabel = "Page ${pageIdx + 1}", showPageLabel = showPageIndicator)
@@ -2040,25 +2070,13 @@ fun AnnotationCanvas(
                         // R2-b2b4-DOS-03 (phase-150): map lookup (hoisted above)
                         // instead of a fresh whole-list filter per page.
                         val pageStrokes = strokesByPage[pageIdx] ?: emptyList()
-                        val previewStroke = if (activeTargetPage == pageIdx && (activePoints.isNotEmpty() || (activeStart != null && activeEnd != null))) {
-Stroke(
-                            id = "preview",
-                            tool = currentTool,
-                            colorInt = currentColor.toArgb(),
-                            width = currentWidth,
-                            points = activePoints,
-                            start = activeStart,
-                            end = activeEnd,
-                            pdfPage = pageIdx,
-                            isAdvanced = advancedBrushesEnabled,
-                            colorMode = currentColorMode,
-                            colorSeed = currentColorSeed,
-                            gradientToColorInt = currentGradientToColor.toArgb()
-                        )
-                    } else null
+                        // Phase 198: wet-only live preview, restricted to the page the
+                        // stroke is being drawn on — the classic preview lives in the
+                        // LiveStrokePreview overlay.
+                        val pageLiveWetPreview = if (activeTargetPage == pageIdx) liveWetPreviewStroke else null
                         drawCompositedLayersStrokes(
                             strokes = pageStrokes,
-                            previewStroke = previewStroke,
+                            previewStroke = pageLiveWetPreview,
                             layers = layers,
                             activeLayerId = activeLayerId,
                             offsetY = 0f,
@@ -2092,49 +2110,96 @@ Stroke(
                     }
                 }
 
-                // Phase 124: live eraser cursor preview. The erase path itself is
-                // pressure-aware (heavier press = wider stamp); this preview shows
-                // what the NEXT erase removes so the user can aim precisely:
-                //   PARTIAL -> the round mask circle the stamp will carve, drawn at
-                //              the full-pressure coverage radius of the current width
-                //   STROKE  -> highlight every whole stroke the classic hit-test
-                //              (including the symmetry mirror) predicts as removed.
-                if (currentTool == StrokeTool.ERASER) {
-                    val cursorPos = eraserCursorCanvas
-                    if (cursorPos != null) {
-                        if (eraserMode == com.authorss81.noteflow.services.EraserMode.PARTIAL) {
-                            val previewR = com.authorss81.noteflow.services.EraserGeometryPolicy.previewRadius(currentWidth, currentWidth)
-                            drawCircle(currentColor.copy(alpha = 0.22f), radius = previewR, center = cursorPos)
-                            drawCircle(
-                                currentColor.copy(alpha = 0.6f),
-                                radius = previewR,
-                                center = cursorPos,
-                                style = DrawStrokeStyle(width = 2f)
-                            )
-                        } else {
-                            val axisCenter = symmetryCenterFor(size.width, cursorPos.y)
-                            for (stroke in activeStrokeList) {
-                                val hits = if (symmetryMode == SymmetryMode.OFF) {
-                                    strokeContainsPoint(stroke, cursorPos)
-                                } else {
-                                    val mirror = SymmetryHelper.mirrorPoint(cursorPos.x, cursorPos.y, symmetryMode, axisCenter.x, axisCenter.y)
-                                    strokeContainsPoint(stroke, cursorPos) || strokeContainsPoint(stroke, Offset(mirror.x, mirror.y))
-                                }
-                                if (!hits) continue
-                                if (stroke.points.size > 1) {
-                                    val path = androidx.compose.ui.graphics.Path().apply {
-                                        moveTo(stroke.points.first().x, stroke.points.first().y)
-                                        stroke.points.drop(1).forEach { lineTo(it.x, it.y) }
-                                    }
-                                    drawPath(path, currentColor.copy(alpha = 0.25f), style = DrawStrokeStyle(width = stroke.width + 10f, cap = androidx.compose.ui.graphics.StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round))
-                                } else {
-                                    val anchor = stroke.start ?: stroke.end ?: continue
-                                    drawCircle(currentColor.copy(alpha = 0.25f), radius = (stroke.width + 18f), center = Offset(anchor.x, anchor.y))
-                                }
-                            }
-                        }
-                    }
+                // Phase 198: the live eraser-cursor preview that used to close this
+                // draw block moved to the LiveStrokePreview overlay below — it read
+                // `eraserCursorCanvas` (mutated per eraser move), so keeping it here
+                // re-invalidated this whole canvas node per sample.
+            }
+
+            // -----------------------------------------------------------------
+            // Phase 198 (PERF 2.1): ISOLATED LIVE-STROKE LAYER.
+            //
+            // Every pen sample used to re-run THIS whole canvas' draw block,
+            // because the live preview read `activePoints` /
+            // `activeStart` / `activeEnd` in the same draw scope as the paper,
+            // templates, page bitmaps, per-page groupBy and layer blits. The
+            // live ink now draws in a SEPARATE canvas node stacked above the
+            // main pass and carrying the IDENTICAL world transform (same
+            // zoom/pan graphicsLayer), so:
+            //   • a pen sample invalidates ONLY this small node — the committed
+            //     page (paper/template/bitmaps/cached layer blits) keeps its
+            //     raster until real content changes;
+            //   • world coordinates are shared unchanged (the transform is
+            //     applied by a parent graphicsLayer, exactly as before);
+            //   • stacking order vs the sticky/media/loupe/ring/minimap
+            //     siblings is preserved (this node sits below them).
+            //
+            // The composition-phase gate below flips only twice per stroke
+            // (start/end): `derivedStateOf` collapses per-sample point appends
+            // into the boolean "is a stroke live" without recomposing — the
+            // per-sample data still flows through DRAW-phase reads inside the
+            // overlay, which is what confines the invalidation to this node.
+            // (`snapshotFlow`-into-state was evaluated and rejected: routing
+            // per-sample emissions through composition state would move the
+            // invalidation INTO recomposition — strictly worse than a
+            // draw-scope read; copying the points per sample via
+            // `derivedStateOf { toList() }` would allocate on every sample.)
+            //
+            // The volatile live state reaches the overlay through PROVIDER
+            // lambdas (`() -> T`), never as value parameters — a value param
+            // would recompose this subtree on every sample (shape tools write
+            // `activeEnd` per move; the eraser writes its cursor per move).
+            // Providers are read only inside the overlay's draw scope.
+            //
+            // Wet tools are the documented exception: their live preview stays
+            // in the main pass (see `liveWetPreviewStroke`) because the AGSL
+            // shader mixes committed strokes WITH the preview in one
+            // saveLayer.
+            // -----------------------------------------------------------------
+            // Keyed on the tool so the derived predicate can never capture a
+            // stale tool selection; the point/cursor states have stable
+            // identities (remember'd), so they need no key.
+            val liveOverlayVisible by remember(currentTool) {
+                derivedStateOf {
+                    activePoints.isNotEmpty() ||
+                        (activeStart != null && activeEnd != null) ||
+                        (currentTool == StrokeTool.ERASER && eraserCursorCanvas != null)
                 }
+            }
+            if (liveOverlayVisible) {
+                LiveStrokePreview(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .testTag("live_stroke_preview")
+                        .graphicsLayer {
+                            scaleX = internalZoomScale
+                            scaleY = internalZoomScale
+                            translationX = internalPanOffset.x
+                            translationY = internalPanOffset.y
+                            transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0f, 0f)
+                        },
+                    currentTool = currentTool,
+                    currentColor = currentColor,
+                    currentWidth = currentWidth,
+                    inkRenderer = if (advancedBrushesEnabled) inkRenderer else null,
+                    isDarkPaper = isDarkPaper,
+                    vibrancyBoost = vibrancyBoost,
+                    strokeRenderOpts = strokeRenderOpts,
+                    symmetryMode = symmetryMode,
+                    symmetryCenterResolver = { screenW, worldY -> symmetryCenterFor(screenW, worldY) },
+                    pageTopYResolver = { calculatePageYOffset(activeTargetPage) },
+                    activePoints = activePoints,
+                    activeStartProvider = { activeStart },
+                    activeEndProvider = { activeEnd },
+                    activeTargetPage = activeTargetPage,
+                    advancedBrushesEnabled = advancedBrushesEnabled,
+                    currentColorMode = currentColorMode,
+                    currentColorSeed = currentColorSeed,
+                    currentGradientToColor = currentGradientToColor,
+                    eraserCursorProvider = { eraserCursorCanvas },
+                    eraserMode = eraserMode,
+                    activeStrokes = activeStrokeList
+                )
             }
 
             // Render Floating Draggable Canvas Sticky Notes Overlay
@@ -2673,10 +2738,151 @@ Stroke(
                 chiselNibAngleDeg = chiselNibAngleDeg,
                 onChiselNibAngleChange = { value ->
                     chiselNibAngleDeg = value
-                    brushRenderSettings.chiselNibAngleDeg = value
-                },
-                onDismiss = { showBrushStudio = false }
+                     brushRenderSettings.chiselNibAngleDeg = value
+                 },
+                 onDismiss = { showBrushStudio = false }
+             )
+         }
+     }
+ }
+
+/**
+ * Phase 198 (PERF 2.1): isolated live-stroke layer.
+ *
+ * Draws ONLY the in-progress ink (classic tools) and the eraser aim cursor,
+ * inside a canvas node whose ONLY snapshot dependencies are the per-sample
+ * live state — so a pen sample re-draws this node alone instead of the whole
+ * [AnnotationCanvas] pass. The caller stacks it above the main canvas with the
+ * identical zoom/pan [modifier] transform, so all coordinates here are the
+ * same world coordinates the main pass uses.
+ *
+ * Rendering parity notes:
+ *  • The preview Stroke is built with exactly the fields the pre-198 inline
+ *    constructions used (id "preview", pdfPage activeTargetPage,
+ *    current mode/seed/gradient) and rendered through the same
+ *    [drawSingleStroke] + view-time symmetry mirror as committed strokes.
+ *  • Wet tools are excluded here: their live preview renders in the MAIN
+ *    canvas ([AnnotationCanvas]'s `liveWetPreviewStroke`) because the AGSL
+ *    wet-mixing shader must see committed strokes + preview in one saveLayer.
+ *  • The composition body reads NO per-sample state; everything below runs in
+ *    the draw phase, which is what keeps invalidation scoped to this node.
+ */
+@Composable
+private fun LiveStrokePreview(
+    modifier: Modifier,
+    currentTool: StrokeTool,
+    currentColor: Color,
+    currentWidth: Float,
+    advancedBrushesEnabled: Boolean,
+    inkRenderer: CanvasStrokeRenderer?,
+    isDarkPaper: Boolean,
+    vibrancyBoost: Float,
+    strokeRenderOpts: StrokeRenderOpts,
+    symmetryMode: SymmetryMode,
+    symmetryCenterResolver: (screenW: Float, worldY: Float) -> Offset,
+    pageTopYResolver: () -> Float,
+    activePoints: List<PointF>,
+    // Phase 198: volatile per-sample state arrives as PROVIDER lambdas and is
+    // read only in the draw scope — as value params they would recompose this
+    // composable on every pen/eraser sample (see call-site comment).
+    activeStartProvider: () -> PointF?,
+    activeEndProvider: () -> PointF?,
+    activeTargetPage: Int,
+    currentColorMode: com.authorss81.noteflow.data.model.StrokeColorMode,
+    currentColorSeed: Int,
+    currentGradientToColor: Color,
+    eraserCursorProvider: () -> Offset?,
+    eraserMode: com.authorss81.noteflow.services.EraserMode,
+    activeStrokes: List<Stroke>
+) {
+    Canvas(modifier = modifier) {
+        val hasLiveInk = activePoints.isNotEmpty() || (activeStartProvider() != null && activeEndProvider() != null)
+
+        // 1. Classic live ink preview (wet tools render in the main pass).
+        if (hasLiveInk && !com.authorss81.noteflow.services.BrushStrokeMath.isWetRenderedTool(currentTool)) {
+            val previewStroke = Stroke(
+                id = "preview",
+                tool = currentTool,
+                colorInt = currentColor.toArgb(),
+                width = currentWidth,
+                points = activePoints,
+                start = activeStartProvider(),
+                end = activeEndProvider(),
+                pdfPage = activeTargetPage,
+                isAdvanced = advancedBrushesEnabled,
+                colorMode = currentColorMode,
+                colorSeed = currentColorSeed,
+                gradientToColorInt = currentGradientToColor.toArgb()
             )
+            drawSingleStroke(
+                stroke = previewStroke,
+                offsetY = 0f,
+                isDarkPaper = isDarkPaper,
+                inkRenderer = inkRenderer,
+                renderOpts = strokeRenderOpts,
+                vibrancy = vibrancyBoost
+            )
+            // Phase 07: view-time symmetry mirror of the live preview — same
+            // page-anchored axis center the committed strokes mirror through.
+            if (symmetryMode != SymmetryMode.OFF && currentTool != StrokeTool.TEXT) {
+                val axisCenter = symmetryCenterResolver(size.width, pageTopYResolver())
+                fun mirror(p: PointF): PointF {
+                    val m = SymmetryHelper.mirrorPoint(p.x, p.y, symmetryMode, axisCenter.x, axisCenter.y)
+                    return p.copy(x = m.x, y = m.y)
+                }
+                drawSingleStroke(
+                    stroke = previewStroke.copy(
+                        points = previewStroke.points.map { mirror(it) },
+                        start = previewStroke.start?.let { mirror(it) },
+                        end = previewStroke.end?.let { mirror(it) }
+                    ),
+                    offsetY = 0f,
+                    isDarkPaper = isDarkPaper,
+                    inkRenderer = inkRenderer,
+                    renderOpts = strokeRenderOpts,
+                    vibrancy = vibrancyBoost
+                )
+            }
+        }
+
+        // 2. Eraser aim cursor (moved verbatim from the pre-198 main pass):
+        //    PARTIAL -> the round mask circle the next stamp will carve;
+        //    STROKE  -> highlight every stroke the hit-test predicts removed.
+        if (currentTool == StrokeTool.ERASER) {
+            val cursorPos = eraserCursorProvider()
+            if (cursorPos != null) {
+                if (eraserMode == com.authorss81.noteflow.services.EraserMode.PARTIAL) {
+                    val previewR = com.authorss81.noteflow.services.EraserGeometryPolicy.previewRadius(currentWidth, currentWidth)
+                    drawCircle(currentColor.copy(alpha = 0.22f), radius = previewR, center = cursorPos)
+                    drawCircle(
+                        currentColor.copy(alpha = 0.6f),
+                        radius = previewR,
+                        center = cursorPos,
+                        style = DrawStrokeStyle(width = 2f)
+                    )
+                } else {
+                    val axisCenter = symmetryCenterResolver(size.width, cursorPos.y)
+                    for (stroke in activeStrokes) {
+                        val hits = if (symmetryMode == SymmetryMode.OFF) {
+                            strokeContainsPoint(stroke, cursorPos)
+                        } else {
+                            val mirror = SymmetryHelper.mirrorPoint(cursorPos.x, cursorPos.y, symmetryMode, axisCenter.x, axisCenter.y)
+                            strokeContainsPoint(stroke, cursorPos) || strokeContainsPoint(stroke, Offset(mirror.x, mirror.y))
+                        }
+                        if (!hits) continue
+                        if (stroke.points.size > 1) {
+                            val path = androidx.compose.ui.graphics.Path().apply {
+                                moveTo(stroke.points.first().x, stroke.points.first().y)
+                                stroke.points.drop(1).forEach { lineTo(it.x, it.y) }
+                            }
+                            drawPath(path, currentColor.copy(alpha = 0.25f), style = DrawStrokeStyle(width = stroke.width + 10f, cap = androidx.compose.ui.graphics.StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round))
+                        } else {
+                            val anchor = stroke.start ?: stroke.end ?: continue
+                            drawCircle(currentColor.copy(alpha = 0.25f), radius = (stroke.width + 18f), center = Offset(anchor.x, anchor.y))
+                        }
+                    }
+                }
+            }
         }
     }
 }
