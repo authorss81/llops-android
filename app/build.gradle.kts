@@ -207,6 +207,42 @@ android {
     }
 }
 
+// Phase 199 review fix (review finding 2): GUARDED restoration of the AGP
+// 8.7.3 compileArtProfile stopgap. The phase-199 commit deleted the old
+// unconditional disable on the assumption that wiring the baseline-profile
+// toolchain also fixed the underlying crash ("String index out of range: 62"
+// when compiling an art profile on the GitHub Actions runner) — but nothing
+// ever proved that, and `.github/workflows/android.yml` runs assembleRelease
+// on every push. Right now NO baseline profile is committed in-tree (none was
+// generated — needs a connected device), so profile compilation would run on
+// exactly the kind of empty/degenerate input that used to crash.
+//
+// The disable is therefore CONDITIONAL: it lifts automatically as soon as a
+// real committed profile exists, so once a maintainer lands one via
+// `gradle :app:generateBaselineProfile`, release builds compile it again and
+// any recurrence of the AGP crash surfaces as an explicit CI failure pointing
+// at the bug — never as a silent skip of a shipped profile.
+//
+// Caveat (documented in workspace/phase-199/REPORT.md): the check runs at
+// CONFIGURATION time, so within the single invocation that first WRITES
+// profiles (`generateBaselineProfile`), the final re-package step may still
+// see no in-tree files and skip compilation. Run the release build once more
+// AFTER generation so the freshly committed profile is compiled in.
+val hasCommittedBaselineProfiles: Boolean =
+    file("src/main/baseline-prof.txt").isFile ||
+        (file("src/main/baselineProfiles").isDirectory &&
+            (file("src/main/baselineProfiles").listFiles()
+                ?.any { it.name.endsWith(".txt") } == true))
+
+tasks.configureEach {
+    if (!hasCommittedBaselineProfiles &&
+        name.startsWith("compile") &&
+        name.endsWith("ArtProfile")
+    ) {
+        enabled = false
+    }
+}
+
 // B1-PLAT-1 (phase-57) fail-fast gate: whenever a task that produces a SIGNED
 // RELEASE artifact is requested while the release keystore is not configured,
 // abort before R8/minify burns minutes. Only release signing/packaging task names
