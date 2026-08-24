@@ -8,9 +8,12 @@ package com.authorss81.noteflow.services
  * it mirrors both axes at once. The stored setting key for RADIAL stays "radial"
  * for backward compatibility with pre-existing prefs.
  *
- * Symmetry is strictly a VIEW-TIME transform: the stored stroke data keeps the
- * real (unmirrored) points so saved notes remain portable and export correctly.
- * The mirror is applied while rendering and, optionally, while capturing input.
+ * Phase 203: symmetry is a CAPTURE-TIME drawing aid. A stroke COMMITTED while a
+ * mode is active persists two independent rows — original + mirrored twin baked
+ * by [SymmetryCommitPolicy.bakedTwin] about the frozen world-space axis center.
+ * Toggling a mode afterwards never changes/adds/removes anything already on the
+ * canvas; the only remaining VIEW-TIME mirror is the LIVE in-progress preview
+ * stroke so the user sees the symmetric effect while drawing.
  *
  * Pure math, no Android dependencies, unit-testable on the JVM.
  */
@@ -49,7 +52,9 @@ object SymmetryHelper {
     }
 
     /**
-     * Mirrors a list of points in one shot (used for whole-stroke rendering).
+     * Mirrors a list of (x, y) points in one shot (pure helper; the stroke-level
+     * twin baking works on [com.authorss81.noteflow.data.model.Stroke] via
+     * [SymmetryCommitPolicy.bakedTwin]).
      */
     fun mirrorPoints(
         points: List<Pair<Float, Float>>,

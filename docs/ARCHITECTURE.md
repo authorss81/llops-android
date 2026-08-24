@@ -472,6 +472,27 @@
 > Tests: `Phase202BugFixBatchTest` (12) + SymmetryHelperTest 8→13; 2718 tests / 3
 > failures all pre-existing on clean HEAD. No schema change, no new deps.
 
+> **Implemented in phase-203** (2026-08-24, symmetry baked at capture time —
+> toggling never rewrites history, see `workspace/phase-203/REPORT.md`): the
+> canvas no longer re-mirrors committed strokes at render time (the old
+> `drawStrokeWithSymmetry` second pass is deleted — enabling symmetry used to
+> retroactively duplicate old ink and disabling made it vanish). A stroke drawn
+> while a mode is active persists TWO independent rows: new pure-JVM
+> `services/SymmetryCommitPolicy.kt` (`shouldBakeMirror` = mode != OFF &&
+> tool != TEXT; `bakedTwin` = exact mirror + fresh UUID, all attributes and
+> per-point pressure/tilt/timestamp preserved) is applied at the freehand commit
+> site (`AnnotationCanvas.kt:1380-1449`), which freezes the gesture's live-preview
+> WORLD axis centre on the UI thread and adds ORIGINAL + TWIN in ONE
+> `onStrokesChanged` update (one undo removes both). Committed loops render via
+> `drawCommittedStrokeOnce` (`AnnotationCanvas.kt:3592`); the view-time mirror
+> survives only for the LIVE preview (`drawLivePreviewWithSymmetry`,
+> `AnnotationCanvas.kt:3598`). Eraser + symmetry now compose through plain
+> per-stroke deletion — the erase-through-mirror special-casing is removed from
+> the hit-test lambda (`:1106`) and the cursor highlight (`:2963`); erasing one
+> twin leaves the other. Tests: `SymmetryCommitPolicyTest` (12) +
+> `Phase203SymmetryCaptureBakeTest` (12 source pins); phase-202/198 pins updated.
+> No schema change, no new deps.
+
 ## Core subsystem anchors (file:line)
 
 - **Encryption/vault**: `services/EncryptionService.kt:18` (PBKDF2 600k, AES-256-GCM, NFKC-normalized password);

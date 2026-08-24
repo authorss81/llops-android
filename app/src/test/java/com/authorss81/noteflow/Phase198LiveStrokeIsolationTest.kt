@@ -139,9 +139,15 @@ class Phase198LiveStrokeIsolationTest {
         val overlayTag = src.indexOf("testTag(\"live_stroke_preview\")")
         val cursorDraw = src.indexOf("EraserGeometryPolicy.previewRadius(currentWidth, currentWidth)")
         assertTrue(overlayTag >= 0 && cursorDraw > overlayTag)
-        // The STROKE-erase highlight loop moved with it.
-        val highlight = src.indexOf("strokeContainsPoint(stroke, cursorPos) || strokeContainsPoint(stroke, Offset(mirror.x, mirror.y))")
+        // The STROKE-erase highlight loop moved with it. Phase 203: plain
+        // per-stroke hit-test — mirrored twins are real rows now, so the old
+        // mirror-the-query-point expression is gone.
+        val highlight = src.indexOf("val hits = strokeContainsPoint(stroke, cursorPos)")
         assertTrue(highlight > overlayTag)
+        assertFalse(
+            "the view-time erase-through-mirror special-case must not resurrect",
+            src.contains("Offset(mirror.x, mirror.y)")
+        )
     }
 
     // ---- 4. Incremental layer-cache invalidation ----------------------------------

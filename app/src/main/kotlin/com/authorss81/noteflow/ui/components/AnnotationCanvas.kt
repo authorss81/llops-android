@@ -1097,19 +1097,14 @@ fun AnnotationCanvas(
             // captures the CURRENT smoothing inputs (same pattern as
             // stabilizerEnabled).
             .pointerInput(currentTool, currentColor, currentWidth, pdfPageFilter, isContinuousMode, activeRawBitmapMap, isLayerLocked, symmetryMode, stabilizerEnabled, eraserMode, activeLayerId, layers, stabilizerStrengthPercent, activeBrushPresetId, importedBrushPresets) {
-                // Phase 07: with a view-time mirror active, erasing a stroke must
-                // also work through the mirrored copy — the user sees a mirrored
-                // stroke and expects to erase it in place. Uses the SAME axis as the
-                // renderer (symmetryCenterFor), so the hit-test and the visual
-                // mirror always agree.
+                // Phase 203: plain per-stroke hit-testing covers both symmetry
+                // copies — a stroke drawn while a mode was active persisted TWO
+                // independent rows (original + baked twin, see
+                // SymmetryCommitPolicy), so erasing either copy deletes exactly
+                // that row and LEAVES the other (the old view-time mirror hit-test
+                // special-case is gone with it).
                 val erasesStroke: (Stroke, Offset) -> Boolean = { stroke, offset ->
-                    if (symmetryMode == SymmetryMode.OFF) {
-                        strokeContainsPoint(stroke, offset)
-                    } else {
-                        val c = symmetryCenterFor(size.width.toFloat(), offset.y)
-                        val m = SymmetryHelper.mirrorPoint(offset.x, offset.y, symmetryMode, c.x, c.y)
-                        strokeContainsPoint(stroke, offset) || strokeContainsPoint(stroke, Offset(m.x, m.y))
-                    }
+                    strokeContainsPoint(stroke, offset)
                 }
                 // Phase 19: shared eraser handler. STROKE mode keeps the classic
                 // remove-whole-stroke behaviour. PARTIAL mode segments every hit
@@ -1374,6 +1369,22 @@ fun AnnotationCanvas(
                                     val commitColorMode = currentColorMode
                                     val commitColorSeed = currentColorSeed
                                     val commitGradientTo = currentGradientToColor.toArgb()
+                                    // Phase 203: symmetry is a CAPTURE-TIME decision. Freeze the
+                                    // mode AND the exact axis center this gesture's live preview
+                                    // used (symmetryCenterResolver(size.width, pageTopY of the
+                                    // active page)) so the baked twin lands precisely where the
+                                    // user saw the mirrored ink while drawing — world space, same
+                                    // coordinate space as the stroke points. Toggling symmetry
+                                    // later never rewrites history; only strokes drawn while a
+                                    // mode is active gain a twin.
+                                    val bakeMirrorTwin = com.authorss81.noteflow.services.SymmetryCommitPolicy.shouldBakeMirror(symmetryMode, tool)
+                                    val symmetryAxisCenter = if (bakeMirrorTwin) {
+                                        val c = symmetryCenterFor(size.width.toFloat(), calculatePageYOffset(targetPage))
+                                        c.x to c.y
+                                    } else {
+                                        null
+                                    }
+                                    val commitSymmetryMode = symmetryMode
 
                                     coroutineScope.launch(kotlinx.coroutines.Dispatchers.Default) {
                                         val candidateStroke = Stroke(
@@ -1419,7 +1430,23 @@ fun AnnotationCanvas(
                                             candidateStroke
                                         }
                                         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                                            activeStrokeList.add(newStroke)
+                                            // Phase 203: ORIGINAL + mirrored TWIN are added together
+                                            // in ONE onStrokesChanged update, so undo removes both at
+                                            // once and the autosave snapshot persists both rows.
+                                            val commitBatch = if (bakeMirrorTwin && symmetryAxisCenter != null) {
+                                                listOf(
+                                                    newStroke,
+                                                    com.authorss81.noteflow.services.SymmetryCommitPolicy.bakedTwin(
+                                                        stroke = newStroke,
+                                                        mode = commitSymmetryMode,
+                                                        centerX = symmetryAxisCenter.first,
+                                                        centerY = symmetryAxisCenter.second
+                                                    )
+                                                )
+                                            } else {
+                                                listOf(newStroke)
+                                            }
+                                            activeStrokeList.addAll(commitBatch)
                                             val otherStrokes = if (isContinuousMode) emptyList() else strokes.filter { it.pdfPage != pdfPageFilter }
                                             onStrokesChanged(otherStrokes + activeStrokeList)
                                             // 36.0: stroke-commit tick + distinct shape-snap tick,
@@ -2928,14 +2955,12 @@ private fun LiveStrokePreview(
                         style = DrawStrokeStyle(width = com.authorss81.noteflow.services.EraserGeometryPolicy.CURSOR_RING_WIDTH_PX)
                     )
                 } else {
-                    val axisCenter = symmetryCenterResolver(size.width, cursorPos.y)
+                    // Phase 203: plain hit-test — mirrored twins are real stroke
+                    // rows, so the highlight predicts exactly the row(s) the
+                    // eraser would delete (the old mirror-the-query-point
+                    // special-case is gone with the view-time erase path).
                     for (stroke in activeStrokes) {
-                        val hits = if (symmetryMode == SymmetryMode.OFF) {
-                            strokeContainsPoint(stroke, cursorPos)
-                        } else {
-                            val mirror = SymmetryHelper.mirrorPoint(cursorPos.x, cursorPos.y, symmetryMode, axisCenter.x, axisCenter.y)
-                            strokeContainsPoint(stroke, cursorPos) || strokeContainsPoint(stroke, Offset(mirror.x, mirror.y))
-                        }
+                        val hits = strokeContainsPoint(stroke, cursorPos)
                         if (!hits) continue
                         if (stroke.points.size > 1) {
                             val path = androidx.compose.ui.graphics.Path().apply {
@@ -3557,11 +3582,20 @@ private fun DrawScope.drawCompositedLayersStrokes(
     liveStrokeSeed: Float = 0f,
     vibrancyBoost: Float = 0f
 ) {
-    // Phase 07: view-time mirror. Symmetry never touches stored point data —
-    // committed strokes keep the real points so saved notes stay portable and
-    // export correctly. TEXT strokes are never mirrored (text cannot sensibly
-    // reflect).
-    fun DrawScope.drawStrokeWithSymmetry(stroke: Stroke, offsetY: Float, sMode: SymmetryMode, centerX: Float = symmetryCenterX, centerY: Float = symmetryCenterY) {
+    // Phase 203: committed strokes render EXACTLY ONCE. Symmetry is baked at
+    // capture time (see SymmetryCommitPolicy): a stroke drawn while a mode was
+    // active persisted BOTH rows (original + mirrored twin), so re-mirroring
+    // committed strokes here retroactively duplicated old ink on enable and
+    // "deleted" it on disable — the user-reported flip-flop. The ONLY remaining
+    // view-time mirror is the LIVE in-progress preview below, so the user still
+    // sees the symmetric effect while drawing, before lift-off.
+    fun DrawScope.drawCommittedStrokeOnce(stroke: Stroke, offsetY: Float) {
+        drawSingleStroke(stroke, offsetY, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer, renderOpts = strokeRenderOpts, vibrancy = vibrancyBoost)
+    }
+
+    // Live preview only: draws [stroke] plus its mirror when [sMode] is active.
+    // TEXT strokes are never mirrored (text cannot sensibly reflect).
+    fun DrawScope.drawLivePreviewWithSymmetry(stroke: Stroke, offsetY: Float, sMode: SymmetryMode, centerX: Float = symmetryCenterX, centerY: Float = symmetryCenterY) {
         drawSingleStroke(stroke, offsetY, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer, renderOpts = strokeRenderOpts, vibrancy = vibrancyBoost)
         if (sMode != SymmetryMode.OFF && stroke.tool != StrokeTool.TEXT) {
             drawSingleStroke(
@@ -3623,16 +3657,11 @@ private fun DrawScope.drawCompositedLayersStrokes(
                     size = androidx.compose.ui.geometry.Size(pageWidth, pageHeight)
                 ) {
                     for (stroke in strokes) {
-                        // Phase 202 (bug batch): the mirror runs on the RAW stored
-                        // points, which are WORLD coordinates — only the final
-                        // drawSingleStroke translation (-pageTopY) moves them into
-                        // the page-local bitmap. The axis center must therefore stay
-                        // in WORLD space too: passing the local centre here made
-                        // HORIZONTAL/RADIAL mirrors reflect about the PAGE-0 centre
-                        // and land off-bitmap on every later page (mirror worked
-                        // only on page 0). Vertical mode was unaffected (x does not
-                        // shift between world and local).
-                        drawStrokeWithSymmetry(stroke, offsetY - pageTopY, symmetryMode, symmetryCenterX, symmetryCenterY)
+                        // Phase 203: committed strokes render ONCE — the mirrored
+                        // twin is a real stroke row baked at capture time (world
+                        // coordinates; see SymmetryCommitPolicy), so no view-time
+                        // second pass happens here anymore.
+                        drawCommittedStrokeOnce(stroke, offsetY - pageTopY)
                     }
                 }
                 cache.hash = strokesHash
@@ -3640,14 +3669,14 @@ private fun DrawScope.drawCompositedLayersStrokes(
 
             drawContext.canvas.nativeCanvas.drawBitmap(cache.bitmap.asAndroidBitmap(), 0f, pageTopY, null)
             if (previewStroke != null) {
-                drawStrokeWithSymmetry(previewStroke, offsetY, symmetryMode)
+                drawLivePreviewWithSymmetry(previewStroke, offsetY, symmetryMode)
             }
         } else {
             for (stroke in strokes) {
-                drawStrokeWithSymmetry(stroke, offsetY, symmetryMode)
+                drawCommittedStrokeOnce(stroke, offsetY)
             }
             if (previewStroke != null) {
-                drawStrokeWithSymmetry(previewStroke, offsetY, symmetryMode)
+                drawLivePreviewWithSymmetry(previewStroke, offsetY, symmetryMode)
             }
         }
         return
@@ -3732,12 +3761,10 @@ private fun DrawScope.drawCompositedLayersStrokes(
         val cacheKey = "${pageIdx}_${layer.id}_${symmetryMode}_v${vibrancyBoost}"
         val strokesHash = layerStrokes.hashCode()
 
-        // Phase 07: symmetry is a view-time transform, but it does NOT have to be
-        // a per-frame cost. The mirrored copy is baked into the layer bitmap and
-        // the key includes the symmetry mode, so a mode change invalidates it and
-        // the normal cached-blit path is restored. Only the live preview is
-        // mirrored per frame; this avoids re-vectorizing every layer every frame
-        // while a symmetry mode is active.
+        // Phase 203: symmetry no longer participates in the committed-layer cache
+        // key's MEANING — committed strokes are baked rows and render once; the
+        // key keeps the mode only to preserve the established budget/format
+        // contract (LayerRenderBudgetPolicy) and force one rebuild on toggle.
         if (layerBitmapCache != null && canvasDrawScope != null && density != null && layoutDirection != null && pageWidth > 0f && pageHeight > 0f) {
             var cache = layerBitmapCache.get(cacheKey)
             val pw = pageWidth.toInt().coerceAtLeast(1)
@@ -3761,11 +3788,9 @@ private fun DrawScope.drawCompositedLayersStrokes(
                     size = androidx.compose.ui.geometry.Size(pageWidth, pageHeight)
                 ) {
                     for (stroke in layerStrokes) {
-                        // Phase 202 (bug batch): WORLD centre — the mirror runs on the
-                        // raw world points before drawSingleStroke's -pageTopY
-                        // translation into this page-local bitmap (see the no-layers
-                        // branch above for the full rationale).
-                        drawStrokeWithSymmetry(stroke, offsetY - pageTopY, symmetryMode, symmetryCenterX, symmetryCenterY)
+                        // Phase 203: committed strokes render ONCE — twins are real
+                        // rows baked at capture time; no view-time mirror here.
+                        drawCommittedStrokeOnce(stroke, offsetY - pageTopY)
                     }
                 }
                 cache.hash = strokesHash
@@ -3783,7 +3808,7 @@ private fun DrawScope.drawCompositedLayersStrokes(
             )
             
             if (isPreviewOnThisLayer && previewStroke != null) {
-                drawStrokeWithSymmetry(previewStroke, offsetY, symmetryMode)
+                drawLivePreviewWithSymmetry(previewStroke, offsetY, symmetryMode)
             }
         } else {
             val isNormal = layer.blendMode.equals("NORMAL", ignoreCase = true)
@@ -3791,10 +3816,10 @@ private fun DrawScope.drawCompositedLayersStrokes(
     
             if (isNormal && isOpaque) {
                 for (stroke in layerStrokes) {
-                    drawStrokeWithSymmetry(stroke, offsetY, symmetryMode)
+                    drawCommittedStrokeOnce(stroke, offsetY)
                 }
                 if (isPreviewOnThisLayer && previewStroke != null) {
-                    drawStrokeWithSymmetry(previewStroke, offsetY, symmetryMode)
+                    drawLivePreviewWithSymmetry(previewStroke, offsetY, symmetryMode)
                 }
             } else {
                 val nativeCanvas = drawContext.canvas.nativeCanvas
@@ -3807,10 +3832,10 @@ private fun DrawScope.drawCompositedLayersStrokes(
                 val saveCount = nativeCanvas.saveLayer(bounds, paint)
                 try {
                     for (stroke in layerStrokes) {
-                        drawStrokeWithSymmetry(stroke, offsetY, symmetryMode)
+                        drawCommittedStrokeOnce(stroke, offsetY)
                     }
                     if (isPreviewOnThisLayer && previewStroke != null) {
-                        drawStrokeWithSymmetry(previewStroke, offsetY, symmetryMode)
+                        drawLivePreviewWithSymmetry(previewStroke, offsetY, symmetryMode)
                     }
                 } finally {
                     nativeCanvas.restoreToCount(saveCount)

@@ -164,20 +164,27 @@ class Phase202BugFixBatchTest {
     // ---- 1. mirror -----------------------------------------------------
 
     @Test
-    fun `both bitmap-cache recording sites pass the WORLD symmetry centre`() {
+    fun `symmetry mirror stays in WORLD space — baked at capture, never re-mirrored at render`() {
         val canvas = sourceFile("ui/components/AnnotationCanvas.kt")
+        // Phase 203: the view-time committed-stroke mirror is GONE — the old
+        // call forms (world-centre AND local-centre) must not resurrect.
         assertFalse(
-            "the pre-fix local-centre form must be gone (mirror only worked on page 0)",
+            "committed strokes must never be re-mirrored at render time",
+            canvas.contains("drawStrokeWithSymmetry")
+        )
+        assertFalse(
+            "the pre-fix local-centre form must stay gone (mirror only worked on page 0)",
             canvas.contains("symmetryCenterX, symmetryCenterY - pageTopY)")
         )
-        val worldCentreCalls = Regex(
-            """drawStrokeWithSymmetry\(stroke, offsetY - pageTopY, symmetryMode, symmetryCenterX, symmetryCenterY\)"""
-        ).findAll(canvas).count()
+        // The capture-time twin bake freezes the WORLD axis centre the live
+        // preview used for the gesture (page-anchored via calculatePageYOffset),
+        // so twins land inside their own page slab on every page >= 1.
         assertTrue(
-            "both cache paths (no-layers + per-layer) must record with the world centre, found $worldCentreCalls",
-            worldCentreCalls >= 2
+            "the commit site must freeze the world centre from calculatePageYOffset",
+            canvas.contains("symmetryCenterFor(size.width.toFloat(), calculatePageYOffset(targetPage))")
         )
-        // The paginated caller must still resolve the per-page WORLD centre.
+        // The paginated renderer still resolves the per-page WORLD centre for
+        // the LIVE preview mirror only.
         assertTrue(canvas.contains("symmetryCenterY = symmetryCenterFor(size.width, pageTopY).y"))
     }
 

@@ -90,21 +90,17 @@ class SymmetryHelperTest {
     }
 
     // -----------------------------------------------------------------------
-    // Phase 202 (bug batch) — cached-render mirror contract, PAGE 1.
+    // Phase 202 + Phase 203 — WORLD-space mirror contract.
     //
-    // AnnotationCanvas stores stroke points in WORLD coordinates. In the
-    // page-local bitmap cache the stroke is recorded as
-    //   drawStrokeWithSymmetry(stroke, offsetY - pageTopY, mode, cx, cyArg)
-    // i.e. mirrorPoint runs on the RAW WORLD points and only the final
-    // drawSingleStroke translation (-pageTopY) moves them into local space.
-    // The centre argument must therefore be the WORLD centre; passing the
-    // LOCAL centre (the pre-fix form) reflected HORIZONTAL/RADIAL copies
-    // about the PAGE-0 axis so they landed off-bitmap on every later page
-    // ("mirror only works on page 0").
-    //
-    // The math these tests pin:
-    //   renderedLocal(world y) = mirrorPoint(x, worldY, mode, cx, cyArg).y - top
+    // AnnotationCanvas stores stroke points in WORLD coordinates. The
+    // phase-203 CAPTURE-TIME twin bake mirrors the raw world points about a
+    // WORLD axis centre frozen from symmetryCenterFor(...) at drag end (the
+    // same centre the live preview showed). The old view-time render pass this
+    // contract guarded is GONE for committed strokes — but the underlying math
+    // invariant still protects every page >= 1:
+    //   bakedLocal(world y) = mirrorPoint(x, worldY, mode, cx, cyWorld).y - top
     //   identity: 2*(C - top) - (y - top)  ==  2*C - y - top
+    // A LOCAL centre argument would land the baked twin off-page on later pages.
     // -----------------------------------------------------------------------
 
     private val PAGE_HEIGHT = 1528f
@@ -114,7 +110,7 @@ class SymmetryHelperTest {
     private val worldCentreY = page1Top + PAGE_HEIGHT / 2f // 2356
     private val localCentreY = PAGE_HEIGHT / 2f // 764 — the PRE-FIX (wrong) argument
 
-    /** Exactly what AnnotationCanvas renders into the page-local cache bitmap. */
+    /** Exactly the capture-time twin bake AnnotationCanvas performs at drag end. */
     private fun renderedMirrorLocalY(
         worldY: Float,
         centreYArgument: Float,
