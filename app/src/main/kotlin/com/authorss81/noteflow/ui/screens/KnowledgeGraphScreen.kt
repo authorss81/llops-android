@@ -33,15 +33,31 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.authorss81.noteflow.data.model.NotePageEntity
@@ -51,8 +67,10 @@ import com.authorss81.noteflow.services.WikiLinkEdge
 import com.authorss81.noteflow.services.WikiLinkParser
 import com.authorss81.noteflow.services.graph.GraphEdgeRef
 import com.authorss81.noteflow.services.graph.GraphLayoutMath
+import com.authorss81.noteflow.services.graph.GraphNeighborhoodFocusPolicy
 import com.authorss81.noteflow.services.graph.GraphPhysicsConfig
 import com.authorss81.noteflow.services.graph.GraphPreviewPolicy
+import com.authorss81.noteflow.services.graph.GraphSearchMatchPolicy
 import com.authorss81.noteflow.services.graph.GraphSubgraphFilter
 import com.authorss81.noteflow.services.graph.GraphTierSelector
 import com.authorss81.noteflow.services.graph.GraphVertex
@@ -70,8 +88,15 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.PI
 import kotlin.math.cos
+import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.math.sqrt
+
+/** Phase 210: TalkBack overlay cap — the N most-connected nodes get invisible
+ *  semantics mirrors. Partial coverage is a documented v1 constraint: on a
+ *  400-node vault, 50 focusable targets already exhausts a practical swipe
+ *  traversal, and capping bounds the semantics-tree size on low-RAM devices. */
+private const val SEMANTIC_NODE_CAP = 50
 
 data class GraphNode(
     val page: NotePageEntity,
@@ -135,6 +160,18 @@ fun KnowledgeGraphScreen(
     var edges by remember { mutableStateOf<List<GraphEdge>>(emptyList()) }
     var allTags by remember { mutableStateOf<List<String>>(emptyList()) }
     var selectedNodeId by remember { mutableStateOf<String?>(null) }
+    // Phase 210: neighborhood focus. `focusEnabled` is session state (the
+    // Focus/Clear-focus buttons on the selected-node card drive it) and stays
+    // sticky across selections so exploring a chain of notes never re-dims the
+    // whole graph per tap; the hop DEPTH persists via SettingsManager so a
+    // returning user keeps their preferred exploration radius.
+    var focusEnabled by remember { mutableStateOf(false) }
+    var focusHops by remember { mutableIntStateOf(viewModel.settings.graphFocusHopCount) }
+    var backlinksTargetId by remember { mutableStateOf<String?>(null) }
+    // Phase 210: search navigation. Matches are ranked deterministically; Enter
+    // cycles and the canvas auto-pans to the active match.
+    var matchIndex by remember { mutableIntStateOf(0) }
+    var canvasSizePx by remember { mutableStateOf(IntSize.Zero) }
     // Phase 156: distinguishes "still decryption the vault" from "vault loaded,
     // genuinely empty" so the empty state never flashes before the load lands.
     var graphLoaded by remember { mutableStateOf(false) }
@@ -350,6 +387,62 @@ fun KnowledgeGraphScreen(
         }
     }
 
+    // Phase 210 — neighborhood focus. The focused id set comes from the pure-JVM
+    // BFS policy; the surviving edge set reuses GraphSubgraphFilter.edgesWithin
+    // (the same both-endpoints-inside rule the notebook subgraph view uses), so
+    // focus mode draws ONLY edges inside the neighborhood and lets the existing
+    // dimming pipeline fade every node outside it.
+    val graphEdgeRefs = remember(edges) { edges.map { GraphEdgeRef(it.sourceId, it.targetId) } }
+    val focusResult = remember(selectedNodeId, graphEdgeRefs, focusEnabled, focusHops) {
+        GraphNeighborhoodFocusPolicy.focus(selectedNodeId, focusEnabled, graphEdgeRefs, focusHops)
+    }
+
+    // Phase 210 — search navigation. Deterministic ranked matches; Enter cycles,
+    // and a change of the active match pans the canvas so that node is centered.
+    val matchIds = remember(searchQuery, nodes) {
+        GraphSearchMatchPolicy.orderedMatches(
+            searchQuery,
+            nodes.map { it.page.id to it.page.title }
+        )
+    }
+    LaunchedEffect(matchIds) {
+        // The list shrank (query edited / relayout): clamp back into range.
+        if (matchIndex >= matchIds.size) matchIndex = 0
+    }
+    val activeMatchId = matchIds.getOrNull(matchIndex)
+    LaunchedEffect(activeMatchId) {
+        val target = activeMatchId ?: return@LaunchedEffect
+        val node = nodes.find { it.page.id == target } ?: return@LaunchedEffect
+        val size = canvasSizePx
+        if (size == IntSize.Zero || size.width <= 0 || size.height <= 0) return@LaunchedEffect
+        val pan = GraphSearchMatchPolicy.panToCenter(
+            node.end.x, node.end.y,
+            size.width.toFloat(), size.height.toFloat(),
+            zoomScale
+        )
+        panOffset = Offset(pan.panX, pan.panY)
+    }
+
+    // Phase 210 — TalkBack overlay set: the SEMANTIC_NODE_CAP most-connected
+    // nodes, then re-sorted by title so traversal order is stable across
+    // physics relayouts (composition order = TalkBack order).
+    val semanticOverlays = remember(nodes, graphEdgeRefs) {
+        if (nodes.isEmpty()) return@remember emptyList<GraphNode>()
+        val degree = HashMap<String, Int>(nodes.size * 2)
+        for (e in graphEdgeRefs) {
+            degree[e.sourceId] = (degree[e.sourceId] ?: 0) + 1
+            degree[e.targetId] = (degree[e.targetId] ?: 0) + 1
+        }
+        nodes
+            .sortedWith(
+                compareByDescending<GraphNode> { degree[it.page.id] ?: 0 }
+                    .thenBy { it.page.title.lowercase() }
+                    .thenBy { it.page.id }
+            )
+            .take(SEMANTIC_NODE_CAP)
+            .sortedWith(compareBy({ it.page.title.lowercase() }, { it.page.id }))
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -399,11 +492,35 @@ fun KnowledgeGraphScreen(
                 ) {
                     OutlinedTextField(
                         value = searchQuery,
-                        onValueChange = { searchQuery = it },
+                        onValueChange = {
+                            searchQuery = it
+                            matchIndex = 0
+                        },
                         placeholder = { Text("Search nodes in graph...") },
                         leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            // Phase 210: Enter cycles through the ranked matches
+                            // (consumed, so it never inserts a newline); the pan
+                            // effect below recenters each cycled match.
+                            .onPreviewKeyEvent { e ->
+                                if (e.type == KeyEventType.KeyDown &&
+                                    (e.key == Key.Enter || e.key == Key.NumPadEnter) &&
+                                    matchIds.isNotEmpty()
+                                ) {
+                                    matchIndex =
+                                        GraphSearchMatchPolicy.nextIndex(matchIndex, matchIds.size)
+                                    true
+                                } else {
+                                    false
+                                }
+                            },
+                        singleLine = true,
+                        supportingText = if (matchIds.size > 1) {
+                            { Text("Match ${matchIndex + 1} of ${matchIds.size} · Enter for next") }
+                        } else {
+                            null
+                        }
                     )
                 }
 
@@ -461,6 +578,7 @@ fun KnowledgeGraphScreen(
                     modifier = Modifier
                         .fillMaxSize()
                         .testTag("knowledge_graph")
+                        .onSizeChanged { canvasSizePx = it }
                         .transformable(state = transformState)
                         .pointerInput(Unit) {
                             detectTapGestures { tapOffset ->
@@ -500,6 +618,11 @@ fun KnowledgeGraphScreen(
                                 translationX = panOffset.x,
                                 translationY = panOffset.y
                             )
+                            // Phase 210: the raw Canvas is decorative — every
+                            // readable signal it draws (dots, labels) has a real
+                            // semantics mirror in the overlay below. Explicitly
+                            // emptied so TalkBack never lands on a blank node.
+                            .clearAndSetSemantics { }
                     ) {
                         val center = Offset(size.width / 2f, size.height / 2f)
                         val progress = layoutProgress.value
@@ -520,9 +643,22 @@ fun KnowledgeGraphScreen(
                         // for every incident edge.
                         val selectedId = selectedNodeId
                         val filteredById = HashMap<String, Boolean>(nodes.size)
+                        // Phase 210: neighborhood focus rides the SAME dimming
+                        // pipeline as the tag filter — anything outside the
+                        // focused N-hop set fades exactly like a tag-filtered
+                        // node, so there is one visual language for "de-emphasized".
+                        fun outOfFocus(id: String): Boolean =
+                            focusResult != null && id !in focusResult.focusedIds
                         fun pageFiltered(id: String, node: GraphNode): Boolean =
-                            filteredById.getOrPut(id) { isFilteredOut(node.page) }
-                        for (edge in edges) {
+                            filteredById.getOrPut(id) { isFilteredOut(node.page) || outOfFocus(id) }
+                        // Phase 210 + GraphSubgraphFilter: in focus mode only the
+                        // edges WITHIN the neighborhood are drawn at all (the same
+                        // both-endpoints rule the notebook subgraph uses); without
+                        // focus the full culled edge set renders. Both branches are
+                        // GraphEdgeRef lists so the draw loop stays uniformly typed.
+                        val drawnEdges: List<GraphEdgeRef> =
+                            focusResult?.focusedEdges ?: graphEdgeRefs
+                        for (edge in drawnEdges) {
                             val src = nodeById[edge.sourceId] ?: continue
                             val tgt = nodeById[edge.targetId] ?: continue
                             val srcFiltered = pageFiltered(edge.sourceId, src)
@@ -550,7 +686,7 @@ fun KnowledgeGraphScreen(
                         // Pulsing "particles" along links touching the selected
                         // node — disabled under reduce-motion.
                         if (!reduceMotion && selectedId != null) {
-                            for (edge in edges) {
+                            for (edge in drawnEdges) {
                                 if (edge.sourceId != selectedId && edge.targetId != selectedId) continue
                                 val a = center + (shownPositions[edge.sourceId] ?: continue)
                                 val b = center + (shownPositions[edge.targetId] ?: continue)
@@ -566,12 +702,13 @@ fun KnowledgeGraphScreen(
                         for (n in nodes) {
                             val matched = searchQuery.isNotBlank() &&
                                 n.page.title.contains(searchQuery, ignoreCase = true)
+                            val isActiveMatch = activeMatchId == n.page.id
                             val isSelected = selectedId == n.page.id
                             val filteredOut = pageFiltered(n.page.id, n)
                             val fade = if (filteredOut) 0.12f else 1f
                             val finalColor = when {
                                 isSelected -> errorColor
-                                matched -> tertiaryColor
+                                isActiveMatch || matched -> tertiaryColor
                                 else -> n.color
                             }
                             val pos = center + shownPositions.getValue(n.page.id)
@@ -581,6 +718,17 @@ fun KnowledgeGraphScreen(
                                 radius = n.radius + (if (isSelected || matched) 14f else 6f),
                                 center = pos
                             )
+                            // Phase 210: the ACTIVE search match (the one Enter
+                            // currently points at, and the pan target) gets a crisp
+                            // ring on top of the soft match halo.
+                            if (isActiveMatch && !isSelected) {
+                                drawCircle(
+                                    color = tertiaryColor.copy(alpha = fade),
+                                    radius = n.radius + 10f,
+                                    center = pos,
+                                    style = Stroke(width = 3f)
+                                )
+                            }
                             drawCircle(
                                 color = finalColor.copy(alpha = fade),
                                 radius = n.radius,
@@ -607,6 +755,39 @@ fun KnowledgeGraphScreen(
                                     pos.x - measured.size.width / 2f,
                                     pos.y + n.radius + 4f
                                 )
+                            )
+                        }
+                    }
+
+                    // Phase 210: TalkBack bridge — invisible semantics mirrors
+                    // for the top-N settled nodes. These Boxes carry ONLY
+                    // semantics modifiers: no pointerInput/clickable is attached,
+                    // so touches pass straight through to the gesture canvas
+                    // underneath while TalkBack can still focus each node and
+                    // offer its double-tap-to-open action.
+                    if (semanticOverlays.isNotEmpty() && canvasSizePx != IntSize.Zero) {
+                        val viewportCenter = Offset(
+                            canvasSizePx.width / 2f,
+                            canvasSizePx.height / 2f
+                        )
+                        val panState = rememberUpdatedState(panOffset)
+                        semanticOverlays.forEach { overlayNode ->
+                            val degree = graphEdgeRefs.count {
+                                it.sourceId == overlayNode.page.id || it.targetId == overlayNode.page.id
+                            }
+                            GraphSemanticNodeOverlay(
+                                node = overlayNode,
+                                connectionCount = degree,
+                                viewportCenterPx = viewportCenter,
+                                zoomScale = zoomScale,
+                                panState = panState,
+                                progressProvider = { layoutProgress.value },
+                                zoomProvider = { zoomScale },
+                                minSideDp = 24.dp,
+                                onOpen = {
+                                    selectedNodeId = overlayNode.page.id
+                                    currentOnOpenPage(overlayNode.page)
+                                }
                             )
                         }
                     }
@@ -654,13 +835,15 @@ fun KnowledgeGraphScreen(
                             .fillMaxWidth(0.9f),
                         elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
                     ) {
-                        Row(
-                            modifier = Modifier.padding(16.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(
+                                    modifier = Modifier.weight(1f),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
                                     Box(
                                         Modifier
                                             .size(12.dp)
@@ -679,17 +862,78 @@ fun KnowledgeGraphScreen(
                                         overflow = TextOverflow.Ellipsis
                                     )
                                 }
-                                Text(
-                                    "Cluster ${node.clusterId} · tap again to open note",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
+                                Spacer(Modifier.width(8.dp))
+                                Button(onClick = { onOpenPage(node.page) }) {
+                                    Text("Open Note")
+                                }
                             }
-                            Button(onClick = { onOpenPage(node.page) }) {
-                                Text("Open Note")
+                            Text(
+                                if (focusResult != null) {
+                                    GraphNeighborhoodFocusPolicy.focusNotice(focusResult.focusedIds.size)
+                                } else {
+                                    "Cluster ${node.clusterId} · tap again to open note"
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            // Phase 210: neighborhood-focus controls + backlinks.
+                            // Horizontally scrollable so the phase-166 compact-screen
+                            // rule (no clipped fixed-width rows at 360dp) holds even
+                            // with every control visible.
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                if (focusResult == null) {
+                                    TextButton(onClick = { focusEnabled = true }) {
+                                        Text("Focus", style = MaterialTheme.typography.labelMedium)
+                                    }
+                                } else {
+                                    TextButton(onClick = { focusEnabled = false }) {
+                                        Text("Clear focus", style = MaterialTheme.typography.labelMedium)
+                                    }
+                                    listOf(1, 2, 3).forEach { hops ->
+                                        FilterChip(
+                                            selected = focusHops == hops,
+                                            onClick = {
+                                                focusHops = hops
+                                                viewModel.settings.graphFocusHopCount = hops
+                                            },
+                                            label = {
+                                                Text(
+                                                    if (hops == 1) "1 hop" else "$hops hops",
+                                                    style = MaterialTheme.typography.labelSmall
+                                                )
+                                            }
+                                        )
+                                    }
+                                }
+                                TextButton(onClick = { backlinksTargetId = node.page.id }) {
+                                    Text("Backlinks", style = MaterialTheme.typography.labelMedium)
+                                }
                             }
                         }
                     }
+                }
+            }
+
+            // Phase 210: the backlinks inspector is finally reachable from the
+            // graph — the import existed for phases without a single call site
+            // here; the selected-node card's Backlinks button surfaces it.
+            backlinksTargetId?.let { backlinksId ->
+                nodes.find { it.page.id == backlinksId }?.let { backlinkNode ->
+                    BacklinksInspectorBottomSheet(
+                        activePage = backlinkNode.page,
+                        viewModel = viewModel,
+                        onOpenPage = { opened ->
+                            backlinksTargetId = null
+                            onOpenPage(opened)
+                        },
+                        onDismiss = { backlinksTargetId = null }
+                    )
                 }
             }
 
@@ -716,4 +960,68 @@ fun KnowledgeGraphScreen(
             }
         }
     }
+}
+
+/**
+ * Phase 210: one invisible TalkBack target mirroring a drawn graph node.
+ *
+ * The Box has NO pointer-input modifiers — only `offset` + `size` +
+ * `semantics` — so it can never steal a touch from the gesture canvas below;
+ * screen readers focus it via the semantics tree and its double-tap activates
+ * [onOpen] through the announced click action ("double-tap to open note").
+ *
+ * Position math mirrors the Canvas transform exactly:
+ * `screen = viewportCenter + (world − viewportCenter)·zoom + pan`, where the
+ * zoom/pan/animation-progress reads are DEFERRED into the offset lambda, so
+ * panning and the settle tween re-position these targets during layout without
+ * recomposing the whole overlay stack. Only the BOUNDS SIZE tracks the
+ * composition-time zoom (a zoom change recomposes anyway); bounds are floored
+ * at [minSideDp] so a node zoomed far out stays a reachable focus target.
+ */
+@Composable
+private fun GraphSemanticNodeOverlay(
+    node: GraphNode,
+    connectionCount: Int,
+    viewportCenterPx: Offset,
+    zoomScale: Float,
+    panState: State<Offset>,
+    progressProvider: () -> Float,
+    zoomProvider: () -> Float,
+    minSideDp: Dp,
+    onOpen: () -> Unit
+) {
+    val density = LocalDensity.current
+    val sideDp = with(density) {
+        (node.radius * 2f * zoomScale).toDp().coerceAtLeast(minSideDp)
+    }
+    Box(
+        Modifier
+            .offset {
+                val progress = progressProvider()
+                val world = Offset(
+                    node.start.x + (node.end.x - node.start.x) * progress,
+                    node.start.y + (node.end.y - node.start.y) * progress
+                )
+                val z = zoomProvider().coerceAtLeast(0.05f)
+                val pan = panState.value
+                val screenX =
+                    viewportCenterPx.x + (world.x - viewportCenterPx.x) * z + pan.x
+                val screenY =
+                    viewportCenterPx.y + (world.y - viewportCenterPx.y) * z + pan.y
+                val sidePx = sideDp.toPx()
+                IntOffset(
+                    (screenX - sidePx / 2f).roundToInt(),
+                    (screenY - sidePx / 2f).roundToInt()
+                )
+            }
+            .size(sideDp)
+            .semantics {
+                contentDescription = "Note ${node.page.title}, $connectionCount connections"
+                role = Role.Button
+                onClick(label = "Open note") {
+                    onOpen()
+                    true
+                }
+            }
+    )
 }

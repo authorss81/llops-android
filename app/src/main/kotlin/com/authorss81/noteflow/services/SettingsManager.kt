@@ -177,6 +177,24 @@ class SettingsManager(context: Context) {
             .putString("page_sort_mode", PageSortPolicy.sanitizePersistenceKey(value))
             .apply()
 
+    // Phase 210: Knowledge-graph neighborhood focus depth (1–3 hops, default 1).
+    // Persisted so a returning user keeps their preferred exploration radius.
+    // Sanitized through the policy on read AND write so a hand-edited pref can
+    // never push the BFS frontier out of range. Prefs only, no DB schema impact.
+    var graphFocusHopCount: Int
+        get() = com.authorss81.noteflow.services.graph.GraphNeighborhoodFocusPolicy.sanitizeHops(
+            prefs.getInt(
+                "graph_focus_hop_count",
+                com.authorss81.noteflow.services.graph.GraphNeighborhoodFocusPolicy.DEFAULT_HOPS
+            )
+        )
+        set(value) = prefs.edit()
+            .putInt(
+                "graph_focus_hop_count",
+                com.authorss81.noteflow.services.graph.GraphNeighborhoodFocusPolicy.sanitizeHops(value)
+            )
+            .apply()
+
     // 26.6: automatic shape snapping/straightening of freehand strokes.
     // Phase-126 made ALL plugins/assistive features strictly opt-in (off by default).
     var shapeAutoSnapEnabled: Boolean

@@ -8,6 +8,31 @@
 
 ## Package layout
 
+> **Implemented in phase-210** (2026-08-25, Knowledge Graph depth — neighborhood focus,
+> search auto-pan, TalkBack access, see `workspace/phase-210/REPORT.md`): three
+> graph-explorability gaps closed, all pure-JVM math, no schema/deps. (1) The dead
+> `GraphSubgraphFilter` import is now LIVE via new
+> `services/graph/GraphNeighborhoodFocusPolicy.kt` (`focus()` = BFS from selection,
+> hops 1..3 sanitized, `MAX_FOCUSED_NODES=400` deterministic trim; focused EDGES
+> scoped through `GraphSubgraphFilter.edgesWithin`) — out-of-focus nodes ride the
+> existing dimming pipeline, only focused edges draw; Focus/Clear-focus buttons +
+> persisted hop chips (`SettingsManager.graphFocusHopCount`, key
+> `graph_focus_hop_count`) on the selected-node card; ON/OFF stays session state,
+> sticky across selections by design. (2) New
+> `services/graph/GraphSearchMatchPolicy.kt`: ranked matches (prefix > word-start >
+> contains, id tie-break) + `panToCenter` solving `pan = (center − world)·zoom`
+> for the screen's own center-pivot graphicsLayer identity + Enter-cycle index;
+> `KnowledgeGraphScreen` pans on active-match change ONLY and cycles via consumed
+> `onPreviewKeyEvent`. (3) TalkBack: decorative Canvas `.clearAndSetSemantics{}`;
+> invisible semantics-only mirrors (`GraphSemanticNodeOverlay`, NO pointer-input
+> modifiers — source-pinned) for the 50 most-connected settled nodes re-sorted
+> title,id for stable traversal; deferred zoom/pan/progress reads inside the offset
+> lambda keep pan/tween off the recomposition path; description "Note <title>,
+> <k> connections" + "Open note" click action. Backlinks button composes
+> `BacklinksInspectorBottomSheet` from the selected-node card (previously imported,
+> never composed here). Tests: `GraphNeighborhoodFocusPolicyTest` (14) +
+> `GraphSearchMatchPolicyTest` (13) + `Phase210GraphDepthPinsTest` (12 pins).
+
 > **Implemented in phase-208** (2026-08-25, page management UX — trash-search safety,
 > sort, move/duplicate, multi-select, palm-reject persistence, see
 > `workspace/phase-208/REPORT.md`): (1) CRITICAL data-loss fix — searching on the
