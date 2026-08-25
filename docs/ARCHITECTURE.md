@@ -2490,6 +2490,24 @@ UNTRUSTED files before any staging); `ui/components/Dialogs.kt` `AppUpdateDialog
   package + exact `plugins.runtime.{PluginContext,PluginEntry,PluginVersion}`); every Gson-reflective source must
   keep a fullMode rule (exhaustive discovery test); adding any of these plugins REQUIRES lockfile entries
   (phase-199 shipped without them and EVERY gradle invocation failed verification until the review fix).
+- **Implemented in phase-211** (release hygiene, see `workspace/phase-211/REPORT.md`): (1) the blanket
+  `-keep class androidx.ink.** { *; }` + stale `-keep com.google.protobuf.** { *; }` are GONE from
+  `app/proguard-rules.pro` — ink's own AARs declare shrink-safety ("Intentionally empty proguard rules"),
+  all 7 app-compiled ink entrypoints stay retained but now OBFUSCATED, protobuf matched nothing
+  (empty usage diff), and NO keep was re-added; −1,047 ink members stripped. (2) dead deps removed:
+  `navigation-compose`, `coil-compose`, `material3-window-size-class` (+ catalog rows, BOTH settings.gradle.kts
+  `io\\.coil.*` allow-list lines, `CentralAllowlist` entry, and 11 stale verification-metadata components —
+  note Gradle's regen PRESERVES un-resolved entries, pruning is deliberate) — proven by
+  `--refresh-dependencies assembleDebug` green. (3) `res/font/lora_italic.ttf` + never-referenced
+  `AppFonts.SerifItalic` deleted (−221 KB raw). (4) Compose compiler metrics/reports via opt-in
+  `composeCompiler {}` block: `gradle :app:compileDebugKotlin -Pinkflow.composeMetrics --rerun`;
+  audit: 92% skippable, god-VM instability reaches ZERO composables, 13 unskippables are trivial helpers
+  (documented, not actioned). (5) gradle.properties: `parallel` + `caching` ON,
+  `android.nonFinalResIds=true` (no getIdentifier anywhere), `org.gradle.configuration-cache=true` KEPT after
+  validating all three hazards (B1-PLAT-1 whenReady gate still refuses keystore-less release — CC keys on env
+  vars so it can never serve stale; splits DSL taskNames are CC-key inputs → debug single APK vs 5-way release
+  splits unchanged; paparazzi graph computes). Net: every release split −359,706 bytes exactly,
+  debug −1.21 MB. Release assembles green (apksigner v2+v3), suite 3006/3 pre-existing.
 
 ## Libraries
 

@@ -279,6 +279,26 @@ kotlin {
     }
 }
 
+// Phase 211 (release hygiene): Compose compiler observability. The project has
+// exactly the instability-prone shapes the stability report exists for
+// (EditorScreen.kt ~320 KB / AnnotationCanvas.kt ~314 KB sources, god-ViewModel
+// params), yet no composeCompiler {} block existed anywhere. Metrics/report
+// emission is OPT-IN via `-Pinkflow.composeMetrics` so ordinary builds are
+// byte-for-byte unchanged (the flag is deliberately NOT a default-on variant
+// switch); run:
+//
+//   gradle :app:assembleDebug -Pinkflow.composeMetrics
+//
+// then read build/compose-compiler-reports/*-composables.csv (stability +
+// skippability per composable) and build/compose-compiler-metrics/*.txt.
+
+composeCompiler {
+    if (project.hasProperty("inkflow.composeMetrics")) {
+        metricsDestination = layout.buildDirectory.dir("compose-compiler-metrics")
+        reportsDestination = layout.buildDirectory.dir("compose-compiler-reports")
+    }
+}
+
 dependencies {
     // Phase 29: shared plugin framework surface (NoteflowPlugin, PluginCapability,
     // PluginContext, PluginEntry, PluginVersion…) compiled once so downloadable
@@ -294,9 +314,13 @@ dependencies {
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
-    implementation(libs.androidx.compose.material3.windowsizeclass)
+    // Phase 211: material3-window-size-class REMOVED — the app rolls its own
+    // `WindowSizeCategory` enum (MainActivity.kt) and never imported
+    // androidx.compose.material3.windowsizeclass (grep-verified).
     implementation(libs.androidx.compose.material.icons)
-    implementation(libs.androidx.navigation.compose)
+    // Phase 211: navigation-compose REMOVED — declared since project genesis
+    // but NEVER used: the app navigates via MainActivity's mutableStateOf
+    // screen switch (no NavHost/rememberNavController anywhere, grep-verified).
 
     // Room
     implementation(libs.androidx.room.runtime)
@@ -328,8 +352,10 @@ dependencies {
     // declared, versioned contract rather than a transitive accident.
     implementation(libs.androidx.profileinstaller)
 
-    // Coil & Utilities
-    implementation(libs.coil.compose)
+    // Utilities
+    // Phase 211: coil-compose REMOVED — zero source references (no
+    // AsyncImage/Coil call site anywhere; grep-verified). Images render via
+    // BitmapFactory/Compose primitives, so the loader was dead weight.
     implementation(libs.androidx.biometric)
     implementation(libs.gson)
 

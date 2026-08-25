@@ -26,7 +26,6 @@ pluginManagement {
         mavenCentral {
             content {
                 includeGroupByRegex("org\\.jetbrains.*")
-                includeGroupByRegex("io\\.coil.*")
                 includeGroupByRegex("com\\.squareup.*")
                 includeGroupByRegex("org\\.commonmark.*")
                 includeGroupByRegex("org\\.jsoup.*")
@@ -126,9 +125,10 @@ dependencyResolutionManagement {
             content {
                 // Kotlin stdlib + coroutines + annotations.
                 includeGroupByRegex("org\\.jetbrains.*")
-                // Coil image loading.
-                includeGroupByRegex("io\\.coil.*")
-                // OkHttp / Okio (Coil + ML Kit transport).
+                // OkHttp / Okio (ML Kit transport in the :plugins:mlkit graph).
+                // Phase 211: the `io\\.coil.*` entry was REMOVED with the dead
+                // coil-compose dependency (zero source references) — no module
+                // of this build resolves io.coil-kt anymore.
                 includeGroupByRegex("com\\.squareup.*")
                 // Markdown (commonmark) + HTML extraction (jsoup).
                 includeGroupByRegex("org\\.commonmark.*")

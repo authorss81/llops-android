@@ -8,8 +8,19 @@
 -keepclassmembers class com.authorss81.noteflow.data.model.** { *; }
 -keepclassmembers class com.authorss81.noteflow.data.db.** { *; }
 
-# Keep AndroidX Ink classes
--keep class androidx.ink.** { *; }
+# Phase 211: the blanket `-keep class androidx.ink.** { *; }` was REMOVED.
+# All 5 ink artifacts now shrink/obfuscate normally. Evidence:
+#  - ink-geometry/-strokes/-authoring/-brush/-rendering AARs each ship
+#    "Intentionally empty proguard rules to indicate this library is safe to
+#    shrink" (the library authors' own declaration); ink-nativeloader's
+#    precise @UsedByNative JNI consumer rules still apply automatically.
+#  - the app reaches ink only through direct compiled references
+#    (`AnnotationCanvas`, `WetBrushEngine`, `StrokeModels`) — no reflective
+#    ink access exists (grep-verified), and strokes persist via the app's own
+#    encrypted pointsJson codec, never Android Parcel.
+#  - post-shrink mapping check: all 7 imported entrypoints retained but
+#    obfuscated; R8 release build green with zero missing-class errors.
+# See workspace/phase-211/REPORT.md.
 
 # Keep Gson annotations & fields
 -keepattributes Signature,*Annotation*
@@ -51,8 +62,11 @@
 
 # Coroutines rules are handled automatically by kotlinx-coroutines-core R8 rules
 
-# MediaPipe tasks-genai (on-device LLM) references protobuf classes that R8
-# would otherwise strip during release minify, causing:
-#   Missing class com.google.protobuf.Internal$ProtoMethodMayReturnNull
--keep class com.google.protobuf.** { *; }
--dontwarn com.google.protobuf.**
+# Phase 211: the stale `-keep class com.google.protobuf.** { *; }` +
+# `-dontwarn com.google.protobuf.**` pair was REMOVED. It was added for the
+# MediaPipe tasks-genai on-device LLM, but that engine left the base APK in
+# phase-29/175 (it ships only inside the downloadable `:plugins:llm`
+# artifact, which carries its own rules). No com.google.protobuf class
+# resolves on the base-app release graph anymore, so both rules matched
+# nothing — verified by the phase-211 clean rebuild (no missing-class errors,
+# identical APK payload apart from the ink/font/dep deltas).

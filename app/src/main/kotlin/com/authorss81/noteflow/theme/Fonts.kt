@@ -62,15 +62,9 @@ object AppFonts {
         }
     )
 
-    /** Lora italic weight-matched instances for emphasised long-form text. */
-    val SerifItalic: FontFamily = FontFamily(
-        SupportedWeights.map { weight ->
-            Font(
-                resId = R.font.lora_italic,
-                weight = weight,
-                style = FontStyle.Italic,
-                variationSettings = variationSettings(weight)
-            )
-        }
-    )
+    // Phase 211: `SerifItalic` + res/font/lora_italic.ttf (221 KB) were DELETED.
+    // The family was never referenced outside this object (grep-verified), so
+    // the italic face shipped in every APK for nothing. If an italic serif is
+    // ever needed again, prefer synthetic slanting (FontStyle.Italic on the
+    // lora variable font) or re-add the asset deliberately.
 }

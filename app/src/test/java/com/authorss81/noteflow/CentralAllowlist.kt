@@ -15,7 +15,9 @@ internal object CentralAllowlist {
 
     val groups: List<String> = listOf(
         "org\\.jetbrains.*",
-        "io\\.coil.*",
+        // Phase 211: `io\\.coil.*` REMOVED with the dead coil-compose dependency
+        // (zero source references) — keep this list in lockstep with BOTH
+        // mavenCentral blocks in settings.gradle.kts.
         "com\\.squareup.*",
         "org\\.commonmark.*",
         "org\\.jsoup.*",
