@@ -259,6 +259,26 @@ class SettingsManager(context: Context) {
         get() = prefs.getString("eraser_mode_key", "STROKE") ?: "STROKE"
         set(value) = prefs.edit().putString("eraser_mode_key", value).apply()
 
+    // Phase 209: recent-search history — the last [RecentSearchPolicy.CAP]
+    // non-blank EXECUTED vault-search queries, persisted as a `search_recent_<n>`
+    // ring (n = 0 is most recent). SharedPreferences only — NEVER the DB schema.
+    // The ring insert/dedupe/cap math lives in RecentSearchPolicy (pure JVM);
+    // these accessors are the SharedPreferences glue and sanitize on read-back.
+    fun getRecentSearches(): List<String> =
+        RecentSearchPolicy.sanitize(
+            (0 until RecentSearchPolicy.CAP).map { prefs.getString("search_recent_$it", null) }
+        )
+
+    fun setRecentSearches(queries: List<String>) {
+        val clean = RecentSearchPolicy.sanitize(queries)
+        prefs.edit().apply {
+            for (i in 0 until RecentSearchPolicy.CAP) {
+                if (i < clean.size) putString("search_recent_$i", clean[i])
+                else remove("search_recent_$i")
+            }
+        }.apply()
+    }
+
     // Phase 172: PERSISTED recently-used brush colors + favorites (ARGB ints).
     // The wire format (comma-joined decimal ARGB) and the caps/dedupe live in
     // ColorRecentsPolicy; these accessors are the SharedPreferences glue. Stored

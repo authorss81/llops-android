@@ -620,7 +620,9 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
         if (VaultSearchPolicy.isBlankQuery(query)) return@withContext emptyList()
         val allPages = loadSearchCorpus()
         val q = query.trim()
-        allPages.filter { page -> VaultSearchPolicy.pageMatches(page, q) }
+        // Phase 209: typo-tolerant tier — exact-substring hits keep the corpus
+        // (recency) order AHEAD of fuzzy subsequence hits (stable within tiers).
+        VaultSearchPolicy.exactFirst(allPages.filter { VaultSearchPolicy.pageMatches(it, q) }, q)
     }
 
     /**
@@ -645,7 +647,8 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
             if (batch.size < VaultSearchPolicy.DEEP_SCAN_BATCH_SIZE) break
             offset += VaultSearchPolicy.DEEP_SCAN_BATCH_SIZE
         }
-        matches
+        // Phase 209: same exact-first ordering as the capped keystroke path.
+        VaultSearchPolicy.exactFirst(matches, q)
     }
 
     suspend fun updatePageTemplate(id: String, template: String) = withContext(Dispatchers.Default) {

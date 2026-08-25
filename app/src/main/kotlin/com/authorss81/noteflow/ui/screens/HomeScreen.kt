@@ -21,6 +21,7 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
@@ -41,6 +42,7 @@ import com.authorss81.noteflow.services.ImportArchivePolicy
 import com.authorss81.noteflow.services.ImportExportService
 import com.authorss81.noteflow.services.OnboardingPolicy
 import com.authorss81.noteflow.services.OrphanImportCleanupPolicy
+import com.authorss81.noteflow.services.RecentSearchPolicy
 import com.authorss81.noteflow.services.isPlainPkBackupFile
 import com.authorss81.noteflow.services.isNflbBackupFile
 import com.authorss81.noteflow.services.RestoreFailSafe
@@ -128,6 +130,10 @@ fun HomeScreen(
     var showOnboarding by remember { mutableStateOf(shouldAutoShowOnboarding) }
     var showTutorial by remember { mutableStateOf(isFirstRun && !tutorialCompleted && !shouldAutoShowOnboarding) }
     var searchQuery by remember { mutableStateOf("") }
+    // Phase 209: recent-search history — focus tracking for the chips row and
+    // the persisted `search_recent_<n>` ring (SettingsManager prefs, no DB).
+    var searchFieldFocused by remember { mutableStateOf(false) }
+    var recentSearches by remember { mutableStateOf(viewModel.settings.getRecentSearches()) }
     var selectedTab by remember { mutableIntStateOf(0) } // 0 = Pages, 1 = Recent, 2 = Tag Vault, 3 = Trash
     var pageViewMode by remember { mutableIntStateOf(0) } // 0 = List, 1 = Gallery, 2 = Kanban, 3 = Calendar, 4 = Table
     var showTemplateLibrary by remember { mutableStateOf(false) }
@@ -328,6 +334,13 @@ fun HomeScreen(
     LaunchedEffect(searchQuery) {
         if (searchQuery.isNotBlank()) {
             refinedSearchDone = false
+            // Phase 209: an EXECUTED non-blank query enters the persisted ring
+            // (dedupe moves it to the front; blank/cleared queries never record).
+            val updatedRecents = RecentSearchPolicy.record(recentSearches, searchQuery)
+            if (updatedRecents != recentSearches) {
+                recentSearches = updatedRecents
+                viewModel.settings.setRecentSearches(updatedRecents)
+            }
             kotlinx.coroutines.delay(300)
             viewModel.searchVault(searchQuery) { results ->
                 globalSearchResults = results
@@ -1205,7 +1218,9 @@ fun HomeScreen(
                                 disabledIndicatorColor = androidx.compose.ui.graphics.Color.Transparent
                             ),
                             textStyle = MaterialTheme.typography.bodyMedium,
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier
+                                .weight(1f)
+                                .onFocusChanged { searchFieldFocused = it.isFocused }
                         )
 
                         FilledTonalIconButton(
@@ -1224,6 +1239,58 @@ fun HomeScreen(
                             modifier = Modifier.size(48.dp)
                         ) {
                             Icon(Icons.Outlined.FileUpload, contentDescription = "Import files")
+                        }
+                    }
+
+                    // Phase 209: recent-search history chips — visible while the
+                    // field is focused AND blank; tapping re-fills + runs the
+                    // query (the debounced LaunchedEffect executes it), the
+                    // trailing × dismisses one persistently. Horizontally
+                    // scrollable so a full ring can never clip (phase-166 rule).
+                    if (searchFieldFocused && searchQuery.isBlank() && recentSearches.isNotEmpty()) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState())
+                                .padding(top = 6.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            recentSearches.forEach { pastQuery ->
+                                InputChip(
+                                    selected = false,
+                                    onClick = { searchQuery = pastQuery },
+                                    label = {
+                                        Text(
+                                            pastQuery,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            style = MaterialTheme.typography.labelMedium
+                                        )
+                                    },
+                                    leadingIcon = {
+                                        Icon(
+                                            Icons.Outlined.History,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                    },
+                                    trailingIcon = {
+                                        Icon(
+                                            Icons.Outlined.Close,
+                                            contentDescription = "Dismiss \"$pastQuery\"",
+                                            modifier = Modifier
+                                                .size(14.dp)
+                                                .clickable {
+                                                    val updated =
+                                                        RecentSearchPolicy.dismiss(recentSearches, pastQuery)
+                                                    recentSearches = updated
+                                                    viewModel.settings.setRecentSearches(updated)
+                                                }
+                                        )
+                                    }
+                                )
+                            }
                         }
                     }
 

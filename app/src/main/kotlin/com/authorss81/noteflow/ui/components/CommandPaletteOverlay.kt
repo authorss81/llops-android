@@ -53,7 +53,10 @@ import kotlinx.coroutines.launch
 fun CommandPaletteOverlay(
     viewModel: NoteflowViewModel,
     onOpenNote: (noteId: String, noteTitle: String) -> Unit,
-    onClose: () -> Unit
+    onClose: () -> Unit,
+    // Phase 209: the `store` quick-action opens the Plugin Store (the host
+    // activity raises its store dialog after closing this palette).
+    onOpenPluginStore: () -> Unit = {}
 ) {
     val reduceMotion = LocalReduceMotion.current
 
@@ -83,9 +86,15 @@ fun CommandPaletteOverlay(
                 is CommandPaletteItem.NoteItem -> onOpenNote(item.rank.doc.id, item.rank.doc.title)
                 is CommandPaletteItem.ActionItem -> {
                     val result = viewModel.runPaletteAction(item.match, item.match.arg, null)
-                    actionFeedback = when (result) {
-                        is NoteflowViewModel.PaletteActionResult.Text -> result.text
-                        is NoteflowViewModel.PaletteActionResult.Error -> result.message
+                    when (result) {
+                        is NoteflowViewModel.PaletteActionResult.Text -> actionFeedback = result.text
+                        is NoteflowViewModel.PaletteActionResult.Error -> actionFeedback = result.message
+                        // Phase 209: `store` — close the palette and let the host
+                        // raise the Plugin Store dialog.
+                        is NoteflowViewModel.PaletteActionResult.OpenPluginStore -> {
+                            onClose()
+                            onOpenPluginStore()
+                        }
                     }
                 }
             }

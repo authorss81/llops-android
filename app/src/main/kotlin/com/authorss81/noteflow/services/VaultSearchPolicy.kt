@@ -27,6 +27,9 @@ import com.authorss81.noteflow.data.model.NotePageEntity
  */
 object VaultSearchPolicy {
 
+    /** Match ranking tiers — EXACT always beats FUZZY (see [pageMatchTier]). */
+    enum class SearchMatchTier { EXACT, FUZZY }
+
     /** Row budget for the cached, per-keystroke decrypted search window. */
     const val SEARCH_CORPUS_CAP = 1500
 
@@ -59,11 +62,46 @@ object VaultSearchPolicy {
         }
 
     /**
-     * Does [page] match [query]? Title OR body substring, case-insensitive —
-     * the same semantics as the pre-fix inline filter, now unit-testable.
-     * [query] must already be trimmed and non-blank (see [isBlankQuery]).
+     * Does [page] match [query]? EXACT title/body substring first
+     * (case-insensitive — the pre-phase-209 semantics), then the Phase 209
+     * typo-tolerant tier: a case-insensitive in-order subsequence match via the
+     * SHARED [FuzzyMatch] (same function the command palette scores with).
+     * True for both tiers; callers that need the ranking split use
+     * [pageMatchTier]. [query] must already be trimmed and non-blank (see
+     * [isBlankQuery]).
      */
     fun pageMatches(page: NotePageEntity, query: String): Boolean =
-        page.title.contains(query, ignoreCase = true) ||
-            (page.extractedText?.contains(query, ignoreCase = true) == true)
+        pageMatchTier(page, query) != null
+
+    /**
+     * Tiered match for ranking. EXACT (title or body substring,
+     * case-insensitive) always outranks FUZZY (in-order subsequence with a
+     * length-aware gap penalty — see [FuzzyMatch]); null = no match. The fuzzy
+     * tier runs ONLY after both exact probes fail, so a keystroke search pays
+     * the extra scan just once per non-matching page.
+     */
+    fun pageMatchTier(page: NotePageEntity, query: String): SearchMatchTier? {
+        if (page.title.contains(query, ignoreCase = true)) return SearchMatchTier.EXACT
+        if (page.extractedText?.contains(query, ignoreCase = true) == true) {
+            return SearchMatchTier.EXACT
+        }
+        val body = page.extractedText
+        val fuzzyTitle = FuzzyMatch.subsequenceDensity(query, page.title)
+        if (fuzzyTitle != null) return SearchMatchTier.FUZZY
+        if (body != null && FuzzyMatch.subsequenceDensity(query, body) != null) {
+            return SearchMatchTier.FUZZY
+        }
+        return null
+    }
+
+    /**
+     * Phase 209 ordering: EXACT-tier results lead, FUZZY typo hits follow;
+     * STABLE within each tier so the corpus's recency order is preserved for
+     * equal ranks. Applied by `NoteRepository.searchPages` / `deepSearchPages`
+     * to their matched list.
+     */
+    fun exactFirst(pages: List<NotePageEntity>, query: String): List<NotePageEntity> =
+        pages.sortedBy { page ->
+            if (pageMatchTier(page, query) == SearchMatchTier.EXACT) 0 else 1
+        }
 }

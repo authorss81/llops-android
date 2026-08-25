@@ -1,5 +1,8 @@
 package com.authorss81.noteflow.services.graph
 
+import com.authorss81.noteflow.services.FuzzyMatch
+import com.authorss81.noteflow.services.PluginStoreDiscoveryPolicy
+
 /**
  * Command palette / quick-switcher logic — pure JVM, deterministic.
  *
@@ -40,7 +43,7 @@ object CommandPaletteMath {
         val lowerTags: Set<String> = tags.mapTo(LinkedHashSet()) { it.lowercase() }
     )
 
-    enum class MatchKind { TITLE_PREFIX, TITLE_CONTAINS, TAG_MATCH, BODY_CONTAINS }
+    enum class MatchKind { TITLE_PREFIX, TITLE_CONTAINS, TAG_MATCH, BODY_CONTAINS, FUZZY_MATCH }
 
     /** A ranked note match with a short preview snippet. */
     data class RankedNote(
@@ -83,15 +86,32 @@ object CommandPaletteMath {
         PaletteActionDescriptor("units", "convert", "Unit Converter", "unit_conversion", needsArg = true, suffixHint = "2 km to mi"),
         PaletteActionDescriptor("dictionary", "define", "Dictionary", "dictionary", needsArg = true, suffixHint = "word"),
         PaletteActionDescriptor("transform", "transform", "Text Transform", "text_transform", needsArg = true, suffixHint = "text"),
-        PaletteActionDescriptor("assistant", "ask", "Assistant", "assistant", needsArg = true, suffixHint = "question")
+        PaletteActionDescriptor("assistant", "ask", "Assistant", "assistant", needsArg = true, suffixHint = "question"),
+        // Phase 209: Plugin Store quick-action — the palette is a discovery
+        // surface; `store` opens the store UI instead of invoking a plugin.
+        PaletteActionDescriptor(
+            "plugin-store",
+            PluginStoreDiscoveryPolicy.PALETTE_KEYWORD,
+            "Plugin Store",
+            PluginStoreDiscoveryPolicy.PALETTE_CAPABILITY_KEY,
+            needsArg = false,
+            suffixHint = "browse & install plugins"
+        )
     )
 
     private const val KEYWORD_SEPARATORS = ":"
 
+    /** Fuzzy-tier score floor — strictly below BODY_CONTAINS (40f). */
+    private const val FUZZY_SCORE_FLOOR = 12f
+
+    /** Fuzzy-tier density→score spread; floor+spread stays below 40f. */
+    private const val FUZZY_SCORE_SPREAD = 18f
+
     /**
      * Stable tiered score for a [PaletteDoc] against [query]. Returns null for
-     * no match. Title-prefix beats title-substring beats tag beats body — the
-     * palette should never rank a passing mention above an exact title.
+     * no match. Title-prefix beats title-substring beats tag beats body beats
+     * the Phase 209 FUZZY typo tier — the palette should never rank a passing
+     * mention above an exact title, nor a fuzzy hit above any exact one.
      */
     fun score(query: String, doc: PaletteDoc): Pair<Float, MatchKind>? {
         val q = query.trim()
@@ -106,6 +126,33 @@ object CommandPaletteMath {
         val tagHit = doc.lowerTags.firstOrNull { it.contains(lq) }
         if (tagHit != null) return 65f to MatchKind.TAG_MATCH
         if (doc.lowerBody.contains(lq)) return 40f to MatchKind.BODY_CONTAINS
+        // Phase 209: typo-tolerant subsequence tier — strictly BELOW every
+        // exact tier. The density score (12..30) ranks tighter matches above
+        // looser ones inside the tier; the SHARED [FuzzyMatch] keeps this in
+        // lockstep with VaultSearchPolicy. Inputs are pre-lowered (the doc's
+        // per-index lowercase fields + lq), so no corpus re-lowercasing.
+        val fuzzy = fuzzyScore(lq, doc) ?: return null
+        return fuzzy to MatchKind.FUZZY_MATCH
+    }
+
+    /**
+     * Fuzzy-tier score: [FUZZY_SCORE_FLOOR] + [FUZZY_SCORE_SPREAD] × density,
+     * tried title → tags → body so the within-tier preference mirrors the
+     * exact tiers. Range (FUZZY_SCORE_FLOOR .. FUZZY_SCORE_FLOOR +
+     * FUZZY_SCORE_SPREAD) stays strictly below BODY_CONTAINS's 40.
+     */
+    private fun fuzzyScore(lowerQuery: String, doc: PaletteDoc): Float? {
+        FuzzyMatch.subsequenceDensityPreLowered(lowerQuery, doc.lowerTitle)?.let { d ->
+            return FUZZY_SCORE_FLOOR + FUZZY_SCORE_SPREAD * d
+        }
+        doc.lowerTags.firstNotNullOfOrNull { tag ->
+            FuzzyMatch.subsequenceDensityPreLowered(lowerQuery, tag)
+        }?.let { d ->
+            return FUZZY_SCORE_FLOOR + FUZZY_SCORE_SPREAD * d
+        }
+        FuzzyMatch.subsequenceDensityPreLowered(lowerQuery, doc.lowerBody)?.let { d ->
+            return FUZZY_SCORE_FLOOR + FUZZY_SCORE_SPREAD * d
+        }
         return null
     }
 

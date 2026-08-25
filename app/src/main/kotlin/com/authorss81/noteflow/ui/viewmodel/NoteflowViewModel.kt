@@ -91,6 +91,7 @@ import com.authorss81.noteflow.services.LayerRenderBudgetPolicy
 import com.authorss81.noteflow.services.MarkdownBodySaveCoordinator
 import com.authorss81.noteflow.services.NoteBodyVaultPolicy
 import com.authorss81.noteflow.services.PasswordStrengthPolicy
+import com.authorss81.noteflow.services.PluginStoreDiscoveryPolicy
 import com.authorss81.noteflow.services.PluginUpdatePromptPolicy
 import com.authorss81.noteflow.services.PendingShareConfirmState
 import com.authorss81.noteflow.services.PendingSharePolicy
@@ -4730,6 +4731,11 @@ fun updatePageTags(id: String, tags: String) {
             PaletteActionResult.Error("OCR needs an image — open a note containing a photo, then use the editor's OCR.")
         PluginCapability.Dictation.key ->
             PaletteActionResult.Error("Dictation needs the microphone — open a note and use the editor's dictation button.")
+        // Phase 209: the palette's Plugin Store quick-action — a UI navigation,
+        // not a plugin invocation. The overlay closes and the activity opens
+        // PluginStoreDialog (see CommandPaletteOverlay.onOpenPluginStore).
+        PluginStoreDiscoveryPolicy.PALETTE_CAPABILITY_KEY ->
+            PaletteActionResult.OpenPluginStore
         else -> PaletteActionResult.Error("This action isn't installed. Check ⋮ menu → Plugin Store.")
     }
 
@@ -4742,6 +4748,9 @@ fun updatePageTags(id: String, tags: String) {
     sealed class PaletteActionResult {
         data class Text(val text: String) : PaletteActionResult()
         data class Error(val message: String) : PaletteActionResult()
+
+        /** Phase 209: `store` quick-action — close the palette + open the store. */
+        data object OpenPluginStore : PaletteActionResult()
     }
 
     data class TagSuggestion(

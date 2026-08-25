@@ -42,6 +42,7 @@ import androidx.compose.material.icons.outlined.Book
 import androidx.compose.material.icons.outlined.Calculate
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.ListAlt
+import androidx.compose.material.icons.outlined.Storefront
 import androidx.compose.material.icons.outlined.WbSunny
 import com.authorss81.noteflow.plugins.NoteflowPlugin
 import com.authorss81.noteflow.plugins.PluginCapability
@@ -72,6 +73,7 @@ import com.authorss81.noteflow.services.ImportExportService
 import com.authorss81.noteflow.services.GalleryTitleDisplayPolicy
 import com.authorss81.noteflow.services.HeadingScrollIndex
 import com.authorss81.noteflow.services.NoteStatsFormatPolicy
+import com.authorss81.noteflow.services.PluginStoreDiscoveryPolicy
 import com.authorss81.noteflow.services.ReaderModePolicy
 import com.authorss81.noteflow.services.WikiLinkParser
 import com.authorss81.noteflow.services.WikiSuggestionPolicy
@@ -350,7 +352,11 @@ fun MarkdownPreviewScreen(
     onBack: () -> Unit,
     onOpenWikiLink: (String) -> Unit,
     onOpenPage: (NotePageEntity) -> Unit,
-    onSaveContent: (String) -> Unit
+    onSaveContent: (String) -> Unit,
+    // Phase 209: Plugin Store deep-link — raised by the "Browse Plugin Store…"
+    // entry appended when this menu's capability lists render empty (the host
+    // activity owns the PluginStoreDialog).
+    onOpenPluginStore: () -> Unit = {}
 ) {
     var viewMode by remember { mutableStateOf(MarkdownViewMode.SPLIT) }
     var splitOrientation by remember { mutableStateOf(SplitOrientation.AUTO) }
@@ -809,6 +815,32 @@ fun MarkdownPreviewScreen(
                                         }
                                     )
                                 }
+                            }
+                            // Phase 209: plugin discovery — when the menu rendered NO
+                            // plugin entries at all (every capability section empty) or
+                            // the "No text-transform plugins installed" dead-end
+                            // placeholder is showing, append the store entry as the LAST
+                            // item so an empty menu is never a dead end.
+                            val servedPluginEntries = transformPlugins.size +
+                                webSearchPlugins.size + textToolsPlugins.size +
+                                langPlugins.size + dictPlugins.size + readAloudPlugins.size +
+                                translationPlugins.size + dictionaryPlugins.size +
+                                weatherPlugins.size + unitConverterPlugins.size +
+                                outlinePlugins.size + citationPlugins.size
+                            if (PluginStoreDiscoveryPolicy.shouldShowEntry(
+                                    servedEntries = servedPluginEntries,
+                                    emptyPlaceholderVisible = transformPlugins.isEmpty()
+                                )
+                            ) {
+                                HorizontalDivider()
+                                DropdownMenuItem(
+                                    text = { Text(PluginStoreDiscoveryPolicy.MENU_LABEL) },
+                                    leadingIcon = { Icon(Icons.Outlined.Storefront, contentDescription = null) },
+                                    onClick = {
+                                        showPluginMenu = false
+                                        onOpenPluginStore()
+                                    }
+                                )
                             }
                         }
                         }

@@ -132,6 +132,12 @@ class MainActivity : FragmentActivity() {
     // and spans above the activity content).
     private var showCommandPalette by mutableStateOf(false)
 
+    // Phase 209: Plugin Store deep-link — raised from the markdown editor's
+    // "Browse Plugin Store…" empty-menu entry or the palette `store`
+    // quick-action. Activity-level because both surfaces live outside
+    // HomeScreen (which owns the original store dialog).
+    private var showPluginStoreDeepLink by mutableStateOf(false)
+
     // B1-PLAT-4 (phase-60): lock the INSTANT the screen turns off. On a no-keyguard
     // / tablet device (a natural target for an ink-notes app) display-off may pause
     // the activity without stopping it, so ON_STOP alone is not enough — a paused
@@ -650,6 +656,7 @@ class MainActivity : FragmentActivity() {
                                                     }
                                                 },
                                                 onOpenPage = { targetPage -> setActivePage(targetPage) },
+                                                onOpenPluginStore = { showPluginStoreDeepLink = true },
                                                 onSaveContent = { newText ->
                                                     // B1-DB-4 (phase-44): the body is written ONLY to the
                                                     // field-encrypted extractedText column — never to a plaintext
@@ -756,6 +763,7 @@ class MainActivity : FragmentActivity() {
                                                                     }
                                                                 },
                                                                 onOpenPage = { targetPage -> setActivePage(targetPage) },
+                                                                onOpenPluginStore = { showPluginStoreDeepLink = true },
                                                                 onSaveContent = { newText ->
                                                                     // B1-DB-4 (phase-44): body written ONLY to the
                                                                     // field-encrypted extractedText column — never a
@@ -995,7 +1003,21 @@ class MainActivity : FragmentActivity() {
                                     setActivePage(found)
                                 }
                             },
-                            onClose = { showCommandPalette = false }
+                            onClose = { showCommandPalette = false },
+                            onOpenPluginStore = {
+                                showCommandPalette = false
+                                showPluginStoreDeepLink = true
+                            }
+                        )
+                    }
+
+                    // Phase 209: the Plugin Store opened via the editor's empty-menu
+                    // "Browse Plugin Store…" entry or the palette `store` action —
+                    // hosted here because both surfaces sit outside HomeScreen.
+                    if (showPluginStoreDeepLink) {
+                        com.authorss81.noteflow.ui.components.PluginStoreDialog(
+                            viewModel = viewModel,
+                            onDismiss = { showPluginStoreDeepLink = false }
                         )
                     }
                 }

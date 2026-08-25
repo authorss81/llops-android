@@ -8,6 +8,26 @@
 
 ## Package layout
 
+> **Implemented in phase-209** (2026-08-25, search quality & plugin discovery, see
+> `workspace/phase-209/REPORT.md`): (1) recent-search history — executed non-blank
+> vault queries persist in the `search_recent_<n>` ring (last 8) via pure-JVM
+> `services/RecentSearchPolicy.kt` + `SettingsManager.getRecentSearches/setRecentSearches`
+> prefs glue; HomeScreen shows dismissible chips while the search field is focused AND
+> blank (tap = fill + run through the existing debounce; × = persistent dismiss).
+> (2) Typo-tolerant tier — shared pure-JVM `services/FuzzyMatch.kt` (case-insensitive
+> in-order subsequence, density = q/(q+skipped), `MIN_QUERY_LENGTH=2`,
+> `MIN_DENSITY=0.45`) sits BELOW every exact tier in BOTH scorers:
+> `VaultSearchPolicy.pageMatchTier` (+ stable `exactFirst` ordering in both repo search
+> paths) and `CommandPaletteMath.score` (`MatchKind.FUZZY_MATCH`, score band 12–30 <
+> BODY_CONTAINS's 40, pre-lowered inputs). (3) Plugin Store discovery — the markdown
+> editor's plugin menu appends "Browse Plugin Store…" as its last item when nothing
+> rendered or the empty-transform placeholder shows (`services/PluginStoreDiscoveryPolicy`),
+> MainActivity hosts `PluginStoreDialog` behind a deep-link flag for both editor panes,
+> and the Command Palette gains a `store` quick-action routed via
+> `PaletteActionResult.OpenPluginStore` (SDK sealed capability set unchanged). Tests:
+> `FuzzyMatchTest` (11) + `RecentSearchPolicyTest` (11) + `Phase209SearchQualityTest`
+> (12) + `Phase209DiscoveryPinsTest` (10 source pins). No schema change, no new deps.
+
 > **Implemented in phase-207** (2026-08-25, crypto/DB efficiency — decrypt memoization + lazy
 > corpus invalidation + BitmapPool byte budget, see `workspace/phase-207/REPORT.md`): three
 > scaling bottlenecks that grow with vault size. (1) Room's TABLE-granular invalidation re-emitted
