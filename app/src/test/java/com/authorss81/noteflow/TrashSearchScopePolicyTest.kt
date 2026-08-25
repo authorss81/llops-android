@@ -116,4 +116,54 @@ class TrashSearchScopePolicyTest {
         )
         assertEquals(listOf("trash-2", "trash-1"), scoped)
     }
+
+    // ---------------- review fixes (2026-08-25) ----------------
+
+    @Test
+    fun `review-fix finding 1 - derived lists intersect on the trash tab only`() {
+        // Derived lists = search hits AND tag-filter matches. Only the trash
+        // context may intersect; every other tab passes through.
+        assertEquals(
+            TrashSearchScopePolicy.Scope.TRASH_INTERSECT,
+            TrashSearchScopePolicy.scopeForDerivedList(TrashSearchScopePolicy.TAB_TRASH)
+        )
+        for (tab in intArrayOf(
+            TrashSearchScopePolicy.TAB_PAGES,
+            TrashSearchScopePolicy.TAB_RECENT,
+            TrashSearchScopePolicy.TAB_TAG_VAULT,
+            -1,
+            99
+        )) {
+            assertEquals(
+                "tab=$tab",
+                TrashSearchScopePolicy.Scope.LIVE_RESULTS,
+                TrashSearchScopePolicy.scopeForDerivedList(tab)
+            )
+        }
+    }
+
+    @Test
+    fun `review-fix finding 1 - tag-matched live notes on the trash tab render empty`() {
+        // The second half of the phase bug class: a tag filter left active while
+        // switching to the Trash tab must never surface LIVE notes under
+        // isTrash=true — same honest scoped-empty as query search.
+        val scoped = TrashSearchScopePolicy.scoped(
+            liveIds,
+            scope = TrashSearchScopePolicy.scopeForDerivedList(TrashSearchScopePolicy.TAB_TRASH),
+            trashedIds = trashedIds,
+            idOf = { it }
+        )
+        assertTrue(scoped.isEmpty())
+    }
+
+    @Test
+    fun `review-fix finding 1 - query search and derived lists share one rule`() {
+        for (tab in 0..4) {
+            assertEquals(
+                "tab=$tab",
+                TrashSearchScopePolicy.scopeFor(tab, hasQuery = true),
+                TrashSearchScopePolicy.scopeForDerivedList(tab)
+            )
+        }
+    }
 }

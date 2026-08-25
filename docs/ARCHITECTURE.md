@@ -37,6 +37,18 @@
 > `gradle assembleDebug` green; `gradle testDebugUnitTest` 2943 / 3 failures all
 > reproduced on clean HEAD (Phase148 UNC-path documented; PaparazziSmokeTest ×2
 > layoutlib env). No schema change, no new deps.
+> **Phase 208 review fixes (2026-08-25)**: (F1) the tag-FILTER branch had the same
+> live-notes-as-trash-cards bug as query search — new single rule
+> `TrashSearchScopePolicy.scopeForDerivedList` now scopes BOTH derived paths
+> (`scopeFor` delegates to it; tag-match branch routes through `scoped(...)` → honest
+> scoped-empty on Trash). (F2) cross-notebook move via vault-wide search hits blocked:
+> pure-JVM `services/MoveSectionScopePolicy.kt` partitions picker targets by active-
+> notebook section ownership (fail-closed), skipped pages get an honest snackbar.
+> (F3) bulk tag APPEND no longer merges from a composition-time snapshot: pure-JVM
+> `services/TagAppendPolicy.kt` + `NoteRepository.appendTagsToPage` read CURRENT tags
+> inside the write path (no-op ⇒ null ⇒ no write). (F4) duplicatePage deletes the
+> pre-transaction backing-file copy if the DB transaction throws. (F5) palm-rejection
+> persistence pin now counts only assignment sites. (F6) ThemeMenu brace formatting.
 
 > **Implemented in phase-209** (2026-08-25, search quality & plugin discovery, see
 > `workspace/phase-209/REPORT.md`): (1) recent-search history — executed non-blank

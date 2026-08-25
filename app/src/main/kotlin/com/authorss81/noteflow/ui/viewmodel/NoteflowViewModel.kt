@@ -3100,28 +3100,21 @@ fun updatePageTags(id: String, tags: String) {
         ids.forEach { movePage(it, targetSectionId) }
 
     /**
-     * Bulk tag append: merges [tagsToAppend] into each page's existing tag list
-     * (comma-separated), deduped case-insensitively. NEVER replaces tags wholesale —
-     * that would wipe every selected page's own tagging.
+     * Bulk tag append (Phase 208 fix #4) — review-fixed (finding 3) to read each
+     * page's CURRENT tags inside the repository write path
+     * ([NoteRepository.appendTagsToPage] + [TagAppendPolicy]) instead of a
+     * composition-time snapshot map, which could silently overwrite tags changed
+     * elsewhere between selection and apply. Never replaces tags wholesale.
      */
-    fun bulkAppendTags(ids: Collection<String>, currentTagsById: Map<String, String>, tagsToAppend: List<String>) {
+    fun bulkAppendTags(ids: Collection<String>, tagsToAppend: List<String>) {
         viewModelScope.launch {
             val additions = tagsToAppend.map { it.trim() }
                 .filter { it.isNotEmpty() }
                 .distinctBy { it.lowercase() }
             if (additions.isEmpty()) return@launch
             for (id in ids) {
-                val existing = currentTagsById[id].orEmpty()
-                    .split(",")
-                    .map { it.trim() }
-                    .filter { it.isNotEmpty() }
-                val merged = (
-                    existing + additions.filter { addition ->
-                        existing.none { it.equals(addition, ignoreCase = true) }
-                    }
-                    ).distinctBy { it.lowercase() }
                 writeGuardedAgainstLock("Vault is locked — tags not saved") {
-                    repository.updatePageTags(id, merged.joinToString(","))
+                    repository.appendTagsToPage(id, additions)
                 }
             }
         }

@@ -1511,7 +1511,19 @@ fun HomeScreen(
                             // `allActivePages` (already collected/live here) filtered by the
                             // scoped id-set can only ever contain this notebook's pages,
                             // because the matching ids came from the scoped vault build.
-                            allActivePages.filter { it.id in matching }
+                            //
+                            // Phase 208 review-fix (finding 1): this branch ALSO bypassed the
+                            // tab branches — a tag filter left active while the user switched
+                            // to the Trash tab rendered LIVE notes under `isTrash = selectedTab
+                            // == 3`, the exact data-loss class fix #1 closed for search. Tag
+                            // matches are DERIVED lists like search hits, so they are scoped
+                            // identically (trash context intersects with the trashed ids).
+                            TrashSearchScopePolicy.scoped(
+                                allActivePages.filter { it.id in matching },
+                                scope = TrashSearchScopePolicy.scopeForDerivedList(selectedTab),
+                                trashedIds = trashedIdSet,
+                                idOf = { it.id }
+                            )
                         } else {
                             when (selectedTab) {
                                 1 -> recentPages
@@ -2408,9 +2420,28 @@ fun HomeScreen(
                 },
                 onDismiss = { moveTargets = emptyList() },
                 onPick = { sectionId ->
-                    viewModel.bulkMovePages(moveTargets, sectionId)
+                    // Phase 208 review-fix (finding 2): vault-wide search results can
+                    // carry foreign-notebook pages; moving those into this notebook's
+                    // sections silently re-parented them across notebooks. Only pages
+                    // whose CURRENT section belongs to the active notebook move — the
+                    // rest are skipped with an honest notice instead.
+                    val (movable, blocked) = com.authorss81.noteflow.services.MoveSectionScopePolicy.partition(
+                        moveTargets,
+                        sectionIdOfPage = { id -> allActivePages.firstOrNull { it.id == id }?.sectionId },
+                        activeNotebookSectionIds = sections.map { it.id }.toSet()
+                    )
+                    if (movable.isNotEmpty()) {
+                        viewModel.bulkMovePages(movable, sectionId)
+                    }
                     viewModel.showSnackbar(
-                        if (moveTargets.size == 1) "Note moved" else "${moveTargets.size} notes moved"
+                        when {
+                            blocked.isEmpty() ->
+                                if (movable.size == 1) "Note moved" else "${movable.size} notes moved"
+                            movable.isEmpty() ->
+                                "Can't move — the selected notes belong to another notebook"
+                            else ->
+                                "${blocked.size} of ${moveTargets.size} notes skipped — they belong to another notebook"
+                        }
                     )
                     moveTargets = emptyList()
                 }
@@ -2423,9 +2454,12 @@ fun HomeScreen(
                 selectionCount = multiSelectedIds.size,
                 onDismiss = { showBulkTagDialog = false },
                 onApply = { tagsCsv ->
+                    // Phase 208 review-fix (finding 3): no composition-time tag map —
+                    // each page's CURRENT tags are read inside the repository write
+                    // path and merged there, so tags changed elsewhere between
+                    // selection and apply can never be silently overwritten.
                     viewModel.bulkAppendTags(
                         multiSelectedIds,
-                        allActivePages.associate { it.id to it.tags },
                         tagsCsv.split(",").map { it.trim() }.filter { it.isNotEmpty() }
                     )
                     showBulkTagDialog = false
@@ -3366,7 +3400,8 @@ private fun BulkTagAppendDialog(
 }
 
 @Composable
-private fun ThemeMenu(viewModel: NoteflowViewModel) {    var expanded by remember { mutableStateOf(false) }
+private fun ThemeMenu(viewModel: NoteflowViewModel) {
+    var expanded by remember { mutableStateOf(false) }
     val currentMode by viewModel.themeMode.collectAsState()
 
     Box {

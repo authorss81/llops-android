@@ -84,3 +84,24 @@ Source pins: pref key exists, editor seeds from prefs, BOTH toggle surfaces pers
 - Duplicate copies row + strokes + tags only (per PROMPT) — layers/sticky notes/media embeds/voice notes are not copied; duplicated ink lands on the default layer.
 - Section picker offers the current notebook's sections (`movePage` takes a section id; cross-notebook move out of scope).
 - Kanban/Calendar/Table views render menus unchanged (list + gallery carry the new verbs; bulk selection covers list + gallery).
+
+---
+
+## Review fixes (2026-08-25)
+
+Independent review of commit `3f86345` produced 8 numbered findings; fixes shipped for findings 1–6:
+
+1. **HIGH — fix #1 was incomplete: the tag-filter path had the SAME live-notes-as-trash-cards bug.** The list-source precedence is search → tag-match → tab branches; a tag filter left active while switching to the Trash tab rendered LIVE notes under `isTrash = selectedTab == 3` (Restore / **Delete Permanently** menus), and the new bulk bar offered permanent delete for them. Fix: `TrashSearchScopePolicy.scopeForDerivedList(selectedTab)` is now the ONE rule for every DERIVED result list (query search delegates to it via `scopeFor`), and the tag-match branch in `HomeScreen.kt` routes through `scoped(...)` exactly like search hits → honest scoped-empty on Trash. Tests: `TrashSearchScopePolicyTest` +3 (derived-scope matrix, tag-match-on-trash empty, search≡derived equivalence) + `Phase208PageManagementTest` pin.
+2. **MEDIUM — cross-notebook move was reachable despite "out of scope".** Vault-wide search results can carry foreign-notebook pages; the picker lists only the active notebook's sections and `movePage` is an unvalidated sectionId UPDATE. New pure-JVM `services/MoveSectionScopePolicy.kt`: a page moves iff its CURRENT section belongs to the active notebook (section ids globally unique ⇒ exact ownership test); unknown sectionIds and an empty active set fail CLOSED to blocked. `SectionPickerDialog.onPick` partitions targets: movable pages move, blocked pages are skipped with an honest snackbar ("Can't move — … another notebook" / "N of M skipped"). Tests: `MoveSectionScopePolicyTest` (5) + source pin.
+3. **LOW — bulk tag append merged from a composition-time snapshot.** `allActivePages.associate { id to tags }` captured at apply time could silently overwrite tags changed elsewhere between selection and apply (`updatePageTags` REPLACES the column). Fix: new pure-JVM `services/TagAppendPolicy.kt` (verbatim existing entries first; case-insensitive dedupe vs existing AND appended; returns null for no-op so no pointless write/updatedAt churn) + `NoteRepository.appendTagsToPage(pageId, additions)` reading the page's CURRENT tags inside the write path; `bulkAppendTags(ids, tagsToAppend)` lost the snapshot-map parameter; HomeScreen call site updated. Tests: `TagAppendPolicyTest` (7) + source pins.
+4. **LOW — duplicatePage file copy ran OUTSIDE the transaction**, leaking an orphaned imports-root copy if the transaction threw. Fix: the copied dest `File` is tracked (`duplicatedCopyFile`) and deleted in a `catch (e: Throwable)` around `db.withTransaction` before rethrowing unchanged (real DB errors stay loud; lock race classified upstream as before). Pinned by test.
+5. **LOW — weak palm-rejection persistence pin.** The old regex counted the SEED line toward the ≥2 threshold, so seed + ONE write site passed. Now only assignment sites count (`viewModel.settings.palmRejectionEnabled =`, ≥2) so both toggle surfaces must persist.
+6. **COSMETIC — formatting regression:** `ThemeMenu`'s opening brace had been merged onto its first statement line during insertion; restored to standard style.
+
+Findings 7–8 were informational/no-action (documented scope limits; verification note). No schema change, no new dependencies, `.github/workflows/` untouched.
+
+### Review-fix verification
+| Command | Result |
+|---|---|
+| `gradle assembleDebug` | **green** (BUILD SUCCESSFUL) |
+| `gradle :app:testDebugUnitTest` | **2962 total / 3 failures** — the SAME pre-existing/environmental set as pre-review (`Phase148UiFailureTextScrubTest` UNC-path + `PaparazziSmokeTest` ×2 layoutlib); all new/extended suites green (`TrashSearchScopePolicyTest` 11, `MoveSectionScopePolicyTest` 5, `TagAppendPolicyTest` 7, `Phase208PageManagementTest` 17). |

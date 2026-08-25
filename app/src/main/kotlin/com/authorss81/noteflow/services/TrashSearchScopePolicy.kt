@@ -42,11 +42,22 @@ object TrashSearchScopePolicy {
     fun isTrashContext(selectedTab: Int): Boolean = selectedTab == TAB_TRASH
 
     /**
+     * Decide the result scoping for ANY DERIVED result list rendered into the
+     * current tab. Derived lists — vault-search hits AND tag-filter matches
+     * alike — contain LIVE rows by construction, so a trash-context render MUST
+     * intersect them with the actually-trashed ids (the phase-208 bug class hid
+     * in BOTH derived paths; the tag-filter path was closed in review).
+     * Unknown tab indices fail SAFE to [Scope.LIVE_RESULTS] (never destructive).
+     */
+    fun scopeForDerivedList(selectedTab: Int): Scope =
+        if (isTrashContext(selectedTab)) Scope.TRASH_INTERSECT else Scope.LIVE_RESULTS
+
+    /**
      * Decide the result scoping for a tab × query combination. Unknown tab
      * indices fail SAFE to [Scope.LIVE_RESULTS] (never destructive).
      */
     fun scopeFor(selectedTab: Int, hasQuery: Boolean): Scope =
-        if (hasQuery && isTrashContext(selectedTab)) Scope.TRASH_INTERSECT else Scope.LIVE_RESULTS
+        if (hasQuery) scopeForDerivedList(selectedTab) else Scope.LIVE_RESULTS
 
     /**
      * Apply a [Scope] to a result list. [idOf] extracts the page id so the

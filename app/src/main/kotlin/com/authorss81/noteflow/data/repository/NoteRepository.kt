@@ -915,6 +915,25 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
         invalidateSearchCorpus()
     }
 
+    /**
+     * Phase 208 review-fix (finding 3): bulk tag APPEND reads the page's
+     * CURRENT tags inside this write path and merges via [TagAppendPolicy] —
+     * never a composition-time snapshot, which could silently overwrite newer
+     * tags changed elsewhere between selection and apply. Appends are
+     * case-insensitively deduped; existing tags are preserved verbatim.
+     * Returns false when the page no longer exists; true when merged or when
+     * there was nothing to change (no write, no updatedAt churn).
+     */
+    suspend fun appendTagsToPage(pageId: String, additions: List<String>): Boolean =
+        withContext(Dispatchers.Default) {
+            val source = db.pageDao().getPageById(pageId) ?: return@withContext false
+            val merged = com.authorss81.noteflow.services.TagAppendPolicy.merge(source.tags, additions)
+                ?: return@withContext true
+            db.pageDao().updatePageTags(pageId, merged)
+            invalidateSearchCorpus()
+            true
+        }
+
     suspend fun updatePageTitleAndTags(id: String, title: String, tags: String) = withContext(Dispatchers.Default) {
         val rawTitle = title.trim()
         // Phase-169: never persist the fail-closed render marker as a real title —
@@ -1006,6 +1025,9 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
         // Document-backed pages: copy the backing file so both pages own their
         // bytes (a shared path breaks the moment one copy is deleted).
         var duplicatedSourcePath: String? = null
+        // Phase 208 review-fix (finding 4): track the copied file so a failed
+        // transaction can roll its bytes back (no orphaned imports-root file).
+        var duplicatedCopyFile: File? = null
         val srcPath = SourceFilePathPolicy.confine(source.sourceFilePath, importsRoot)
         if (srcPath != null) {
             val srcFile = File(srcPath)
@@ -1013,6 +1035,7 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
                 if (srcFile.isFile) {
                     val dest = File(importsRoot, "${UUID.randomUUID()}_${srcFile.name}")
                     srcFile.copyTo(dest, overwrite = false)
+                    duplicatedCopyFile = dest
                     SourceFilePathPolicy.confine(dest.absolutePath, importsRoot)
                 } else {
                     null
@@ -1046,50 +1069,60 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
             tags = source.tags // plaintext column — copied as-is
         )
 
-        db.withTransaction {
-            db.pageDao().insertPage(copy)
+        // Phase 208 review-fix (finding 4): the backing-file copy happened BEFORE
+        // the transaction; if the transaction fails the copied bytes must be
+        // rolled back too, or a half-created duplicate leaks an orphaned
+        // imports-root file. The exception still propagates unchanged (real DB
+        // errors stay loud; the lock race is classified upstream).
+        try {
+            db.withTransaction {
+                db.pageDao().insertPage(copy)
 
-            // Copy stroke rows through the SAME bounded reader the loader uses,
-            // so legacy over-budget rows can never materialize unbounded here.
-            var offset = 0
-            while (true) {
-                val batch = db.strokeDao().getStrokesForPageBounded(
-                    pageId,
-                    StrokeGeometryPolicy.MAX_STORED_POINTS_JSON_CHARS,
-                    StrokeGeometryPolicy.MAX_STROKES_LOAD_BATCH,
-                    offset
-                )
-                if (batch.isEmpty()) break
-                offset += batch.size
-
-                val copies = ArrayList<StrokeEntity>(batch.size)
-                for (row in batch) {
-                    if (StrokeGeometryPolicy.storedPointsJsonOverBudget(row.pointsJson.length)) continue
-                    val newStrokeId = UUID.randomUUID().toString()
-                    val rawText = if (row.textContent.isNotBlank()) {
-                        decryptForDuplicate(row.textContent, dek, "strokes", row.id, "textContent")
-                    } else {
-                        row.textContent
-                    } ?: continue // unreadable stroke text -> skip this row
-                    val rawPoints = decryptForDuplicate(row.pointsJson, dek, "strokes", row.id, "pointsJson")
-                        ?: continue // unreadable geometry -> skip this row
-                    copies.add(
-                        row.copy(
-                            id = newStrokeId,
-                            pageId = newPageId,
-                            textContent = EncryptionService.encryptField(
-                                rawText.toByteArray(), dek, "strokes", newStrokeId, "textContent"
-                            ),
-                            pointsJson = EncryptionService.encryptField(
-                                rawPoints.toByteArray(), dek, "strokes", newStrokeId, "pointsJson"
-                            ),
-                            layerId = null
-                        )
+                // Copy stroke rows through the SAME bounded reader the loader uses,
+                // so legacy over-budget rows can never materialize unbounded here.
+                var offset = 0
+                while (true) {
+                    val batch = db.strokeDao().getStrokesForPageBounded(
+                        pageId,
+                        StrokeGeometryPolicy.MAX_STORED_POINTS_JSON_CHARS,
+                        StrokeGeometryPolicy.MAX_STROKES_LOAD_BATCH,
+                        offset
                     )
+                    if (batch.isEmpty()) break
+                    offset += batch.size
+
+                    val copies = ArrayList<StrokeEntity>(batch.size)
+                    for (row in batch) {
+                        if (StrokeGeometryPolicy.storedPointsJsonOverBudget(row.pointsJson.length)) continue
+                        val newStrokeId = UUID.randomUUID().toString()
+                        val rawText = if (row.textContent.isNotBlank()) {
+                            decryptForDuplicate(row.textContent, dek, "strokes", row.id, "textContent")
+                        } else {
+                            row.textContent
+                        } ?: continue // unreadable stroke text -> skip this row
+                        val rawPoints = decryptForDuplicate(row.pointsJson, dek, "strokes", row.id, "pointsJson")
+                            ?: continue // unreadable geometry -> skip this row
+                        copies.add(
+                            row.copy(
+                                id = newStrokeId,
+                                pageId = newPageId,
+                                textContent = EncryptionService.encryptField(
+                                    rawText.toByteArray(), dek, "strokes", newStrokeId, "textContent"
+                                ),
+                                pointsJson = EncryptionService.encryptField(
+                                    rawPoints.toByteArray(), dek, "strokes", newStrokeId, "pointsJson"
+                                ),
+                                layerId = null
+                            )
+                        )
+                    }
+                    if (copies.isNotEmpty()) db.strokeDao().insertStrokes(copies)
+                    if (batch.size < StrokeGeometryPolicy.MAX_STROKES_LOAD_BATCH) break
                 }
-                if (copies.isNotEmpty()) db.strokeDao().insertStrokes(copies)
-                if (batch.size < StrokeGeometryPolicy.MAX_STROKES_LOAD_BATCH) break
             }
+        } catch (e: Throwable) {
+            duplicatedCopyFile?.let { runCatching { it.delete() } }
+            throw e
         }
         invalidateSearchCorpus()
 

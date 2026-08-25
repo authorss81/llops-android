@@ -108,8 +108,11 @@ class Phase208PageManagementTest {
             assertTrue("$name menu", src.contains("\"Duplicate\""))
         }
         // HomeScreen hosts the shared picker dialog wired to the VM move verb.
+        // Review-fix (finding 2): the picker partitions targets first, so only
+        // active-notebook pages reach bulkMovePages.
         assertTrue(homeScreen().contains("SectionPickerDialog("))
-        assertTrue(homeScreen().contains("bulkMovePages(moveTargets"))
+        assertTrue(homeScreen().contains("MoveSectionScopePolicy.partition("))
+        assertTrue(homeScreen().contains("bulkMovePages(movable, sectionId)"))
         assertTrue(homeScreen().contains("viewModel.duplicatePage(page.id)"))
     }
 
@@ -181,13 +184,63 @@ class Phase208PageManagementTest {
             "seed from prefs, not a hardcoded true",
             editor.contains("mutableStateOf(viewModel.settings.palmRejectionEnabled)")
         )
-        // BOTH toggle surfaces (⋮ menu + Canvas & Paper Options sheet) write the
-        // pref back — exactly two persistence call sites in this file.
-        val persistSites = Regex("""viewModel\.settings\.palmRejectionEnabled""")
+        // Phase 208 review-fix (finding 5): count WRITE (assignment) sites only —
+        // the seed line above must never satisfy this on its own. BOTH toggle
+        // surfaces (⋮ menu + Canvas & Paper Options sheet) must persist the
+        // toggle, so there must be at least two distinct assignment sites.
+        val writeSites = Regex("""viewModel\.settings\.palmRejectionEnabled\s*=""")
             .findAll(editor)
             .count()
-        assertTrue("both surfaces must persist the toggle, found $persistSites", persistSites >= 2)
+        assertTrue(
+            "both surfaces must persist the toggle (≥2 write sites), found $writeSites",
+            writeSites >= 2
+        )
         assertTrue(editor.contains("onPalmRejectionToggle"))
         assertTrue(editor.contains("\"Palm Rejection\""))
+    }
+
+    // ---------------- review fixes (2026-08-25) ----------------
+
+    @Test
+    fun `review-fix finding 1 - the tag-match branch is scoped like search results`() {
+        // The tag filter bypassed the tab branches: a tag filter left active on
+        // the Trash tab rendered LIVE notes under the Restore / Delete
+        // Permanently menu. The derived-list scope policy must guard it too.
+        assertTrue(homeScreen().contains("TrashSearchScopePolicy.scopeForDerivedList(selectedTab)"))
+        val policy =
+            read("app/src/main/kotlin/com/authorss81/noteflow/services/TrashSearchScopePolicy.kt")
+        assertTrue(policy.contains("fun scopeForDerivedList("))
+        // scopeFor must delegate to the same rule so query search cannot drift.
+        assertTrue(Regex("""scopeFor\(selectedTab[^}]*scopeForDerivedList\(selectedTab\)""").containsMatchIn(policy))
+    }
+
+    @Test
+    fun `review-fix finding 2 - section picker partitions move targets by notebook ownership`() {
+        assertTrue(homeScreen().contains("MoveSectionScopePolicy.partition("))
+        val policy =
+            read("app/src/main/kotlin/com/authorss81/noteflow/services/MoveSectionScopePolicy.kt")
+        assertTrue(policy.contains("activeNotebookSectionIds"))
+    }
+
+    @Test
+    fun `review-fix finding 3 - bulk tag append reads current tags inside the write path`() {
+        assertFalse(
+            "the stale composition-time snapshot map must be gone from HomeScreen",
+            homeScreen().contains("allActivePages.associate { it.id to it.tags }")
+        )
+        val repo = repository()
+        assertTrue(repo.contains("suspend fun appendTagsToPage(pageId: String, additions: List<String>)"))
+        assertTrue(repo.contains("TagAppendPolicy.merge(source.tags, additions)"))
+    }
+
+    @Test
+    fun `review-fix finding 4 - a failed duplicate transaction rolls back the copied file`() {
+        val repo = repository()
+        assertTrue(repo.contains("var duplicatedCopyFile: File? = null"))
+        assertTrue(
+            "the catch block must delete the copied file and rethrow",
+            Regex("""catch \(e: Throwable\) \{[\s\S]*?duplicatedCopyFile\?\.let \{ runCatching \{ it\.delete\(\) \} \}[\s\S]*?throw e""")
+                .containsMatchIn(repo)
+        )
     }
 }
