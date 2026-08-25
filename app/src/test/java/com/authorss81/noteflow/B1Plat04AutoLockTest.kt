@@ -219,15 +219,26 @@ class B1Plat04AutoLockTest {
     }
 
     @Test
-    fun `inactivity auto-lock is a continuous poll, not a next-touch check`() {
+    fun `inactivity auto-lock is deadline-scheduled, not a next-touch check`() {
         val source = readMainActivitySource()
-        val poller = source.substringAfter("LaunchedEffect(autoLockTimeoutSeconds, authenticated)")
+        val scheduler = source.substringAfter("LaunchedEffect(autoLockTimeoutSeconds, authenticated)")
             .substringBefore("// 22.5 + B1-PLAT-2")
 
-        assertTrue("the poller must delay on the shared cadence", poller.contains("AutoLockPolicy.IDLE_CHECK_INTERVAL_MS"))
-        assertTrue("the decision must route through the policy", poller.contains("AutoLockPolicy.shouldAutoLock"))
-        assertTrue("over the window the poller must lock", poller.contains("viewModel.lock()"))
+        // Phase 206: one wake per idle window (deadline scheduling), never a
+        // fixed-interval poll and never gated behind the next touch.
+        assertTrue("the schedule must come from the shared policy", scheduler.contains("AutoLockPolicy.nextCheckDelayMs"))
+        assertTrue("the decision must route through the policy", scheduler.contains("AutoLockPolicy.shouldAutoLock"))
+        assertTrue("over the window the scheduler must lock", scheduler.contains("viewModel.lock()"))
         assertTrue("the idle baseline is refreshed at each start", source.contains("lastActivityAtMs = System.currentTimeMillis()"))
+        assertFalse(
+            "the phase-60 1 s fixed-interval poll must be gone (phase-206)",
+            source.contains("IDLE_CHECK_INTERVAL_MS")
+        )
+        // Auto-lock OFF must not arm any timer at all.
+        assertFalse(
+            "the fixed-cadence delay loop must not remain",
+            Regex("""delay\(\s*1_000L\s*\)""").containsMatchIn(scheduler)
+        )
 
         // The pointerInput touch handler must ONLY stamp lastActivityAtMs.
         val touchHandler = source.substringAfter(".pointerInput(autoLockTimeoutSeconds)")

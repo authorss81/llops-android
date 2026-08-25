@@ -12,6 +12,17 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.io.File
 
+/**
+ * Phase 206 (PERF/BATTERY): playback position tick cadence.
+ *
+ * Humans read a seek bar at ~1-2 Hz; the pre-206 50 ms poll recomposed the
+ * waveform/seek-bar UI 20x/s for the whole playback session. 200 ms (5 Hz)
+ * keeps scrubbing smooth while cutting position wakes 4x. Drag-seek accuracy is
+ * unchanged: [VoiceNoteManager.seekTo] publishes the exact target position
+ * immediately and the next tick re-syncs to `player.currentPosition`.
+ */
+private const val PLAYBACK_POSITION_POLL_MS: Long = 200L
+
 class VoiceNoteManager(private val context: Context) {
     private var mediaRecorder: MediaRecorder? = null
     private var mediaPlayer: MediaPlayer? = null
@@ -395,7 +406,8 @@ class VoiceNoteManager(private val context: Context) {
                     stopPlayback()
                 }
 
-                // Track progress
+                // Track progress — Phase 206: 200 ms cadence (see the constant's
+                // doc; was a 20 Hz poll driving seek-bar recomposition all session).
                 playbackJob?.cancel()
                 playbackJob = scope.launch {
                     while (isActive && _isPlaying.value) {
@@ -404,7 +416,7 @@ class VoiceNoteManager(private val context: Context) {
                         } catch (e: Exception) {
                             break
                         }
-                        delay(50)
+                        delay(PLAYBACK_POSITION_POLL_MS)
                     }
                 }
             } catch (e: Exception) {

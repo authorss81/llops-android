@@ -382,18 +382,33 @@ class MainActivity : FragmentActivity() {
                 }
             }
 
-            // B1-PLAT-4 (phase-60): the foreground inactivity auto-lock is a
-            // CONTINUOUS poll while unlocked — not "lock on the next touch after
-            // the idle window" (the phase-30 behavior left an unattended,
-            // foregrounded vault readable until the user touched it again, which
-            // on a no-keyguard device is exactly the attack). Restarted on every
-            // unlock so the idle baseline is fresh; the touch handler below only
-            // stamps lastActivityAtMs.
+            // B1-PLAT-4 (phase-60): the foreground inactivity auto-lock fires AT
+            // the idle deadline — not "on the next touch after the idle window"
+            // (the phase-30 behavior left an unattended, foregrounded vault
+            // readable until the user touched it again, which on a no-keyguard
+            // device is exactly the attack). Restarted on every unlock so the
+            // idle baseline is fresh; the touch handler below only stamps
+            // lastActivityAtMs.
+            //
+            // Phase 206 (PERF/BATTERY): the 1 s POLL is gone. Each iteration now
+            // sleeps exactly until the moment the current idle window elapses
+            // ([AutoLockPolicy.nextCheckDelayMs]) — one wake per idle window,
+            // recomputed from the LATEST activity stamp on every wake, so touches
+            // push the deadline out with zero extra wakes. Auto-lock OFF
+            // (timeoutSeconds <= 0) arms NO timer at all. Pre-206 this loop woke
+            // 3600x/hour even when disabled; post-206 an OFF setting costs zero
+            // wakes and an ON setting costs ~12/hour while active.
             LaunchedEffect(autoLockTimeoutSeconds, authenticated) {
                 if (!authenticated) return@LaunchedEffect
                 lastActivityAtMs = System.currentTimeMillis()
                 while (viewModel.authenticated.value) {
-                    delay(com.authorss81.noteflow.services.AutoLockPolicy.IDLE_CHECK_INTERVAL_MS)
+                    val sleepMs = com.authorss81.noteflow.services.AutoLockPolicy.nextCheckDelayMs(
+                        nowMs = System.currentTimeMillis(),
+                        lastActivityAtMs = lastActivityAtMs,
+                        timeoutSeconds = autoLockTimeoutSeconds
+                    ) ?: return@LaunchedEffect
+                    delay(sleepMs)
+                    if (!viewModel.authenticated.value) return@LaunchedEffect
                     if (com.authorss81.noteflow.services.AutoLockPolicy.shouldAutoLock(
                             nowMs = System.currentTimeMillis(),
                             lastActivityAtMs = lastActivityAtMs,

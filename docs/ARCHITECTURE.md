@@ -8,6 +8,22 @@
 
 ## Package layout
 
+> **Implemented in phase-206** (2026-08-25, kill perpetual pollers — event-driven idle/thermal/audio
+> clocks, see `workspace/phase-206/REPORT.md`): four always-running timer loops are gone.
+> (1) The wet-engine Choreographer pump moved from a never-unregistered self-reposting
+> `LaunchedEffect` callback in `AnnotationCanvas.kt` (one immortal 60-120 Hz loop STACKED per editor
+> open) to `ui/components/WetBrushFramePump.kt` — owned by a `DisposableEffect`
+> (`choreographer.removeFrameCallback` in `onDispose`), re-posting ONLY while ink is actively drawn
+> (`start()`/`stop()` from the drag handlers), thermal status sampled ≤1 Hz; an idle editor costs
+> zero frame wakes. (2) Auto-lock: pure-JVM `AutoLockPolicy.nextCheckDelayMs` deadline-schedules the
+> lock (one wake per idle window, recomputed per wake; `null` = auto-lock OFF arms nothing);
+> `IDLE_CHECK_INTERVAL_MS` deleted. (3) Voice playback position tick 50 ms → documented
+> `PLAYBACK_POSITION_POLL_MS = 200L` (`VoiceNoteManager.kt`; drag-seek accuracy preserved via the
+> immediate `seekTo` publish). (4) Lockout countdown: new pure-JVM `services/LockoutTickerPolicy.kt`
+> wakes at minute milestones (+ exact-zero transition preserving `settings.lockoutUntilEpochMs = 0L`)
+> instead of 1 Hz — a 15-min lockout costs ~15 wakes, not ~900. Tests: `Phase206EventDrivenTimersTest`
+> (13) + updated `B1Plat04AutoLockTest`. No schema change, no new deps.
+
 > **Implemented in phase-205** (2026-08-25, canvas commit integrity — sync commits + render-side
 > laser fade, see `workspace/phase-205/REPORT.md`): (1) the freehand commit is SYNCHRONOUS on Main
 > (`AnnotationCanvas.kt:1428-1520`) — the pre-205 `Dispatchers.Default` launch + `withContext(Main)`
@@ -1862,8 +1878,7 @@
     boundary is no longer reachable only via ON_STOP / next-touch. Pure-JVM
     `services/AutoLockPolicy.kt` owns the default (`DEFAULT_AUTO_LOCK_TIMEOUT_SECONDS = 300`,
     read by `SettingsManager.autoLockTimeoutSeconds` — auto-lock ships ENABLED), the decision
-    (`shouldAutoLock`, `>=` boundary, 0/negative = off) and the poll cadence
-    (`IDLE_CHECK_INTERVAL_MS`). `MainActivity` runs a continuous 1 s idle poll while the vault is
+    (`shouldAutoLock`, `>=` boundary, 0/negative = off). `MainActivity` runs a continuous 1 s idle poll while the vault is
     authenticated (`LaunchedEffect(autoLockTimeoutSeconds, authenticated)`), stamps a fresh idle
     baseline at each unlock, keeps the `pointerInput` touch handler timestamp-only, locks instantly
     on a runtime `ACTION_SCREEN_OFF` receiver (register in onCreate / deregister in onDestroy;
@@ -1871,6 +1886,13 @@
     applies FLAG_SECURE unconditionally (debug clearFlags carve-out deleted). `ON_STOP` → lock
     retained. `ON_PAUSE` → lock explicitly NOT chosen (system-overlay pauses like phase-59's SAF
     pickers, biometric prompts and the share sheet must not force a lock).
+  - **Implemented in phase-206** (PERF/BATTERY, see `workspace/phase-206/REPORT.md`): the phase-60
+    fixed 1 s idle POLL is replaced by DEADLINE SCHEDULING — pure-JVM
+    `AutoLockPolicy.nextCheckDelayMs(nowMs, lastActivityAtMs, timeoutSeconds)` returns the sleep
+    until the exact moment the window elapses (one wake per idle window, recomputed from the latest
+    activity stamp on every wake) or `null` when auto-lock is off (NO timer armed at all);
+    `IDLE_CHECK_INTERVAL_MS` is deleted. Security posture unchanged (lock still fires AT the
+    deadline without a touch; screen-off receiver untouched).
   - **Implemented in phase-130** (user-requested UI/UX, see `workspace/phase-130/REPORT.md`):
     FLAG_SECURE is gated on `!BuildConfig.DEBUG` per the AGENTS.md hard rule. New pure-JVM
     `services/SecureWindowPolicy.kt` = single decision `shouldApplySecureFlag(debug)` (debug →

@@ -836,30 +836,27 @@ fun AnnotationCanvas(
     // Per-stroke texture seed — refreshed on drag start so each live stroke owns a
     // fresh grain/bristle phase (the committed copy gets one from its stroke id).
     var currentStrokeSeed by remember { mutableFloatStateOf(0f) }
-    LaunchedEffect(Unit) {
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-            val choreographer = android.view.Choreographer.getInstance()
-            var lastFrameTimeNanos = 0L
-            val frameCallback = object : android.view.Choreographer.FrameCallback {
-                override fun doFrame(frameTimeNanos: Long) {
-                    if (lastFrameTimeNanos != 0L) {
-                        val elapsedMs = (frameTimeNanos - lastFrameTimeNanos) / 1_000_000f
-                        wetBrushEngine.recordFrameTime(elapsedMs)
-                    }
-                    lastFrameTimeNanos = frameTimeNanos
-
-                    val thermalStatus = ThermalSanityHelper.getCurrentThermalStatus(context)
-                    wetBrushEngine.updateTierAndFallback(
-                        isAgslSupported = ShaderCapabilityHelper.isAgslSupported,
-                        thermalStatus = thermalStatus,
-                        manualOverrideEnabled = gpuWetBrushesEnabled,
-                        currentTimeMs = System.currentTimeMillis()
-                    )
-
-                    choreographer.postFrameCallback(this)
-                }
-            }
-            choreographer.postFrameCallback(frameCallback)
+    // Phase 206 (PERF/BATTERY): the wet-engine Choreographer pump is EVENT-DRIVEN.
+    // Pre-206 a `LaunchedEffect(Unit)` posted a SELF-REPOSTING FrameCallback that
+    // was never unregistered (zero removeFrameCallback call-sites repo-wide), so
+    // every editor visit STACKED another immortal 60-120 Hz loop doing frame-time
+    // sampling + a thermal-status service call + tier re-evaluation PER FRAME even
+    // on a static untouched note. Now the callback is owned by [WetBrushFramePump]:
+    // it re-posts only while a stroke is actively being drawn (start()/stop() from
+    // the drag handlers below), samples thermal status at ≤1 Hz, and the
+    // DisposableEffect's onDispose UNREGISTERS it so teardown can never leak it.
+    val wetFramePump = remember(wetBrushEngine) {
+        WetBrushFramePump(
+            wetBrushEngine = wetBrushEngine,
+            isAgslSupported = ShaderCapabilityHelper.isAgslSupported,
+            manualOverrideProvider = { gpuWetBrushesEnabled },
+            thermalStatusProvider = { ThermalSanityHelper.getCurrentThermalStatus(context) }
+        )
+    }
+    DisposableEffect(wetFramePump) {
+        onDispose {
+            // Phase 206: unregister the frame callback — no more immortal pump.
+            wetFramePump.stop()
         }
     }
 
@@ -1279,6 +1276,9 @@ fun AnnotationCanvas(
                                 eraseSamples.add(EraseSample(canvasOffset, lastPressure))
                                 applyEraser(canvasOffset)
                             } else {
+                                // Phase 206: arm the wet-engine frame pump ONLY while
+                                // ink is actually flowing (idle editors cost zero wakes).
+                                wetFramePump.start()
                                 activeStart = startPoint
                                 activeEnd = startPoint
                                 activePoints.clear()
@@ -1377,6 +1377,9 @@ fun AnnotationCanvas(
                              }
                         },
                         onDragEnd = {
+                            // Phase 206: the stroke is over — disarm the frame pump on
+                            // EVERY end path (idempotent; early returns included).
+                            wetFramePump.stop()
                             // Phase 196: reconcile BEFORE every early-return
                             // (review-fix) so no predicted tail can outlive this
                             // gesture — and so COMMITTED geometry below contains
@@ -1527,6 +1530,7 @@ fun AnnotationCanvas(
                             onDrawingEnd()
                         },
                         onDragCancel = {
+                            wetFramePump.stop()
                             isDraggingCard = false
                             eyedropperPosition = null
                             sampledColorPreview = null

@@ -3556,10 +3556,20 @@ fun updatePageTags(id: String, tags: String) {
                     val remaining = (settings.lockoutUntilEpochMs - System.currentTimeMillis()).coerceAtLeast(0L)
                     _lockoutRemainingMs.value = remaining
                     if (remaining <= 0L) {
+                        // Exact-zero clearing preserved (phase-206): the persisted
+                        // lockout is cleared the moment the countdown lapses.
                         settings.lockoutUntilEpochMs = 0L
                         break
                     }
-                    delay(1000)
+                    // Phase 206 (PERF/BATTERY): minute-milestone wakes via
+                    // LockoutTickerPolicy — a 15-minute lockout costs ~16 wakes,
+                    // not 900 (the display is minute-granularity anyway; between
+                    // milestones it may overstate by <60s, which keeps the
+                    // unlock button disabled longer — never shorter).
+                    delay(
+                        com.authorss81.noteflow.services.LockoutTickerPolicy.nextWakeDelayMs(remaining)
+                            ?: break
+                    )
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
