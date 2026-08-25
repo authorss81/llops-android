@@ -424,10 +424,14 @@ fun KnowledgeGraphScreen(
     }
 
     // Phase 210 — TalkBack overlay set: the SEMANTIC_NODE_CAP most-connected
-    // nodes, then re-sorted by title so traversal order is stable across
-    // physics relayouts (composition order = TalkBack order).
+    // nodes with their connection degrees PRECOMPUTED here, then re-sorted by
+    // title so traversal order is stable across physics relayouts (composition
+    // order = TalkBack order). Review fix: the degrees are derived ONCE per
+    // (nodes, edges) change — recounting them at the call site re-ran an
+    // O(cap × E) scan on every pan/zoom frame because that scope subscribes to
+    // the pan/zoom state.
     val semanticOverlays = remember(nodes, graphEdgeRefs) {
-        if (nodes.isEmpty()) return@remember emptyList<GraphNode>()
+        if (nodes.isEmpty()) return@remember emptyList<Pair<GraphNode, Int>>()
         val degree = HashMap<String, Int>(nodes.size * 2)
         for (e in graphEdgeRefs) {
             degree[e.sourceId] = (degree[e.sourceId] ?: 0) + 1
@@ -441,6 +445,7 @@ fun KnowledgeGraphScreen(
             )
             .take(SEMANTIC_NODE_CAP)
             .sortedWith(compareBy({ it.page.title.lowercase() }, { it.page.id }))
+            .map { node -> node to (degree[node.page.id] ?: 0) }
     }
 
     Scaffold(
@@ -517,7 +522,9 @@ fun KnowledgeGraphScreen(
                             },
                         singleLine = true,
                         supportingText = if (matchIds.size > 1) {
-                            { Text("Match ${matchIndex + 1} of ${matchIds.size} · Enter for next") }
+                            // Review fix: name the hardware keyboard honestly —
+                            // soft-keyboard IME actions never reach onPreviewKeyEvent.
+                            { Text("Match ${matchIndex + 1} of ${matchIds.size} · Enter cycles (hardware keyboard)") }
                         } else {
                             null
                         }
@@ -705,7 +712,11 @@ fun KnowledgeGraphScreen(
                             val isActiveMatch = activeMatchId == n.page.id
                             val isSelected = selectedId == n.page.id
                             val filteredOut = pageFiltered(n.page.id, n)
-                            val fade = if (filteredOut) 0.12f else 1f
+                            // Phase 210 review fix: the ACTIVE search match is
+                            // always drawn at full opacity — auto-pan centers it,
+                            // so a focus-dimmed target would be an invisible
+                            // "Match k of n".
+                            val fade = if (filteredOut && !isActiveMatch) 0.12f else 1f
                             val finalColor = when {
                                 isSelected -> errorColor
                                 isActiveMatch || matched -> tertiaryColor
@@ -771,13 +782,10 @@ fun KnowledgeGraphScreen(
                             canvasSizePx.height / 2f
                         )
                         val panState = rememberUpdatedState(panOffset)
-                        semanticOverlays.forEach { overlayNode ->
-                            val degree = graphEdgeRefs.count {
-                                it.sourceId == overlayNode.page.id || it.targetId == overlayNode.page.id
-                            }
+                        semanticOverlays.forEach { (overlayNode, connectionCount) ->
                             GraphSemanticNodeOverlay(
                                 node = overlayNode,
-                                connectionCount = degree,
+                                connectionCount = connectionCount,
                                 viewportCenterPx = viewportCenter,
                                 zoomScale = zoomScale,
                                 panState = panState,

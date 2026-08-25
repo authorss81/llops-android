@@ -20,9 +20,11 @@ object GraphNeighborhoodFocusPolicy {
     /** Upper bound — 4 hops on a hub node can re-create the hairball. */
     const val MAX_HOPS = 3
 
-    /** Focus cap: never dim MORE than half the graph into uselessness… but also
-     *  never let one focus request exceed the device render budget by pulling in
-     *  an unbounded frontier (defensive only; BFS is O(E+V) anyway). */
+    /**
+     * Defensive frontier cap: bounds ONE focus request so a pathological hub
+     * node cannot pull in an unbounded BFS frontier. BFS itself stays O(E+V);
+     * this cap exists to protect the render budget on low-RAM devices.
+     */
     const val MAX_FOCUSED_NODES = 400
 
     fun sanitizeHops(hops: Int): Int = when {

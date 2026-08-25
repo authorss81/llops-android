@@ -6,6 +6,7 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
 import com.authorss81.noteflow.plugins.PluginSettingKey
+import com.authorss81.noteflow.services.graph.GraphNeighborhoodFocusPolicy
 import com.authorss81.noteflow.services.localsend.LocalSendPairingCodes
 import com.authorss81.noteflow.theme.AppThemeMode
 import java.security.KeyStore
@@ -182,16 +183,16 @@ class SettingsManager(context: Context) {
     // Sanitized through the policy on read AND write so a hand-edited pref can
     // never push the BFS frontier out of range. Prefs only, no DB schema impact.
     var graphFocusHopCount: Int
-        get() = com.authorss81.noteflow.services.graph.GraphNeighborhoodFocusPolicy.sanitizeHops(
+        get() = GraphNeighborhoodFocusPolicy.sanitizeHops(
             prefs.getInt(
                 "graph_focus_hop_count",
-                com.authorss81.noteflow.services.graph.GraphNeighborhoodFocusPolicy.DEFAULT_HOPS
+                GraphNeighborhoodFocusPolicy.DEFAULT_HOPS
             )
         )
         set(value) = prefs.edit()
             .putInt(
                 "graph_focus_hop_count",
-                com.authorss81.noteflow.services.graph.GraphNeighborhoodFocusPolicy.sanitizeHops(value)
+                GraphNeighborhoodFocusPolicy.sanitizeHops(value)
             )
             .apply()
 

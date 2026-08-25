@@ -198,4 +198,28 @@ class Phase210GraphDepthPinsTest {
         )
         assertTrue(screen.contains("var backlinksTargetId by remember { mutableStateOf<String?>(null) }"))
     }
+
+    // ---------- review fixes (2026-08-25) ----------
+
+    @Test
+    fun `active search match stays visible even outside the focused neighborhood`() {
+        val screen = mainSource("ui/screens/KnowledgeGraphScreen.kt")
+        assertTrue(
+            "the active match must bypass the focus dim (auto-pan centers it)",
+            screen.contains("val fade = if (filteredOut && !isActiveMatch) 0.12f else 1f")
+        )
+    }
+
+    @Test
+    fun `overlay connection counts are precomputed - never recounted per recomposition`() {
+        val screen = mainSource("ui/screens/KnowledgeGraphScreen.kt")
+        assertTrue(
+            "the overlay call site must consume precomputed degrees",
+            screen.contains("semanticOverlays.forEach { (overlayNode, connectionCount) ->")
+        )
+        assertFalse(
+            "no per-frame degree recount may remain in the overlay block",
+            screen.contains("val degree = graphEdgeRefs.count")
+        )
+    }
 }

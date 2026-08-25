@@ -51,8 +51,12 @@ no `.github/workflows/` edits, no base-APK-size impact.**
   active match lands centered (runs ONLY on match change — user zoom/pan is never
   fought). Enter / numpad-Enter on the search field cycles via `onPreviewKeyEvent`
   (consumed, so no newline is inserted); a `supportingText` line shows
-  "Match k of n · Enter for next" when there is more than one hit; the active
-  match draws a crisp tertiary ring on top of the soft match halo.
+  "Match k of n · Enter cycles (hardware keyboard)" when there is more than one
+  hit (review fix: soft-keyboard IME actions never reach `onPreviewKeyEvent`, so
+  the hint names the hardware keyboard honestly); the active match draws a crisp
+  tertiary ring on top of the soft match halo and is ALWAYS drawn full-opacity
+  even outside the focused neighborhood (review fix — auto-pan centers it, so a
+  focus-dimmed target would be an invisible "Match k of n").
 
 ## 3. TalkBack access
 
@@ -109,7 +113,38 @@ space) → full graph returns. Hop chips persist across sessions via prefs.
   (UNC-path, reproduced on clean stashed HEAD), `WikiLinkParserCacheUnitTest`
   (documented timing flake — passes in isolation with this diff applied),
   `PaparazziSmokeTest ×2` (layoutlib env, passes in isolation).
-* New tests: `GraphNeighborhoodFocusPolicyTest` (14), `GraphSearchMatchPolicyTest`
-  (13), `Phase210GraphDepthPinsTest` (12 source pins incl. the subgraph-filter
-  wiring pin and the no-pointer-input a11y-target pin).
+* New tests: `GraphNeighborhoodFocusPolicyTest` (15), `GraphSearchMatchPolicyTest`
+  (14), `Phase210GraphDepthPinsTest` (13 source pins incl. the subgraph-filter
+  wiring pin and the no-pointer-input a11y target pin). Review fixes added two
+  more pins (see §6) → `Phase210GraphDepthPinsTest` now carries 15.
 * `gradle :app:assembleDebug` green.
+
+## 6. Review fixes (2026-08-25)
+
+Findings from the post-phase review, all applied in the same phase:
+
+1. **Report accuracy** — the per-suite test counts above were off by one each;
+   corrected to the actual `@Test` counts (15 / 14 / 13 pre-review-fix).
+2. **Focus × search visibility** — with focus armed, Enter/auto-pan could center
+   a node dimmed to alpha 0.12. The active match now bypasses the focus dim
+   (`fade = if (filteredOut && !isActiveMatch) 0.12f else 1f`,
+   KnowledgeGraphScreen.kt node draw loop) and renders full-opacity; pinned by
+   `active search match stays visible even outside the focused neighborhood`.
+3. **Overlay gesture-path perf** — connection degrees were recounted per overlay
+   (`O(cap × E)` scans) inside the canvas Box scope on every pan/zoom frame;
+   they are now computed ONCE inside the `remember(nodes, graphEdgeRefs)`
+   `semanticOverlays` block and consumed as `(node, degree)` pairs at the call
+   site; pinned by
+   `overlay connection counts are precomputed - never recounted per recomposition`.
+4. **Honest Enter hint** — soft-keyboard IME actions never reach
+   `onPreviewKeyEvent`, so the supportingText now reads "Match k of n · Enter
+   cycles (hardware keyboard)".
+5. **Style/KDoc** — `SettingsManager.graphFocusHopCount` uses a proper import
+   instead of fully-qualified names; the garbled `MAX_FOCUSED_NODES` KDoc was
+   rewritten.
+6. Not actioned (documented v1 behavior): auto-pan targets the settled position
+   during the settle tween (self-corrects when the tween lands), and armed focus
+   stays invisible after an empty-space deselect until the next selection.
+
+Re-verification after the fixes: the three phase-210 suites green via
+`gradle :app:testDebugUnitTest --tests …` and main sources compile.
