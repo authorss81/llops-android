@@ -82,6 +82,14 @@ painting engine, free features).
 | phase-217 | **Block resize polish** — markdown code-block handle, canvas embed dim-visible handles + aspect-lock for photos, voice block collapsed behavior | user-requested |
 | phase-218 | **Markdown polish** — code block line-numbers + gutter + scroll, tables horizontal-scroll, task strikethrough, callout colors/icons, typography (no new deps) | user-requested |
 | phase-219 | **Templates + pencil soft-shade** — per-template color/spacing/opacity controls + 2 new templates; `soft_shade` pencil preset for portrait shading (shade below eye etc.) + SMUDGE discoverability | user-requested |
+| phase-220 | **Blender + dual-brush scatter** — `blenderStrength` → `mixStrength` and `scatterAmount` → spacing/scatter per-preset sliders | painting |
+| phase-221 | **Fill bucket + gradient** — flood fill tolerance 12% on active layer bitmap + drag gradient (`color → gradientTo`) | painting |
+| phase-222 | **Alpha-lock + clipping mask + tilt shading** — `DST_IN` mask for alpha-lock/clipping, tilt `0-90°` → width/alpha (`TiltShadingPolicy`) | painting |
+| phase-223 | **Perspective grid + canvas rotate + ruler** — 1pt/2pt/isometric grid, `rotationZ` gesture, straight-line ruler snap | painting |
+| phase-224 | **Timelapse replay** — timestamp-ordered replay `withFrameNanos` + `MediaCodec`/`MediaMuxer` MP4 export 720p30 | painting |
+| phase-225 | **Eyedropper from reference image** — samples `referenceImage` bitmap / `LayerBitmapLruCache` pixel, applies to `currentColor` | painting |
+| phase-226 | **Selection transform** — scale (corner handles) + rotate (`CanvasItemRotationMath`) for lasso selection, baked into points | painting |
+| phase-227 | **Paper deckled edge + texture + layered export** — wavy `Path` clip, `paperTextureStrength` slider, PSD per-layer + PNG transparent toggle | painting |
 
 ## How phases run
 
