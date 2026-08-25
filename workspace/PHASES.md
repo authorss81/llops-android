@@ -75,6 +75,11 @@ painting engine, free features).
 | phase-210 | **Knowledge graph depth** - neighborhood focus via the imported-but-unused GraphSubgraphFilter, search auto-pan/cycle, TalkBack semantics overlay for nodes + Backlinks sheet entry (audit) | audit |
 | phase-211 | **Release hygiene** - remove blanket androidx.ink keep + stale protobuf keep, drop dead deps (navigation-compose/coil/window-size-class), delete unused lora_italic.ttf (221 KB), Compose compiler metrics, gradle parallel/cache/nonFinalResIds (+config-cache trial) (audit) | audit |
 | phase-212 | **JVM test hardening** - first tests for OrphanImportCleanupPolicy (deletes files!), ShapeRecognitionHelper (runs every freehand commit), 6 plugin stores, plugin installer/updater atomicity, HtmlToMarkdownConverter, wet-engine boundaries (audit) | audit |
+| phase-213 | **Brush shading & drop shadows** — per-stroke soft shadows (vector + GPU blur) like pro drawing apps, theme-aware, low-end gated | user-requested |
+| phase-214 | **Stroke smoothing v2** — pressure/tilt low-pass, historical MotionEvent batch, velocity-adaptive EWMA, optional One-Euro/spline fairing | user-requested |
+| phase-215 | **Lasso stroke select** — repurpose dead SELECT tool into lasso + box marquee with pure-JVM hit policy and overlay | user-requested |
+| phase-216 | **Lasso copy/duplicate + shape select & move** — clipboard, duplicate, delete, shape-aware move/translate for any selected strokes/shapes | user-requested |
+| phase-217 | **Block resize polish** — markdown code-block handle, canvas embed dim-visible handles + aspect-lock for photos, voice block collapsed behavior | user-requested |
 
 ## How phases run
 
