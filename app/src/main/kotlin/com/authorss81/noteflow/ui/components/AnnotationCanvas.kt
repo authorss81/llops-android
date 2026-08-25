@@ -152,6 +152,17 @@ fun AnnotationCanvas(
     // call sites (tests/previews) keep compiling unchanged.
     onDynamicPageCountCapped: (() -> Unit)? = null,
     onStrokesChanged: (List<Stroke>) -> Unit,
+    // Phase 205: CURRENT-state provider for stroke-list emissions. The gesture
+    // closures below can hold a FROZEN `strokes` parameter for a whole session
+    // (pointerInput only restarts on its keys), so any full-list payload rebuilt
+    // from that capture resurrected erased strokes / reordered rapid commits.
+    // The provider is read at APPLY time instead; EditorScreen passes `{ strokes }`
+    // whose delegated state always reflects the latest committed list.
+    currentStrokesProvider: () -> List<Stroke> = { strokes },
+    // Phase 205: EPHEMERAL channel for laser-fade cleanup. Expired trails are
+    // not an edit — the parent must update its list + autosave WITHOUT pushing
+    // undo entries or clearing redo (see handleLaserTrailsExpired).
+    onLaserTrailsExpired: (List<Stroke>) -> Unit = {},
     onStickyNotesChanged: (List<CanvasStickyNote>) -> Unit = {},
     onMediaEmbedsChanged: (List<CanvasMediaEmbed>) -> Unit = {},
     onToggleVoicePlay: (String) -> Unit = {},
@@ -312,18 +323,35 @@ fun AnnotationCanvas(
         showPageIndicator = false
     }
 
+    // Phase 205: LASER trails are EPHEMERAL. The pre-205 expiry path was a
+    // `while(true) { …; delay(40) }` poll (25 Hz) that emitted one FULL-list
+    // onStrokesChanged per expired stroke — every tick copied the whole list
+    // into EditorScreen's undo stack, cleared redo and armed a Room autosave.
+    // Post-205:
+    //  1. The fade itself is RENDER-SIDE ONLY. While any trail exists this
+    //     effect runs ONE frame clock that bumps [laserFadeTick]; the main draw
+    //     pass reads it (draw-phase subscription) so the alpha ramp in
+    //     drawSingleStroke animates without recomposing or touching state.
+    //  2. Removal is ONE batched LaserTrailPolicy.stripExpired call per fade
+    //     wave, delivered through onLaserTrailsExpired (ephemeral: no undo
+    //     push, no redo clear) with exactly one autosave arm.
     val hasLaserStrokes = strokes.any { it.tool == StrokeTool.LASER }
-    LaunchedEffect(hasLaserStrokes, strokes.size) {
-        if (hasLaserStrokes) {
-            while (true) {
-                val now = System.currentTimeMillis()
-                val expiredIds = strokes.filter { it.tool == StrokeTool.LASER && it.timestampMs != null && (now - it.timestampMs) >= 1800L }.map { it.id }.toSet()
-                if (expiredIds.isNotEmpty()) {
-                    val remaining = strokes.filterNot { it.id in expiredIds }
-                    onStrokesChanged(remaining)
-                }
-                kotlinx.coroutines.delay(40L)
+    val laserFadeTickState = remember { mutableLongStateOf(0L) }
+    val currentOnLaserTrailsExpiredState by rememberUpdatedState(onLaserTrailsExpired)
+    LaunchedEffect(hasLaserStrokes) {
+        if (!hasLaserStrokes) return@LaunchedEffect
+        while (true) {
+            withFrameNanos { }
+            val now = System.currentTimeMillis()
+            laserFadeTickState.longValue = now
+            val wave = com.authorss81.noteflow.services.LaserTrailPolicy.stripExpired(
+                currentStrokesProvider(),
+                now
+            )
+            if (wave != null) {
+                currentOnLaserTrailsExpiredState(wave.remaining)
             }
+            if (currentStrokesProvider().none { it.tool == StrokeTool.LASER }) break
         }
     }
 
@@ -1150,8 +1178,19 @@ fun AnnotationCanvas(
                     if (changed) {
                         activeStrokeList.clear()
                         activeStrokeList.addAll(newList)
-                        val otherStrokes = if (isContinuousMode) emptyList() else strokes.filter { it.pdfPage != pdfPageFilter }
-                        onStrokesChanged(otherStrokes + newList)
+                        // Phase 205: derive "other pages" from CURRENT state at
+                        // apply time — the captured `strokes` parameter here is a
+                        // frozen pointerInput snapshot that resurrected erased
+                        // strokes when re-emitted wholesale.
+                        onStrokesChanged(
+                            com.authorss81.noteflow.services.CanvasCommitListPolicy.emittedList(
+                                currentAll = currentStrokesProvider(),
+                                isContinuousMode = isContinuousMode,
+                                pageOf = { it.pdfPage },
+                                pdfPageFilter = pdfPageFilter,
+                                scopedReplacement = newList
+                            )
+                        )
                     }
                 }
                 // Phase 13: the STICKER tool places stickers via tap only; it is
@@ -1386,79 +1425,97 @@ fun AnnotationCanvas(
                                     }
                                     val commitSymmetryMode = symmetryMode
 
-                                    coroutineScope.launch(kotlinx.coroutines.Dispatchers.Default) {
-                                        val candidateStroke = Stroke(
-                                            id = java.util.UUID.randomUUID().toString(),
-                                            tool = tool,
-                                            colorInt = colorInt,
-                                            width = width,
-                                            points = pointsToSimplify,
-                                            start = startPoint,
-                                            end = endPoint,
-                                            pdfPage = targetPage,
-                                            timestampMs = if (tool == StrokeTool.LASER) System.currentTimeMillis() else if (isVoiceRec) elapsedMs else null,
-                                            isAdvanced = advBrushes,
-                                            layerId = actLayerId ?: "layer_default",
-                                            colorMode = commitColorMode,
-                                            colorSeed = commitColorSeed,
-                                            gradientToColorInt = commitGradientTo
-                                        )
-                                        val isWetOrFleeting = tool == StrokeTool.LASER || com.authorss81.noteflow.services.BrushStrokeMath.isWetRenderedTool(tool)
-                                        val stylePreservingTool = tool == StrokeTool.DOTTED || tool == StrokeTool.NEON ||
-                                            tool == StrokeTool.CHARCOAL || tool == StrokeTool.OIL_PASTEL ||
-                                            tool == StrokeTool.DRY_BRUSH || tool == StrokeTool.PALETTE_KNIFE
-                                        val snappedShape = if (shapeAutoSnapEnabled && tool.isFreehandTool && !isWetOrFleeting && !stylePreservingTool) {
-                                            com.authorss81.noteflow.services.ShapeRecognitionHelper.trySnapShape(candidateStroke)
-                                        } else {
-                                            null
-                                        }
-                                        val newStroke = if (snappedShape != null) {
-                                            snappedShape.snappedStroke
-                                        } else if (pointsToSimplify.size > 2) {
-                                            // Phase 201 (PERF 1.4): per-brush epsilon —
-                                            // hairline nibs keep their fine inflections
-                                            // (0.6-0.8 px), everything else stays at the
-                                            // legacy 1.3 px. Runs ONLY here, on pointer-up;
-                                            // the live preview never simplifies mid-stroke.
-                                            candidateStroke.copy(
-                                                points = com.authorss81.noteflow.utils.RamerDouglasPeucker.simplify(
-                                                    pointsToSimplify,
-                                                    epsilon = com.authorss81.noteflow.services.StrokeSimplifyPolicy.epsilonFor(tool, width)
-                                                )
+                                    // Phase 205: the commit is SYNCHRONOUS on Main.
+                                    // Pre-205 this block launched on Dispatchers.Default and
+                                    // hopped back withContext(Main) inside rememberCoroutineScope,
+                                    // which opened three races: (a) editor disposal before the
+                                    // hop CANCELLED the coroutine and silently dropped the
+                                    // finished stroke; (b) two fast strokes could compute out
+                                    // of order and land out of order (z-order + undo churn);
+                                    // (c) the emit rebuilt the payload from the `strokes`
+                                    // captured at drag-end, resurrecting strokes erased in
+                                    // between. RDP/snap are cheap geometry passes, so the
+                                    // whole pipeline now runs inline before the gesture
+                                    // handler returns: nothing is pending, ordering IS call
+                                    // order, and "other pages" comes from
+                                    // currentStrokesProvider() read AT APPLY TIME via
+                                    // CanvasCommitListPolicy — never from capture time.
+                                    val candidateStroke = Stroke(
+                                        id = java.util.UUID.randomUUID().toString(),
+                                        tool = tool,
+                                        colorInt = colorInt,
+                                        width = width,
+                                        points = pointsToSimplify,
+                                        start = startPoint,
+                                        end = endPoint,
+                                        pdfPage = targetPage,
+                                        timestampMs = if (tool == StrokeTool.LASER) System.currentTimeMillis() else if (isVoiceRec) elapsedMs else null,
+                                        isAdvanced = advBrushes,
+                                        layerId = actLayerId ?: "layer_default",
+                                        colorMode = commitColorMode,
+                                        colorSeed = commitColorSeed,
+                                        gradientToColorInt = commitGradientTo
+                                    )
+                                    val isWetOrFleeting = tool == StrokeTool.LASER || com.authorss81.noteflow.services.BrushStrokeMath.isWetRenderedTool(tool)
+                                    val stylePreservingTool = tool == StrokeTool.DOTTED || tool == StrokeTool.NEON ||
+                                        tool == StrokeTool.CHARCOAL || tool == StrokeTool.OIL_PASTEL ||
+                                        tool == StrokeTool.DRY_BRUSH || tool == StrokeTool.PALETTE_KNIFE
+                                    val snappedShape = if (shapeAutoSnapEnabled && tool.isFreehandTool && !isWetOrFleeting && !stylePreservingTool) {
+                                        com.authorss81.noteflow.services.ShapeRecognitionHelper.trySnapShape(candidateStroke)
+                                    } else {
+                                        null
+                                    }
+                                    val newStroke = if (snappedShape != null) {
+                                        snappedShape.snappedStroke
+                                    } else if (pointsToSimplify.size > 2) {
+                                        // Phase 201 (PERF 1.4): per-brush epsilon —
+                                        // hairline nibs keep their fine inflections
+                                        // (0.6-0.8 px), everything else stays at the
+                                        // legacy 1.3 px. Runs ONLY here, on pointer-up;
+                                        // the live preview never simplifies mid-stroke.
+                                        candidateStroke.copy(
+                                            points = com.authorss81.noteflow.utils.RamerDouglasPeucker.simplify(
+                                                pointsToSimplify,
+                                                epsilon = com.authorss81.noteflow.services.StrokeSimplifyPolicy.epsilonFor(tool, width)
                                             )
+                                        )
+                                    } else {
+                                        candidateStroke
+                                    }
+                                    // Phase 203: ORIGINAL + mirrored TWIN are added together
+                                    // in ONE onStrokesChanged update, so undo removes both at
+                                    // once and the autosave snapshot persists both rows.
+                                    val commitBatch = if (bakeMirrorTwin && symmetryAxisCenter != null) {
+                                        listOf(
+                                            newStroke,
+                                            com.authorss81.noteflow.services.SymmetryCommitPolicy.bakedTwin(
+                                                stroke = newStroke,
+                                                mode = commitSymmetryMode,
+                                                centerX = symmetryAxisCenter.first,
+                                                centerY = symmetryAxisCenter.second
+                                            )
+                                        )
+                                    } else {
+                                        listOf(newStroke)
+                                    }
+                                    activeStrokeList.addAll(commitBatch)
+                                    onStrokesChanged(
+                                        com.authorss81.noteflow.services.CanvasCommitListPolicy.emittedList(
+                                            currentAll = currentStrokesProvider(),
+                                            isContinuousMode = isContinuousMode,
+                                            pageOf = { it.pdfPage },
+                                            pdfPageFilter = pdfPageFilter,
+                                            scopedReplacement = activeStrokeList
+                                        )
+                                    )
+                                    // 36.0: stroke-commit tick + distinct shape-snap tick,
+                                    // both gated by the haptics setting AND reduce-motion.
+                                    val hapticGate = com.authorss81.noteflow.services.MotionPolicy.hapticsAllowed(hapticsEnabled, reduceMotion)
+                                    if (hapticGate) {
+                                        if (snappedShape != null) {
+                                            hapticFeedback.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
                                         } else {
-                                            candidateStroke
-                                        }
-                                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                                            // Phase 203: ORIGINAL + mirrored TWIN are added together
-                                            // in ONE onStrokesChanged update, so undo removes both at
-                                            // once and the autosave snapshot persists both rows.
-                                            val commitBatch = if (bakeMirrorTwin && symmetryAxisCenter != null) {
-                                                listOf(
-                                                    newStroke,
-                                                    com.authorss81.noteflow.services.SymmetryCommitPolicy.bakedTwin(
-                                                        stroke = newStroke,
-                                                        mode = commitSymmetryMode,
-                                                        centerX = symmetryAxisCenter.first,
-                                                        centerY = symmetryAxisCenter.second
-                                                    )
-                                                )
-                                            } else {
-                                                listOf(newStroke)
-                                            }
-                                            activeStrokeList.addAll(commitBatch)
-                                            val otherStrokes = if (isContinuousMode) emptyList() else strokes.filter { it.pdfPage != pdfPageFilter }
-                                            onStrokesChanged(otherStrokes + activeStrokeList)
-                                            // 36.0: stroke-commit tick + distinct shape-snap tick,
-                                            // both gated by the haptics setting AND reduce-motion.
-                                            val hapticGate = com.authorss81.noteflow.services.MotionPolicy.hapticsAllowed(hapticsEnabled, reduceMotion)
-                                            if (hapticGate) {
-                                                if (snappedShape != null) {
-                                                    hapticFeedback.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                                                } else {
-                                                    hapticFeedback.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
-                                                }
-                                            }
+                                            hapticFeedback.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
                                         }
                                     }
                                 }
@@ -1741,8 +1798,16 @@ fun AnnotationCanvas(
                                 layerId = activeLayerId ?: "layer_default"
                             )
                             activeStrokeList.add(newStroke)
-                            val otherStrokes = if (isContinuousMode) emptyList() else strokes.filter { it.pdfPage != pdfPageFilter }
-                            onStrokesChanged(otherStrokes + activeStrokeList)
+                            // Phase 205: apply-time derivation (see CanvasCommitListPolicy).
+                            onStrokesChanged(
+                                com.authorss81.noteflow.services.CanvasCommitListPolicy.emittedList(
+                                    currentAll = currentStrokesProvider(),
+                                    isContinuousMode = isContinuousMode,
+                                    pageOf = { it.pdfPage },
+                                    pdfPageFilter = pdfPageFilter,
+                                    scopedReplacement = activeStrokeList
+                                )
+                            )
                             showTextInputDialog = false
                         }
                     ) {
@@ -1840,6 +1905,15 @@ fun AnnotationCanvas(
                     }
             ) {
                 val activeInkRenderer = if (advancedBrushesEnabled) inkRenderer else null
+
+                // Phase 205: LASER fade clock — draw-phase subscription. Reading
+                // the tick here (only while trails exist) re-runs THIS draw pass
+                // each frame so the alpha ramp in drawSingleStroke animates; no
+                // snapshot write reaches composition, so nothing recomposes, and
+                // fade frames never touch undo stacks or persistence.
+                if (hasLaserStrokes) {
+                    laserFadeTickState.longValue
+                }
 
                 // Phase 198 (PERF 2.1): the LIVE ink preview no longer renders in this
                 // draw block — every pen sample mutated `activePoints`, and any read of
@@ -4663,8 +4737,16 @@ private fun DrawScope.drawSingleStroke(
             }
         }
         StrokeTool.LASER -> {
-            val ageMs = if (stroke.timestampMs != null) (System.currentTimeMillis() - stroke.timestampMs).coerceAtLeast(0L) else 0L
-            val fadeFactor = (1.0f - (ageMs / 1800f)).coerceIn(0.0f, 1.0f)
+            // Phase 205: fade envelope from LaserTrailPolicy — the SAME 1800 ms
+            // budget and boundary the batched expiry wave uses, so a trail is
+            // never removed while still visibly drawing (or kept after reaching
+            // alpha 0). This branch re-executes every frame while trails exist:
+            // the main draw pass subscribes to laserFadeTick (see the draw-phase
+            // subscription at the top of the canvas block).
+            val fadeFactor = com.authorss81.noteflow.services.LaserTrailPolicy.fadeFraction(
+                stroke.timestampMs,
+                System.currentTimeMillis()
+            )
             val baseLaserColor = if (color == Color.Unspecified || color == Color.Transparent) Color(0xFFFF0044) else color
             val laserColor = baseLaserColor.copy(alpha = baseLaserColor.alpha * fadeFactor)
 

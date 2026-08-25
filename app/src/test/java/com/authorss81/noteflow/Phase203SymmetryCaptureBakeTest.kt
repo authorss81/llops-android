@@ -143,16 +143,19 @@ class Phase203SymmetryCaptureBakeTest {
     // ---- 2. Capture-time baking at the commit site -------------------------------
 
     @Test
-    fun `commit freezes the mode and axis center before the background build`() {
+    fun `commit freezes the mode and axis center before the stroke build`() {
+        // Phase 205: the background build became a synchronous inline build —
+        // the freeze invariant is unchanged: mode + exact axis center are
+        // captured BEFORE the committed geometry is constructed.
         val src = canvas()
         val freezeIdx = src.indexOf(
             "val bakeMirrorTwin = com.authorss81.noteflow.services.SymmetryCommitPolicy.shouldBakeMirror(symmetryMode, tool)"
         )
-        val launchIdx = src.indexOf("coroutineScope.launch(kotlinx.coroutines.Dispatchers.Default)", freezeIdx)
-        assertTrue(freezeIdx > 0 && launchIdx > freezeIdx)
-        val frozen = src.substring(freezeIdx, launchIdx)
+        val buildIdx = src.indexOf("val candidateStroke = Stroke(", freezeIdx)
+        assertTrue(freezeIdx > 0 && buildIdx > freezeIdx)
+        val frozen = src.substring(freezeIdx, buildIdx)
         assertTrue(
-            "the axis center must be FROZEN on the UI thread from the same resolver the live preview used",
+            "the axis center must be FROZEN from the same resolver the live preview used",
             frozen.contains("symmetryCenterFor(size.width.toFloat(), calculatePageYOffset(targetPage))")
         )
         assertTrue(frozen.contains("val commitSymmetryMode = symmetryMode"))
@@ -164,7 +167,7 @@ class Phase203SymmetryCaptureBakeTest {
         val batchIdx = src.indexOf("val commitBatch = if (bakeMirrorTwin && symmetryAxisCenter != null)")
         val twinIdx = src.indexOf(".bakedTwin(", batchIdx)
         val addAllIdx = src.indexOf("activeStrokeList.addAll(commitBatch)", batchIdx)
-        val changedIdx = src.indexOf("onStrokesChanged(otherStrokes + activeStrokeList)", addAllIdx)
+        val changedIdx = src.indexOf("onStrokesChanged(", addAllIdx)
         assertTrue(batchIdx > 0 && twinIdx > batchIdx && addAllIdx > twinIdx && changedIdx > addAllIdx)
         // The twin is built FROM the finalized stroke (post shape-snap / RDP).
         val twinCall = src.substring(twinIdx, twinIdx + 120)

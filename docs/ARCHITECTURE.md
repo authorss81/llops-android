@@ -8,6 +8,25 @@
 
 ## Package layout
 
+> **Implemented in phase-205** (2026-08-25, canvas commit integrity — sync commits + render-side
+> laser fade, see `workspace/phase-205/REPORT.md`): (1) the freehand commit is SYNCHRONOUS on Main
+> (`AnnotationCanvas.kt:1428-1520`) — the pre-205 `Dispatchers.Default` launch + `withContext(Main)`
+> hop inside `rememberCoroutineScope` let editor disposal silently drop a finished stroke, let fast
+> strokes land out of order, and resurrected erased strokes from the pointerInput-captured
+> `strokes` snapshot; (2) every full-list emission now derives "other pages" from the new
+> `currentStrokesProvider` param (`:161`, EditorScreen wires `{ strokes }`) AT APPLY TIME via
+> pure-JVM `services/CanvasCommitListPolicy.emittedList` — commit/eraser/text sites `:1503`/`:1186`
+> /`:1803`; sticky/media emit sites still use captured lists (synchronous-only paths, follow-up);
+> (3) LASER trails fade RENDER-SIDE (one `withFrameNanos` clock while trails exist →
+> `laserFadeTickState`, draw-phase subscription `:1915`, envelope `LaserTrailPolicy.fadeFraction`)
+> and expiry is ONE batched `LaserTrailPolicy.stripExpired` wave per due set through the EPHEMERAL
+> `onLaserTrailsExpired` channel (`EditorScreen.handleLaserTrailsExpired` `:872-882` — never touches
+> undo/redo, one debounced autosave per wave; replaces the 25 Hz `delay(40)` poll that pushed undo +
+> armed Room writes per tick); (4) the phase-201 direct RenderNode AGSL carrier is regression-pinned
+> repo-wide (zero reflective setRenderEffect lookups allowed). Tests: `LaserTrailPolicyTest` (10),
+> `CanvasCommitListPolicyTest` (5), `Phase205CanvasCommitIntegrityTest` (8 pins). No schema change,
+> no new deps.
+
 | Subpackage | Key files | Purpose |
 |---|---|---|
 | `data/model/` | `Entities.kt`, `StrokeModels.kt` | Room entities (8) + stroke/ink types |

@@ -869,6 +869,18 @@ fun EditorScreen(
         triggerAutoSave(newStrokes)
     }
 
+    fun handleLaserTrailsExpired(newStrokes: List<Stroke>) {
+        // Phase 205: EPHEMERAL channel for laser-fade cleanup. A laser trail is
+        // a transient pointer highlight by design, so its expiry must NEVER
+        // enter history: unlike handleStrokesChange this pushes NO undo entry
+        // and clears NO redo stack (pre-205 every fade tick pushed the full
+        // list onto the undo stack and armed a Room write per stroke). The
+        // removal still persists — exactly ONE debounced autosave arm per fade
+        // wave keeps the vault consistent with what the user saw.
+        strokes = newStrokes
+        triggerAutoSave(newStrokes)
+    }
+
     fun handleLayersChange(newLayers: List<LayerEntity>) {
         layers = newLayers
         // B2-UI-1 (phase-49): route the write through the lock-safe gate.
@@ -2163,6 +2175,15 @@ fun EditorScreen(
                 },
                 onStrokesChanged = { updatedStrokes ->
                     handleStrokesChange(updatedStrokes)
+                },
+                // Phase 205: the canvas derives full-list emissions from THIS
+                // provider at apply time (a captured `strokes` value inside the
+                // canvas' gesture closures goes stale for a whole session), and
+                // routes laser-fade cleanup through the ephemeral channel so
+                // trail expiry never touches undo/redo history.
+                currentStrokesProvider = { strokes },
+                onLaserTrailsExpired = { remainingAfterWave ->
+                    handleLaserTrailsExpired(remainingAfterWave)
                 },
                 onStickyNotesChanged = { updatedNotes ->
                     handleStickyNotesChange(updatedNotes)
