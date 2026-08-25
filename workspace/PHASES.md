@@ -80,6 +80,8 @@ painting engine, free features).
 | phase-215 | **Lasso stroke select** — repurpose dead SELECT tool into lasso + box marquee with pure-JVM hit policy and overlay | user-requested |
 | phase-216 | **Lasso copy/duplicate + shape select & move** — clipboard, duplicate, delete, shape-aware move/translate for any selected strokes/shapes | user-requested |
 | phase-217 | **Block resize polish** — markdown code-block handle, canvas embed dim-visible handles + aspect-lock for photos, voice block collapsed behavior | user-requested |
+| phase-218 | **Markdown polish** — code block line-numbers + gutter + scroll, tables horizontal-scroll, task strikethrough, callout colors/icons, typography (no new deps) | user-requested |
+| phase-219 | **Templates + pencil soft-shade** — per-template color/spacing/opacity controls + 2 new templates; `soft_shade` pencil preset for portrait shading (shade below eye etc.) + SMUDGE discoverability | user-requested |
 
 ## How phases run
 
