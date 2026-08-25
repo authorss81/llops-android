@@ -54,7 +54,10 @@ object HtmlToMarkdownConverter {
 
         // 3. Blockquotes
         processed = processed.replace(Regex("(?is)<blockquote.*?>(.*?)</blockquote>")) { matchResult ->
-            val content = stripTags(matchResult.groupValues[1]).trim()
+            // Phase 212 fix: <br> inside a quote becomes a line break BEFORE the
+            // "> " prefix pass — the pre-fix stripTags silently glued the quote's
+            // lines together ("firstsecond").
+            val content = stripTags(matchResult.groupValues[1].replace(Regex("(?i)<br\\s*/?>"), "\n")).trim()
             val lines = content.lines().joinToString("\n") { "> $it" }
             "\n\n$lines\n\n"
         }
@@ -96,7 +99,11 @@ object HtmlToMarkdownConverter {
             val linkText = stripTags(matchResult.groupValues[2]).trim()
             if (href.endsWith(".html", ignoreCase = true) || href.endsWith(".htm", ignoreCase = true) || !href.contains("://")) {
                 val targetPage = href.substringAfterLast('/').substringBeforeLast('.')
-                " [[$targetPage${if (linkText.isNotBlank() && !linkText.equals(targetPage, ignoreCase = true)) "|$linkText" else ""}\"]] "
+                // Phase 212 fix: the pre-fix format string carried an escaped
+                // quote before the closing "]]" so every imported internal
+                // link emitted a corrupted target ("[[page\"]]"). Pinned by
+                // HtmlToMarkdownConverterTest.
+                " [[$targetPage${if (linkText.isNotBlank() && !linkText.equals(targetPage, ignoreCase = true)) "|$linkText" else ""}]] "
             } else {
                 " [$linkText]($href) "
             }

@@ -8,6 +8,19 @@
 
 ## Package layout
 
+> **Implemented in phase-212** (2026-08-25, JVM test hardening — deletion/install/shape-snap
+> coverage, see `workspace/phase-212/REPORT.md`): the thirteen zero-coverage service classes
+> gained 117 behavior tests across 13 suites in `app/src/test/java/com/authorss81/noteflow/
+> services/`. New test harnesses: `FakeSharedPreferences.kt` (in-memory SharedPreferences +
+> fake Context so the six `SettingsPlugin*Store` adapters run against a REAL `SettingsManager`
+> without Robolectric) and `Phase212RuntimeFakes.kt` (scriptable `PluginRuntime`, writing
+> `DownloadTransport`, `assertNoResidue`). Four production bugs exposed and fixed (all pinned):
+> doubled-back strokes no longer become zero-height rectangles (`ShapeRecognitionHelper.kt:138`
+> non-degenerate box floor); traced squares now snap RECTANGLE not ELLIPSE (corner-evidence
+> gate `ShapeRecognitionHelper.kt:102,242`); imported internal wikilinks no longer carry a
+> stray quote (`HtmlToMarkdownConverter.kt:99`); blockquote `<br>` line breaks preserved
+> (`HtmlToMarkdownConverter.kt:55`). Full suite 3123 tests / 3 pre-existing failures.
+
 > **Implemented in phase-210** (2026-08-25, Knowledge Graph depth — neighborhood focus,
 > search auto-pan, TalkBack access, see `workspace/phase-210/REPORT.md`): three
 > graph-explorability gaps closed, all pure-JVM math, no schema/deps. (1) The dead

@@ -92,7 +92,18 @@ object ShapeRecognitionHelper {
             }
             val avgDev = totalDev / pts.size
 
-            if (avgDev < 0.35f) {
+            // Phase 212 fix: a traced RECTANGLE can also score a passing ellipse
+            // fit, so crisp squares used to snap to smooth ELLIPSEs and were
+            // replaced with the wrong geometry. An ellipse/circle only TOUCHES
+            // its bounding box at four tangent regions and never approaches the
+            // box CORNERS; a traced rectangle passes straight through them. When
+            // the stroke shows corner evidence, let the rectangle detector
+            // below decide instead.
+            val cornerEvidence = hasCornerEvidence(
+                pts, minX, maxX, minY, maxY, max(5f, boundingDiag * 0.06f)
+            )
+
+            if (avgDev < 0.35f && !cornerEvidence) {
                 // Generate smooth ellipse points
                 val ellipsePts = mutableListOf<PointF>()
                 val steps = 36
@@ -119,7 +130,14 @@ object ShapeRecognitionHelper {
         if (isClosedLoop && pts.size >= 10) {
             val perimeterMargin = max(5f, boundingDiag * 0.06f)
             val trackedPerimeter = perimeterFitRatio(pts, minX, maxX, minY, maxY, perimeterMargin)
-            if (trackedPerimeter >= 0.72f) {
+            // Phase 212 fix: a stroke that doubles back along ONE line (e.g. an
+            // underlined-twice mark) satisfies the perimeter heuristic because
+            // every point sits on the collapsed bounding-box edge — it used to
+            // be REPLACED by a zero-height rectangle. A real rectangle spans a
+            // non-degenerate box in BOTH dimensions.
+            val nonDegenerateBox =
+                minOf(width, height) >= max(4f, boundingDiag * 0.04f)
+            if (trackedPerimeter >= 0.72f && nonDegenerateBox) {
                 val rectPts = listOf(
                     PointF(minX, minY),
                     PointF(maxX, minY),
@@ -218,5 +236,29 @@ object ShapeRecognitionHelper {
             if (minOf(minOf(dLeft, dRight), minOf(dTop, dBottom)) <= margin) onPerimeter++
         }
         return onPerimeter.toFloat() / pts.size
+    }
+
+    /**
+     * Phase 212: fraction of points that hug BOTH axes of the bounding box
+     * simultaneously (i.e. sit near a corner region). A traced rectangle passes
+     * straight through all four corners; an ellipse/circle only touches the box
+     * at four tangent regions and never approaches a corner, so it scores ~0.
+     */
+    private fun hasCornerEvidence(
+        pts: List<PointF>,
+        minX: Float,
+        maxX: Float,
+        minY: Float,
+        maxY: Float,
+        margin: Float
+    ): Boolean {
+        if (pts.isEmpty()) return false
+        var corners = 0
+        for (p in pts) {
+            val nearX = (p.x - minX <= margin) || (maxX - p.x <= margin)
+            val nearY = (p.y - minY <= margin) || (maxY - p.y <= margin)
+            if (nearX && nearY) corners++
+        }
+        return corners.toFloat() / pts.size >= 0.04f
     }
 }
