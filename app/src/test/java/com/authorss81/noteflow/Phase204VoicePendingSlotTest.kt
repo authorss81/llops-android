@@ -176,12 +176,14 @@ class Phase204VoicePendingSlotTest {
         val editor = sourceFile("ui/screens/EditorScreen.kt")
         val consumeIdx = editor.indexOf("viewModel.consumePendingVoiceRecording(page.id)")
         assertTrue("the consume call site must exist", consumeIdx >= 0)
-        val effectStart = editor.lastIndexOf("LaunchedEffect(page.id, isInitialLoadComplete)", consumeIdx)
+        val effectStart = editor.lastIndexOf("LaunchedEffect(page.id, isInitialLoadComplete, isAuthenticated)", consumeIdx)
         assertTrue("consumption must run inside the post-load effect", effectStart >= 0)
         val region = editor.substring(effectStart, consumeIdx)
         assertTrue(
-            "attach must wait until the initial canvas load completed (embeds populated)",
-            region.contains("if (!isInitialLoadComplete || !viewModel.authenticated.value) return@LaunchedEffect")
+            "attach must wait until the initial canvas load completed AND the vault is authenticated " +
+                "(review fix: auth must be a collected key so adoption retries on unlock)",
+            region.contains("if (!isInitialLoadComplete || !isAuthenticated) return@LaunchedEffect") &&
+                !region.contains("authenticated.value")
         )
         val afterConsume = editor.substring(consumeIdx, consumeIdx + 400)
         assertTrue(

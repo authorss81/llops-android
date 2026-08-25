@@ -53,13 +53,16 @@ object StartFreshVaultResetPolicy {
     /**
      * Fixed, honest, non-alarming abort text (UiFailureTextPolicy fixed-text
      * discipline — never exception text, never absolute paths). Rendered on the
-     * KeystoreKeyLostScreen when start-fresh aborts; the screen stays up with
-     * the old vault untouched.
+     * KeystoreKeyLostScreen when start-fresh aborts; the screen stays up.
+     * Review-fix honest wording: a PARTIAL failure may already have moved some
+     * files aside, so the text never claims the vault was "unchanged" — it
+     * promises only what is true: nothing was deleted (renamed copies keep
+     * their bytes under their quarantine names).
      */
     const val ABORT_MESSAGE: String =
         "Couldn't safely reset the vault — some of its files could not be moved " +
-            "aside, so your existing vault was left unchanged. Free up storage " +
-            "space (or restart the device) and try again."
+            "aside, so the reset was cancelled. Nothing was deleted. Free up " +
+            "storage space (or restart the device) and try again."
 
     /**
      * The outcome matrix:

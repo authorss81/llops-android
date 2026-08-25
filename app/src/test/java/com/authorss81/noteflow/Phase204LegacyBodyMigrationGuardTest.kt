@@ -101,17 +101,22 @@ class Phase204LegacyBodyMigrationGuardTest {
     }
 
     @Test
-    fun `migration treats null as skip-overwrite-and-skip-delete with retry accounting`() {
+    fun `migration treats null OR raced-empty head as skip-overwrite-and-skip-delete with retry accounting`() {
         val repo = sourceFile("data/repository/NoteRepository.kt")
         val readIdx = repo.indexOf("val fileBody = AttachmentIngestPolicy.readTextHead(file)")
         assertTrue("the migration must call readTextHead", readIdx >= 0)
         val guardRegion = repo.substring(readIdx, repo.indexOf("if (fileBody != dbBody)", readIdx))
         assertTrue(
-            "null (read error) must count as remaining so the sweep retries next unlock",
+            "review fix: null AND a raced-away \"\" (exists/canRead early-out after the " +
+                "sweep's own pre-checks) must both count as content UNKNOWN",
+            guardRegion.contains("if (fileBody.isNullOrEmpty())")
+        )
+        assertTrue(
+            "unknown content must count as remaining so the sweep retries next unlock",
             guardRegion.contains("filesRemaining++")
         )
         assertTrue(
-            "null must skip this page entirely BEFORE any overwrite/delete",
+            "unknown content must skip this page entirely BEFORE any overwrite/delete",
             guardRegion.contains("return@forEach")
         )
         // The old dead try/catch around the (never-throwing) call is gone.

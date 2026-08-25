@@ -2995,13 +2995,12 @@ fun updatePageTags(id: String, tags: String) {
     /**
      * Phase 204: surfaced on KeystoreKeyLostScreen when "start fresh" aborts
      * because a vault file rename failed (fixed policy text — never raw errors).
+     * Cleared at the top of each new attempt (`startFreshAfterKeystoreKeyLoss`);
+     * no separate clearer is exposed (review fix: the phase-204 clearer had no
+     * call sites).
      */
     private val _startFreshError = MutableStateFlow<String?>(null)
     val startFreshError: StateFlow<String?> = _startFreshError.asStateFlow()
-
-    fun clearStartFreshError() {
-        _startFreshError.value = null
-    }
 
     /** Renames the live vault DB (+wal/shm/journal) aside, preserving its bytes. */
     private fun quarantineVaultFiles(suffixTag: String): List<com.authorss81.noteflow.services.StartFreshVaultResetPolicy.VaultFileRename> {

@@ -696,7 +696,15 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
             // file as remaining, and let the sweep retry on the next unlock
             // (the migration flag stays unset whenever filesRemaining > 0).
             val fileBody = AttachmentIngestPolicy.readTextHead(file)
-            if (fileBody == null) {
+            // Phase 204 (+review fix): null = the read FAILED mid-way. "" here can
+            // only mean content became UNKNOWN between THIS sweep's pre-checks and
+            // the read itself (the checks above already guaranteed length > 0,
+            // readable, within cap — a readable non-empty file can never yield ""),
+            // i.e. the same vanished/raced-file window. Either way: skip BOTH the
+            // overwrite and the delete, count the file as remaining, and let the
+            // sweep retry on the next unlock (the migration flag stays unset
+            // whenever filesRemaining > 0).
+            if (fileBody.isNullOrEmpty()) {
                 filesRemaining++
                 return@forEach
             }

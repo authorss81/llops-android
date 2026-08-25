@@ -21,7 +21,7 @@
 - Consume-once semantics ⇒ never double-attaches; a new `startRecording` invalidates the prior latch; the phase-153 discard notice for FAILED saves is byte-intact (`release(): Boolean` signature unchanged).
 
 ### Tests
-`Phase204VoicePendingSlotTest` (12): 7 slot-lifecycle unit tests (round-trip, one-shot consume, republish-keeps-latest, page independence, fixed notice) + 5 source pins (finalize records success as unattached; release captures unattached SUCCESS; teardown relays to the VM slot; ≥2 attach-site acks; post-load adoption + recovered notice; VM relay API present).
+`Phase204VoicePendingSlotTest` (12): 7 slot-lifecycle unit tests (round-trip, one-shot consume, republish-keeps-latest, page independence, fixed notice) + 5 source pins (finalize records success as unattached; release captures unattached SUCCESS; teardown relays to the VM slot; ≥2 attach-site acks; post-load adoption + recovered notice; VM relay API present). *(Review-fix note: the "7 + 5" split is 6 lifecycle + 6 pins = 12 — count corrected in the Verification table.)*
 
 ---
 
@@ -41,7 +41,7 @@
 - Display-path callers updated without behavior change: `NoteBodyVaultPolicy.resolveBodyForDisplay` falls through to the encrypted column on null; `WikiLinkParser.readFullText` appends nothing on null.
 
 ### Tests
-`Phase204LegacyBodyMigrationGuardTest` (7): behavioral — injected-opener IOException ⇒ null; partial-read-then-fail ⇒ null (never the truncated body); benign cases still `""`; healthy default path intact. Source pins — migration skips BOTH writes before any `updatePageBody`/`delete` with retry accounting; display/wikilink callers handle null. `B2Dos05AttachmentIngestTest` updated for the nullable return (success head still non-null, pinned).
+`Phase204LegacyBodyMigrationGuardTest` (6): behavioral — injected-opener IOException ⇒ null; partial-read-then-fail ⇒ null (never the truncated body); benign cases still `""`; healthy default path intact. Source pins — migration skips BOTH writes before any `updatePageBody`/`delete` with retry accounting; display/wikilink callers handle null. *(Count corrected from the originally-claimed 7 in the review fixes.)* `B2Dos05AttachmentIngestTest` updated for the nullable return (success head still non-null, pinned).
 
 ---
 
@@ -85,7 +85,7 @@
 |---|---|
 | `gradle assembleDebug` | GREEN |
 | `gradle testDebugUnitTest` | 2778 tests / 3 failures — all reproduced on clean stash HEAD (see header) |
-| New tests | `Phase204VoicePendingSlotTest` (12) + `Phase204LegacyBodyMigrationGuardTest` (7) + `Phase204StartFreshRenamePolicyTest` (11) + `Phase204PickerNoOpTest` (5) = 35, all green; `B2Dos05AttachmentIngestTest` updated & green |
+| New tests | `Phase204VoicePendingSlotTest` (12) + `Phase204LegacyBodyMigrationGuardTest` (6) + `Phase204StartFreshRenamePolicyTest` (11) + `Phase204PickerNoOpTest` (5) = 34, all green; `B2Dos05AttachmentIngestTest` updated & green. **Correction (review fixes 2026-08-25): this row originally claimed 7 tests / 35 total for the migration-guard class — the file has 6 `@Test` methods; totals corrected everywhere.** |
 
 ## Files touched
 
@@ -100,3 +100,18 @@
 - `app/src/main/kotlin/com/authorss81/noteflow/ui/screens/EditorScreen.kt` (teardown relay; markRecordingAttached at both attach sites; post-load recovery consumer; four picker null-guards)
 - `app/src/main/kotlin/com/authorss81/noteflow/MainActivity.kt` (KeystoreKeyLostScreen renders the start-fresh abort)
 - Tests: 4 new classes + `B2Dos05AttachmentIngestTest` nullable-return update
+
+---
+
+## Review fixes (2026-08-25)
+
+Findings from the post-phase review, all applied (no behavior outside the findings touched):
+
+1. **Test-count claims corrected** — `Phase204LegacyBodyMigrationGuardTest` has **6** `@Test` methods, not the claimed 7; the new-test total is **34**, not 35. Fixed here and in `docs/phase-status.md`.
+2. **ABORT_MESSAGE honest wording** (`services/StartFreshVaultResetPolicy.kt`) — on a PARTIAL rename failure some files HAVE already moved aside, so "your existing vault was left unchanged" was false. New text promises only what is true: *"the reset was cancelled. Nothing was deleted."* The pin test now asserts `Nothing was deleted` present AND `"unchanged"` absent (`Phase204StartFreshRenamePolicyTest`).
+3. **Residual TOCTOU in Fix 2 closed** (`data/repository/NoteRepository.kt`) — `readTextHead`'s internal exists/canRead early-outs still return `""`; a legacy file racing between THIS sweep's own pre-checks and the read would still overwrite a good column with encrypted "". The migration guard is now `fileBody.isNullOrEmpty()` — after those pre-checks an empty head can ONLY mean content UNKNOWN — so both the overwrite and the delete are skipped and the file retries next unlock. KDoc caveat added on `readTextHead`; pin test updated to require `isNullOrEmpty()`.
+4. **Adoption effect reactive to auth** (`ui/screens/EditorScreen.kt`) — the recovered-recording consumer keyed only on `(page.id, isInitialLoadComplete)` and read `authenticated.value` non-reactively; a lock racing initial load silently skipped adoption until reopen. Now collects `viewModel.authenticated` as `isAuthenticated` and includes it in the effect key, so an unlock inside the same composition adopts the pending recording. Pin updated (guard string + no `.value` read in region).
+5. **Dead API removed** — `NoteflowViewModel.clearStartFreshError()` had zero call sites (each attempt resets `_startFreshError` at entry); deleted.
+6. **INFO accepted, no change** — a recovered embed attaches at the adopting editor's current viewport position (not the original recording spot): `VoiceRecordingResult` carries no position, and attaching at the live viewport matches every other attach path.
+
+Verification: targeted rerun of the four `Phase204*` classes green after the edits; public/behavioral surface otherwise untouched.

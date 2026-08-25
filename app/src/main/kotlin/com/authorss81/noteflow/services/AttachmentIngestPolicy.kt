@@ -67,6 +67,15 @@ object AttachmentIngestPolicy {
      *
      * [open] injects the stream factory for pure-JVM tests (default opens a
      * real [FileInputStream]); production callers never pass it.
+     *
+     * Review-fix caveat: the `""`-on-missing/unreadable early-outs below are
+     * only benign for callers that have NOT pre-verified the file (display
+     * path, wikilink scan). A caller that ALREADY checked exists/canRead/length
+     * before calling (the legacy-body migration) must treat a resulting "" as
+     * content UNKNOWN too — it can then only mean the file raced between that
+     * pre-check and this read — and skip both the overwrite and the delete
+     * (`NoteRepository.migrateLegacyPlaintextNoteBodies` does exactly that via
+     * `isNullOrEmpty()`).
      */
     fun readTextHead(
         file: File,

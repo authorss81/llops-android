@@ -125,7 +125,10 @@ class Phase204StartFreshRenamePolicyTest {
         assertTrue(msg.isNotBlank())
         assertFalse("never leak absolute paths", msg.contains('/'))
         assertFalse("never leak file names", msg.contains(mainDb))
-        assertTrue("must tell the user their data is unchanged", msg.contains("unchanged"))
+        assertTrue(
+            "review fix: a PARTIAL move must not be called 'unchanged' — promise only no-deletion",
+            msg.contains("Nothing was deleted") && !msg.contains("unchanged")
+        )
     }
 
     // ---------------- wiring pins ----------------

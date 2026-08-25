@@ -420,6 +420,10 @@ fun EditorScreen(
     // auto-finalized by the sampler — observe its published result so the audio
     // embed is attached instead of leaving an orphaned encrypted blob.
     val completedVoiceRecording by voiceNoteManager.completedRecordingResult.collectAsState()
+    // Phase 204 review fix: COLLECTED (not a non-reactive `.value` read) so the
+    // recovered-recording adoption effect below re-runs when auth flips — a lock
+    // racing the initial load no longer silently skips adoption until reopen.
+    val isAuthenticated by viewModel.authenticated.collectAsState()
 
     val paletteItems by viewModel.paletteItems.collectAsState()
 
@@ -1062,8 +1066,8 @@ fun EditorScreen(
     // is populated — attaching earlier would be clobbered by the initial load),
     // consume the pending result once and attach it, with an honest recovered
     // notice. Consume-once semantics mean it can never double-attach.
-    LaunchedEffect(page.id, isInitialLoadComplete) {
-        if (!isInitialLoadComplete || !viewModel.authenticated.value) return@LaunchedEffect
+    LaunchedEffect(page.id, isInitialLoadComplete, isAuthenticated) {
+        if (!isInitialLoadComplete || !isAuthenticated) return@LaunchedEffect
         val recovered = viewModel.consumePendingVoiceRecording(page.id) ?: return@LaunchedEffect
         attachVoiceRecording(recovered)
         viewModel.showSnackbar(com.authorss81.noteflow.services.VoicePendingRecordingSlot.RECOVERED_NOTICE, isLong = true)
