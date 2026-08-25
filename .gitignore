@@ -18,6 +18,9 @@ app/.cxx/
 .externalNativeBuild/
 app/.externalNativeBuild/
 
+# Kotlin/Native + Kotlin build-session state
+.kotlin/
+
 # ===== Secrets / keys (never commit) =====
 *.jks
 *.keystore

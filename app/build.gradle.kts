@@ -287,7 +287,7 @@ kotlin {
 // byte-for-byte unchanged (the flag is deliberately NOT a default-on variant
 // switch); run:
 //
-//   gradle :app:assembleDebug -Pinkflow.composeMetrics
+//   gradle :app:compileDebugKotlin -Pinkflow.composeMetrics --rerun
 //
 // then read build/compose-compiler-reports/*-composables.csv (stability +
 // skippability per composable) and build/compose-compiler-metrics/*.txt.

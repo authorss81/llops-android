@@ -69,7 +69,7 @@ Lockfile note: Gradle's `--write-verification-metadata` PRESERVES entries it
 didn't resolve during regeneration (verified empirically — a regen rewrite was
 byte-identical to the committed file), so the prune had to be done deliberately;
 strict verification then proven by `gradle --refresh-dependencies assembleDebug`
-green (605 → 594 components; anything still needed would have failed loudly).
+green (604 → 593 `<component>` entries; anything still needed would have failed loudly).
 
 Release bytes ≈ unchanged by this alone (R8 already strip'd unused deps);
 debug APK −1.15 MB (see §7 table), faster minify input, smaller verification
@@ -191,3 +191,30 @@ Every split shrank by EXACTLY 359,706 bytes (deterministic deltas: font
   actioned (no measurable win, UI-path risk).
 - CI archival of compose reports (like mapping archival) remains a workflow
   edit gated on user approval.
+
+## Review fixes (2026-08-25)
+
+Post-phase review corrections — docs/housekeeping only, zero code-behavior
+change:
+
+1. **Fonts.kt final newline restored** (`theme/Fonts.kt`) — the phase-211 edit
+   dropped the file-ending newline, violating `.editorconfig`
+   `insert_final_newline = true`.
+2. **Component counts corrected** (§2 above + `docs/phase-status.md`): the
+   lockfile counts were `grep -c '<component'` hits that included the
+   `<components>` root tag; actual `<component>` entries are 604 → 593
+   (−11: 5 androidx.navigation, 4 io.coil-kt, 2 material3-window-size-class*).
+3. **Canonical compose-metrics invocation aligned** (`app/build.gradle.kts`
+   comment): `gradle :app:compileDebugKotlin -Pinkflow.composeMetrics --rerun`
+   (the comment previously showed `assembleDebug`; both work, one command now).
+4. **`.kotlin/` added to `.gitignore`** — Kotlin build-session state directory
+   was appearing untracked in `git status` after any Gradle run.
+
+Review also re-verified (no change needed): ink AAR shrink-safety declarations
+extracted from all 6 cached AARs; `com.google.protobuf` absent from BOTH
+usage.txt captures (the loose "protobuf" greps hit kotlin-reflect's shaded
+`kotlin.reflect.jvm.internal.impl.protobuf`); allow-list sync pins green
+(`B2Deps03DependencyVerificationTest` 5/5 + `Phase146BuildIntegrityTest` 6/6
+re-run on HEAD); the regen's incidental ADDITION of previously-unrecorded
+`appcompat-1.2.0.aar` / `appcompat-resources-1.2.0.aar` closed a latent
+lockfile-completeness gap.
