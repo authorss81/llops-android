@@ -38,12 +38,12 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
         get() = VaultKeyHolder.dek
         set(value) {
             VaultKeyHolder.dek = value
-            invalidateSearchCorpus()
+            clearPlaintextCaches()
         }
 
     fun zeroizeKey() {
         VaultKeyHolder.zeroize()
-        invalidateSearchCorpus()
+        clearPlaintextCaches()
     }
 
     /**
@@ -183,6 +183,12 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
      * vault search. Loaded once and reused across keystrokes so per-keystroke
      * search does not decrypt the entire vault; invalidated on any page mutation
      * or when the vault is locked/re-keyed.
+     *
+     * Phase-207: mutations no longer NULL this window — they only flip
+     * [searchCorpusDirty] (lazy invalidation), and the rebuild reuses every row
+     * whose ciphertext is unchanged via [corpusPageCache]. The committed window
+     * itself still lives here; it is nulled ONLY at the key epoch boundary
+     * ([clearPlaintextCaches]) or replaced on a successful rebuild.
      */
     @Volatile
     private var cachedSearchCorpus: List<NotePageEntity>? = null
@@ -191,6 +197,26 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
 
     @Volatile
     private var searchCorpusGeneration = 0L
+
+    /**
+     * Phase-207: lazy-corpus-invalidation flag. Set by EVERY page mutation (the
+     * pre-fix behavior nulled [cachedSearchCorpus] eagerly, forcing the next
+     * query to re-decrypt the whole capped window); cleared ONLY together with a
+     * successful rebuild under [searchCorpusLock]. While true, the fast path in
+     * [loadSearchCorpus] never serves the stale committed window — search can
+     * never see a stale body, it just defers paying for the rebuild until a
+     * query actually arrives.
+     */
+    @Volatile
+    private var searchCorpusDirty = true
+
+    // Phase-207: per-row decrypt memoization. Two ISOLATED instances — the
+    // display path records B1-DB-8 ledger failures on its misses, the corpus
+    // path never does (phase-88 review semantics); sharing one instance would
+    // let a corpus-first read suppress a display-side failure report.
+    private val displayPageCache = DecryptedPageCache()
+    private val corpusPageCache = DecryptedPageCache()
+    private val corpusReuse = SearchCorpusReuse(corpusPageCache)
 
     /**
      * B2-DOS-02 (phase-78): whether the cached search window was CAPPED because
@@ -216,12 +242,39 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
     private fun invalidateSearchCorpus() {
         synchronized(searchCorpusLock) {
             searchCorpusGeneration++
-            cachedSearchCorpus = null
+            // Phase-207: LAZY invalidation. The committed window stays in memory
+            // (its per-row plaintext remains hash-valid for unchanged rows) and
+            // is simply marked stale; [loadSearchCorpus] rebuilds — reusing every
+            // unchanged row — on the next actual query. A mutation followed by
+            // no query costs nothing, and a query after a single-row edit pays
+            // one row's decrypt instead of the whole capped window.
+            searchCorpusDirty = true
             searchCorpusIsCapped = false
         }
         // B2-DOS-11: the WikiLink/tag builders must not serve a scan from a previous
         // unlock epoch — this hook fires on lock, key replacement and every page
         // mutation, which is exactly the "per unlock epoch" cache boundary.
+        WikiLinkParser.invalidateCaches()
+    }
+
+    /**
+     * Phase-207: the key-epoch security boundary (lock / key replacement /
+     * re-key). Every cache holding DECRYPTED PLAINTEXT is dropped here — the
+     * display memoization, the corpus memoization AND the committed corpus
+     * window — so no note content can outlive the key it was decrypted with.
+     * This replaces what [invalidateSearchCorpus] used to do on `zeroizeKey()`/
+     * the `encryptionKey` setter; plain mutations must NOT route through here or
+     * they would defeat the memoization entirely.
+     */
+    private fun clearPlaintextCaches() {
+        displayPageCache.clear()
+        corpusPageCache.clear()
+        synchronized(searchCorpusLock) {
+            searchCorpusGeneration++
+            cachedSearchCorpus = null
+            searchCorpusDirty = true
+            searchCorpusIsCapped = false
+        }
         WikiLinkParser.invalidateCaches()
     }
 
@@ -236,22 +289,31 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
      */
     private suspend fun loadSearchCorpus(): List<NotePageEntity> {
         while (true) {
-            synchronized(searchCorpusLock) {
-                cachedSearchCorpus?.let { return it }
+            // Phase-207 fast path: only a CLEAN window is served as-is. A dirty
+            // flag (any mutation since the last rebuild) always rebuilds — the
+            // generation re-check below keeps that honest across races.
+            if (!searchCorpusDirty) {
+                synchronized(searchCorpusLock) {
+                    if (!searchCorpusDirty) cachedSearchCorpus?.let { return it }
+                }
             }
             val generationAtStart = synchronized(searchCorpusLock) { searchCorpusGeneration }
-            val window = db.pageDao().getAllActivePagesBounded(VaultSearchPolicy.SEARCH_CORPUS_CAP)
+            val window = corpusReuse.assemble(
+                // B2-DOS-02 (phase-78): the window read is SQL-bounded at the cap.
+                db.pageDao().getAllActivePagesBounded(VaultSearchPolicy.SEARCH_CORPUS_CAP)
+            ) { page ->
                 // B1-DB-8 (phase-88 review fix): undecryptable pages are dropped
                 // from the search corpus (never a rankable "Unreadable" marker)
                 // and their failures are NOT recorded against the persistent
                 // ledger here (the Home-list/display reads already count them).
-                .map { decryptPageOrNullForCorpus(it) }
-                .filterNotNull()
+                decryptPageOrNullForCorpus(page)
+            }
             val totalActive = db.pageDao().getActivePageCountOnce()
             synchronized(searchCorpusLock) {
                 if (generationAtStart == searchCorpusGeneration) {
                     searchCorpusIsCapped = VaultSearchPolicy.exceedsCorpusCap(totalActive)
                     cachedSearchCorpus = window
+                    searchCorpusDirty = false
                     return window
                 }
                 // else: invalidated (e.g. re-key) while decrypting — loop retries
@@ -1694,14 +1756,31 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
      * even with a zeroized DEK (phase-88 review fix): the old `encryptionKey ==
      * null` early-return passed the raw encrypted page through, unlike the
      * strokes/embeds/versions sinks, which already rendered the marker.
+     *
+     * Phase-207: the result is MEMOIZED in [displayPageCache], keyed by
+     * `(pageId, sha256(title ciphertext), sha256(extracted ciphertext))`. Room's
+     * invalidation tracker is TABLE-granular, so every debounced keystroke save
+     * re-emits all four page flows at once; without this each emission
+     * re-decrypted title+body of EVERY row. A hit requires BOTH ciphertext keys
+     * to match the memoized ones, so any rewritten field misses and re-decrypts
+     * — stale plaintext can never be served. Entries hold decrypted content and
+     * are dropped wholesale by [clearPlaintextCaches] at the lock/re-key key
+     * boundary (no plaintext survives a lock). Ledger note: a cached marker
+     * skips only a redundant add of an already-recorded note id (the ledger is a
+     * dedup set), so escalation semantics are unchanged.
      */
     private fun decryptPageIfNeeded(page: NotePageEntity): NotePageEntity {
+        val titleKey = DecryptedPageCache.fieldKeyOf(page.title)
+        val extractedKey = DecryptedPageCache.fieldKeyOf(page.extractedText)
+        val memoized = displayPageCache.lookup(page.id, titleKey, extractedKey)
+        if (memoized != null) return page.copy(title = memoized.decryptedTitle, extractedText = memoized.decryptedExtracted)
         val decryptedTitle = decryptFieldForDisplay(page.title, "pages", page.id, "title", page.id)
         val decryptedExtracted = if (!page.extractedText.isNullOrBlank()) {
             decryptFieldForDisplay(page.extractedText, "pages", page.id, "extractedText", page.id)
         } else {
             page.extractedText
         }
+        displayPageCache.put(page.id, titleKey, extractedKey, decryptedTitle, decryptedExtracted)
         return page.copy(title = decryptedTitle, extractedText = decryptedExtracted)
     }
 

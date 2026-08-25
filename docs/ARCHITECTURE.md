@@ -8,6 +8,26 @@
 
 ## Package layout
 
+> **Implemented in phase-207** (2026-08-25, crypto/DB efficiency — decrypt memoization + lazy
+> corpus invalidation + BitmapPool byte budget, see `workspace/phase-207/REPORT.md`): three
+> scaling bottlenecks that grow with vault size. (1) Room's TABLE-granular invalidation re-emitted
+> all four page flows on every debounced keystroke save and each pass AES-GCM-decrypted every row;
+> `decryptPageIfNeeded` now memoizes through pure-JVM `data/repository/DecryptedPageCache.kt`
+> keyed by `(pageId, sha256(title ct), sha256(extracted ct))` — a hit requires BOTH ciphertext
+> keys to match so stale plaintext is impossible; display and corpus caches are ISOLATED instances
+> (B1-DB-8 ledger semantics preserved). (2) Search-corpus mutation no longer nulls the cached
+> window — `searchCorpusDirty` lazy flag + pure-JVM `SearchCorpusReuse.assemble` rebuild that
+> re-decrypts ONLY rows whose ciphertext hash changed (generation guard untouched). (3)
+> `BitmapPool` retention is bounded by TOTAL bytes via pure-JVM `utils/BitmapMemoryPolicy.kt`
+> (64 MB ceiling) + `utils/BitmapPoolLedger.kt` (global-oldest-first eviction across keys), and
+> `NoteflowViewModel.lock()` now calls `BitmapPool.clear()` beside the DEK zeroization — pooled
+> rasters hold rendered ink and previously survived lock. Key-epoch boundary: new private
+> `clearPlaintextCaches()` (wired into `zeroizeKey` + the `encryptionKey` setter) drops both
+> caches + the committed corpus window — no plaintext outlives its key. ≈4,990 GCM passes saved
+> per autosave on a 500-row vault (~99.8%). Tests: `DecryptedPageCacheTest` (13) +
+> `SearchCorpusReuseTest` (7) + `BitmapPoolLedgerTest` (9) + `Phase207CryptoDbEfficiencyTest`
+> (9 source pins). No schema change, no new deps.
+
 > **Implemented in phase-206** (2026-08-25, kill perpetual pollers — event-driven idle/thermal/audio
 > clocks, see `workspace/phase-206/REPORT.md`): four always-running timer loops are gone.
 > (1) The wet-engine Choreographer pump moved from a never-unregistered self-reposting

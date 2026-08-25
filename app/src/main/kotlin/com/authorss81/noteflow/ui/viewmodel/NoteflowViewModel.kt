@@ -4814,6 +4814,12 @@ fun updatePageTags(id: String, tags: String) {
             // next unlock recomputes it from fresh reads (and a locked vault never
             // inflates it: reads record only when a DEK is actually present).
             repository.zeroizeKey()
+            // Phase-207: pooled canvas rasters hold rendered (decrypted) ink and
+            // previously survived a lock (clear() fired only from
+            // onTrimMemory/onLowMemory). Recycle them at the lock boundary so no
+            // rendered plaintext outlives the key epoch, mirroring the
+            // decrypted-content StateFlow clears below.
+            com.authorss81.noteflow.utils.BitmapPool.clear()
             repository.resetDecryptFailures()
             // B1-AUTH-02 (phase-47): the lock boundary must reach the DATA LAYER, not
             // just the Compose LockScreen boolean. dispose() closes and forgets the
