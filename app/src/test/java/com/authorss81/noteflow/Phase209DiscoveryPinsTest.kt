@@ -56,6 +56,19 @@ class Phase209DiscoveryPinsTest {
             "the ring size must come from the policy cap",
             src.contains("0 until RecentSearchPolicy.CAP")
         )
+        // Phase 209 review-fix (finding 2): queries are note-content-derived text,
+        // so each ring value MUST be encrypted at rest under AndroidKeyStore
+        // AES-GCM (WebDavCredentialStore discipline) — never written plaintext.
+        assertTrue(
+            "ring values must be AES-GCM encrypted under a non-extractable keystore key",
+            src.contains("AES/GCM/NoPadding") &&
+                src.contains("\"AndroidKeyStore\"") &&
+                src.contains("noteflow_recent_searches_key")
+        )
+        assertTrue(
+            "ring writes must store the ENCRYPTED value only",
+            src.contains("putString(\"search_recent_\$i\", enc)")
+        )
     }
 
     @Test
@@ -90,6 +103,27 @@ class Phase209DiscoveryPinsTest {
         assertTrue(
             "the chips row is horizontally scrollable",
             Regex("recent-search history chips(?s).*horizontalScroll").containsMatchIn(src)
+        )
+        // Phase 209 review-fix (finding 1): recording happens only AFTER the 300ms
+        // debounce settles — the pre-fix order (record BEFORE delay) put every
+        // keystroke prefix ("n", "no", "not", …) into the persisted ring.
+        assertTrue(
+            "recording must happen AFTER the debounce settles, never per keystroke",
+            src.indexOf("kotlinx.coroutines.delay(300)") <
+                src.indexOf("RecentSearchPolicy.record(recentSearches, searchQuery)")
+        )
+        // Phase 209 review-fix (finding 4): the dismiss affordance is an
+        // IconButton (Material minimum-touch-target enforcement), not a raw
+        // clickable 14dp Icon.
+        assertFalse(
+            "chip dismiss must not be a raw clickable Icon with no touch target",
+            Regex("""\.size\(14\.dp\)\s*\n\s*\.clickable""").containsMatchIn(src)
+        )
+        val dismissIcon = src.indexOf("contentDescription = \"Dismiss \\\"\$pastQuery\\\"\"")
+        assertTrue("the dismiss affordance must still exist", dismissIcon > 0)
+        assertTrue(
+            "chip dismiss must be wrapped in an IconButton",
+            src.lastIndexOf("IconButton(", dismissIcon) > src.lastIndexOf("trailingIcon", dismissIcon)
         )
     }
 
@@ -130,6 +164,13 @@ class Phase209DiscoveryPinsTest {
             "the tier enum keeps EXACT above FUZZY by construction",
             policy.indexOf("EXACT") < policy.indexOf("FUZZY") &&
                 policy.contains("enum class SearchMatchTier { EXACT, FUZZY }")
+        )
+        // Phase 209 review-fix (finding 3): exactFirst computes the tier ONCE per
+        // page (decorate-sort) — the pre-fix form re-ran up to two full-text fuzzy
+        // scans per page O(n log n) times inside the sort selector.
+        assertTrue(
+            "exactFirst must decorate tiers once per page, not per comparison",
+            policy.contains(".map { page -> page to pageMatchTier(page, query) }")
         )
     }
 
@@ -181,11 +222,26 @@ class Phase209DiscoveryPinsTest {
             src.contains("if (showPluginStoreDeepLink) {") &&
                 src.contains("com.authorss81.noteflow.ui.components.PluginStoreDialog(")
         )
+        val paletteStart = src.indexOf("CommandPaletteOverlay(")
         val dialogHost = src.indexOf("if (showPluginStoreDeepLink) {")
-        val overlayBlock = src.substring(src.indexOf("CommandPaletteOverlay("), dialogHost)
         assertTrue(
             "the command palette's store quick-action raises the same deep-link flag",
-            overlayBlock.contains("onOpenPluginStore = {")
+            Regex("onOpenPluginStore = \\{")
+                .containsMatchIn(src.substring(paletteStart, paletteStart + 1500))
+        )
+        // Phase 209 review-fix (finding 6): the dialog composes BEFORE the
+        // phase-140 opaque pause-cover Surface, so the cover draws OVER it during
+        // ON_PAUSE — the recents thumbnail can never capture the open dialog.
+        val coverBlock = src.indexOf("if (pauseCoverActive &&")
+        assertTrue(
+            "the store dialog must compose before (i.e. under) the pause cover",
+            dialogHost in 0 until coverBlock
+        )
+        // Phase 209 review-fix (finding 5): locking the vault drops the pending
+        // deep-link so unlocking never re-presents a dialog the user left behind.
+        assertTrue(
+            "the deep-link flag must be cleared when the vault locks",
+            src.contains("if (!authenticated) showPluginStoreDeepLink = false")
         )
     }
 

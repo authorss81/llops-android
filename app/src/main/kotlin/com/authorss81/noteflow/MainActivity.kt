@@ -304,6 +304,10 @@ class MainActivity : FragmentActivity() {
                 }
             }
 
+            LaunchedEffect(authenticated) {
+                if (!authenticated) showPluginStoreDeepLink = false
+            }
+
             val pages by viewModel.pages.collectAsState()
             // Phase 133: the global all-active-pages flow is a SECOND fallback for
             // resolving the active page — a page created in a section that is not
@@ -967,14 +971,28 @@ class MainActivity : FragmentActivity() {
                             }
                         }
 
+                        // Phase 209: the Plugin Store opened via the editor's empty-menu
+                        // "Browse Plugin Store…" entry or the palette `store` action —
+                        // hosted here because both surfaces sit outside HomeScreen.
+                        // Phase 209 REVIEW-FIX (finding 6): composed BEFORE the
+                        // phase-140 opaque pause cover below, so the cover draws OVER
+                        // the open dialog during ON_PAUSE and the recents thumbnail
+                        // can never capture it.
+                        if (showPluginStoreDeepLink) {
+                            com.authorss81.noteflow.ui.components.PluginStoreDialog(
+                                viewModel = viewModel,
+                                onDismiss = { showPluginStoreDeepLink = false }
+                            )
+                        }
+
                         // R2-B1A-03 (phase-140): opaque cover over the WHOLE content
                         // once ON_PAUSE fires for an authenticated has-master-password
-                        // vault. Last child of the Box = drawn on top of the content,
-                        // the snackbar host, and the inactive command palette — a
-                        // SYSTEM_ALERT_WINDOW overlay, in-call UI or translucent
-                        // anti-theft app drawn over the paused activity can never read
-                        // decrypted notes through it. Cleared on every legitimate
-                        // resume (picker / biometric / share-sheet return).
+                        // vault. Drawn after the store dialog above = on top of the
+                        // content, the snackbar host, the deep-link dialog, and the
+                        // inactive command palette — a SYSTEM_ALERT_WINDOW overlay,
+                        // in-call UI or translucent anti-theft app drawn over the paused
+                        // activity can never read decrypted notes through it. Cleared on
+                        // every legitimate resume (picker / biometric / share-sheet return).
                         if (pauseCoverActive &&
                             com.authorss81.noteflow.services.OnPauseCoverPolicy.shouldCoverOnPause(
                                 hasMasterPassword = hasMasterPassword,
@@ -1008,16 +1026,6 @@ class MainActivity : FragmentActivity() {
                                 showCommandPalette = false
                                 showPluginStoreDeepLink = true
                             }
-                        )
-                    }
-
-                    // Phase 209: the Plugin Store opened via the editor's empty-menu
-                    // "Browse Plugin Store…" entry or the palette `store` action —
-                    // hosted here because both surfaces sit outside HomeScreen.
-                    if (showPluginStoreDeepLink) {
-                        com.authorss81.noteflow.ui.components.PluginStoreDialog(
-                            viewModel = viewModel,
-                            onDismiss = { showPluginStoreDeepLink = false }
                         )
                     }
                 }

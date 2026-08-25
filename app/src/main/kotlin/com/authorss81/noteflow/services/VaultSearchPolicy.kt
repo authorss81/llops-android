@@ -99,9 +99,16 @@ object VaultSearchPolicy {
      * STABLE within each tier so the corpus's recency order is preserved for
      * equal ranks. Applied by `NoteRepository.searchPages` / `deepSearchPages`
      * to their matched list.
+     *
+     * Phase 209 REVIEW-FIX (finding 3): the tier is computed ONCE per page
+     * (decorate-sort-undecorate) instead of inside the sort selector, which a
+     * comparator-driven `sortedBy` re-invokes O(n log n) times — each such call
+     * re-ran up to two full-text fuzzy scans per page.
      */
     fun exactFirst(pages: List<NotePageEntity>, query: String): List<NotePageEntity> =
-        pages.sortedBy { page ->
-            if (pageMatchTier(page, query) == SearchMatchTier.EXACT) 0 else 1
-        }
+        pages.asSequence()
+            .map { page -> page to pageMatchTier(page, query) }
+            .sortedBy { if (it.second == SearchMatchTier.EXACT) 0 else 1 }
+            .map { it.first }
+            .toList()
 }

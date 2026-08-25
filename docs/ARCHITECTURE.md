@@ -26,7 +26,14 @@
 > and the Command Palette gains a `store` quick-action routed via
 > `PaletteActionResult.OpenPluginStore` (SDK sealed capability set unchanged). Tests:
 > `FuzzyMatchTest` (11) + `RecentSearchPolicyTest` (11) + `Phase209SearchQualityTest`
-> (12) + `Phase209DiscoveryPinsTest` (10 source pins). No schema change, no new deps.
+> (14) + `Phase209DiscoveryPinsTest` (11 source pins). No schema change, no new deps.
+> **Review-fixes (2026-08-25, FINDINGS 1–7):** recording happens only AFTER the 300 ms
+> debounce settle (executed queries, never keystroke prefixes); ring values are AES-GCM-
+> encrypted at rest under dedicated AndroidKeyStore alias `noteflow_recent_searches_key`
+> (fail-closed — never plaintext; phase-158 prefs-hold-non-secret rule honored);
+> `exactFirst` decorates tiers once per page (no O(n log n) re-scan); chip dismiss is an
+> IconButton (min touch target); the store deep-link flag is dropped on lock(); the store
+> dialog composes BEFORE the phase-140 pause cover.
 
 > **Implemented in phase-207** (2026-08-25, crypto/DB efficiency — decrypt memoization + lazy
 > corpus invalidation + BitmapPool byte budget, see `workspace/phase-207/REPORT.md`): three

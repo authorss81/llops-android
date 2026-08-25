@@ -2,9 +2,17 @@ package com.authorss81.noteflow.services
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
+import android.util.Base64
 import com.authorss81.noteflow.plugins.PluginSettingKey
 import com.authorss81.noteflow.services.localsend.LocalSendPairingCodes
 import com.authorss81.noteflow.theme.AppThemeMode
+import java.security.KeyStore
+import javax.crypto.Cipher
+import javax.crypto.KeyGenerator
+import javax.crypto.SecretKey
+import javax.crypto.spec.GCMParameterSpec
 
 class SettingsManager(context: Context) {
     private val prefs: SharedPreferences =
@@ -262,21 +270,93 @@ class SettingsManager(context: Context) {
     // Phase 209: recent-search history — the last [RecentSearchPolicy.CAP]
     // non-blank EXECUTED vault-search queries, persisted as a `search_recent_<n>`
     // ring (n = 0 is most recent). SharedPreferences only — NEVER the DB schema.
-    // The ring insert/dedupe/cap math lives in RecentSearchPolicy (pure JVM);
-    // these accessors are the SharedPreferences glue and sanitize on read-back.
+    // Phase 209 REVIEW-FIX (finding 2): search strings are user-typed text
+    // derived from decrypted note content, and prefs are plaintext XML — so every
+    // ring value is now ENCRYPTED at rest under a non-extractable AndroidKeyStore
+    // AES-GCM key (same discipline as WebDavCredentialStore; honors the phase-158
+    // rule that prefs never hold sensitive content in the clear). Fail-CLOSED:
+    // when the keystore or encryption is unavailable nothing is written and
+    // undecryptable entries read back as null — a plaintext fallback is never
+    // taken. The ring insert/dedupe/cap math lives in RecentSearchPolicy (pure
+    // JVM); these accessors are the glue and sanitize on read-back.
     fun getRecentSearches(): List<String> =
         RecentSearchPolicy.sanitize(
-            (0 until RecentSearchPolicy.CAP).map { prefs.getString("search_recent_$it", null) }
+            (0 until RecentSearchPolicy.CAP).map { decryptRingValue(prefs.getString("search_recent_$it", null)) }
         )
 
     fun setRecentSearches(queries: List<String>) {
         val clean = RecentSearchPolicy.sanitize(queries)
         prefs.edit().apply {
             for (i in 0 until RecentSearchPolicy.CAP) {
-                if (i < clean.size) putString("search_recent_$i", clean[i])
-                else remove("search_recent_$i")
+                val enc = if (i < clean.size) encryptRingValue(clean[i]) else null
+                if (enc != null) putString("search_recent_$i", enc) else remove("search_recent_$i")
             }
         }.apply()
+    }
+
+    /** Mint-or-load the dedicated, non-extractable AES-256-GCM keystore key. */
+    private fun recentSearchKeyOrNull(): SecretKey? = try {
+        val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        (keyStore.getKey(RECENT_SEARCHES_KEY_ALIAS, null) as? SecretKey)?.let { return it }
+        if (keyStore.containsAlias(RECENT_SEARCHES_KEY_ALIAS)) {
+            runCatching { keyStore.deleteEntry(RECENT_SEARCHES_KEY_ALIAS) }
+        }
+        val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
+        generator.init(
+            KeyGenParameterSpec.Builder(
+                RECENT_SEARCHES_KEY_ALIAS,
+                KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
+            )
+                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                .setKeySize(256)
+                .build()
+        )
+        generator.generateKey()
+    } catch (t: Throwable) {
+        null
+    }
+
+    /** AES-GCM encrypt to `iv(12) || ciphertext`, base64 — or null (fail-closed). */
+    private fun encryptRingValue(plain: String): String? {
+        return try {
+            val key = recentSearchKeyOrNull() ?: return null
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            cipher.init(Cipher.ENCRYPT_MODE, key)
+            val cipherText = cipher.doFinal(plain.toByteArray(Charsets.UTF_8))
+            val combined = ByteArray(RECENT_SEARCH_IV_BYTES + cipherText.size)
+            System.arraycopy(cipher.iv, 0, combined, 0, RECENT_SEARCH_IV_BYTES)
+            System.arraycopy(cipherText, 0, combined, RECENT_SEARCH_IV_BYTES, cipherText.size)
+            Base64.encodeToString(combined, Base64.NO_WRAP)
+        } catch (t: Throwable) {
+            null
+        }
+    }
+
+    /**
+     * Decrypt a stored ring value, or null when absent/undecryptable. A null on
+     * decrypt also silently retires any pre-review-fix PLAINTEXT entry left by
+     * the original phase-209 build (it can never validate against GCM).
+     */
+    private fun decryptRingValue(stored: String?): String? {
+        return try {
+            if (stored.isNullOrBlank()) return null
+            val key = recentSearchKeyOrNull() ?: return null
+            val combined = Base64.decode(stored, Base64.NO_WRAP)
+            if (combined.size <= RECENT_SEARCH_IV_BYTES) return null
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            cipher.init(
+                Cipher.DECRYPT_MODE,
+                key,
+                GCMParameterSpec(128, combined, 0, RECENT_SEARCH_IV_BYTES)
+            )
+            String(
+                cipher.doFinal(combined, RECENT_SEARCH_IV_BYTES, combined.size - RECENT_SEARCH_IV_BYTES),
+                Charsets.UTF_8
+            )
+        } catch (t: Throwable) {
+            null
+        }
     }
 
     // Phase 172: PERSISTED recently-used brush colors + favorites (ARGB ints).
@@ -654,5 +734,13 @@ class SettingsManager(context: Context) {
             .remove("master_password_wrapped_dek")
             .remove("biometric_auth_enabled")
             .apply()
+    }
+
+    companion object {
+        /** Dedicated alias — never shared with the WebDAV credential keys. */
+        private const val RECENT_SEARCHES_KEY_ALIAS = "noteflow_recent_searches_key"
+
+        /** GCM standard 12-byte IV prefix of every stored ring blob. */
+        private const val RECENT_SEARCH_IV_BYTES = 12
     }
 }

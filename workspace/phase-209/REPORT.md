@@ -101,10 +101,10 @@ their own.
     negative noise cases, single-char gate, density ordering, bounds, pre-lowered parity).
   - `services/RecentSearchPolicyTest` — 11 (insert order, move-to-front dedupe, cap=8,
     blank rejection, case-insensitive dismiss, sanitize/cap-on-read).
-  - `Phase209SearchQualityTest` — 12 behavior tests (vault tiers, exactFirst ordering,
+  - `Phase209SearchQualityTest` — 14 behavior tests (vault tiers, exactFirst ordering,
     palette FUZZY_MATCH band < BODY_CONTAINS, exact-beats-fuzzy with newer fuzzy doc,
     store routing + keyword uniqueness, discovery policy truth table).
-  - `Phase209DiscoveryPinsTest` — 10 source pins (ring keys in SettingsManager, HomeScreen
+  - `Phase209DiscoveryPinsTest` — 11 source pins (ring keys in SettingsManager, HomeScreen
     focus/record/dismiss/chips wiring, single-matcher rule — the greedy walk exists ONLY in
     FuzzyMatch.kt —, exactFirst in both repo paths, FUZZY_MATCH below BODY_CONTAINS in
     scorer order, editor menu deep-link + served-entry sum, MainActivity 3× flag raisers +
@@ -126,3 +126,34 @@ their own.
   what lets a 3-char query stay selective ("nte" matches "notebook" at 0.75 but rejects
   "alternative" at 0.27); the trade-off is that mid-body typo hits need slightly denser
   matches, which titles — the primary typo surface — satisfy comfortably.
+
+## Review fixes (2026-08-25)
+
+All seven review FINDINGS applied (commit `llops: phase-209 review fixes`):
+
+1. **[HIGH] Prefix pollution** — recording moved AFTER the 300 ms debounce settle
+   (`HomeScreen.kt`), so only EXECUTED queries enter the ring; the pre-fix order put every
+   keystroke prefix ("n","no","not",…) into the persisted 8-slot ring, evicting real
+   history. Pin strengthened: record must appear after `delay(300)` in source.
+2. **[MEDIUM] Plaintext-at-rest** — ring values are now AES-256-GCM encrypted under a new,
+   non-extractable AndroidKeyStore key (`noteflow_recent_searches_key`,
+   `SettingsManager.kt`, WebDavCredentialStore discipline; honors the phase-158
+   prefs-hold-non-secret-data-only rule). Fail-CLOSED: no plaintext fallback ever; legacy
+   pre-fix plaintext entries fail GCM validation on read and are silently retired.
+3. **[MED-LOW perf] `exactFirst`** now decorates tiers ONCE per page
+   (`VaultSearchPolicy.kt`) instead of recomputing them O(n log n) times inside the sort
+   selector (each recompute = up to two full-text fuzzy scans).
+4. **[LOW a11y]** chip dismiss is an `IconButton` (Material minimum-touch-target
+   enforcement) instead of a raw clickable 14dp Icon.
+5. **[LOW UX]** `showPluginStoreDeepLink` is cleared when the vault locks
+   (`MainActivity.kt`), so unlocking never re-presents a dialog the user left behind.
+6. **[LOW invariant]** the store dialog composes BEFORE the phase-140 opaque pause cover,
+   so the cover draws over it during ON_PAUSE (recents-thumbnail safety); the phase-140
+   cover comment updated accordingly and the pin test made order-independent.
+7. **[LOW docs]** suite counts corrected (14 behavior / 11 pins here, in ARCHITECTURE.md
+   and phase-status.md); totals unchanged (no new @Test methods — all additions are
+   assertions inside existing tests).
+
+Verification after the fixes: targeted rerun of `FuzzyMatchTest`, `RecentSearchPolicyTest`,
+`Phase209SearchQualityTest`, `Phase209DiscoveryPinsTest`, `CommandPaletteMathTest`,
+`B2Dos02VaultSearchBoundedTest` + `gradle assembleDebug` — green.

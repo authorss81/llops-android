@@ -334,14 +334,18 @@ fun HomeScreen(
     LaunchedEffect(searchQuery) {
         if (searchQuery.isNotBlank()) {
             refinedSearchDone = false
-            // Phase 209: an EXECUTED non-blank query enters the persisted ring
-            // (dedupe moves it to the front; blank/cleared queries never record).
+            kotlinx.coroutines.delay(300)
+            // Phase 209 REVIEW-FIX (finding 1): the query is recorded only AFTER
+            // the debounce settles — i.e. when it is actually EXECUTED below. The
+            // pre-fix order recorded BEFORE the delay, so every keystroke prefix
+            // ("n", "no", "not", …) entered the ring and evicted real history.
+            // Dedupe moves an existing entry to the front; blank/cleared queries
+            // never record (the blank branch below).
             val updatedRecents = RecentSearchPolicy.record(recentSearches, searchQuery)
             if (updatedRecents != recentSearches) {
                 recentSearches = updatedRecents
                 viewModel.settings.setRecentSearches(updatedRecents)
             }
-            kotlinx.coroutines.delay(300)
             viewModel.searchVault(searchQuery) { results ->
                 globalSearchResults = results
             }
@@ -1276,18 +1280,25 @@ fun HomeScreen(
                                         )
                                     },
                                     trailingIcon = {
-                                        Icon(
-                                            Icons.Outlined.Close,
-                                            contentDescription = "Dismiss \"$pastQuery\"",
-                                            modifier = Modifier
-                                                .size(14.dp)
-                                                .clickable {
-                                                    val updated =
-                                                        RecentSearchPolicy.dismiss(recentSearches, pastQuery)
-                                                    recentSearches = updated
-                                                    viewModel.settings.setRecentSearches(updated)
-                                                }
-                                        )
+                                        // Phase 209 REVIEW-FIX (finding 4): an IconButton
+                                        // instead of a raw clickable 14dp Icon, so Material's
+                                        // minimum-touch-target enforcement gives the glyph a
+                                        // real hit area.
+                                        IconButton(
+                                            onClick = {
+                                                val updated =
+                                                    RecentSearchPolicy.dismiss(recentSearches, pastQuery)
+                                                recentSearches = updated
+                                                viewModel.settings.setRecentSearches(updated)
+                                            },
+                                            modifier = Modifier.size(20.dp)
+                                        ) {
+                                            Icon(
+                                                Icons.Outlined.Close,
+                                                contentDescription = "Dismiss \"$pastQuery\"",
+                                                modifier = Modifier.size(14.dp)
+                                            )
+                                        }
                                     }
                                 )
                             }
