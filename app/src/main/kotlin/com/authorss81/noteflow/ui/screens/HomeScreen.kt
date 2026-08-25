@@ -3,8 +3,11 @@ package com.authorss81.noteflow.ui.screens
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.*
@@ -14,6 +17,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.Article
+import androidx.compose.material.icons.automirrored.outlined.Sort
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
@@ -35,6 +39,7 @@ import com.authorss81.noteflow.data.model.SectionEntity
 import com.authorss81.noteflow.plugins.webcapture.WebPageFetchPolicy
 import com.authorss81.noteflow.services.BackupPasswordPolicy
 import com.authorss81.noteflow.services.DocumentTextExtractor
+import com.authorss81.noteflow.services.DuplicatePagePolicy
 import com.authorss81.noteflow.services.ExportDestinationPolicy
 import com.authorss81.noteflow.services.GalleryTitleDisplayPolicy
 import com.authorss81.noteflow.services.HomeStatsMath
@@ -42,7 +47,9 @@ import com.authorss81.noteflow.services.ImportArchivePolicy
 import com.authorss81.noteflow.services.ImportExportService
 import com.authorss81.noteflow.services.OnboardingPolicy
 import com.authorss81.noteflow.services.OrphanImportCleanupPolicy
+import com.authorss81.noteflow.services.PageSortPolicy
 import com.authorss81.noteflow.services.RecentSearchPolicy
+import com.authorss81.noteflow.services.TrashSearchScopePolicy
 import com.authorss81.noteflow.services.isPlainPkBackupFile
 import com.authorss81.noteflow.services.isNflbBackupFile
 import com.authorss81.noteflow.services.RestoreFailSafe
@@ -136,6 +143,17 @@ fun HomeScreen(
     var recentSearches by remember { mutableStateOf(viewModel.settings.getRecentSearches()) }
     var selectedTab by remember { mutableIntStateOf(0) } // 0 = Pages, 1 = Recent, 2 = Tag Vault, 3 = Trash
     var pageViewMode by remember { mutableIntStateOf(0) } // 0 = List, 1 = Gallery, 2 = Kanban, 3 = Calendar, 4 = Table
+    // Phase 208 fix #2: persisted page-list sort mode (Pages tab, all views).
+    var pageSortMode by remember {
+        mutableStateOf(PageSortPolicy.Mode.fromKey(viewModel.settings.pageSortModeKey))
+    }
+    // Phase 208 fixes #3/#4: Move-to-Section picker + multi-select state. The
+    // target list is shared by the single-card "Move to Section…" menu item and
+    // the bulk bar's move verb; `multiSelectedIds` non-empty == selection mode.
+    var moveTargets by remember { mutableStateOf<List<String>>(emptyList()) }
+    var multiSelectedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    val selectionActive = multiSelectedIds.isNotEmpty()
+    var showBulkTagDialog by remember { mutableStateOf(false) }
     var showTemplateLibrary by remember { mutableStateOf(false) }
     var showWebDavDialog by remember { mutableStateOf(false) }
     var showLocalSendDialog by remember { mutableStateOf(false) }
@@ -152,6 +170,11 @@ fun HomeScreen(
     LaunchedEffect(selectedNotebookId) {
         activeTagFilterPath = null
         activeTagMatchingIds = null
+    }
+    // Phase 208 fix #4: leaving a tab drops any in-progress multi-selection so
+    // ids selected on one tab can never feed another tab's verbs.
+    LaunchedEffect(selectedTab) {
+        multiSelectedIds = emptySet()
     }
 
     val isWide = BoxWithConstraintsScope_isWide()
@@ -1395,6 +1418,44 @@ fun HomeScreen(
                                 onClick = { pageViewMode = 4 },
                                 label = { Text("Table", maxLines = 1) }
                             )
+
+                            // Phase 208 fix #2: sort control — previously there was
+                            // NO sort UI anywhere; order was the hard-coded DAO
+                            // `ORDER BY pinned DESC, updatedAt DESC`. The chosen
+                            // mode persists via SettingsManager.pageSortModeKey and
+                            // orders every Pages-tab view client-side.
+                            Box {
+                                var sortMenuExpanded by remember { mutableStateOf(false) }
+                                FilledTonalIconButton(
+                                    onClick = { sortMenuExpanded = true },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(
+                                        Icons.AutoMirrored.Outlined.Sort,
+                                        contentDescription = "Sort notes"
+                                    )
+                                }
+                                DropdownMenu(
+                                    expanded = sortMenuExpanded,
+                                    onDismissRequest = { sortMenuExpanded = false },
+                                    scrollState = overflowMenuScrollState(),
+                                    modifier = overflowMenuScrollModifier()
+                                ) {
+                                    PageSortPolicy.Mode.entries.forEach { mode ->
+                                        DropdownMenuItem(
+                                            text = { Text(mode.label) },
+                                            trailingIcon = if (pageSortMode == mode) {
+                                                { Icon(Icons.Outlined.Check, contentDescription = null) }
+                                            } else null,
+                                            onClick = {
+                                                pageSortMode = mode
+                                                viewModel.settings.pageSortModeKey = mode.persistenceKey
+                                                sortMenuExpanded = false
+                                            }
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
 
@@ -1419,8 +1480,29 @@ fun HomeScreen(
                             }
                         )
                     } else {
-                        val activePageList = if (searchQuery.isNotBlank()) {
-                            globalSearchResults ?: emptyList()
+                        // Phase 208 fix #1 (CRITICAL data-loss bug): search results
+                        // used to REPLACE the list globally while `isTrash` was
+                        // rendered from the tab index — so a query typed on the
+                        // Trash tab rendered LIVE notes with the Restore / Delete
+                        // Permanently menu (one tap from unrecoverable deletion).
+                        // Results are now SCOPED per tab by the pure-JVM policy:
+                        // on the Trash tab they are intersected with the actually-
+                        // trashed ids (an honest scoped-empty today, correct trash
+                        // cards if the backend ever covers deleted rows).
+                        val searchScope = TrashSearchScopePolicy.scopeFor(
+                            selectedTab,
+                            searchQuery.isNotBlank()
+                        )
+                        val trashedIdSet = remember(trashedPages) {
+                            trashedPages.map { it.id }.toSet()
+                        }
+                        val rawPageList = if (searchQuery.isNotBlank()) {
+                            TrashSearchScopePolicy.scoped(
+                                globalSearchResults ?: emptyList(),
+                                scope = searchScope,
+                                trashedIds = trashedIdSet,
+                                idOf = { it.id }
+                            )
                         } else if (activeTagMatchingIds != null) {
                             val matching = activeTagMatchingIds!!
                             // Phase 164 review (finding 7): the tag vault is NOTEBOOK-scoped,
@@ -1436,6 +1518,23 @@ fun HomeScreen(
                                 3 -> trashedPages
                                 else -> pages
                             }
+                        }
+
+                        // Phase 208 fix #2: client-side sort keyed by the persisted
+                        // SettingsManager.pageSortModeKey. Search-result order is
+                        // deliberately PRESERVED (relevance ordering from the
+                        // exact/fuzzy tiers); every other list is sorted client-side.
+                        val activePageList = if (searchQuery.isNotBlank()) {
+                            rawPageList
+                        } else {
+                            PageSortPolicy.sorted(
+                                rawPageList,
+                                pageSortMode,
+                                pinned = { it.pinned },
+                                title = { it.title },
+                                createdAt = { it.createdAt },
+                                updatedAt = { it.updatedAt }
+                            )
                         }
 
                         if (activeTagFilterPath != null) {
@@ -1523,6 +1622,91 @@ fun HomeScreen(
                             }
                         }
 
+                        // Phase 208 fix #4: multi-select contextual bar. Long-press
+                        // a card (list or gallery) to enter selection mode; the
+                        // verbs follow the tab context via DuplicatePagePolicy
+                        // (live: trash/move/tag — recoverable only; trash:
+                        // restore/delete-permanently). "Empty Trash" is untouched.
+                        val bulkVerbs = DuplicatePagePolicy.bulkVerbs(
+                            TrashSearchScopePolicy.isTrashContext(selectedTab)
+                        )
+                        if (selectionActive && selectedTab != 2) {
+                            Surface(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 8.dp),
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.secondaryContainer
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        "${multiSelectedIds.size} selected",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                        modifier = Modifier.weight(1f),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    if (DuplicatePagePolicy.BulkVerb.MOVE_TO_TRASH in bulkVerbs) {
+                                        IconButton(onClick = {
+                                            viewModel.bulkTrashPages(multiSelectedIds)
+                                            multiSelectedIds = emptySet()
+                                        }) {
+                                            Icon(
+                                                Icons.Outlined.Delete,
+                                                contentDescription = "Move selected to trash"
+                                            )
+                                        }
+                                    }
+                                    if (DuplicatePagePolicy.BulkVerb.MOVE_TO_SECTION in bulkVerbs) {
+                                        IconButton(onClick = { moveTargets = multiSelectedIds.toList() }) {
+                                            Icon(
+                                                Icons.Outlined.DriveFileMove,
+                                                contentDescription = "Move selected to section"
+                                            )
+                                        }
+                                    }
+                                    if (DuplicatePagePolicy.BulkVerb.EDIT_TAGS in bulkVerbs) {
+                                        IconButton(onClick = { showBulkTagDialog = true }) {
+                                            Icon(
+                                                Icons.Outlined.Label,
+                                                contentDescription = "Tag selected notes"
+                                            )
+                                        }
+                                    }
+                                    if (DuplicatePagePolicy.BulkVerb.RESTORE in bulkVerbs) {
+                                        IconButton(onClick = {
+                                            viewModel.bulkRestorePages(multiSelectedIds)
+                                            multiSelectedIds = emptySet()
+                                        }) {
+                                            Icon(
+                                                Icons.Outlined.RestoreFromTrash,
+                                                contentDescription = "Restore selected notes"
+                                            )
+                                        }
+                                    }
+                                    if (DuplicatePagePolicy.BulkVerb.DELETE_PERMANENTLY in bulkVerbs) {
+                                        IconButton(onClick = { deleteConfirmType = "bulk_page_perm" }) {
+                                            Icon(
+                                                Icons.Outlined.DeleteForever,
+                                                contentDescription = "Delete selected permanently",
+                                                tint = MaterialTheme.colorScheme.error
+                                            )
+                                        }
+                                    }
+                                    IconButton(onClick = { multiSelectedIds = emptySet() }) {
+                                        Icon(
+                                            Icons.Outlined.Close,
+                                            contentDescription = "Exit selection mode"
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
                         if (activePageList.isEmpty()) {
                             val emptyDecision = EmptyStateResolver.decide(
                                 kind = when {
@@ -1563,7 +1747,22 @@ fun HomeScreen(
                                         pages = activePageList,
                                         viewModel = viewModel,
                                         onOpenPage = onOpenPage,
-                                        onEditTags = { tagEditorTargetPage = it }
+                                        onEditTags = { tagEditorTargetPage = it },
+                                        onMoveToSection = { moveTargets = listOf(it.id) },
+                                        onDuplicate = { viewModel.duplicatePage(it.id) },
+                                        selectionActive = selectionActive,
+                                        selectedIds = multiSelectedIds,
+                                        onToggleSelect = { page ->
+                                            multiSelectedIds =
+                                                if (page.id in multiSelectedIds) {
+                                                    multiSelectedIds - page.id
+                                                } else {
+                                                    multiSelectedIds + page.id
+                                                }
+                                        },
+                                        onEnterSelection = { page ->
+                                            multiSelectedIds = setOf(page.id)
+                                        }
                                     )
                                     2 -> KanbanBoardView(pages = activePageList, viewModel = viewModel, onOpenPage = onOpenPage)
                                     3 -> CalendarView(pages = activePageList, viewModel = viewModel, onOpenPage = onOpenPage)
@@ -1577,7 +1776,22 @@ fun HomeScreen(
                                                 NotePageCard(
                                                     page = page,
                                                     isTrash = false,
-                                                    onClick = { onOpenPage(page) },
+                                                    onClick = {
+                                                        if (selectionActive) {
+                                                            multiSelectedIds =
+                                                                if (page.id in multiSelectedIds) {
+                                                                    multiSelectedIds - page.id
+                                                                } else {
+                                                                    multiSelectedIds + page.id
+                                                                }
+                                                        } else {
+                                                            onOpenPage(page)
+                                                        }
+                                                    },
+                                                    onLongPress = {
+                                                        if (!selectionActive) multiSelectedIds = setOf(page.id)
+                                                    },
+                                                    isSelected = page.id in multiSelectedIds,
                                                     onTogglePin = { viewModel.togglePinPage(page.id, page.pinned) },
                                                     onRename = {
                                                         targetEntityId = page.id
@@ -1592,7 +1806,9 @@ fun HomeScreen(
                                                     },
                                                     onEditTags = {
                                                         tagEditorTargetPage = page
-                                                    }
+                                                    },
+                                                    onMoveToSection = { moveTargets = listOf(page.id) },
+                                                    onDuplicate = { viewModel.duplicatePage(page.id) }
                                                 )
                                             }
                                         }
@@ -1607,7 +1823,22 @@ fun HomeScreen(
                                         NotePageCard(
                                             page = page,
                                             isTrash = selectedTab == 3,
-                                            onClick = { onOpenPage(page) },
+                                            onClick = {
+                                                if (selectionActive) {
+                                                    multiSelectedIds =
+                                                        if (page.id in multiSelectedIds) {
+                                                            multiSelectedIds - page.id
+                                                        } else {
+                                                            multiSelectedIds + page.id
+                                                        }
+                                                } else {
+                                                    onOpenPage(page)
+                                                }
+                                            },
+                                            onLongPress = {
+                                                if (!selectionActive) multiSelectedIds = setOf(page.id)
+                                            },
+                                            isSelected = page.id in multiSelectedIds,
                                             onTogglePin = { viewModel.togglePinPage(page.id, page.pinned) },
                                             onRename = {
                                                 targetEntityId = page.id
@@ -1622,7 +1853,13 @@ fun HomeScreen(
                                             },
                                             onEditTags = {
                                                 tagEditorTargetPage = page
-                                            }
+                                            },
+                                            onMoveToSection = if (selectedTab != 3) {
+                                                { moveTargets = listOf(page.id) }
+                                            } else null,
+                                            onDuplicate = if (selectedTab != 3) {
+                                                { viewModel.duplicatePage(page.id) }
+                                            } else null
                                         )
                                     }
                                 }
@@ -2096,6 +2333,8 @@ fun HomeScreen(
                 "sec" -> "Delete Section?"
                 "empty_trash" -> "Empty Trash?"
                 "page_perm" -> "Permanently Delete Note?"
+                // Phase 208 fix #4: multi-select permanent delete confirmation.
+                "bulk_page_perm" -> "Permanently Delete ${multiSelectedIds.size} Notes?"
                 else -> "Delete Item?"
             }
             val msg = when (type) {
@@ -2103,6 +2342,7 @@ fun HomeScreen(
                 "sec" -> if (deleteWarningMessage.isNotBlank()) deleteWarningMessage else "All pages inside will be permanently deleted."
                 "empty_trash" -> "All trashed notes will be permanently destroyed."
                 "page_perm" -> "This action cannot be undone. This note will be permanently destroyed."
+                "bulk_page_perm" -> "This action cannot be undone. All selected notes will be permanently destroyed."
                 else -> ""
             }
             ConfirmDeleteDialog(
@@ -2115,6 +2355,10 @@ fun HomeScreen(
                         "sec" -> targetEntityId?.let { viewModel.deleteSection(it) }
                         "empty_trash" -> viewModel.emptyTrash()
                         "page_perm" -> targetEntityId?.let { viewModel.deletePagePermanently(it) }
+                        "bulk_page_perm" -> {
+                            viewModel.bulkDeletePagesPermanently(multiSelectedIds)
+                            multiSelectedIds = emptySet()
+                        }
                     }
                     deleteConfirmType = null
                 }
@@ -2146,6 +2390,46 @@ fun HomeScreen(
                 onDismiss = { tagEditorTargetPage = null },
                 onSaveTags = { newTags ->
                     viewModel.updatePageTags(page.id, newTags)
+                }
+            )
+        }
+
+        // Phase 208 fix #3: "Move to Section…" — the movePage backend existed
+        // with ZERO UI call sites before this dialog. Serves both the single
+        // card-menu item and the multi-select bar's move verb.
+        if (moveTargets.isNotEmpty()) {
+            SectionPickerDialog(
+                sections = sections,
+                currentSectionIdOf = { id ->
+                    // Only meaningful for single-page moves (the bulk bar's pages
+                    // may span sections); a null simply marks nothing "current".
+                    allActivePages.firstOrNull { it.id == id }?.sectionId
+                        ?.takeIf { moveTargets.size == 1 }
+                },
+                onDismiss = { moveTargets = emptyList() },
+                onPick = { sectionId ->
+                    viewModel.bulkMovePages(moveTargets, sectionId)
+                    viewModel.showSnackbar(
+                        if (moveTargets.size == 1) "Note moved" else "${moveTargets.size} notes moved"
+                    )
+                    moveTargets = emptyList()
+                }
+            )
+        }
+
+        // Phase 208 fix #4: bulk tag APPEND (never replaces each note's own tags).
+        if (showBulkTagDialog && multiSelectedIds.isNotEmpty()) {
+            BulkTagAppendDialog(
+                selectionCount = multiSelectedIds.size,
+                onDismiss = { showBulkTagDialog = false },
+                onApply = { tagsCsv ->
+                    viewModel.bulkAppendTags(
+                        multiSelectedIds,
+                        allActivePages.associate { it.id to it.tags },
+                        tagsCsv.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+                    )
+                    showBulkTagDialog = false
+                    multiSelectedIds = emptySet()
                 }
             )
         }
@@ -2761,6 +3045,7 @@ private fun NotebookAndSectionSelectorBar(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun NotePageCard(
     page: NotePageEntity,
@@ -2771,22 +3056,62 @@ private fun NotePageCard(
     onTrash: () -> Unit,
     onRestore: () -> Unit,
     onDeletePermanent: () -> Unit,
-    onEditTags: () -> Unit = {}
+    onEditTags: () -> Unit = {},
+    // Phase 208 fixes #3/#4: Move/Duplicate verbs + multi-select hooks.
+    onMoveToSection: (() -> Unit)? = null,
+    onDuplicate: (() -> Unit)? = null,
+    onLongPress: (() -> Unit)? = null,
+    isSelected: Boolean = false
 ) {
     // 36.0: record the tapped card's window bounds so the editor can morph from
     // it (shared-element reveal). Fall back to a plain fade when reduce-motion.
     var cardWindowBounds by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
     Card(
-        onClick = {
-            cardWindowBounds?.let { com.authorss81.noteflow.ui.components.SharedElementState.rememberCard(it) }
-            onClick()
-        },
         modifier = Modifier
             .fillMaxWidth()
             .onGloballyPositioned { coords ->
                 cardWindowBounds = coords.boundsInWindow()
-            },
-        shape = RoundedCornerShape(16.dp)
+            }
+            .then(
+                if (onLongPress != null) {
+                    Modifier.combinedClickable(
+                        onClick = {
+                            // Phase 36 shared-element reveal: only record the card
+                            // bounds when this tap OPENS the page (never while
+                            // toggling multi-select).
+                            if (!isSelected) {
+                                cardWindowBounds?.let {
+                                    com.authorss81.noteflow.ui.components.SharedElementState.rememberCard(it)
+                                }
+                            }
+                            onClick()
+                        },
+                        onLongClick = onLongPress
+                    )
+                } else {
+                    Modifier.clickable(
+                        onClick = {
+                            if (!isSelected) {
+                                cardWindowBounds?.let {
+                                    com.authorss81.noteflow.ui.components.SharedElementState.rememberCard(it)
+                                }
+                            }
+                            onClick()
+                        }
+                    )
+                }
+            ),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isSelected) {
+                MaterialTheme.colorScheme.secondaryContainer
+            } else {
+                MaterialTheme.colorScheme.surface
+            }
+        ),
+        border = if (isSelected) {
+            BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
+        } else null
     ) {
         Row(
             modifier = Modifier
@@ -2799,12 +3124,23 @@ private fun NotePageCard(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.weight(1f)
             ) {
-                Icon(
-                    imageVector = if (page.sourceFileType == "pdf") Icons.Outlined.PictureAsPdf else Icons.AutoMirrored.Outlined.Article,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(24.dp)
-                )
+                // Phase 208 fix #4: selection marker replaces the type icon in
+                // selection mode so the tap target reads as "toggle selection".
+                if (isSelected) {
+                    Icon(
+                        imageVector = Icons.Outlined.CheckCircle,
+                        contentDescription = "Selected",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(24.dp)
+                    )
+                } else {
+                    Icon(
+                        imageVector = if (page.sourceFileType == "pdf") Icons.Outlined.PictureAsPdf else Icons.AutoMirrored.Outlined.Article,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
                 Spacer(modifier = Modifier.width(12.dp))
                 Column {
                     Text(
@@ -2874,6 +3210,26 @@ private fun NotePageCard(
                                 text = { Text("Edit Tags") },
                                 onClick = { menuExpanded = false; onEditTags() }
                             )
+                            // Phase 208 fix #3: the movePage backend existed with
+                            // ZERO UI call sites — this is its first consumer.
+                            if (onMoveToSection != null) {
+                                DropdownMenuItem(
+                                    text = { Text("Move to Section…") },
+                                    leadingIcon = {
+                                        Icon(Icons.Outlined.DriveFileMove, contentDescription = null)
+                                    },
+                                    onClick = { menuExpanded = false; onMoveToSection!!() }
+                                )
+                            }
+                            if (onDuplicate != null) {
+                                DropdownMenuItem(
+                                    text = { Text("Duplicate") },
+                                    leadingIcon = {
+                                        Icon(Icons.Outlined.ContentCopy, contentDescription = null)
+                                    },
+                                    onClick = { menuExpanded = false; onDuplicate!!() }
+                                )
+                            }
                             DropdownMenuItem(
                                 text = { Text("Move to Trash") },
                                 onClick = { menuExpanded = false; onTrash() }
@@ -2895,9 +3251,122 @@ private fun NotePageCard(
     }
 }
 
+/**
+ * Phase 208 fix #3: section picker for "Move to Section…" (single card menu and
+ * the multi-select bar's move verb). Lists the current notebook's sections; the
+ * page's CURRENT section is marked with a check (and still selectable — a same-
+ * section move is a harmless no-op write). Moving across notebooks is out of
+ * scope: `movePage` targets a section id, and only the active notebook's
+ * sections are loaded here.
+ */
 @Composable
-private fun ThemeMenu(viewModel: NoteflowViewModel) {
-    var expanded by remember { mutableStateOf(false) }
+private fun SectionPickerDialog(
+    sections: List<SectionEntity>,
+    currentSectionIdOf: (String) -> String?,
+    onDismiss: () -> Unit,
+    onPick: (String) -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Move to Section…") },
+        text = {
+            if (sections.isEmpty()) {
+                Text("This notebook has no other sections to move notes into.")
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 320.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    items(sections, key = { it.id }) { section ->
+                        val currentForTargets = currentSectionIdOf(section.id)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onPick(section.id) }
+                                .padding(horizontal = 8.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Outlined.Folder,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Text(
+                                text = section.name,
+                                style = MaterialTheme.typography.bodyLarge,
+                                modifier = Modifier.weight(1f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            if (currentForTargets != null) {
+                                Icon(
+                                    Icons.Outlined.Check,
+                                    contentDescription = "Current section",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        }
+    )
+}
+
+/**
+ * Phase 208 fix #4: bulk tag APPEND dialog for the multi-select bar. The entered
+ * comma-separated tags are MERGED into each selected note's existing tags by the
+ * ViewModel — never a wholesale replacement of every note's own tagging.
+ */
+@Composable
+private fun BulkTagAppendDialog(
+    selectionCount: Int,
+    onDismiss: () -> Unit,
+    onApply: (String) -> Unit
+) {
+    var tagsText by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Tag $selectionCount Notes") },
+        text = {
+            Column {
+                Text(
+                    "Adds these tags to each selected note. Existing tags are kept.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = tagsText,
+                    onValueChange = { tagsText = it },
+                    label = { Text("Tags (comma separated)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onApply(tagsText) },
+                enabled = tagsText.isNotBlank()
+            ) { Text("Add Tags") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        }
+    )
+}
+
+@Composable
+private fun ThemeMenu(viewModel: NoteflowViewModel) {    var expanded by remember { mutableStateOf(false) }
     val currentMode by viewModel.themeMode.collectAsState()
 
     Box {

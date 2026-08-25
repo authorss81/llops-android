@@ -8,6 +8,36 @@
 
 ## Package layout
 
+> **Implemented in phase-208** (2026-08-25, page management UX — trash-search safety,
+> sort, move/duplicate, multi-select, palm-reject persistence, see
+> `workspace/phase-208/REPORT.md`): (1) CRITICAL data-loss fix — searching on the
+> Trash tab used to render LIVE notes as trash cards (search results replaced the
+> list globally while `isTrash` came from the tab index; results are live-only rows)
+> one tap from unrecoverable deletion; new pure-JVM `services/TrashSearchScopePolicy.kt`
+> scopes results per tab — query+Trash intersects with the trashed-id set (honest
+> scoped-empty today), every other combination passes through. (2) Sort: pure-JVM
+> `services/PageSortPolicy.kt` (UPDATED_DESC default / CREATED_DESC / TITLE_ASC,
+> pinned-first always, stable) + persisted `SettingsManager.pageSortModeKey`
+> (`page_sort_mode`) + a sort dropdown beside the Pages-tab view-mode chips;
+> client-side only (no schema change), search relevance order preserved. (3) New
+> `NoteRepository.duplicatePage` — ONE transaction copying page row + strokes +
+> tags, DECRYPT-and-RE-ENCRYPT under NEW record AAD (verbatim ciphertext would fail
+> GCM), fresh stroke ids, `layerId=null`, document-backed files copied under imports
+> root, fail-closed on undecryptable title/body; VM verb + "Move to Section…"
+> (`SectionPickerDialog` → first-ever UI consumer of `movePage`) and "Duplicate" in
+> BOTH card menus. (4) Multi-select: long-press list/gallery cards → contextual bar
+> (`DuplicatePagePolicy.bulkVerbs`) — live tabs get recoverable trash/move/tag-append,
+> Trash gets restore/permanent-delete behind a `"bulk_page_perm"` confirm; selection
+> resets on tab change; Empty Trash untouched. (5) Palm rejection persists via
+> `SettingsManager.palmRejectionEnabled` (`palm_rejection_enabled`) — previously reset
+> to true every editor open — seeded from prefs in EditorScreen, toggled from BOTH the
+> ⋮ menu and a new switch row in Canvas & Paper Options. Tests:
+> `TrashSearchScopePolicyTest` (8) + `PageSortPolicyTest` (10) +
+> `DuplicatePagePolicyTest` (7) + `Phase208PageManagementTest` (12 source pins).
+> `gradle assembleDebug` green; `gradle testDebugUnitTest` 2943 / 3 failures all
+> reproduced on clean HEAD (Phase148 UNC-path documented; PaparazziSmokeTest ×2
+> layoutlib env). No schema change, no new deps.
+
 > **Implemented in phase-209** (2026-08-25, search quality & plugin discovery, see
 > `workspace/phase-209/REPORT.md`): (1) recent-search history — executed non-blank
 > vault queries persist in the `search_recent_<n>` ring (last 8) via pure-JVM

@@ -947,6 +947,178 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
         invalidateSearchCorpus()
     }
 
+    /**
+     * Phase 208 (fix #3): full-page duplicate in ONE transaction — the page row,
+     * every stroke row, and the plaintext tags column. There was previously NO
+     * duplicate path anywhere (the backend `movePage` had zero UI call sites and
+     * no copy verb existed at all).
+     *
+     * Encryption contract (why ciphertext is NEVER copied verbatim):
+     *  - field AEAD binds `pages|<recordId>|title|…` AAD, so the source's
+     *    title/extractedText ciphertexts are DECRYPTED under the SOURCE record
+     *    id and RE-ENCRYPTED under the NEW id — a verbatim copy would fail GCM
+     *    authentication on first open;
+     *  - strokes bind `strokes|<strokeId>|textContent|pointsJson`, so each
+     *    copied row gets a FRESH stroke id + fresh AAD. The decrypted pointsJson
+     *    payload is copied bit-exact (the legacy stroke id embedded inside the
+     *    JSON is inert — the load path derives identity from the ROW id).
+     *
+     * Deliberate scope (per phase-208 PROMPT): layers / media embeds / sticky
+     * notes / voice notes are NOT copied; copied strokes have their layerId
+     * stripped to null so they render on the default layer instead of dangling
+     * references to non-copied layers.
+     *
+     * Failure semantics (fail-closed, never a half-copy or silent data loss):
+     *  - missing source → null;
+     *  - an undecryptable source title/body aborts the whole duplicate (null) —
+     *    persisting the UNREADABLE_MARKER as a real title is forbidden (phase-169);
+     *  - undecryptable individual STROKE rows are SKIPPED (they render as nothing
+     *    anyway per B1-DB-8 semantics — copying them would only create blank rows);
+     *  - over-budget stored geometry rows are skipped (same B2-DOS-01 guard the
+     *    loader applies);
+     *  - pdf/image pages carry their backing document via `sourceFilePath`; the
+     *    file is COPIED to a new imports-root name (two pages sharing one file
+     *    would break on delete — `deletePagePermanently` removes it); if that
+     *    byte copy fails for a document-backed page the whole duplicate aborts.
+     *
+     * @return the created page with decrypted title/body (mirroring [createPage]),
+     *         or null when the operation was refused.
+     */
+    suspend fun duplicatePage(pageId: String): NotePageEntity? = withContext(Dispatchers.Default) {
+        val source = db.pageDao().getPageById(pageId) ?: return@withContext null
+        val dek = requireEncryptionKey()
+
+        val rawTitle = decryptForDuplicate(source.title, dek, "pages", source.id, "title")
+            ?: return@withContext null
+        // Phase 208: the copy's title carries the " (Copy)" suffix (policy-owned
+        // derivation; duplicating a copy does not stack suffixes).
+        val copyTitle = com.authorss81.noteflow.services.DuplicatePagePolicy.duplicateTitle(rawTitle)
+        val rawBody = if (!source.extractedText.isNullOrBlank()) {
+            decryptForDuplicate(source.extractedText!!, dek, "pages", source.id, "extractedText")
+                ?: return@withContext null
+        } else {
+            ""
+        }
+
+        val newPageId = UUID.randomUUID().toString()
+        val now = System.currentTimeMillis()
+
+        // Document-backed pages: copy the backing file so both pages own their
+        // bytes (a shared path breaks the moment one copy is deleted).
+        var duplicatedSourcePath: String? = null
+        val srcPath = SourceFilePathPolicy.confine(source.sourceFilePath, importsRoot)
+        if (srcPath != null) {
+            val srcFile = File(srcPath)
+            val ok = runCatching {
+                if (srcFile.isFile) {
+                    val dest = File(importsRoot, "${UUID.randomUUID()}_${srcFile.name}")
+                    srcFile.copyTo(dest, overwrite = false)
+                    SourceFilePathPolicy.confine(dest.absolutePath, importsRoot)
+                } else {
+                    null
+                }
+            }.getOrNull()
+            val documentBacked = source.sourceFileType == "pdf" || source.sourceFileType == "image"
+            if (ok == null && documentBacked) {
+                // Without its bytes a pdf/image duplicate would be a broken page.
+                return@withContext null
+            }
+            duplicatedSourcePath = ok
+        }
+
+        val storedTitle = EncryptionService.encryptField(copyTitle.toByteArray(), dek, "pages", newPageId, "title")
+        val storedBody = EncryptionService.encryptField(rawBody.toByteArray(), dek, "pages", newPageId, "extractedText")
+
+        val copy = NotePageEntity(
+            id = newPageId,
+            sectionId = source.sectionId,
+            title = storedTitle,
+            sourceFilePath = duplicatedSourcePath,
+            sourceFileType = source.sourceFileType,
+            pageIndex = 0,
+            createdAt = now,
+            updatedAt = now,
+            pinned = false, // a fresh copy starts unpinned regardless of the source
+            deleted = false,
+            template = source.template,
+            paperColor = source.paperColor,
+            extractedText = storedBody,
+            tags = source.tags // plaintext column — copied as-is
+        )
+
+        db.withTransaction {
+            db.pageDao().insertPage(copy)
+
+            // Copy stroke rows through the SAME bounded reader the loader uses,
+            // so legacy over-budget rows can never materialize unbounded here.
+            var offset = 0
+            while (true) {
+                val batch = db.strokeDao().getStrokesForPageBounded(
+                    pageId,
+                    StrokeGeometryPolicy.MAX_STORED_POINTS_JSON_CHARS,
+                    StrokeGeometryPolicy.MAX_STROKES_LOAD_BATCH,
+                    offset
+                )
+                if (batch.isEmpty()) break
+                offset += batch.size
+
+                val copies = ArrayList<StrokeEntity>(batch.size)
+                for (row in batch) {
+                    if (StrokeGeometryPolicy.storedPointsJsonOverBudget(row.pointsJson.length)) continue
+                    val newStrokeId = UUID.randomUUID().toString()
+                    val rawText = if (row.textContent.isNotBlank()) {
+                        decryptForDuplicate(row.textContent, dek, "strokes", row.id, "textContent")
+                    } else {
+                        row.textContent
+                    } ?: continue // unreadable stroke text -> skip this row
+                    val rawPoints = decryptForDuplicate(row.pointsJson, dek, "strokes", row.id, "pointsJson")
+                        ?: continue // unreadable geometry -> skip this row
+                    copies.add(
+                        row.copy(
+                            id = newStrokeId,
+                            pageId = newPageId,
+                            textContent = EncryptionService.encryptField(
+                                rawText.toByteArray(), dek, "strokes", newStrokeId, "textContent"
+                            ),
+                            pointsJson = EncryptionService.encryptField(
+                                rawPoints.toByteArray(), dek, "strokes", newStrokeId, "pointsJson"
+                            ),
+                            layerId = null
+                        )
+                    )
+                }
+                if (copies.isNotEmpty()) db.strokeDao().insertStrokes(copies)
+                if (batch.size < StrokeGeometryPolicy.MAX_STROKES_LOAD_BATCH) break
+            }
+        }
+        invalidateSearchCorpus()
+
+        // Return the display-shaped entity (decrypted fields), like [createPage].
+        copy.copy(title = copyTitle, extractedText = rawBody)
+    }
+
+    /**
+     * Decrypt a stored field for [duplicatePage] under its SOURCE record AAD.
+     * Returns null when the value is structurally encrypted but fails to
+     * authenticate (caller decides skip-vs-abort). Legacy plaintext values pass
+     * through unchanged, mirroring [decryptFieldForDisplay].
+     */
+    private fun decryptForDuplicate(
+        storedValue: String,
+        dek: ByteArray,
+        table: String,
+        recordId: String,
+        fieldName: String
+    ): String? {
+        if (storedValue.isBlank()) return storedValue
+        if (!DecryptFailurePolicy.isStructuralCiphertext(storedValue)) return storedValue
+        return try {
+            String(EncryptionService.decryptField(storedValue, dek, table, recordId, fieldName))
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     suspend fun updatePageIndex(id: String, pageIndex: Int) {
         db.pageDao().updatePageIndex(id, pageIndex)
     }

@@ -160,6 +160,23 @@ class SettingsManager(context: Context) {
         get() = prefs.getBoolean("haptics_enabled", true)
         set(value) = prefs.edit().putBoolean("haptics_enabled", value).apply()
 
+    // Phase 208: S-Pen palm rejection persists across editor opens (previously a
+    // plain `remember` that reset to true on every visit). Default true = the
+    // long-standing behavior. Prefs only, no DB schema impact.
+    var palmRejectionEnabled: Boolean
+        get() = prefs.getBoolean("palm_rejection_enabled", true)
+        set(value) = prefs.edit().putBoolean("palm_rejection_enabled", value).apply()
+
+    // Phase 208: page-list sort mode for the Pages tab (all view modes).
+    // Client-side ordering of already-collected lists via PageSortPolicy — the
+    // DAO query is untouched (no schema change). Fail-closed decode on both
+    // read and write; unknown keys fall back to UPDATED_DESC (the legacy order).
+    var pageSortModeKey: String
+        get() = PageSortPolicy.sanitizePersistenceKey(prefs.getString("page_sort_mode", null))
+        set(value) = prefs.edit()
+            .putString("page_sort_mode", PageSortPolicy.sanitizePersistenceKey(value))
+            .apply()
+
     // 26.6: automatic shape snapping/straightening of freehand strokes.
     // Phase-126 made ALL plugins/assistive features strictly opt-in (off by default).
     var shapeAutoSnapEnabled: Boolean

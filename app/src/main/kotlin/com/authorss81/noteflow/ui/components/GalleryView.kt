@@ -2,6 +2,7 @@ package com.authorss81.noteflow.ui.components
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -11,7 +12,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Article
 import androidx.compose.material.icons.outlined.Brush
+import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.DriveFileMove
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Label
 import androidx.compose.material.icons.outlined.MoreVert
@@ -59,19 +63,31 @@ import java.util.Locale
  *   primaryContainer wash that fades from the top, gentle 3 dp elevation.
  * - Rich preview: type badge, overflow-ellipsized title, first ~2-3 lines of
  *   page text, pinned indicator, tag chips (max 3) and the updated date.
- * - Card ripple comes from the clickable [Card]; there is no multi-select UI in
- *   the app yet, so no separate selection state is needed.
+ * - Card ripple comes from the clickable card surface; phase 208 adds LONG-PRESS
+ *   multi-select (the old "no multi-select UI in the app yet" admission is gone):
+ *   long-press enters selection mode, taps then toggle membership, and HomeScreen
+ *   renders the contextual bulk-action bar (trash/move/tag).
  *
  * No canvas rasterization happens here — the preview is derived purely from the
  * existing title/extractedText/tags/pinned/date fields (per AGENTS.md hardware
  * reality, no image generation, no heavy shadow/blur layers).
  */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun GalleryView(
     pages: List<NotePageEntity>,
     viewModel: NoteflowViewModel,
     onOpenPage: (NotePageEntity) -> Unit,
     onEditTags: (NotePageEntity) -> Unit = {},
+    // Phase 208 fix #3: Move-to-Section / Duplicate verbs (wired to HomeScreen's
+    // shared section-picker dialog + viewModel.duplicatePage).
+    onMoveToSection: (NotePageEntity) -> Unit = {},
+    onDuplicate: (NotePageEntity) -> Unit = {},
+    // Phase 208 fix #4: multi-select hooks (all default-inert for compatibility).
+    selectionActive: Boolean = false,
+    selectedIds: Set<String> = emptySet(),
+    onToggleSelect: (NotePageEntity) -> Unit = {},
+    onEnterSelection: (NotePageEntity) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     LazyVerticalGrid(
@@ -87,18 +103,31 @@ fun GalleryView(
                 page = page,
                 viewModel = viewModel,
                 onOpenPage = onOpenPage,
-                onEditTags = onEditTags
+                onEditTags = onEditTags,
+                onMoveToSection = onMoveToSection,
+                onDuplicate = onDuplicate,
+                selectionActive = selectionActive,
+                isSelected = page.id in selectedIds,
+                onToggleSelect = onToggleSelect,
+                onEnterSelection = onEnterSelection
             )
         }
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun GalleryCardItem(
     page: NotePageEntity,
     viewModel: NoteflowViewModel,
     onOpenPage: (NotePageEntity) -> Unit,
-    onEditTags: (NotePageEntity) -> Unit
+    onEditTags: (NotePageEntity) -> Unit,
+    onMoveToSection: (NotePageEntity) -> Unit,
+    onDuplicate: (NotePageEntity) -> Unit,
+    selectionActive: Boolean,
+    isSelected: Boolean,
+    onToggleSelect: (NotePageEntity) -> Unit,
+    onEnterSelection: (NotePageEntity) -> Unit
 ) {
     val scheme = MaterialTheme.colorScheme
     val dateFormat = remember { SimpleDateFormat("MMM d, yyyy", Locale.getDefault()) }
@@ -136,22 +165,39 @@ private fun GalleryCardItem(
     val paperDotColor = scheme.outlineVariant.copy(alpha = InkCardPaperPolicy.GRID_ALPHA)
 
     Card(
-        onClick = { onOpenPage(page) },
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(min = minCardHeight),
+            .heightIn(min = minCardHeight)
+            // Phase 208 fix #4: tap opens (or toggles selection while a
+            // selection is active); LONG-PRESS enters selection mode.
+            .combinedClickable(
+                onClick = {
+                    if (selectionActive) onToggleSelect(page) else onOpenPage(page)
+                },
+                onLongClick = { if (!selectionActive) onEnterSelection(page) }
+            ),
         shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.cardColors(
-            containerColor = scheme.surfaceVariant.copy(alpha = 0.55f)
+            containerColor = if (isSelected) {
+                scheme.secondaryContainer.copy(alpha = 0.55f)
+            } else {
+                scheme.surfaceVariant.copy(alpha = 0.55f)
+            }
         ),
         elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
         // Phase 188 risk #3: an explicit hairline border keeps cards distinct
         // from near-black surfaces in dark themes (surfaceVariant on dark is
         // close to surface; the phase-187 paper fill flattens it further). The
         // width/alpha come from the pure-JVM policy so the decision is pinned.
+        // Phase 208 fix #4: a selected card swaps the hairline for a bold
+        // primary border so multi-selection reads at a glance.
         border = BorderStroke(
-            GalleryCardLayoutPolicy.GALLERY_CARD_BORDER_WIDTH_DP.dp,
-            scheme.outlineVariant.copy(alpha = GalleryCardLayoutPolicy.GALLERY_CARD_BORDER_ALPHA)
+            if (isSelected) 2.dp else GalleryCardLayoutPolicy.GALLERY_CARD_BORDER_WIDTH_DP.dp,
+            if (isSelected) {
+                scheme.primary
+            } else {
+                scheme.outlineVariant.copy(alpha = GalleryCardLayoutPolicy.GALLERY_CARD_BORDER_ALPHA)
+            }
         )
     ) {
         Box(
@@ -206,18 +252,36 @@ private fun GalleryCardItem(
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Surface(
-                        shape = RoundedCornerShape(10.dp),
-                        color = scheme.primaryContainer
-                    ) {
-                        Icon(
-                            imageVector = pageTypeIcon(page),
-                            contentDescription = null,
-                            tint = scheme.onPrimaryContainer,
-                            modifier = Modifier
-                                .padding(6.dp)
-                                .size(18.dp)
-                        )
+                    if (isSelected) {
+                        // Phase 208 fix #4: selection marker replaces the type
+                        // badge while the card is selected.
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = scheme.primary
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.CheckCircle,
+                                contentDescription = "Selected",
+                                tint = scheme.onPrimary,
+                                modifier = Modifier
+                                    .padding(6.dp)
+                                    .size(18.dp)
+                            )
+                        }
+                    } else {
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = scheme.primaryContainer
+                        ) {
+                            Icon(
+                                imageVector = pageTypeIcon(page),
+                                contentDescription = null,
+                                tint = scheme.onPrimaryContainer,
+                                modifier = Modifier
+                                    .padding(6.dp)
+                                    .size(18.dp)
+                            )
+                        }
                     }
 
                     Text(
@@ -299,6 +363,36 @@ private fun GalleryCardItem(
                                 onClick = {
                                     menuExpanded = false
                                     onEditTags(page)
+                                }
+                            )
+                            // Phase 208 fix #3: Move to Section… + Duplicate —
+                            // the same verbs the list-view card menu offers.
+                            DropdownMenuItem(
+                                text = { Text("Move to Section…") },
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = Icons.Outlined.DriveFileMove,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                },
+                                onClick = {
+                                    menuExpanded = false
+                                    onMoveToSection(page)
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Duplicate") },
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = Icons.Outlined.ContentCopy,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                },
+                                onClick = {
+                                    menuExpanded = false
+                                    onDuplicate(page)
                                 }
                             )
                             DropdownMenuItem(

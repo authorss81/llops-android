@@ -434,7 +434,12 @@ fun EditorScreen(
     val favoriteColors by viewModel.favoriteColors.collectAsState()
 
     // S-Pen / Stylus Palm Rejection & Pressure Toggle State
-    var palmRejectionEnabled by remember { mutableStateOf(true) }
+    // Phase 208 fix #5: palm rejection previously reset to `true` on EVERY editor
+    // open (plain `remember`) and hid under the ⋮ export clutter. It now seeds
+    // from SettingsManager (`palm_rejection_enabled`, hapticsEnabled pattern) so
+    // the user's choice survives rotation AND process restarts; it is also
+    // reachable as a chip in the Canvas & Paper Options sheet.
+    var palmRejectionEnabled by remember { mutableStateOf(viewModel.settings.palmRejectionEnabled) }
     var stylusPressureEnabled by remember { mutableStateOf(true) }
     var advancedBrushesEnabled by remember { mutableStateOf(false) }
 
@@ -2026,6 +2031,8 @@ fun EditorScreen(
                             leadingIcon = { Icon(Icons.Outlined.DoNotTouch, contentDescription = null) },
                             onClick = {
                                 palmRejectionEnabled = !palmRejectionEnabled
+                                // Phase 208 fix #5: persist across editor opens.
+                                viewModel.settings.palmRejectionEnabled = palmRejectionEnabled
                                 showOverflowMenu = false
                             }
                         )
@@ -2638,6 +2645,13 @@ fun EditorScreen(
                 onHapticsToggle = { enabled ->
                     hapticsEnabled = enabled
                     viewModel.settings.hapticsEnabled = enabled
+                },
+                palmRejectionEnabled = palmRejectionEnabled,
+                onPalmRejectionToggle = { enabled ->
+                    // Phase 208 fix #5: one pref behind both this chip and the
+                    // ⋮-menu item; the canvas recomposes from the same state.
+                    palmRejectionEnabled = enabled
+                    viewModel.settings.palmRejectionEnabled = enabled
                 },
                 inkToShapeAvailable = inkToShapeAvailable,
                 inkToShapeKeepOriginal = inkToShapeKeepOriginal,
@@ -4758,6 +4772,10 @@ private fun CanvasSettingsBottomSheet(
     onShapeAutoSnapToggle: (Boolean) -> Unit = {},
     hapticsEnabled: Boolean = true,
     onHapticsToggle: (Boolean) -> Unit = {},
+    // Phase 208 fix #5: palm rejection surfaced as a chip in this sheet (it used
+    // to hide in the ⋮ export clutter and reset on every editor open).
+    palmRejectionEnabled: Boolean = true,
+    onPalmRejectionToggle: (Boolean) -> Unit = {},
     inkToShapeAvailable: Boolean = true,
     inkToShapeKeepOriginal: Boolean = false,
     onInkToShapeKeepOriginalChange: (Boolean) -> Unit = {},
@@ -5260,6 +5278,33 @@ private fun CanvasSettingsBottomSheet(
                 Switch(
                     checked = hapticsEnabled,
                     onCheckedChange = onHapticsToggle
+                )
+            }
+
+            // Phase 208 fix #5: palm rejection surfaced here (previously it hid
+            // in the ⋮ export clutter AND reset to Enabled on every editor open —
+            // the toggle now persists via SettingsManager and lives in both
+            // places, sharing one pref).
+            Spacer(modifier = Modifier.height(16.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Icon(Icons.Outlined.DoNotTouch, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    Column {
+                        Text("Palm Rejection", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "Ignore touches from your palm while writing with the stylus",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                Switch(
+                    checked = palmRejectionEnabled,
+                    onCheckedChange = onPalmRejectionToggle
                 )
             }
 

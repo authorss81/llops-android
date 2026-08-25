@@ -3066,6 +3066,67 @@ fun updatePageTags(id: String, tags: String) {
         }
     }
 
+    /**
+     * Phase 208 (fix #3): duplicate a note (page row + strokes + tags in one
+     * transaction). The backend verb existed nowhere before — [movePage] had
+     * zero UI call sites and no copy path existed at all. Surfaces one honest
+     * snackbar per outcome; the Room flows refresh via normal invalidation.
+     */
+    fun duplicatePage(id: String) {
+        viewModelScope.launch {
+            val created = writeGuardedAgainstLock("Vault is locked — page not duplicated") {
+                repository.duplicatePage(id)
+            }
+            if (created == null && repository.encryptionKey != null) {
+                showSnackbar("Could not duplicate this note.")
+            } else if (created != null) {
+                showSnackbar("Note duplicated")
+            }
+        }
+    }
+
+    /**
+     * Phase 208 (fix #4): bulk verbs for the multi-select contextual bar. Each
+     * id goes through its single-page guarded path; failures degrade to the
+     * standard locked-vault notice instead of partial silent writes.
+     */
+    fun bulkTrashPages(ids: Collection<String>) = ids.forEach { trashPage(it) }
+
+    fun bulkRestorePages(ids: Collection<String>) = ids.forEach { restorePage(it) }
+
+    fun bulkDeletePagesPermanently(ids: Collection<String>) = ids.forEach { deletePagePermanently(it) }
+
+    fun bulkMovePages(ids: Collection<String>, targetSectionId: String) =
+        ids.forEach { movePage(it, targetSectionId) }
+
+    /**
+     * Bulk tag append: merges [tagsToAppend] into each page's existing tag list
+     * (comma-separated), deduped case-insensitively. NEVER replaces tags wholesale —
+     * that would wipe every selected page's own tagging.
+     */
+    fun bulkAppendTags(ids: Collection<String>, currentTagsById: Map<String, String>, tagsToAppend: List<String>) {
+        viewModelScope.launch {
+            val additions = tagsToAppend.map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .distinctBy { it.lowercase() }
+            if (additions.isEmpty()) return@launch
+            for (id in ids) {
+                val existing = currentTagsById[id].orEmpty()
+                    .split(",")
+                    .map { it.trim() }
+                    .filter { it.isNotEmpty() }
+                val merged = (
+                    existing + additions.filter { addition ->
+                        existing.none { it.equals(addition, ignoreCase = true) }
+                    }
+                    ).distinctBy { it.lowercase() }
+                writeGuardedAgainstLock("Vault is locked — tags not saved") {
+                    repository.updatePageTags(id, merged.joinToString(","))
+                }
+            }
+        }
+    }
+
     fun emptyTrash() {
         viewModelScope.launch {
             writeGuardedAgainstLock("Vault is locked — trash not emptied") {
