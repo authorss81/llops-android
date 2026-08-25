@@ -119,7 +119,41 @@ unlock button (`enabled = !isLockedOut`) can never enable early. The real lockou
 
 ## Out of scope (deliberate)
 
-- The phase-196 motion-PREDICTION frame loop (`withFrameNanos` in `AnnotationCanvas.kt:635`) also wakes
-  per frame while composed, but unlike the leaked Choreographer callback it lives in a `LaunchedEffect`
-  coroutine that IS cancelled on disposal (cancellation-safe) — different defect class, untouched here.
+- The phase-196 motion-PREDICTION frame loop (`withFrameNanos` in `AnnotationCanvas.kt`) also woke
+  per frame while composed, but unlike the leaked Choreographer callback it lived in a `LaunchedEffect`
+  coroutine that WAS cancelled on disposal (cancellation-safe) — a different defect class.
+  **Resolved by the phase-206 review fixes below** (event-scoped via snapshotFlow parking).
 - The phase-205 render-side LASER fade clock already runs only while trails exist (event-scoped).
+
+## Review fixes (2026-08-25, same day)
+
+Applied after a full-diff review (findings 3–6 of the review; findings 1–2 verified PASS,
+7 accepted per house pin style, 8–9 informational):
+
+1. **(Review MEDIUM) Motion-prediction frame loop event-scoped** — the last perpetual frame waker:
+   `AnnotationCanvas.kt` `LaunchedEffect(motionPredictor, …)` parks on
+   `snapshotFlow { activePoints.isNotEmpty() }.first { it }` and runs its `withFrameNanos` loop only
+   while a stroke is in progress (`if (activePoints.isEmpty()) break` exits back to parking when
+   `!extend` fires with an emptied point list). Idle editor on API-29+ predictor devices now costs
+   zero frame wakes. Mid-stroke effect relaunches (orientation/key change) resume immediately because
+   snapshotFlow re-emits the current true state; gesture end/cancel paths already stripped the tail,
+   so idle frames did no useful work. Pinch-while-stroking behavior unchanged (loop keeps running
+   while points exist, exactly as pre-fix). New pin: `motion-prediction frame loop parks...`.
+2. **(Review LOW) Pump remember keyed on `(wetBrushEngine, gpuWetBrushesEnabled)`** — a live settings
+   toggle now rebuilds the pump (old one stopped by the keyed `DisposableEffect`) instead of
+   `manualOverrideProvider` serving a first-composition captured value forever. Parity quirk
+   inherited from the pre-206 closure, closed cheaply. New pin added.
+3. **(Review LOW, pre-existing defect surfaced) Voice seek bar froze after pause→resume** —
+   `resumePlayback()` set `_isPlaying=true` but never restarted `playbackJob`, whose condition
+   (`isActive && _isPlaying.value`) had already exited on pause. Extracted
+   `VoiceNoteManager.trackPlaybackPosition(player)` (same 200 ms cadence + cancel-previous
+   semantics), called from BOTH `startPlayback` and `resumePlayback`. NOT introduced by 206 — the
+   identical structure existed pre-206 with `delay(50)`. New pin: `resume restarts the playback
+   position tracker`.
+4. **(Review LOW) docs/ARCHITECTURE.md contradiction fixed** — the phase-60 section's stale
+   "`MainActivity` runs a continuous 1 s idle poll" sentence rewritten to the deadline-scheduled
+   state (the historical `docs/phase-status.md` phase-60 row is left as-is: it records what
+   phase-60 did at the time).
+
+Tests after review fixes: `Phase206EventDrivenTimersTest` 16 tests (13 original + 3 review-fix pins).
+Full-suite rerun numbers recorded in `docs/phase-status.md`.

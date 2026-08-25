@@ -93,8 +93,10 @@ import kotlin.math.floor
 import kotlin.math.ceil
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 
 /**
  * Phase 124: one point of the accumulated eraser path — canvas (world)
@@ -626,58 +628,74 @@ fun AnnotationCanvas(
         predictedTailTracker.stripFrom(activePoints)
     }
 
-    // Per-frame predict loop (API 29+ only): mirrors the existing Choreographer
-    // loop above — one cheap guard pass per frame when idle. Re-keyed on the
-    // tool/curve AND on the page geometry (review-fix: pageWidthPx/pageHeightPx/
-    // isContinuousMode are plain per-composition vals, so without keying them a
-    // mid-session orientation/continuous-mode change would leave stale bounds
-    // captured in the loop closure; the predictor/tracker objects survive).
+    // Per-frame predict loop (API 29+ only). Phase-206 review-fix: EVENT-SCOPED
+    // (see the parking comment inside) — it runs frame-clock iterations only
+    // while a stroke is in progress; an open idle editor costs zero wakes.
+    // Re-keyed on the tool/curve AND on the page geometry (review-fix:
+    // pageWidthPx/pageHeightPx/isContinuousMode are plain per-composition vals,
+    // so without keying them a mid-session orientation/continuous-mode change
+    // would leave stale bounds captured in the loop closure; the
+    // predictor/tracker objects survive).
     LaunchedEffect(motionPredictor, currentTool, pressureCurve, pageWidthPx, pageHeightPx, isContinuousMode) {
         val predictor = motionPredictor ?: return@LaunchedEffect
-        while (true) {
-            withFrameNanos { }
-            val extend = com.authorss81.noteflow.services.MotionPredictionPolicy.shouldExtendPreview(
-                predictorAvailable = true,
-                freehandTool = currentTool.isFreehandTool,
-                strokeInProgress = activePoints.isNotEmpty(),
-                singlePointerStream = predictionPointerCount.get() == 1,
-                panningWhiteSpace = isPanningBlackSpace
-            )
-            if (!extend) {
+        // Phase-206 review-fix (PERF/BATTERY): PARK until ink actually flows.
+        // Pre-fix this effect ran an UNCONDITIONAL frame loop (`withFrameNanos`
+        // forever) — one guard pass per frame (60-120 Hz) for the whole editor
+        // lifetime even on a static note (the last perpetual frame waker after
+        // the pump fix above). Gesture end/cancel paths already strip the tail,
+        // so idle frames did no useful work; a mid-stroke effect relaunch
+        // resumes immediately because snapshotFlow re-emits the current state.
+        while (isActive) {
+            snapshotFlow { activePoints.isNotEmpty() }.first { it }
+            while (isActive) {
+                withFrameNanos { }
+                val extend = com.authorss81.noteflow.services.MotionPredictionPolicy.shouldExtendPreview(
+                    predictorAvailable = true,
+                    freehandTool = currentTool.isFreehandTool,
+                    strokeInProgress = activePoints.isNotEmpty(),
+                    singlePointerStream = predictionPointerCount.get() == 1,
+                    panningWhiteSpace = isPanningBlackSpace
+                )
+                if (!extend) {
+                    dropPredictedTail()
+                    // Stroke over (activePoints cleared by the end/cancel path):
+                    // leave the frame loop and go back to parking — zero wakes
+                    // until the next stroke starts.
+                    if (activePoints.isEmpty()) break
+                    continue
+                }
+                val predicted = try {
+                    predictor.predict()
+                } catch (t: Throwable) {
+                    null
+                }
+                // Reconcile: replace whatever tail the previous frame drew.
                 dropPredictedTail()
-                continue
-            }
-            val predicted = try {
-                predictor.predict()
-            } catch (t: Throwable) {
-                null
-            }
-            // Reconcile: replace whatever tail the previous frame drew.
-            dropPredictedTail()
-            if (predicted != null) {
-                val pageTopY = calculatePageYOffset(activeTargetPage)
-                val remappedPressure = PressureCurveHelper.remapPressure(
-                    if (predicted.pressure > 0f) predicted.pressure else lastPressure,
-                    pressureCurve
-                )
-                val point = com.authorss81.noteflow.services.MotionPredictionPolicy.predictedWorldPoint(
-                    predictedViewX = predicted.x,
-                    predictedViewY = predicted.y,
-                    canvasWindowX = canvasBoxWindowOffset.x,
-                    canvasWindowY = canvasBoxWindowOffset.y,
-                    zoomScale = internalZoomScale,
-                    panX = internalPanOffset.x,
-                    panY = internalPanOffset.y,
-                    pageWidthPx = pageWidthPx,
-                    pageTopY = pageTopY,
-                    pageBottomY = pageTopY + pageHeightPx,
-                    pressure = remappedPressure,
-                    tilt = lastTilt,
-                    timestampMs = predicted.eventTime
-                )
-                if (point != null) {
-                    activePoints.add(point)
-                    predictedTailTracker.mark()
+                if (predicted != null) {
+                    val pageTopY = calculatePageYOffset(activeTargetPage)
+                    val remappedPressure = PressureCurveHelper.remapPressure(
+                        if (predicted.pressure > 0f) predicted.pressure else lastPressure,
+                        pressureCurve
+                    )
+                    val point = com.authorss81.noteflow.services.MotionPredictionPolicy.predictedWorldPoint(
+                        predictedViewX = predicted.x,
+                        predictedViewY = predicted.y,
+                        canvasWindowX = canvasBoxWindowOffset.x,
+                        canvasWindowY = canvasBoxWindowOffset.y,
+                        zoomScale = internalZoomScale,
+                        panX = internalPanOffset.x,
+                        panY = internalPanOffset.y,
+                        pageWidthPx = pageWidthPx,
+                        pageTopY = pageTopY,
+                        pageBottomY = pageTopY + pageHeightPx,
+                        pressure = remappedPressure,
+                        tilt = lastTilt,
+                        timestampMs = predicted.eventTime
+                    )
+                    if (point != null) {
+                        activePoints.add(point)
+                        predictedTailTracker.mark()
+                    }
                 }
             }
         }
@@ -845,7 +863,11 @@ fun AnnotationCanvas(
     // it re-posts only while a stroke is actively being drawn (start()/stop() from
     // the drag handlers below), samples thermal status at ≤1 Hz, and the
     // DisposableEffect's onDispose UNREGISTERS it so teardown can never leak it.
-    val wetFramePump = remember(wetBrushEngine) {
+    // Phase-206 review-fix: also keyed on gpuWetBrushesEnabled so a live
+    // settings toggle REBUILDS the pump (DisposableEffect below stops the old
+    // one) instead of manualOverrideProvider serving a value captured at the
+    // first composition forever.
+    val wetFramePump = remember(wetBrushEngine, gpuWetBrushesEnabled) {
         WetBrushFramePump(
             wetBrushEngine = wetBrushEngine,
             isAgslSupported = ShaderCapabilityHelper.isAgslSupported,

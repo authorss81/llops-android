@@ -408,17 +408,9 @@ class VoiceNoteManager(private val context: Context) {
 
                 // Track progress — Phase 206: 200 ms cadence (see the constant's
                 // doc; was a 20 Hz poll driving seek-bar recomposition all session).
-                playbackJob?.cancel()
-                playbackJob = scope.launch {
-                    while (isActive && _isPlaying.value) {
-                        try {
-                            _playbackPositionMs.value = player.currentPosition.toLong()
-                        } catch (e: Exception) {
-                            break
-                        }
-                        delay(PLAYBACK_POSITION_POLL_MS)
-                    }
-                }
+                // Phase-206 review-fix: loop body extracted to
+                // trackPlaybackPosition so resumePlayback can restart it too.
+                trackPlaybackPosition(player)
             } catch (e: Exception) {
                 Log.w("VoiceNoteManager", "Playback failed (${FailureLogPolicy.classNameToken(e)})")
                 _isPlaying.value = false
@@ -438,10 +430,34 @@ class VoiceNoteManager(private val context: Context) {
         _isPlaying.value = false
     }
 
+    /**
+     * Phase-206 review-fix: the position-tracking loop extracted from
+     * [startPlayback] so [resumePlayback] can restart it too. The loop's
+     * condition includes `_isPlaying`, so pause ENDS the job — without this
+     * restart, resume resumed the audio but the seek bar/waveform froze until
+     * the next seek (pre-existing defect, surfaced by the phase-206 review).
+     */
+    private fun trackPlaybackPosition(player: MediaPlayer) {
+        playbackJob?.cancel()
+        playbackJob = scope.launch {
+            while (isActive && _isPlaying.value) {
+                try {
+                    _playbackPositionMs.value = player.currentPosition.toLong()
+                } catch (e: Exception) {
+                    break
+                }
+                delay(PLAYBACK_POSITION_POLL_MS)
+            }
+        }
+    }
+
     fun resumePlayback() {
+        val player = mediaPlayer
         try {
-            mediaPlayer?.start()
+            player?.start()
             _isPlaying.value = true
+            // Phase-206 review-fix: restart position tracking after pause.
+            player?.let { trackPlaybackPosition(it) }
         } catch (e: Exception) {
             _activePlayingFilePath.value?.let { startPlayback(it, _playbackSpeed.value) }
         }

@@ -22,7 +22,19 @@
 > immediate `seekTo` publish). (4) Lockout countdown: new pure-JVM `services/LockoutTickerPolicy.kt`
 > wakes at minute milestones (+ exact-zero transition preserving `settings.lockoutUntilEpochMs = 0L`)
 > instead of 1 Hz — a 15-min lockout costs ~15 wakes, not ~900. Tests: `Phase206EventDrivenTimersTest`
-> (13) + updated `B1Plat04AutoLockTest`. No schema change, no new deps.
+> (16) + updated `B1Plat04AutoLockTest`. No schema change, no new deps.
+>
+> **Phase-206 review fixes** (2026-08-25, same day): (a) the phase-196 motion-prediction frame loop
+> (`AnnotationCanvas.kt` `LaunchedEffect(motionPredictor, …)`) is EVENT-SCOPED too — it parks on
+> `snapshotFlow { activePoints.isNotEmpty() }.first { it }` and runs the `withFrameNanos` loop only
+> while a stroke is in progress, exiting back to parking when the stroke ends (the last perpetual
+> 60-120 Hz idle waker in the app is gone; mid-stroke effect relaunches resume immediately because
+> snapshotFlow re-emits the current state). (b) The pump's `remember` is keyed on
+> `(wetBrushEngine, gpuWetBrushesEnabled)` so a live settings toggle rebuilds it instead of serving a
+> first-composition captured override. (c) `VoiceNoteManager.trackPlaybackPosition(player)` extracted
+> and restarted by `resumePlayback()` — pre-existing defect where pause ended the position job and
+> resume froze the seek bar until the next seek. (d) The stale phase-60 "continuous 1 s idle poll"
+> sentence in this file corrected to the deadline-scheduled state.
 
 > **Implemented in phase-205** (2026-08-25, canvas commit integrity — sync commits + render-side
 > laser fade, see `workspace/phase-205/REPORT.md`): (1) the freehand commit is SYNCHRONOUS on Main
@@ -1878,8 +1890,10 @@
     boundary is no longer reachable only via ON_STOP / next-touch. Pure-JVM
     `services/AutoLockPolicy.kt` owns the default (`DEFAULT_AUTO_LOCK_TIMEOUT_SECONDS = 300`,
     read by `SettingsManager.autoLockTimeoutSeconds` — auto-lock ships ENABLED), the decision
-    (`shouldAutoLock`, `>=` boundary, 0/negative = off). `MainActivity` runs a continuous 1 s idle poll while the vault is
-    authenticated (`LaunchedEffect(autoLockTimeoutSeconds, authenticated)`), stamps a fresh idle
+    (`shouldAutoLock`, `>=` boundary, 0/negative = off). `MainActivity` arms the idle auto-lock
+    timer while the vault is authenticated (`LaunchedEffect(autoLockTimeoutSeconds, authenticated)`
+    — phase-206 replaced phase-60's fixed 1 s poll with deadline scheduling, see the note below),
+    stamps a fresh idle
     baseline at each unlock, keeps the `pointerInput` touch handler timestamp-only, locks instantly
     on a runtime `ACTION_SCREEN_OFF` receiver (register in onCreate / deregister in onDestroy;
     API 33+ uses the flagged registration, below that the plain system-broadcast registration), and

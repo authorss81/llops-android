@@ -30,6 +30,11 @@ import org.junit.Test
  *
  * Behavior tests are pure JVM; wiring is pinned at source level (no Robolectric
  * on this project), same technique as B1Plat04AutoLockTest.
+ *
+ * Review fixes (2026-08-25) add three pins: the phase-196 motion-prediction
+ * frame loop must PARK until ink flows (last perpetual idle frame waker), the
+ * wet-pump remember must be keyed on the live GPU-wet-brushes setting, and
+ * resumePlayback must restart the position tracker (frozen seek bar defect).
  */
 class Phase206EventDrivenTimersTest {
 
@@ -197,6 +202,37 @@ class Phase206EventDrivenTimersTest {
         assertTrue("drag cancel must stop the pump", dragCancel.contains("wetFramePump.stop()"))
     }
 
+    @Test
+    fun `frame pump remember is keyed on the live manual-override setting (review fix)`() {
+        val canvas = readSource("app/src/main/kotlin/com/authorss81/noteflow/ui/components/AnnotationCanvas.kt")
+        assertTrue(
+            "the pump must rebuild when gpuWetBrushesEnabled flips so the provider " +
+                "never serves a first-composition captured value",
+            canvas.contains("remember(wetBrushEngine, gpuWetBrushesEnabled)")
+        )
+    }
+
+    @Test
+    fun `motion-prediction frame loop parks until ink flows instead of waking every frame (review fix)`() {
+        val canvas = readSource("app/src/main/kotlin/com/authorss81/noteflow/ui/components/AnnotationCanvas.kt")
+        val loop = canvas.substringAfter(
+            "LaunchedEffect(motionPredictor, currentTool, pressureCurve, pageWidthPx, pageHeightPx, isContinuousMode)"
+        ).substringBefore("// Color sampling helper")
+
+        assertTrue(
+            "the loop must park on the stroke-in-progress state (snapshotFlow) between strokes",
+            loop.contains("snapshotFlow { activePoints.isNotEmpty() }.first { it }")
+        )
+        assertFalse(
+            "the unconditional while(true) frame waker must be gone",
+            loop.contains("while (true)")
+        )
+        assertTrue(
+            "the frame loop must exit back to parking when the stroke ends",
+            loop.contains("if (activePoints.isEmpty()) break")
+        )
+    }
+
     // ---------- Source pins: auto-lock scheduler ----------
 
     @Test
@@ -234,6 +270,32 @@ class Phase206EventDrivenTimersTest {
         assertFalse(
             "the pre-206 50 ms tick must be gone",
             source.contains("delay(50)")
+        )
+    }
+
+    @Test
+    fun `resume restarts the playback position tracker (review fix - frozen seek bar)`() {
+        val source = readSource("app/src/main/kotlin/com/authorss81/noteflow/services/VoiceNoteManager.kt")
+
+        val startPlayback = source.substringAfter("fun startPlayback(").substringBefore("fun pausePlayback")
+        assertTrue(
+            "startPlayback must route through the extracted tracker",
+            startPlayback.contains("trackPlaybackPosition(player)")
+        )
+
+        val resume = source.substringAfter("fun resumePlayback()").substringBefore("fun togglePlayback")
+        assertTrue(
+            "resumePlayback must restart the tracker (its while condition includes _isPlaying, " +
+                "so pause ends the job — without the restart the seek bar freezes after resume)",
+            resume.contains("trackPlaybackPosition(")
+        )
+
+        val tracker = source.substringAfter("private fun trackPlaybackPosition(")
+            .substringBefore("fun resumePlayback()")
+        assertTrue(
+            "the tracker must keep the 200 ms cadence and the _isPlaying exit",
+            tracker.contains("delay(PLAYBACK_POSITION_POLL_MS)") &&
+                tracker.contains("_isPlaying.value")
         )
     }
 
