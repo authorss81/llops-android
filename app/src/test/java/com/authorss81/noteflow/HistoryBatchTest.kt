@@ -179,6 +179,11 @@ class HistoryBatchTest {
         assertTrue(src.contains("sample.y - canvasBoxWindowOffset.y"))
         // Monotonic gate guards every ingested sample.
         assertTrue(src.contains("StrokeBatchPolicy.isStale(sample.timestampMs, lastIngestedInputTimestampMs)"))
+        // Review-fix: the gate stamp advances ONLY when the sample was actually
+        // accepted — a page-bounds rejection must not consume its timestamp.
+        assertTrue(src.contains("val accepted = ingestPointerSample("))
+        assertTrue(src.contains("if (accepted) lastIngestedInputTimestampMs = sample.timestampMs"))
+        assertTrue(src.contains("if (accepted && lastTimestampMs != null) lastIngestedInputTimestampMs = lastTimestampMs"))
         // Freehand ingests the WHOLE batch; other tools stay newest-only.
         assertTrue(src.contains("drainedCount > 1 && currentTool.isFreehandTool"))
         assertTrue(src.contains("batchDrainScratch.last()"))

@@ -68,12 +68,34 @@ object BrushStrokeMath {
      * Falls back to the interpolated point spacing (px per nominal 16 ms step)
      * when timestamps are absent so old saved strokes still modulate.
      */
-    fun segmentVelocity(pointA: com.authorss81.noteflow.data.model.PointF, pointB: com.authorss81.noteflow.data.model.PointF): Float {
-        val dx = pointB.x - pointA.x
-        val dy = pointB.y - pointA.y
+    fun segmentVelocity(pointA: com.authorss81.noteflow.data.model.PointF, pointB: com.authorss81.noteflow.data.model.PointF): Float =
+        segmentVelocity(
+            pointA.x,
+            pointA.y,
+            pointA.timestampMs,
+            pointB.x,
+            pointB.y,
+            pointB.timestampMs
+        )
+
+    /**
+     * Allocation-free scalar form of [segmentVelocity] for hot capture loops
+     * that already hold raw coordinates/timestamps (phase-214 review fix) —
+     * EXACTLY the same float ops in the same order as the PointF version.
+     */
+    fun segmentVelocity(
+        x1: Float,
+        y1: Float,
+        timestampMs1: Long?,
+        x2: Float,
+        y2: Float,
+        timestampMs2: Long?
+    ): Float {
+        val dx = x2 - x1
+        val dy = y2 - y1
         val dist = kotlin.math.sqrt(dx * dx + dy * dy)
         if (dist <= 0f) return 0f
-        val dtMs = (pointB.timestampMs ?: 0L) - (pointA.timestampMs ?: 0L)
+        val dtMs = (timestampMs2 ?: 0L) - (timestampMs1 ?: 0L)
         return if (dtMs > 0L && dist > 0.001f) dist / dtMs.toFloat() else dist / 16f
     }
 

@@ -58,6 +58,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
@@ -5601,11 +5602,11 @@ private fun CanvasSettingsBottomSheet(
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
                                 Text(
-                                    "Tension (lag compensation)",
+                                    stringResource(com.authorss81.noteflow.R.string.canvas_tension_label),
                                     style = MaterialTheme.typography.bodyMedium
                                 )
                                 Text(
-                                    "$stabilizerPredictionPercent%",
+                                    stringResource(com.authorss81.noteflow.R.string.canvas_tension_percent_format, stabilizerPredictionPercent),
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.primary
                                 )
@@ -5617,7 +5618,7 @@ private fun CanvasSettingsBottomSheet(
                                 steps = com.authorss81.noteflow.services.StrokeSmoothingPolicy.MAX_PREDICTION_PERCENT - 1
                             )
                             Text(
-                                "Higher = snappier follow-through · Lower = rounder, calmer lines",
+                                stringResource(com.authorss81.noteflow.R.string.canvas_tension_helper),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -5635,16 +5636,16 @@ private fun CanvasSettingsBottomSheet(
                                 FilterChip(
                                     selected = stabilizerModelKey == com.authorss81.noteflow.services.StrokeSmoothingPolicy.MODEL_EWMA,
                                     onClick = { onStabilizerModelSelect(com.authorss81.noteflow.services.StrokeSmoothingPolicy.MODEL_EWMA) },
-                                    label = { Text("Classic", style = MaterialTheme.typography.labelSmall) }
+                                    label = { Text(stringResource(com.authorss81.noteflow.R.string.canvas_model_classic), style = MaterialTheme.typography.labelSmall) }
                                 )
                                 FilterChip(
                                     selected = stabilizerModelKey == com.authorss81.noteflow.services.StrokeSmoothingPolicy.MODEL_ONE_EURO,
                                     onClick = { onStabilizerModelSelect(com.authorss81.noteflow.services.StrokeSmoothingPolicy.MODEL_ONE_EURO) },
-                                    label = { Text("Adaptive (One-Euro)", style = MaterialTheme.typography.labelSmall) }
+                                    label = { Text(stringResource(com.authorss81.noteflow.R.string.canvas_model_one_euro), style = MaterialTheme.typography.labelSmall) }
                                 )
                             }
                             Text(
-                                "Affects strokes drawn after the change",
+                                stringResource(com.authorss81.noteflow.R.string.canvas_model_apply_note),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )

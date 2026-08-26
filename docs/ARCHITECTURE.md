@@ -569,8 +569,15 @@
 > fairs hairline-only RDP output with ONE Chaikin pass (endpoints exact, size 2n−2,
 > snapped shapes excluded) and the geometry cap is re-enforced AFTER fairing.
 > Tests: `HistoryBatchTest`/`PressureSmoothingTest`/`VelocityAdaptiveAlphaTest`/
-> `OneEuroParityTest`/`Phase214StrokeSmoothingV2Test` (42 new @Test). No schema change,
-> no new deps.
+> `OneEuroParityTest`/`Phase214StrokeSmoothingV2Test` (45 new @Test after review
+> fixes). **Review fixes (2026-08-26, see `workspace/phase-214/REPORT.md` §9):**
+> batcher thread-safety doc scoped honestly (overflow advances head producer-side —
+> UI-thread-only contract); monotonic gate stamp advances ONLY on accepted samples
+> (`ingestPointerSample` returns Boolean); Chaikin timestamp interpolation moved to
+> Double space (Float loses ms exactness past ~4.6 h uptime); allocation-free scalar
+> `BrushStrokeMath.segmentVelocity` overload for the capture loop; new sheet strings
+> extracted to `strings.xml`; REPORT test inventory + failure manifest corrected.
+> No schema change, no new deps.
 
 > **Implemented in phase-196** (2026-08-24, stylus motion prediction — PERF 1.1, see
 > `workspace/phase-196/REPORT.md`): the ink canvas now records every raw `MotionEvent`

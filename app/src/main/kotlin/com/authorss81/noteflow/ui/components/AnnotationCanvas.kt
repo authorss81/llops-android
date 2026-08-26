@@ -1422,13 +1422,17 @@ fun AnnotationCanvas(
                             // live or coalesced-historical. Coordinates arrive in the
                             // modifier's BOX-LOCAL space (raw window coords are mapped
                             // by subtracting the box origin BEFORE the pan/zoom transform).
+                            // Returns TRUE iff the sample was actually ingested; the
+                            // page-bounds rejection returns FALSE so the monotonic
+                            // batch-gate stamp never advances past a REJECTED sample
+                            // (review-fix: "last ACCEPTED" must mean accepted).
                             fun ingestPointerSample(
                                 boxLocalX: Float,
                                 boxLocalY: Float,
                                 rawPressure: Float,
                                 tiltDegrees: Float,
                                 sampleTimestampMs: Long?
-                            ) {
+                            ): Boolean {
                                 val rawCanvasX = (boxLocalX - internalPanOffset.x) / internalZoomScale
                                 val rawCanvasY = (boxLocalY - internalPanOffset.y) / internalZoomScale
 
@@ -1441,7 +1445,7 @@ fun AnnotationCanvas(
                                         rawCanvasY < targetPageYStart || rawCanvasY > targetPageYEnd
 
                                 if (isOutsidePage && currentTool != StrokeTool.EYEDROPPER && currentTool != StrokeTool.ERASER) {
-                                    return
+                                    return false
                                 }
 
                                 val currentPressure = PressureCurveHelper.remapPressure(rawPressure, pressureCurve)
@@ -1473,6 +1477,8 @@ fun AnnotationCanvas(
                                     var drawPoint = currentPoint
                                     if (stabilizerEnabled) {
                                         val prevAccepted = activePoints.lastOrNull()
+                                        // Scalar overload: same math as the PointF pair version,
+                                        // without the two throwaway allocations per sample.
                                         val velocity = if (
                                             prevAccepted != null &&
                                             prevAccepted.timestampMs != null &&
@@ -1480,16 +1486,12 @@ fun AnnotationCanvas(
                                             sampleTimestampMs > prevAccepted.timestampMs!!
                                         ) {
                                             BrushStrokeMath.segmentVelocity(
-                                                com.authorss81.noteflow.data.model.PointF(
-                                                    prevAccepted.x,
-                                                    prevAccepted.y,
-                                                    timestampMs = prevAccepted.timestampMs
-                                                ),
-                                                com.authorss81.noteflow.data.model.PointF(
-                                                    currentPoint.x,
-                                                    currentPoint.y,
-                                                    timestampMs = sampleTimestampMs
-                                                )
+                                                prevAccepted.x,
+                                                prevAccepted.y,
+                                                prevAccepted.timestampMs,
+                                                currentPoint.x,
+                                                currentPoint.y,
+                                                sampleTimestampMs
                                             )
                                         } else {
                                             null
@@ -1543,6 +1545,7 @@ fun AnnotationCanvas(
                                 } else {
                                     activeEnd = currentPoint
                                 }
+                                return true
                             }
 
                             // Phase 214: consume coalesced history FIRST so every
@@ -1556,34 +1559,34 @@ fun AnnotationCanvas(
                             if (drainedCount > 1 && currentTool.isFreehandTool) {
                                 for (sample in batchDrainScratch) {
                                     if (StrokeBatchPolicy.isStale(sample.timestampMs, lastIngestedInputTimestampMs)) continue
-                                    ingestPointerSample(
+                                    val accepted = ingestPointerSample(
                                         boxLocalX = sample.x - canvasBoxWindowOffset.x,
                                         boxLocalY = sample.y - canvasBoxWindowOffset.y,
                                         rawPressure = sample.pressure,
                                         tiltDegrees = if (sample.tiltRad != 0f) Math.toDegrees(sample.tiltRad.toDouble()).toFloat() else 0f,
                                         sampleTimestampMs = sample.timestampMs
                                     )
-                                    lastIngestedInputTimestampMs = sample.timestampMs
+                                    if (accepted) lastIngestedInputTimestampMs = sample.timestampMs
                                 }
                             } else if (drainedCount > 0) {
                                 val newest = batchDrainScratch.last()
                                 if (!StrokeBatchPolicy.isStale(newest.timestampMs, lastIngestedInputTimestampMs)) {
-                                    ingestPointerSample(
+                                    val accepted = ingestPointerSample(
                                         boxLocalX = newest.x - canvasBoxWindowOffset.x,
                                         boxLocalY = newest.y - canvasBoxWindowOffset.y,
                                         rawPressure = newest.pressure,
                                         tiltDegrees = if (newest.tiltRad != 0f) Math.toDegrees(newest.tiltRad.toDouble()).toFloat() else 0f,
                                         sampleTimestampMs = newest.timestampMs
                                     )
-                                    lastIngestedInputTimestampMs = newest.timestampMs
+                                    if (accepted) lastIngestedInputTimestampMs = newest.timestampMs
                                 }
                             } else {
                                 // Defensive fallback: an event that somehow bypassed the passive
                                 // bridge (queue empty) still processes exactly ONE sample, using the
                                 // pre-214 state values — behaviour identical to the old single-sample path.
                                 if (!StrokeBatchPolicy.isStale(lastTimestampMs ?: Long.MIN_VALUE, lastIngestedInputTimestampMs)) {
-                                    ingestPointerSample(change.position.x, change.position.y, lastPressure, lastTilt, lastTimestampMs)
-                                    if (lastTimestampMs != null) lastIngestedInputTimestampMs = lastTimestampMs
+                                    val accepted = ingestPointerSample(change.position.x, change.position.y, lastPressure, lastTilt, lastTimestampMs)
+                                    if (accepted && lastTimestampMs != null) lastIngestedInputTimestampMs = lastTimestampMs
                                 }
                             }
                         },

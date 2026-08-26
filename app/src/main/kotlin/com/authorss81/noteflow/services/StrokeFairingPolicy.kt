@@ -2,6 +2,7 @@ package com.authorss81.noteflow.services
 
 import com.authorss81.noteflow.data.model.PointF
 import com.authorss81.noteflow.data.model.StrokeTool
+import kotlin.math.roundToLong
 
 /**
  * Phase 214 (Stroke Smoothing v2): commit-time fairing of hairline ink.
@@ -97,8 +98,14 @@ object StrokeFairingPolicy {
             tilt = a.tilt?.let { at ->
                 b.tilt?.let { bt -> at * weightA + bt * wb } ?: at
             },
+            // Timestamps interpolate in DOUBLE space (review-fix): event-uptime
+            // millis exceed Float's 24-bit exact-integer range after ~4.6 h of
+            // device uptime, where a Float blend would round stamps to coarse
+            // or duplicated values. Double keeps every Long below 2^53 exact.
             timestampMs = a.timestampMs?.let { at ->
-                b.timestampMs?.let { bt -> (at * weightA + bt * wb).toLong() } ?: at
+                b.timestampMs?.let { bt ->
+                    (at.toDouble() * weightA + bt.toDouble() * wb).roundToLong()
+                } ?: at
             }
         )
     }

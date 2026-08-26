@@ -14,4 +14,10 @@
     <string name="share_captured_previous_session">A shared clip from a previous session wasn\'t captured.</string>
     <string name="reader_history_restore_disabled">Restore is disabled while reading — focus mode is read-only.</string>
     <string name="import_pdf_split_truncated">Imported the first %1$d of %2$d PDF pages.</string>
+    <string name="canvas_tension_label">Tension (lag compensation)</string>
+    <string name="canvas_tension_percent_format">%1$d%%</string>
+    <string name="canvas_tension_helper">Higher = snappier follow-through · Lower = rounder, calmer lines</string>
+    <string name="canvas_model_classic">Classic</string>
+    <string name="canvas_model_one_euro">Adaptive (One-Euro)</string>
+    <string name="canvas_model_apply_note">Affects strokes drawn after the change</string>
 </resources>

@@ -27,10 +27,13 @@ package com.authorss81.noteflow.services
  * current pan/zoom/box-offset (same transform the predicted-tail path uses),
  * never at capture time.
  *
- * Thread-safety: SPSC ring with @Volatile indices — safe even if the producer
- * and consumer ever ran on different threads, though today both run on the UI
- * thread. Overflow overwrites the OLDEST samples (a stroke that outruns the
- * consumer keeps its freshest geometry, never stalls).
+ * Thread-safety: SPSC ring with @Volatile indices. TODAY BOTH SIDES RUN ON THE
+ * UI THREAD, and that is the supported contract: the overflow path in [offer]
+ * advances `head` from the PRODUCER side, so a genuinely concurrent
+ * producer/consumer pair could race on that index (lost update) and desync the
+ * ring. The volatile writes still publish the array slots safely for the
+ * single-threaded case. Overflow overwrites the OLDEST samples (a stroke that
+ * outruns the consumer keeps its freshest geometry, never stalls).
  */
 class RawInputSample(
     /** Window-space X (host view coordinates, as reported by the MotionEvent). */
@@ -87,6 +90,10 @@ class StrokeInputBatcher(private val capacity: Int = DEFAULT_CAPACITY) {
     /**
      * Drains every queued sample FIFO order into [sink] (cleared first).
      * Returns the number of drained samples. Consumer side only.
+     *
+     * Allocation note: the RING storage itself is primitive arrays and [offer]
+     * never allocates, but draining materializes one lightweight
+     * [RawInputSample] per queued sample (≤ [DEFAULT_CAPACITY] per frame).
      */
     fun drainInto(sink: MutableList<RawInputSample>): Int {
         sink.clear()

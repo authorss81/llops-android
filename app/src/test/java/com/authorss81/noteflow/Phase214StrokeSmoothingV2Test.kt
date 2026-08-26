@@ -114,6 +114,23 @@ class Phase214StrokeSmoothingV2Test {
         assertEquals(emptyList<PointF>(), StrokeFairingPolicy.chaikinOnce(emptyList()))
     }
 
+    @Test
+    fun `chaikin timestamps stay exact at magnitudes beyond float precision`() {
+        // Review-fix regression pin: ~5.5 h of device uptime puts eventTime
+        // millis past Float's 24-bit exact-integer range, where the original
+        // Float blend rounded interpolated stamps to coarse/duplicated values.
+        // The Double blend must keep every magnitude below 2^53 exact.
+        val base = 20_000_000_000L // > 2^24 ms (~4.66 h uptime)
+        val input = listOf(
+            PointF(0f, 0f, null, null, base),
+            PointF(10f, 0f, null, null, base + 16L),
+            PointF(20f, 0f, null, null, base + 32L)
+        )
+        val out = StrokeFairingPolicy.chaikinOnce(input)
+        assertEquals(base + 12L, out[1].timestampMs!!) // ¾B + ¼A
+        assertEquals(base + 20L, out[2].timestampMs!!) // ¾B + ¼C
+    }
+
     // ---- Source pins: canvas commit order + UI/persistence --------------------------
 
     private fun repoRoot(): File {
@@ -177,16 +194,34 @@ class Phase214StrokeSmoothingV2Test {
     @Test
     fun `editor sheet exposes tension dial and model chips with honest apply note`() {
         val editor = readSource("ui/screens/EditorScreen.kt")
-        assertTrue(editor.contains("\"Tension (lag compensation)\""))
+        assertTrue(editor.contains("R.string.canvas_tension_label"))
         assertTrue(editor.contains("onStabilizerPredictionChange(Math.round(it).toInt().coerceIn(0,"))
-        assertTrue(editor.contains("\"Adaptive (One-Euro)\""))
+        assertTrue(editor.contains("R.string.canvas_model_one_euro"))
         assertTrue(editor.contains("viewModel.settings.strokeStabilizerPredictionPercent = percent"))
         assertTrue(editor.contains("viewModel.settings.strokeStabilizerModelKey = key"))
         // Honest contract: affects strokes drawn AFTER the change.
-        assertTrue(editor.contains("Affects strokes drawn after the change"))
+        assertTrue(editor.contains("R.string.canvas_model_apply_note"))
         // The model chip row scrolls horizontally instead of clipping at 360dp.
         val region = editor.substringAfter("Phase 214: smoothing model")
         assertTrue(region.contains(".horizontalScroll(modelScroll)"))
+    }
+
+    @Test
+    fun `phase-214 sheet strings live in strings_xml - no hardcoded literals`() {
+        val res = File(repoRoot(), "app/src/main/res/values/strings.xml").readText()
+        for (name in listOf(
+            "canvas_tension_label", "canvas_tension_percent_format", "canvas_tension_helper",
+            "canvas_model_classic", "canvas_model_one_euro", "canvas_model_apply_note"
+        )) {
+            assertTrue("missing string resource $name", res.contains("name=\"$name\""))
+        }
+        assertTrue(res.contains("Tension (lag compensation)"))
+        assertTrue(res.contains("Adaptive (One-Euro)"))
+        assertTrue(res.contains("Affects strokes drawn after the change"))
+        val editor = readSource("ui/screens/EditorScreen.kt")
+        assertTrue(!editor.contains("\"Tension (lag compensation)\""))
+        assertTrue(!editor.contains("\"Adaptive (One-Euro)\""))
+        assertTrue(!editor.contains("\"Affects strokes drawn after the change\""))
     }
 
     @Test
