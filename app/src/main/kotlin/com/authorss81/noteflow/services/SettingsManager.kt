@@ -518,6 +518,14 @@ class SettingsManager(context: Context) {
         get() = prefs.getBoolean("serif_reading_enabled", false)
         set(value) = prefs.edit().putBoolean("serif_reading_enabled", value).apply()
 
+    // Phase 218: optional line-number gutter in fenced/indented code blocks.
+    // OFF by default so existing code blocks render identically; the gutter is
+    // a cosmetic read-only overlay that does not alter the AnnotatedString
+    // content (copy/selection still returns the raw source).
+    var markdownCodeGutterEnabled: Boolean
+        get() = prefs.getBoolean("markdown_code_gutter_enabled", false)
+        set(value) = prefs.edit().putBoolean("markdown_code_gutter_enabled", value).apply()
+
     // Phase 158 (22.5a): NON-SECRET "a shared clip is pending capture" marker.
     // A boolean + a wall-clock stamp ONLY — never the clip content (that would
     // be plaintext at rest, which every encryption finding forbids). Used to

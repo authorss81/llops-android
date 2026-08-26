@@ -3,6 +3,7 @@ package com.authorss81.noteflow.ui.components.markdown
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
@@ -12,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -204,6 +206,8 @@ internal fun MarkdownRenderBlocks(
                     text = node.collectLiteral(),
                     style = serifBodyStyle(style, serif).copy(
                         fontWeight = FontWeight.Bold,
+                        lineHeight = style.fontSize * 1.35f,
+                        letterSpacing = style.letterSpacing,
                         color = if (node.level <= 3) scheme.primary else scheme.onBackground
                     )
                 )
@@ -250,7 +254,7 @@ internal fun MarkdownRenderBlocks(
                             modifier = Modifier
                                 .width(3.dp)
                                 .fillMaxHeight()
-                                .background(primaryColor.copy(alpha = 0.5f))
+                                .background(scheme.primary)
                         )
                         Column(modifier = Modifier.padding(horizontal = 12.dp)) {
                             MarkdownRenderBlocks(node.childrenList(), primaryColor, baseDir, onOpenWikiLink, serif, cursor, onToggleCheckbox)
@@ -259,7 +263,11 @@ internal fun MarkdownRenderBlocks(
                 }
             }
             is TableBlock -> MarkdownTable(node, serif)
-            is ThematicBreak -> HorizontalDivider(color = scheme.outline)
+            is ThematicBreak -> HorizontalDivider(
+                modifier = Modifier.padding(vertical = 6.dp),
+                thickness = 1.dp,
+                color = scheme.onSurfaceVariant.copy(alpha = 0.3f)
+            )
             is HtmlBlock -> {
                 val html = node.literal ?: ""
                 if (html.contains("<details>", ignoreCase = true)) {
@@ -377,7 +385,12 @@ private fun MarkdownListItemView(
         val restText = firstText!!.substring(checkboxMatch.range.last)
         val checked = checkboxMatch.groupValues[1].trim() in setOf("x", "X")
         val candidateIndex = cursor?.nextOrNull()
-        Row(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 4.dp),
+            verticalAlignment = Alignment.Top
+        ) {
             AnimatedCheckmark(
                 checked = checked,
                 enabled = onToggleCheckbox != null,
@@ -387,17 +400,26 @@ private fun MarkdownListItemView(
                 } else {
                     null
                 },
-                modifier = Modifier.padding(end = 8.dp).padding(top = 2.dp)
+                modifier = Modifier.padding(end = 8.dp, top = 2.dp)
             )
             Column(modifier = Modifier.weight(1f)) {
                 val annotated = remember(restText, primaryColor) {
                     buildMarkdownAnnotatedString(restText, primaryColor)
                 }
                 val context = LocalContext.current
+                val checkedTextStyle = if (checked) {
+                    serifBodyStyle(MaterialTheme.typography.bodyLarge, serif).copy(
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                        textDecoration = TextDecoration.LineThrough
+                    )
+                } else {
+                    serifBodyStyle(MaterialTheme.typography.bodyLarge, serif).copy(
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+                }
                 ClickableText(
                     text = annotated,
-                    style = serifBodyStyle(MaterialTheme.typography.bodyLarge, serif)
-                        .copy(color = MaterialTheme.colorScheme.onBackground),
+                    style = checkedTextStyle,
                     onClick = { offset ->
                         val wiki = annotated.getStringAnnotations(tag = "WIKILINK", start = offset, end = offset)
                             .firstOrNull()
@@ -440,14 +462,19 @@ private fun MarkdownListItemView(
         return
     }
 
-    Row(modifier = Modifier.fillMaxWidth()) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.Top
+    ) {
         Text(
             text = marker,
             style = serifBodyStyle(MaterialTheme.typography.bodyLarge, serif).copy(
                 color = primaryColor,
                 fontWeight = FontWeight.SemiBold
             ),
-            modifier = Modifier.padding(end = 8.dp)
+            modifier = Modifier.padding(end = 8.dp, top = 2.dp)
         )
         Column(modifier = Modifier.weight(1f)) {
             MarkdownRenderBlocks(item.childrenList(), primaryColor, baseDir, onOpenWikiLink, serif, cursor, onToggleCheckbox)
@@ -458,20 +485,24 @@ private fun MarkdownListItemView(
 @Composable
 private fun MarkdownTable(node: TableBlock, serif: Boolean = false) {
     val scheme = MaterialTheme.colorScheme
-    Column(modifier = Modifier.fillMaxWidth()) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+    ) {
         for (child in node.childrenList()) {
             when (child) {
                 is TableHead -> {
                     for (rowNode in child.childrenList()) {
                         val row = rowNode as? TableRow ?: continue
-                        Row(modifier = Modifier.background(scheme.surfaceVariant)) {
+                        Row(modifier = Modifier.background(scheme.surfaceVariant.copy(alpha = 0.5f))) {
                             for (cell in row.childrenList()) {
                                 val tableCell = cell as? TableCell ?: continue
                                 MarkdownTableCellView(tableCell, isHeader = true, serif = serif)
                             }
                         }
                     }
-                    HorizontalDivider(color = scheme.primary)
+                    HorizontalDivider(thickness = 1.5.dp, color = scheme.primary)
                 }
                 is TableBody -> {
                     for (rowNode in child.childrenList()) {

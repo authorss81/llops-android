@@ -14,11 +14,15 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.ListAlt
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Hub
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.KeyboardArrowUp
+import androidx.compose.material.icons.outlined.Lightbulb
 import androidx.compose.material.icons.outlined.Save
 import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -1521,7 +1525,7 @@ private fun RenderBlocks(
                 val readerStyle = if (LocalReaderMode.current) {
                     baseStyle.copy(lineHeight = ReaderModePolicy.readerLineHeightSp(baseStyle.fontSize.value, baseStyle.lineHeight.value).sp)
                 } else {
-                    baseStyle
+                    baseStyle.copy(lineHeight = style.fontSize * 1.35f, letterSpacing = style.letterSpacing)
                 }
                 // Phase 174 (Feature 2): register this heading's measured offset
                 // into the precomputed index so the outline rail can jump here.
@@ -1575,13 +1579,13 @@ private fun RenderBlocks(
                     val calloutBody = quoteText.substringAfter("]").trim()
                     val (bannerColor, bannerTitle, bannerIcon) = when {
                         calloutType.contains("WARNING") || calloutType.contains("CAUTION") ->
-                            Triple(Color(0xFFE53935), "WARNING", androidx.compose.material.icons.Icons.Outlined.Edit)
+                            Triple(Color(0xFFE53935), "WARNING", Icons.Outlined.Warning)
                         calloutType.contains("TIP") ->
-                            Triple(Color(0xFF43A047), "TIP", androidx.compose.material.icons.Icons.Outlined.Edit)
+                            Triple(Color(0xFF43A047), "TIP", Icons.Outlined.Lightbulb)
                         calloutType.contains("IMPORTANT") ->
-                            Triple(Color(0xFF8E24AA), "IMPORTANT", androidx.compose.material.icons.Icons.Outlined.Edit)
+                            Triple(Color(0xFF8E24AA), "IMPORTANT", Icons.Outlined.ErrorOutline)
                         else ->
-                            Triple(primaryColor, "NOTE", androidx.compose.material.icons.Icons.Outlined.Edit)
+                            Triple(primaryColor, "NOTE", Icons.Outlined.Info)
                     }
 
                     Surface(
@@ -1592,6 +1596,13 @@ private fun RenderBlocks(
                     ) {
                         Column(modifier = Modifier.padding(12.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = bannerIcon,
+                                    contentDescription = null,
+                                    tint = bannerColor,
+                                    modifier = Modifier.width(18.dp).height(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
                                 Text(
                                     text = bannerTitle,
                                     style = MaterialTheme.typography.titleSmall,
@@ -1615,7 +1626,7 @@ private fun RenderBlocks(
                             modifier = Modifier
                                 .width(3.dp)
                                 .fillMaxHeight()
-                                .background(primaryColor.copy(alpha = 0.5f))
+                                .background(scheme.primary)
                         )
                         Column(modifier = Modifier.padding(horizontal = 12.dp)) {
                             RenderBlocks(node.childrenList(), primaryColor, baseDir, onOpenWikiLink, serif)
@@ -1624,7 +1635,11 @@ private fun RenderBlocks(
                 }
             }
             is TableBlock -> MarkdownTable(node, serif)
-            is ThematicBreak -> HorizontalDivider(color = scheme.outline)
+            is ThematicBreak -> HorizontalDivider(
+                modifier = Modifier.padding(vertical = 6.dp),
+                thickness = 1.dp,
+                color = scheme.onSurfaceVariant.copy(alpha = 0.3f)
+            )
             is HtmlBlock -> {
                 val html = node.literal ?: ""
                 if (html.contains("<details>", ignoreCase = true)) {
@@ -1681,14 +1696,19 @@ private fun ListItemView(
     onOpenWikiLink: (String) -> Unit,
     serif: Boolean = false
 ) {
-    Row(modifier = Modifier.fillMaxWidth()) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.Top
+    ) {
         Text(
             text = marker,
             style = serifBodyStyle(MaterialTheme.typography.bodyLarge, serif).copy(
                 color = primaryColor,
                 fontWeight = FontWeight.SemiBold
             ),
-            modifier = Modifier.padding(end = 8.dp)
+            modifier = Modifier.padding(end = 8.dp, top = 2.dp)
         )
         Column(modifier = Modifier.weight(1f)) {
             RenderBlocks(item.childrenList(), primaryColor, baseDir, onOpenWikiLink, serif)
@@ -1699,20 +1719,24 @@ private fun ListItemView(
 @Composable
 private fun MarkdownTable(node: TableBlock, serif: Boolean = false) {
     val scheme = MaterialTheme.colorScheme
-    Column(modifier = Modifier.fillMaxWidth()) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+    ) {
         for (child in node.childrenList()) {
             when (child) {
                 is TableHead -> {
                     for (rowNode in child.childrenList()) {
                         val row = rowNode as? TableRow ?: continue
-                        Row(modifier = Modifier.background(scheme.surfaceVariant)) {
+                        Row(modifier = Modifier.background(scheme.surfaceVariant.copy(alpha = 0.5f))) {
                             for (cell in row.childrenList()) {
                                 val tableCell = cell as? TableCell ?: continue
                                 TableCellView(tableCell, isHeader = true, serif = serif)
                             }
                         }
                     }
-                    HorizontalDivider(color = scheme.primary)
+                    HorizontalDivider(thickness = 1.5.dp, color = scheme.primary)
                 }
                 is TableBody -> {
                     for (rowNode in child.childrenList()) {
