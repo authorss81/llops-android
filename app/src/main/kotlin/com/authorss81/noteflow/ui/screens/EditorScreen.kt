@@ -491,6 +491,8 @@ fun EditorScreen(
     var divideIntoPages by remember { mutableStateOf(true) }
     var gpuWetBrushesEnabled by remember { mutableStateOf(viewModel.settings.gpuWetBrushesEnabled) }
     var shapeAutoSnapEnabled by remember { mutableStateOf(viewModel.settings.shapeAutoSnapEnabled) }
+    // Phase 213: per-stroke soft drop shadows ("paper elevation"). Default ON.
+    var paperElevationEnabled by remember { mutableStateOf(viewModel.settings.paperElevationEnabled) }
     var hapticsEnabled by remember { mutableStateOf(viewModel.settings.hapticsEnabled) }
 
     // Phase 19: dual eraser mode + render-time vibrancy. Stored in SharedPreferences
@@ -687,6 +689,19 @@ fun EditorScreen(
                     viewModel.settings.lowEndMinimapWarningShown = true
                     viewModel.showSnackbar(
                         "Minimap HUD turned off for low-end device performance. You can re-enable it in canvas settings.",
+                        isLong = true
+                    )
+                }
+                // Phase 213: stroke drop shadows roughly double the per-stroke path
+                // work — auto-off ONCE on low-end hardware with an honest message;
+                // a deliberate re-enable from canvas settings is honored (the
+                // renderer reads ONLY this flag, so no hidden tier gate blocks it).
+                if (viewModel.settings.paperElevationEnabled && !viewModel.settings.lowEndPaperElevationWarningShown) {
+                    paperElevationEnabled = false
+                    viewModel.settings.paperElevationEnabled = false
+                    viewModel.settings.lowEndPaperElevationWarningShown = true
+                    viewModel.showSnackbar(
+                        "Paper elevation shadows turned off for low-end device performance. You can re-enable them in canvas settings.",
                         isLong = true
                     )
                 }
@@ -2164,6 +2179,7 @@ fun EditorScreen(
                 activeVoiceSpeed = activeVoiceSpeed,
                 gpuWetBrushesEnabled = gpuWetBrushesEnabled,
                 shapeAutoSnapEnabled = shapeAutoSnapEnabled,
+                paperElevationEnabled = paperElevationEnabled,
                 hapticsEnabled = hapticsEnabled,
                 stabilizerEnabled = stabilizerEnabled,
                 stabilizerStrengthPercent = stabilizerStrengthPercent,
@@ -2640,6 +2656,11 @@ fun EditorScreen(
                 onShapeAutoSnapToggle = { enabled ->
                     shapeAutoSnapEnabled = enabled
                     viewModel.settings.shapeAutoSnapEnabled = enabled
+                },
+                paperElevationEnabled = paperElevationEnabled,
+                onPaperElevationToggle = { enabled ->
+                    paperElevationEnabled = enabled
+                    viewModel.settings.paperElevationEnabled = enabled
                 },
                 hapticsEnabled = hapticsEnabled,
                 onHapticsToggle = { enabled ->
@@ -4770,6 +4791,10 @@ private fun CanvasSettingsBottomSheet(
     onGpuWetBrushesToggle: (Boolean) -> Unit = {},
     shapeAutoSnapEnabled: Boolean = false,
     onShapeAutoSnapToggle: (Boolean) -> Unit = {},
+    // Phase 213: per-stroke soft drop shadows (default ON; low-end devices are
+    // auto-offed once with a message by the editor's device-tier effect).
+    paperElevationEnabled: Boolean = true,
+    onPaperElevationToggle: (Boolean) -> Unit = {},
     hapticsEnabled: Boolean = true,
     onHapticsToggle: (Boolean) -> Unit = {},
     // Phase 208 fix #5: palm rejection surfaced as a chip in this sheet (it used
@@ -5203,6 +5228,30 @@ private fun CanvasSettingsBottomSheet(
                 Switch(
                     checked = shapeAutoSnapEnabled,
                     onCheckedChange = onShapeAutoSnapToggle
+                )
+            }
+
+            // Phase 213: per-stroke soft drop shadows ("paper elevation").
+            Spacer(modifier = Modifier.height(16.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Icon(Icons.Outlined.Layers, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    Column {
+                        Text("Paper Elevation", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "Soft drop shadows lift strokes off the page",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                Switch(
+                    checked = paperElevationEnabled,
+                    onCheckedChange = onPaperElevationToggle
                 )
             }
 

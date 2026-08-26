@@ -8,6 +8,27 @@
 
 ## Package layout
 
+> **Implemented in phase-213** (2026-08-26, brush shading & drop shadows — "paper
+> elevation", see `workspace/phase-213/REPORT.md`): per-stroke soft drop shadows
+> lift ink off the paper, render-only (no schema/deps). New pure-JVM
+> `services/BrushShadowPolicy.kt` (skip-list ERASER/LASER/TEXT/SMUDGE/STICKER/
+> SELECT/PAN/EYEDROPPER; HIGHLIGHTER alpha ×0.5; offset `w·0.35/w·0.40` clamped
+> 1..6 dp; blur `w·0.6` clamped 2..12 px; alpha 0.20 light / **0.12 white on dark
+> paper**) + pooled `ui/components/StrokeShadowRenderer.kt` (ONE process-lifetime
+> Paint/Path; the single BlurMaskFilter re-fires only on a quantized-radius change —
+> never per segment) drawn by `drawSingleStroke` BEFORE both render paths
+> (`AnnotationCanvas.kt:4252-4276`, androidx.ink advanced path included).
+> Setting `paper_elevation_enabled` default ON ("Paper Elevation" row in Canvas &
+> Paper Options); both layer-raster cache keys gained `_s{0|1}` so toggling
+> invalidates rasters. LOW_END devices are auto-offed ONCE with an honest snackbar
+> (`EditorScreen.kt:694-708`, latch `lowEndPaperElevationWarningShown`) and a
+> re-enable is honored — deliberately NO tier gate inside the canvas. AGSL shader
+> uniforms untouched (bit-exact zero-pigment passthrough preserved). GPU
+> RenderEffect carrier evaluated and deferred with rationale (software layer
+> rasters can't run carriers; BlurMaskFilter already rides Skia GPU blur on HW
+> canvases). Tests: `BrushShadowPolicyTest` (19) + `Phase213BrushShadowTest` (7 pins);
+> visual DoD `visual-qa/screenshots/phase-213/before-after-light-dark.png`.
+
 > **Implemented in phase-212** (2026-08-25, JVM test hardening — deletion/install/shape-snap
 > coverage, see `workspace/phase-212/REPORT.md`): the thirteen zero-coverage service classes
 > gained 117 behavior tests across 13 suites in `app/src/test/java/com/authorss81/noteflow/

@@ -154,6 +154,15 @@ class SettingsManager(context: Context) {
         get() = prefs.getBoolean("gpu_wet_brushes_enabled", true)
         set(value) = prefs.edit().putBoolean("gpu_wet_brushes_enabled", value).apply()
 
+    // Phase 213: per-stroke soft drop shadows ("paper elevation"). Default ON —
+    // the shadow underlay is decided per stroke by BrushShadowPolicy and LOW_END
+    // devices skip it entirely (cosmetic overlay, PaperGrainPolicy precedent),
+    // so the default only ever ADDS depth on capable hardware. Prefs only, no
+    // DB schema impact.
+    var paperElevationEnabled: Boolean
+        get() = prefs.getBoolean("paper_elevation_enabled", true)
+        set(value) = prefs.edit().putBoolean("paper_elevation_enabled", value).apply()
+
     // 36.0: master haptics toggle. All gesture-milestone haptics (shape snap, color
     // detents, slider notches) are additionally gated by reduce-motion via
     // MotionPolicy.hapticsAllowed.
@@ -576,6 +585,12 @@ class SettingsManager(context: Context) {
     var lowEndMinimapWarningShown: Boolean
         get() = prefs.getBoolean("low_end_minimap_warning_shown", false)
         set(value) = prefs.edit().putBoolean("low_end_minimap_warning_shown", value).apply()
+
+    // Phase 213: remembers whether the paper-elevation low-end auto-off message
+    // has been shown (same one-time honest-degradation pattern as the two above).
+    var lowEndPaperElevationWarningShown: Boolean
+        get() = prefs.getBoolean("low_end_paper_elevation_warning_shown", false)
+        set(value) = prefs.edit().putBoolean("low_end_paper_elevation_warning_shown", value).apply()
 
     var databaseIntegrityWarningDismissed: Boolean
         get() = prefs.getBoolean("database_integrity_warning_dismissed", false)

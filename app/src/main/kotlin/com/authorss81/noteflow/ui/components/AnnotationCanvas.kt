@@ -177,6 +177,11 @@ fun AnnotationCanvas(
     onExtractOcr: ((String) -> Unit)? = null,
     gpuWetBrushesEnabled: Boolean = true,
     shapeAutoSnapEnabled: Boolean = false,
+    // Phase 213: per-stroke soft drop shadows ("paper elevation"). Default ON;
+    // BrushShadowPolicy still skips utility tools per stroke, and the low-end
+    // auto-off (with an honest one-time message) lives in EditorScreen, so
+    // pre-213 call sites that don't pass this keep compiling unchanged.
+    paperElevationEnabled: Boolean = true,
     hapticsEnabled: Boolean = true,
     stabilizerEnabled: Boolean = false,
     // Phase 197 (PERF 1.2): user strength trim 0–100 over the per-brush
@@ -795,6 +800,15 @@ fun AnnotationCanvas(
     val paperGrainBrush = remember(paperGrainEnabled, isDarkPaper) {
         PaperGrainTileCache.brushFor(isDarkPaper, paperGrainEnabled)
     }
+
+    // Phase 213: the shadow gate is the USER SETTING alone. The low-end-device
+    // policy lives in EditorScreen's device-tier effect (BrushShadowPolicy.
+    // enabled → auto-off ONCE with a non-alarming message, re-enable honored),
+    // NOT here: a second tier gate inside the renderer would make a deliberate
+    // settings re-enable silently ineffective on low-end hardware, violating
+    // the "never silent degradation" rule. Old strokes are unchanged whenever
+    // the flag is false (BrushShadowPolicy.plan returns null → zero draw work).
+    val strokeShadowEnabled = paperElevationEnabled
 
     // R2-b2b4-DOS-02 (phase-150): the reusable layer rasters live in a BOUNDED
     // LRU (was an unbounded `mutableMapOf`), so the native resident bytes stay at
@@ -2057,6 +2071,7 @@ fun AnnotationCanvas(
                         wetCanvasEngine = wetCanvasEngine,
                         wetBrushEngine = wetBrushEngine,
                         gpuWetBrushesEnabled = gpuWetBrushesEnabled,
+                        strokeShadowEnabled = strokeShadowEnabled,
                         symmetryMode = symmetryMode,
                         symmetryCenterX = symmetryCenterFor(size.width, 0f).x,
                         symmetryCenterY = symmetryCenterFor(size.width, 0f).y,
@@ -2108,6 +2123,7 @@ fun AnnotationCanvas(
                         wetCanvasEngine = wetCanvasEngine,
                         wetBrushEngine = wetBrushEngine,
                         gpuWetBrushesEnabled = gpuWetBrushesEnabled,
+                        strokeShadowEnabled = strokeShadowEnabled,
                         symmetryMode = symmetryMode,
                         symmetryCenterX = symmetryCenterFor(size.width, 0f).x,
                         symmetryCenterY = symmetryCenterFor(size.width, 0f).y,
@@ -2252,6 +2268,7 @@ fun AnnotationCanvas(
                             wetCanvasEngine = wetCanvasEngine,
                             wetBrushEngine = wetBrushEngine,
                             gpuWetBrushesEnabled = gpuWetBrushesEnabled,
+                            strokeShadowEnabled = strokeShadowEnabled,
                             symmetryMode = symmetryMode,
                             symmetryCenterX = symmetryCenterFor(size.width, pageTopY).x,
                             symmetryCenterY = symmetryCenterFor(size.width, pageTopY).y,
@@ -2335,6 +2352,7 @@ fun AnnotationCanvas(
                     currentWidth = currentWidth,
                     inkRenderer = if (advancedBrushesEnabled) inkRenderer else null,
                     isDarkPaper = isDarkPaper,
+                    strokeShadowEnabled = strokeShadowEnabled,
                     vibrancyBoost = vibrancyBoost,
                     strokeRenderOpts = strokeRenderOpts,
                     symmetryMode = symmetryMode,
@@ -2928,6 +2946,9 @@ private fun LiveStrokePreview(
     advancedBrushesEnabled: Boolean,
     inkRenderer: CanvasStrokeRenderer?,
     isDarkPaper: Boolean,
+    // Phase 213: composition-level shadow gate, threaded so the LIVE preview
+    // casts the same drop shadow the committed stroke will.
+    strokeShadowEnabled: Boolean,
     vibrancyBoost: Float,
     strokeRenderOpts: StrokeRenderOpts,
     symmetryMode: SymmetryMode,
@@ -2972,7 +2993,8 @@ private fun LiveStrokePreview(
                 isDarkPaper = isDarkPaper,
                 inkRenderer = inkRenderer,
                 renderOpts = strokeRenderOpts,
-                vibrancy = vibrancyBoost
+                vibrancy = vibrancyBoost,
+                shadowEnabled = strokeShadowEnabled
             )
             // Phase 07: view-time symmetry mirror of the live preview — same
             // page-anchored axis center the committed strokes mirror through.
@@ -2992,7 +3014,8 @@ private fun LiveStrokePreview(
                     isDarkPaper = isDarkPaper,
                     inkRenderer = inkRenderer,
                     renderOpts = strokeRenderOpts,
-                    vibrancy = vibrancyBoost
+                    vibrancy = vibrancyBoost,
+                    shadowEnabled = strokeShadowEnabled
                 )
             }
         }
@@ -3675,6 +3698,9 @@ private fun DrawScope.drawCompositedLayersStrokes(
     wetCanvasEngine: com.authorss81.noteflow.services.WetCanvasEngine? = null,
     wetBrushEngine: com.authorss81.noteflow.services.WetBrushEngine? = null,
     gpuWetBrushesEnabled: Boolean = true,
+    // Phase 213: per-stroke drop-shadow gate = the resolved user setting
+    // (low-end tier policy applied upstream by EditorScreen's device effect).
+    strokeShadowEnabled: Boolean = false,
     symmetryMode: SymmetryMode = SymmetryMode.OFF,
     symmetryCenterX: Float = 0f,
     symmetryCenterY: Float = 0f,
@@ -3690,13 +3716,13 @@ private fun DrawScope.drawCompositedLayersStrokes(
     // view-time mirror is the LIVE in-progress preview below, so the user still
     // sees the symmetric effect while drawing, before lift-off.
     fun DrawScope.drawCommittedStrokeOnce(stroke: Stroke, offsetY: Float) {
-        drawSingleStroke(stroke, offsetY, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer, renderOpts = strokeRenderOpts, vibrancy = vibrancyBoost)
+        drawSingleStroke(stroke, offsetY, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer, renderOpts = strokeRenderOpts, vibrancy = vibrancyBoost, shadowEnabled = strokeShadowEnabled)
     }
 
     // Live preview only: draws [stroke] plus its mirror when [sMode] is active.
     // TEXT strokes are never mirrored (text cannot sensibly reflect).
     fun DrawScope.drawLivePreviewWithSymmetry(stroke: Stroke, offsetY: Float, sMode: SymmetryMode, centerX: Float = symmetryCenterX, centerY: Float = symmetryCenterY) {
-        drawSingleStroke(stroke, offsetY, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer, renderOpts = strokeRenderOpts, vibrancy = vibrancyBoost)
+        drawSingleStroke(stroke, offsetY, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer, renderOpts = strokeRenderOpts, vibrancy = vibrancyBoost, shadowEnabled = strokeShadowEnabled)
         if (sMode != SymmetryMode.OFF && stroke.tool != StrokeTool.TEXT) {
             drawSingleStroke(
                 stroke.copy(
@@ -3717,7 +3743,8 @@ private fun DrawScope.drawCompositedLayersStrokes(
                 isDarkPaper = isDarkPaper,
                 inkRenderer = inkRenderer,
                 renderOpts = strokeRenderOpts,
-                vibrancy = vibrancyBoost
+                vibrancy = vibrancyBoost,
+                shadowEnabled = strokeShadowEnabled
             )
         }
     }
@@ -3735,7 +3762,10 @@ private fun DrawScope.drawCompositedLayersStrokes(
             pageWidth > 0f && pageHeight > 0f
         ) {
             val defaultLayerId = "layer_default"
-            val cacheKey = "${pageIdx}_${defaultLayerId}_v${vibrancyBoost}"
+            // Phase 213: the shadow flag is IN the key — toggling "Paper
+            // elevation" (or a tier change) orphans the old rasters instead of
+            // serving stale flat/shadowed ink.
+            val cacheKey = "${pageIdx}_${defaultLayerId}_v${vibrancyBoost}_s${if (strokeShadowEnabled) 1 else 0}"
             val strokesHash = strokes.hashCode()
             var cache = layerBitmapCache.get(cacheKey)
             val pw = pageWidth.toInt().coerceAtLeast(1)
@@ -3855,12 +3885,15 @@ private fun DrawScope.drawCompositedLayersStrokes(
                 layoutDirection = layoutDirection,
                 strokeRenderOpts = strokeRenderOpts,
                 liveStrokeSeed = liveStrokeSeed,
-                vibrancyBoost = vibrancyBoost
+                vibrancyBoost = vibrancyBoost,
+                strokeShadowEnabled = strokeShadowEnabled
             )
             continue
         }
 
-        val cacheKey = "${pageIdx}_${layer.id}_v${vibrancyBoost}"
+        // Phase 213: `_s<flag>` rides in the key for the same reason as the
+        // no-layers path above — a shadow-toggle change must invalidate rasters.
+        val cacheKey = "${pageIdx}_${layer.id}_v${vibrancyBoost}_s${if (strokeShadowEnabled) 1 else 0}"
         val strokesHash = layerStrokes.hashCode()
 
         // Phase 203 (review fixes): symmetry is fully OUT of the committed-layer
@@ -3976,7 +4009,8 @@ private fun DrawScope.drawWetLayerPass(
     layoutDirection: androidx.compose.ui.unit.LayoutDirection? = null,
     strokeRenderOpts: StrokeRenderOpts = StrokeRenderOpts(),
     liveStrokeSeed: Float = 0f,
-    vibrancyBoost: Float = 0f
+    vibrancyBoost: Float = 0f,
+    strokeShadowEnabled: Boolean = false
 ) {
     if (ShaderCapabilityHelper.isAgslSupported && wetMixingEffect != null) {
         val brushPos = activePoints.lastOrNull() ?: activeStart
@@ -4070,10 +4104,10 @@ private fun DrawScope.drawWetLayerPass(
 
         fun drawStrokes() {
             for (stroke in layerStrokes) {
-                drawSingleStroke(stroke, 0f, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer, renderOpts = strokeRenderOpts, vibrancy = vibrancyBoost)
+                drawSingleStroke(stroke, 0f, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer, renderOpts = strokeRenderOpts, vibrancy = vibrancyBoost, shadowEnabled = strokeShadowEnabled)
             }
             if (previewStroke != null) {
-                drawSingleStroke(previewStroke, 0f, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer, renderOpts = strokeRenderOpts, vibrancy = vibrancyBoost)
+                drawSingleStroke(previewStroke, 0f, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer, renderOpts = strokeRenderOpts, vibrancy = vibrancyBoost, shadowEnabled = strokeShadowEnabled)
             }
         }
 
@@ -4142,10 +4176,10 @@ private fun DrawScope.drawWetLayerPass(
         }
     } else {
         for (stroke in layerStrokes) {
-            drawSingleStroke(stroke, 0f, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer, renderOpts = strokeRenderOpts, vibrancy = vibrancyBoost)
+            drawSingleStroke(stroke, 0f, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer, renderOpts = strokeRenderOpts, vibrancy = vibrancyBoost, shadowEnabled = strokeShadowEnabled)
         }
         if (previewStroke != null) {
-            drawSingleStroke(previewStroke, 0f, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer, renderOpts = strokeRenderOpts, vibrancy = vibrancyBoost)
+            drawSingleStroke(previewStroke, 0f, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer, renderOpts = strokeRenderOpts, vibrancy = vibrancyBoost, shadowEnabled = strokeShadowEnabled)
         }
     }
 }
@@ -4211,8 +4245,33 @@ private fun DrawScope.drawSingleStroke(
     isDarkPaper: Boolean = false,
     inkRenderer: CanvasStrokeRenderer? = null,
     renderOpts: StrokeRenderOpts = StrokeRenderOpts(),
-    vibrancy: Float = 0f
+    vibrancy: Float = 0f,
+    // Phase 213: composition-level gate threaded from the canvas (user setting
+    // AND non-low-end tier). The per-stroke decision still runs through
+    // BrushShadowPolicy.plan below, which can still return null per tool.
+    shadowEnabled: Boolean = false
 ) {
+    // Phase 213 ("Paper elevation"): soft drop-shadow UNDER the ink, drawn
+    // BEFORE both render paths (the androidx.ink advanced path returns early
+    // below) so every tool lifts off the paper consistently. The decision table
+    // lives in BrushShadowPolicy — null means zero draw work (setting off or a
+    // utility tool), keeping old strokes byte-identical.
+    val shadowPlan = com.authorss81.noteflow.services.BrushShadowPolicy.plan(
+        tool = stroke.tool,
+        widthPx = stroke.width,
+        isDarkPaper = isDarkPaper,
+        settingEnabled = shadowEnabled,
+        pxPerDp = density
+    )
+    if (shadowPlan != null) {
+        StrokeShadowRenderer.drawStrokeShadow(
+            canvas = drawContext.canvas.nativeCanvas,
+            stroke = stroke,
+            offsetY = offsetY,
+            plan = shadowPlan,
+            isDarkPaper = isDarkPaper
+        )
+    }
     if (stroke.isAdvanced && inkRenderer != null) {
         try {
             val inkStroke = convertToInkStroke(stroke, vibrancy = vibrancy)
