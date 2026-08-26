@@ -3738,6 +3738,7 @@ private fun DockQuickToolsRow(
 ) {
     val quickTools = listOf(
         StrokeTool.ERASER,
+        StrokeTool.SMUDGE,
         StrokeTool.TEXT,
         StrokeTool.STICKER,
         StrokeTool.RECTANGLE,
@@ -3755,12 +3756,22 @@ private fun DockQuickToolsRow(
                 onClick = { onQuickTool(tool) },
                 selected = currentTool == tool,
                 content = {
-                    Icon(
-                        imageVector = getToolIcon(tool),
-                        contentDescription = tool.label,
-                        tint = if (currentTool == tool) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(18.dp)
-                    )
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            imageVector = getToolIcon(tool),
+                            contentDescription = tool.label,
+                            tint = if (currentTool == tool) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        if (tool == StrokeTool.SMUDGE) {
+                            Text(
+                                text = "Blend",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontSize = 7.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                            )
+                        }
+                    }
                 }
             )
         }
@@ -3777,6 +3788,7 @@ private fun DockQuickToolsColumn(
 ) {
     val quickTools = listOf(
         StrokeTool.ERASER,
+        StrokeTool.SMUDGE,
         StrokeTool.TEXT,
         StrokeTool.STICKER,
         StrokeTool.RECTANGLE,
@@ -3794,12 +3806,22 @@ private fun DockQuickToolsColumn(
                 onClick = { onQuickTool(tool) },
                 selected = currentTool == tool,
                 content = {
-                    Icon(
-                        imageVector = getToolIcon(tool),
-                        contentDescription = tool.label,
-                        tint = if (currentTool == tool) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(18.dp)
-                    )
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            imageVector = getToolIcon(tool),
+                            contentDescription = tool.label,
+                            tint = if (currentTool == tool) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        if (tool == StrokeTool.SMUDGE) {
+                            Text(
+                                text = "Blend",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontSize = 7.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                            )
+                        }
+                    }
                 }
             )
         }

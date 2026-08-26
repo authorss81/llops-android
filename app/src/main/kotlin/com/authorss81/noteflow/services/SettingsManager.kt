@@ -289,6 +289,33 @@ class SettingsManager(context: Context) {
         return out
     }
 
+    // Phase 219: per-template-type visual overrides (line spacing, grid opacity,
+    // dot radius, accent color). Stored as a JSON string keyed by template type
+    // ("lined", "grid", "dots"). No DB schema impact — prefs only.
+    var templatePrefsJson: String
+        get() = prefs.getString("template_prefs_json", "{}") ?: "{}"
+        set(value) = prefs.edit().putString("template_prefs_json", value).apply()
+
+    /** Read a single template-type override or the default. */
+    fun templatePref(templateType: String, key: String, default: String): String {
+        return try {
+            val obj = org.json.JSONObject(templatePrefsJson)
+            if (obj.has(templateType)) {
+                val inner = obj.getJSONObject(templateType)
+                if (inner.has(key)) inner.getString(key) else default
+            } else default
+        } catch (_: Exception) { default }
+    }
+
+    /** Write a single template-type override. */
+    fun setTemplatePref(templateType: String, key: String, value: String) {
+        val obj = try { org.json.JSONObject(templatePrefsJson) } catch (_: Exception) { org.json.JSONObject() }
+        val inner = if (obj.has(templateType)) obj.getJSONObject(templateType) else org.json.JSONObject()
+        inner.put(key, value)
+        obj.put(templateType, inner)
+        templatePrefsJson = obj.toString()
+    }
+
     // Phase 13: the last selected ready-made brush preset (BrushPresetPack).
     // Persisted in SharedPreferences — NO DB schema impact.
     var activeBrushPresetId: String?

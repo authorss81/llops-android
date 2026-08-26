@@ -130,3 +130,25 @@ Render:
 
 - Tools are persisted by name (`StrokeTool.valueOf`), so saved strokes / custom
   presets with the new tools survive restarts. See `BrushStrokeMathTest`.
+
+## Presets (Phase 219)
+
+### Soft Shade — portrait graphite build-up
+
+A curated `BrushPreset` (`soft_shade` in `BrushPresetPack`) designed for
+repeated-light-pass shading (e.g. under-eye shadows in portrait work).
+
+| param      | value | why |
+|------------|-------|-----|
+| tool       | PENCIL | classic graphite feel |
+| color      | #334155 | warm dark graphite |
+| size       | 18 | wide soft coverage |
+| curve      | light | sqrt(p) — light press still deposits width |
+| charge     | 0.25 | low pigment → single pass ~0.30 alpha |
+| dilution   | 0.88 | high wetness for soft feathered edges |
+| paperGrain | 0.35 | subtle paper texture without harsh speckle |
+| smoothing  | 0.75 | forgiving, smooth strokes |
+
+Layering: 1 pass = faint veil, 2 passes = light shadow, 3 passes = mid-tone.
+Pair with SMUDGE (quick tool, "Blend shade" hint) for smooth transitions.
+No new AGSL shader — uses the existing PENCIL_GRAPHITE texture path.

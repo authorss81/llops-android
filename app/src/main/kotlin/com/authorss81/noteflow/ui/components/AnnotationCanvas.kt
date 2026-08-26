@@ -942,6 +942,19 @@ fun AnnotationCanvas(
     // Phase 18: brush-physics render settings — velocity width modulation, nib angle.
     // Persisted via the existing SettingsManager (SharedPreferences) path; NO DB schema change.
     val brushRenderSettings = remember(context) { com.authorss81.noteflow.services.SettingsManager(context) }
+    // Phase 219: read per-template-type visual overrides once per recomposition.
+    fun templateOverridesFor(tpl: String): TemplateOverrides {
+        val spacing = brushRenderSettings.templatePref(tpl, "spacing", "").ifEmpty { null }?.toFloatOrNull()
+        val opacity = brushRenderSettings.templatePref(tpl, "opacity", "").ifEmpty { null }?.toFloatOrNull()
+        val dotR = brushRenderSettings.templatePref(tpl, "dotRadius", "").ifEmpty { null }?.toFloatOrNull()
+        val color = brushRenderSettings.templatePref(tpl, "color", "").ifEmpty { null }
+        return TemplateOverrides(
+            lineSpacingDp = spacing,
+            gridOpacity = opacity,
+            dotRadiusPx = dotR,
+            accentColorHex = color
+        )
+    }
     var velocityModulated by remember { mutableStateOf(brushRenderSettings.velocityModulationEnabled) }
     var velocityIntensity by remember { mutableFloatStateOf(brushRenderSettings.velocityModulationIntensity) }
     var nibAngleDeg by remember { mutableFloatStateOf(brushRenderSettings.calligraphicNibAngleDeg) }
@@ -2361,7 +2374,7 @@ fun AnnotationCanvas(
                 if (!isContinuousMode) {
                     // Single Page Canvas
                     drawPaperCard(0f, 0f, size.width, size.height, paperColor = parsedPaperColor, isDarkPaper = isDarkPaper, grainBrush = paperGrainBrush)
-                    drawPaperTemplate(template, 0f, 0f, size.width, size.height, isDarkPaper = isDarkPaper, paperTexture = paperTexture)
+                    drawPaperTemplate(template, 0f, 0f, size.width, size.height, isDarkPaper = isDarkPaper, paperTexture = paperTexture, templateOverrides = templateOverridesFor(template))
 
                     val bg = pdfPageBitmaps[pdfPageFilter] ?: backgroundImage
                     bg?.let { bitmap ->
@@ -2434,7 +2447,7 @@ fun AnnotationCanvas(
                     val (canvasW, infiniteH) = computeCanvasWorld(size.width)
 
                     drawPaperCard(0f, 0f, canvasW, infiniteH, paperColor = parsedPaperColor, isDarkPaper = isDarkPaper, pageLabel = null, grainBrush = paperGrainBrush)
-                    drawPaperTemplate(template, 0f, 0f, canvasW, infiniteH, isDarkPaper = isDarkPaper, paperTexture = paperTexture)
+                    drawPaperTemplate(template, 0f, 0f, canvasW, infiniteH, isDarkPaper = isDarkPaper, paperTexture = paperTexture, templateOverrides = templateOverridesFor(template))
 
                     // Phase 178: reference-image underlay (seamless world coords).
                     if (referenceImagePage == pdfPageFilter) {
@@ -2530,7 +2543,7 @@ fun AnnotationCanvas(
 
                         // 1. Differentiated Page Paper Container with Card Shadow & Page Badge
                         drawPaperCard(0f, pageTopY, canvasW, pageHeightPx, paperColor = parsedPaperColor, isDarkPaper = isDarkPaper, pageLabel = "Page ${pageIdx + 1}", showPageLabel = showPageIndicator, grainBrush = paperGrainBrush)
-                        drawPaperTemplate(template, 0f, pageTopY, canvasW, pageHeightPx, isDarkPaper = isDarkPaper, paperTexture = paperTexture)
+                        drawPaperTemplate(template, 0f, pageTopY, canvasW, pageHeightPx, isDarkPaper = isDarkPaper, paperTexture = paperTexture, templateOverrides = templateOverridesFor(template))
 
                         // 2. Render Page Bitmap (if in window)
                         val pageBitmap = pdfPageBitmaps[pageIdx]
@@ -3833,6 +3846,18 @@ private fun DrawScope.drawPaperCard(
     }
 }
 
+/** Phase 219: per-template-type visual overrides read from SettingsManager. */
+private data class TemplateOverrides(
+    val lineSpacingDp: Float? = null,
+    val gridOpacity: Float? = null,
+    val dotRadiusPx: Float? = null,
+    val accentColorHex: String? = null
+) {
+    companion object {
+        val DEFAULT = TemplateOverrides()
+    }
+}
+
 private fun DrawScope.drawPaperTemplate(
     template: String,
     xOffset: Float,
@@ -3840,7 +3865,8 @@ private fun DrawScope.drawPaperTemplate(
     width: Float,
     height: Float,
     isDarkPaper: Boolean = false,
-    paperTexture: ImageBitmap? = null
+    paperTexture: ImageBitmap? = null,
+    templateOverrides: TemplateOverrides = TemplateOverrides.DEFAULT
 ) {
     // Phase 07: tiled custom paper texture pack (drawn first so the classic
     // template grid/lines overlay it when both are configured).
@@ -3863,10 +3889,15 @@ private fun DrawScope.drawPaperTemplate(
             }
         }
     }
-    val gridColor = if (isDarkPaper) Color(0xFF94A3B8).copy(alpha = 0.35f) else Color.Gray.copy(alpha = 0.22f)
+    val gridAlpha = templateOverrides.gridOpacity
+        ?: (if (isDarkPaper) 0.35f else 0.22f)
+    val baseGridColor = templateOverrides.accentColorHex?.let {
+        try { Color(android.graphics.Color.parseColor(it)) } catch (_: Exception) { Color.Gray }
+    } ?: if (isDarkPaper) Color(0xFF94A3B8) else Color.Gray
+    val gridColor = baseGridColor.copy(alpha = gridAlpha)
     when (template) {
         "lined" -> {
-            val lineSpacing = 36.dp.toPx()
+            val lineSpacing = (templateOverrides.lineSpacingDp ?: 36f).dp.toPx()
             var y = yOffset + lineSpacing
             while (y < yOffset + height) {
                 drawLine(gridColor, Offset(xOffset, y), Offset(xOffset + width, y), strokeWidth = 1.5f)
@@ -3874,7 +3905,7 @@ private fun DrawScope.drawPaperTemplate(
             }
         }
         "grid" -> {
-            val gridSize = 28.dp.toPx()
+            val gridSize = (templateOverrides.lineSpacingDp ?: 28f).dp.toPx()
             var x = xOffset + gridSize
             while (x < xOffset + width) {
                 drawLine(gridColor, Offset(x, yOffset), Offset(x, yOffset + height), strokeWidth = 1f)
@@ -3887,15 +3918,40 @@ private fun DrawScope.drawPaperTemplate(
             }
         }
         "dots" -> {
-            val dotSpacing = 28.dp.toPx()
+            val dotSpacing = (templateOverrides.lineSpacingDp ?: 28f).dp.toPx()
+            val dotRadius = templateOverrides.dotRadiusPx ?: 2f
             var x = xOffset + dotSpacing
             while (x < xOffset + width) {
                 var y = yOffset + dotSpacing
                 while (y < yOffset + height) {
-                    drawCircle(gridColor, radius = 2f, center = Offset(x, y))
+                    drawCircle(gridColor, radius = dotRadius, center = Offset(x, y))
                     y += dotSpacing
                 }
                 x += dotSpacing
+            }
+        }
+        "cross_grid" -> {
+            val crossSpacing = (templateOverrides.lineSpacingDp ?: 28f).dp.toPx()
+            val dotRadius = templateOverrides.dotRadiusPx ?: 2f
+            val faintGridColor = gridColor.copy(alpha = gridAlpha * 0.5f)
+            var x = xOffset + crossSpacing
+            while (x < xOffset + width) {
+                drawLine(faintGridColor, Offset(x, yOffset), Offset(x, yOffset + height), strokeWidth = 0.5f)
+                x += crossSpacing
+            }
+            var y = yOffset + crossSpacing
+            while (y < yOffset + height) {
+                drawLine(faintGridColor, Offset(xOffset, y), Offset(xOffset + width, y), strokeWidth = 0.5f)
+                y += crossSpacing
+            }
+            var dx = xOffset + crossSpacing
+            while (dx < xOffset + width) {
+                var dy = yOffset + crossSpacing
+                while (dy < yOffset + height) {
+                    drawCircle(gridColor, radius = dotRadius, center = Offset(dx, dy))
+                    dy += crossSpacing
+                }
+                dx += crossSpacing
             }
         }
         "cornell" -> {
@@ -4022,6 +4078,28 @@ private fun DrawScope.drawPaperTemplate(
                     drawLine(gridColor, Offset(xOffset + 24.dp.toPx(), lineY), Offset(xOffset + width - 24.dp.toPx(), lineY), strokeWidth = 1.2f)
                 }
                 currentY += 4 * staffSpacing + groupSpacing
+            }
+        }
+        "storyboard" -> {
+            val accentColor = if (isDarkPaper) Color(0xFF60A5FA).copy(alpha = 0.45f) else Color(0xFF3B82F6).copy(alpha = 0.35f)
+            val panelGap = 16.dp.toPx()
+            val panelH = (height - 4 * panelGap) / 3f
+            val panelW = width - 32.dp.toPx()
+            val panelX = xOffset + 16.dp.toPx()
+
+            for (i in 0 until 3) {
+                val panelY = yOffset + panelGap + i * (panelH + panelGap)
+                // Panel border (rounded rect)
+                drawRoundRect(
+                    color = accentColor,
+                    topLeft = Offset(panelX, panelY),
+                    size = androidx.compose.ui.geometry.Size(panelW, panelH),
+                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(8.dp.toPx()),
+                    style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.5f)
+                )
+                // Caption line at bottom of panel
+                val captionY = panelY + panelH - 28.dp.toPx()
+                drawLine(gridColor, Offset(panelX + 12.dp.toPx(), captionY), Offset(panelX + panelW - 12.dp.toPx(), captionY), strokeWidth = 1f)
             }
         }
     }

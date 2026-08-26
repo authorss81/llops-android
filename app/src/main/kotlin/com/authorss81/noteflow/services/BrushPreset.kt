@@ -143,6 +143,24 @@ object BrushPresetPack {
             // The eraser path never routes through the stabilizer; a neutral
             // value keeps every pack member valid all the same.
             smoothing = 0.50f
+        ),
+        // Phase 219: soft shade for portrait work — light pressure deposits
+        // faint graphite that builds with repeated passes. The LIGHT curve
+        // (sqrt(p)) widens low-pressure strokes so a gentle touch still covers
+        // area; low charge (0.25) keeps single-pass alpha ~0.30 so 3 passes
+        // reach mid-tone. SMUDGE pairs naturally for blending.
+        BrushPreset(
+            id = "soft_shade",
+            name = "Soft Shade",
+            tool = com.authorss81.noteflow.data.model.StrokeTool.PENCIL,
+            brushParams = BrushStudioParams(
+                dilution = 0.88f, charge = 0.25f, pull = 0.30f, impasto = 0.0f,
+                paperGrain = 0.35f, splatterSpread = 0.05f
+            ),
+            size = 18.0f,
+            colorHex = "#334155",
+            pressureCurveKey = "light",
+            smoothing = 0.75f
         )
     )
 

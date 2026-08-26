@@ -596,6 +596,17 @@
 > Tests: `StrokeSelectionActionPolicyTest` (41) + `Phase216SelectionWiringTest`
 > (24). `assembleDebug` green, no schema change, no new deps.
 
+> **Implemented in phase-219** (2026-08-26, Templates + Pencil Shade Preset, see
+> `workspace/phase-219/REPORT.md`): template customization via JSON prefs
+> (`SettingsManager.templatePrefsJson`, `templatePref()`/`setTemplatePref()` at
+> `SettingsManager.kt:292-319`); `TemplateLibraryDialog` per-card expand controls
+> (color/spacing/opacity/dots); `AnnotationCanvas.drawPaperTemplate` reads
+> overrides via `templateOverridesFor(template)` (`AnnotationCanvas.kt:3847`).
+> New templates: `cross_grid` (dots + faint grid) and `storyboard` (3 captioned
+> panels). `BrushPresetPack.soft_shade` (PENCIL, size 18, LIGHT curve, charge
+> 0.25, smoothing 0.75) for portrait shade build-up. SMUDGE in quick tool dock
+> with "Blend" label. No schema change, no new deps.
+
 > **Implemented in phase-196** (2026-08-24, stylus motion prediction — PERF 1.1, see
 > `workspace/phase-196/REPORT.md`): the ink canvas now records every raw `MotionEvent`
 > with `androidx.input:input-motionprediction:1.0.0` (`MotionEventPredictor.newInstance`,
