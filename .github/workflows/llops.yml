@@ -61,11 +61,11 @@ jobs:
             grep -qx "workspace/${name}/.attempts" /tmp/tree.txt && touch "/tmp/phases/${name}.attempts"
           done < /tmp/phase_names.txt
 
-          # Read a phase's timeout marker via the API (default 90 min — 60 was too tight for canvas/painting phases with Paparazzi + gradle).
+          # Read a phase's timeout marker via the API (default 120 min / 2h — 60/90 was too tight for canvas/painting phases with Paparazzi + gradle).
           phase_timeout() {
             local n="$1" t
             t=$(gh api "repos/${GITHUB_REPOSITORY}/contents/workspace/${n}/.timeout" --jq '.content' 2>/dev/null | base64 -d 2>/dev/null | tr -d '[:space:]')
-            if [ -n "$t" ] && [ "$t" -ge 1 ] 2>/dev/null; then printf '%s' "$t"; else printf '90'; fi
+            if [ -n "$t" ] && [ "$t" -ge 1 ] 2>/dev/null; then printf '%s' "$t"; else printf '120'; fi
           }
 
           # Manual dispatch override.
@@ -116,7 +116,7 @@ jobs:
     needs: select-phase
     if: needs.select-phase.outputs.exists == 'true'
     runs-on: ubuntu-latest
-    # Fix 6: per-phase timeout (workspace/<phase>/.timeout), default 60 min.
+    # Fix 6: per-phase timeout (workspace/<phase>/.timeout), default 120 min / 2h.
     timeout-minutes: ${{ fromJSON(needs.select-phase.outputs.timeout) }}
     outputs:
       phase: ${{ steps.run.outputs.phase }}
