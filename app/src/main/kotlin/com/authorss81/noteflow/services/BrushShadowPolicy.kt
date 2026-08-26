@@ -94,6 +94,8 @@ object BrushShadowPolicy {
         StrokeTool.TEXT,        // text boxes already read as flat annotations
         StrokeTool.SMUDGE,      // blending smear is not raised paint
         StrokeTool.STICKER,     // placed artwork carries its own art
+        StrokeTool.DOTTED,      // discrete dots; the continuous blurred centerline
+        //                       outline would read as a phantom stripe between dots
         StrokeTool.SELECT,
         StrokeTool.PAN,
         StrokeTool.EYEDROPPER
@@ -102,6 +104,12 @@ object BrushShadowPolicy {
     /**
      * Master gate: shadows are a cosmetic overlay, so LOW_END devices keep the
      * pre-213 draw path entirely (same precedent as PaperGrainPolicy.enabled).
+     *
+     * Pinned tier table only: production resolves the tier UPSTREAM — the
+     * EditorScreen device-tier effect auto-offs the persisted SETTING once (with
+     * an honest message) and the canvas reads that setting alone, so this
+     * function is exercised by `BrushShadowPolicyTest` today and stays reserved
+     * for a renderer-side gate if one is ever needed.
      */
     fun enabled(lowEndDevice: Boolean): Boolean = !lowEndDevice
 
@@ -147,6 +155,14 @@ object BrushShadowPolicy {
      * the renderer stays dumb. The device tier is resolved UPSTREAM (the
      * EditorScreen auto-off honors user re-enables), so this core variant
      * assumes eligibility was already decided.
+     *
+     * Review fix (phase-213): a one-slot last-plan memo removes the per-frame
+     * [ShadowPlan] allocation on the hottest consumer — the live preview
+     * re-plans the SAME in-progress stroke every frame with identical inputs,
+     * so the probe (pure field comparison) hits continuously while drawing.
+     * Canvas draws are UI-thread only (same contract as StrokeShadowRenderer)
+     * and tests exercise the table sequentially, so no synchronization is
+     * needed; the memo stores both null and non-null outcomes.
      */
     fun plan(
         tool: StrokeTool,
@@ -155,9 +171,33 @@ object BrushShadowPolicy {
         settingEnabled: Boolean,
         pxPerDp: Float
     ): ShadowPlan? {
+        val w = sanitizeWidth(widthPx)
+        if (memoValid &&
+            memoTool === tool && memoWidth == w && memoDark == isDarkPaper &&
+            memoSetting == settingEnabled && memoDensity == pxPerDp
+        ) {
+            return memoPlan
+        }
+        val result = computePlan(tool, w, isDarkPaper, settingEnabled, pxPerDp)
+        memoTool = tool
+        memoWidth = w
+        memoDark = isDarkPaper
+        memoSetting = settingEnabled
+        memoDensity = pxPerDp
+        memoPlan = result
+        memoValid = true
+        return result
+    }
+
+    private fun computePlan(
+        tool: StrokeTool,
+        w: Float,
+        isDarkPaper: Boolean,
+        settingEnabled: Boolean,
+        pxPerDp: Float
+    ): ShadowPlan? {
         if (!settingEnabled) return null
         if (!shouldApply(tool)) return null
-        val w = sanitizeWidth(widthPx)
         if (w <= 0f) return null
         val off = offset(w, pxPerDp)
         var alpha = shadowAlpha(isDarkPaper)
@@ -185,6 +225,16 @@ object BrushShadowPolicy {
 
     private fun sanitizeWidth(widthPx: Float): Float =
         if (widthPx.isFinite()) widthPx else 0f
+
+    // One-slot plan memo — see [plan]. UI-thread-only contract; never read from
+    // a background thread.
+    private var memoValid = false
+    private var memoTool: StrokeTool? = null
+    private var memoWidth = Float.NaN
+    private var memoDark = false
+    private var memoSetting = false
+    private var memoDensity = Float.NaN
+    private var memoPlan: ShadowPlan? = null
 
     /** Immutable shadow parameters for one stroke draw. */
     data class ShadowPlan(

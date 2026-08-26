@@ -41,6 +41,10 @@ class Phase213BrushShadowTest {
     private fun canvasSource(): String =
         source("app/src/main/kotlin/com/authorss81/noteflow/ui/components/AnnotationCanvas.kt")
 
+    /** Collapse all whitespace runs to single spaces — reformat-tolerant pins. */
+    private fun normalized(src: String): String =
+        src.replace(Regex("\\s+"), " ").trim()
+
     // ---- 1. Shadow underlay inside drawSingleStroke -----------------------------
 
     @Test
@@ -73,20 +77,17 @@ class Phase213BrushShadowTest {
         )
         // Committed + live closures inside drawCompositedLayersStrokes.
         assertTrue(src.contains("vibrancy = vibrancyBoost, shadowEnabled = strokeShadowEnabled"))
-        // The AGSL wet pass receives and re-threads the flag.
+        // The AGSL wet pass receives and re-threads the flag. Matched on
+        // whitespace-normalized source so re-indentation cannot break the pin
+        // (review fix: the original raw multi-line literals were brittle).
+        val flat = normalized(src)
         assertTrue(
-            src.contains(
-                "vibrancyBoost = vibrancyBoost,\n" +
-                    "                strokeShadowEnabled = strokeShadowEnabled\n" +
-                    "            )"
-            )
+            "the wet-pass call site must pass strokeShadowEnabled",
+            flat.contains("vibrancyBoost = vibrancyBoost, strokeShadowEnabled = strokeShadowEnabled )")
         )
         assertTrue(
-            src.contains(
-                "vibrancyBoost: Float = 0f,\n" +
-                    "    strokeShadowEnabled: Boolean = false\n" +
-                    ")"
-            )
+            "drawWetLayerPass must accept a strokeShadowEnabled param",
+            flat.contains("vibrancyBoost: Float = 0f, strokeShadowEnabled: Boolean = false )")
         )
         // LiveStrokePreview casts the same shadow as the committed stroke will.
         assertEquals(
@@ -117,6 +118,26 @@ class Phase213BrushShadowTest {
         )
         assertTrue("blur must be NORMAL soft blur", src.contains("BlurMaskFilter.Blur.NORMAL"))
         assertTrue("geometry resets into the shared path", src.contains("path.reset()"))
+    }
+
+    @Test
+    fun `shadow paint style cannot leak from the tap-dot branch into other geometry`() {
+        // Review fix (phase-213): the single-point freehand branch sets
+        // FILL_AND_STROKE on the SHARED pooled paint; without an explicit STROKE
+        // reset, every later shape/start-end shadow drew FILLED (a solid blob at
+        // 0.20 alpha) instead of the outline the main pass draws.
+        val src = source("app/src/main/kotlin/com/authorss81/noteflow/ui/components/StrokeShadowRenderer.kt")
+        assertEquals(
+            "FILL_AND_STROKE must exist ONLY for the single-point tap-dot branch",
+            1,
+            src.split("Paint.Style.FILL_AND_STROKE").size - 1
+        )
+        assertEquals(
+            "STROKE style must be set at exactly 4 sites on the shared pooled paint " +
+                "(field init + shape branch + bare start/end branch + multi-point freehand reset)",
+            4,
+            src.split("style = Paint.Style.STROKE").size - 1
+        )
     }
 
     // ---- 3. Cache keys ----------------------------------------------------------

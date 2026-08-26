@@ -12,11 +12,13 @@
 > elevation", see `workspace/phase-213/REPORT.md`): per-stroke soft drop shadows
 > lift ink off the paper, render-only (no schema/deps). New pure-JVM
 > `services/BrushShadowPolicy.kt` (skip-list ERASER/LASER/TEXT/SMUDGE/STICKER/
-> SELECT/PAN/EYEDROPPER; HIGHLIGHTER alpha ×0.5; offset `w·0.35/w·0.40` clamped
+> DOTTED/SELECT/PAN/EYEDROPPER; HIGHLIGHTER alpha ×0.5; offset `w·0.35/w·0.40` clamped
 > 1..6 dp; blur `w·0.6` clamped 2..12 px; alpha 0.20 light / **0.12 white on dark
-> paper**) + pooled `ui/components/StrokeShadowRenderer.kt` (ONE process-lifetime
-> Paint/Path; the single BlurMaskFilter re-fires only on a quantized-radius change —
-> never per segment) drawn by `drawSingleStroke` BEFORE both render paths
+> paper**; one-slot last-plan memo so live-preview frames don't allocate a plan
+> per stroke) + pooled `ui/components/StrokeShadowRenderer.kt` (ONE process-lifetime
+> Paint/Path — STROKE at every non-dot geometry branch, FILL_AND_STROKE only for
+> single-point tap-dots; the single BlurMaskFilter re-fires only on a quantized-radius
+> change — never per segment) drawn by `drawSingleStroke` BEFORE both render paths
 > (`AnnotationCanvas.kt:4252-4276`, androidx.ink advanced path included).
 > Setting `paper_elevation_enabled` default ON ("Paper Elevation" row in Canvas &
 > Paper Options); both layer-raster cache keys gained `_s{0|1}` so toggling
@@ -26,8 +28,13 @@
 > uniforms untouched (bit-exact zero-pigment passthrough preserved). GPU
 > RenderEffect carrier evaluated and deferred with rationale (software layer
 > rasters can't run carriers; BlurMaskFilter already rides Skia GPU blur on HW
-> canvases). Tests: `BrushShadowPolicyTest` (19) + `Phase213BrushShadowTest` (7 pins);
+> canvases). Tests: `BrushShadowPolicyTest` (19) + `Phase213BrushShadowTest` (9 pins);
 > visual DoD `visual-qa/screenshots/phase-213/before-after-light-dark.png`.
+> **Review fixes (2026-08-26)**: DOTTED actually added to the skip set (the original
+> commit omitted it while claiming it), paint-style leak fixed (a tap-dot made later
+> shape shadows draw FILLED), honest zoom-behavior + simulation-scope caveats in the
+> REPORT, doc test-count corrections (was misstated as 19+7; actual was 18+8, now 19+9),
+> whitespace-tolerant source pins. See `workspace/phase-213/REPORT.md` §5b.
 
 > **Implemented in phase-212** (2026-08-25, JVM test hardening — deletion/install/shape-snap
 > coverage, see `workspace/phase-212/REPORT.md`): the thirteen zero-coverage service classes

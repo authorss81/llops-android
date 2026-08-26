@@ -55,6 +55,20 @@ class BrushShadowPolicyTest {
         }
     }
 
+    @Test
+    fun `dotted strokes are skipped - dots must not gain a continuous blurred band`() {
+        // Review fix (phase-213): the shipped skip set had omitted DOTTED even
+        // though the REPORT claimed it was skipped — the continuous blurred
+        // centerline outline under discrete dots reads as a phantom stripe.
+        assertFalse(BrushShadowPolicy.shouldApply(StrokeTool.DOTTED))
+        assertNull(
+            BrushShadowPolicy.plan(
+                StrokeTool.DOTTED, widthPx = 8f, isDarkPaper = false,
+                settingEnabled = true, pxPerDp = anyDp
+            )
+        )
+    }
+
     // ---- alpha -------------------------------------------------------------
 
     @Test

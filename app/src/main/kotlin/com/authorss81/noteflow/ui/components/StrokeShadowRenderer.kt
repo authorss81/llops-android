@@ -92,6 +92,11 @@ internal object StrokeShadowRenderer {
         val end = stroke.end
         return when {
             stroke.tool.isShapeTool && start != null && end != null -> {
+                // Review fix (phase-213): the shared pooled paint must never
+                // inherit FILL_AND_STROKE from a previous single-point tap-dot
+                // draw — shapes are OUTLINES in the main pass, so their shadows
+                // must be stroked outlines too.
+                paint.style = Paint.Style.STROKE
                 buildShapeOutline(path, stroke.tool, start, end)
                 true
             }
@@ -100,6 +105,7 @@ internal object StrokeShadowRenderer {
                 true
             }
             start != null && end != null -> {
+                paint.style = Paint.Style.STROKE
                 path.moveTo(start.x, start.y)
                 path.lineTo(end.x, end.y)
                 true

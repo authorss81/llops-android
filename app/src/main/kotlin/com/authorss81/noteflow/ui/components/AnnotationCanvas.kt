@@ -802,8 +802,8 @@ fun AnnotationCanvas(
     }
 
     // Phase 213: the shadow gate is the USER SETTING alone. The low-end-device
-    // policy lives in EditorScreen's device-tier effect (BrushShadowPolicy.
-    // enabled → auto-off ONCE with a non-alarming message, re-enable honored),
+    // policy lives UPSTREAM in EditorScreen's device-tier effect, which flips the
+    // SETTING itself off ONCE with a non-alarming message (re-enable honored) —
     // NOT here: a second tier gate inside the renderer would make a deliberate
     // settings re-enable silently ineffective on low-end hardware, violating
     // the "never silent degradation" rule. Old strokes are unchanged whenever
