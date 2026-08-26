@@ -97,4 +97,122 @@ object StrokeSmoothingPolicy {
 
     /** Prediction stays the pre-197 constant; only the window adapts. */
     const val PREDICTION = StrokeStabilizer.DEFAULT_PREDICTION
+
+    // ---- Phase 214 (Stroke Smoothing v2): velocity-adaptive alpha --------------
+
+    /**
+     * Adaptive-alpha floor: slow strokes get at least this much damping
+     * (slow writing exposes hand jitter that a static window rides through).
+     */
+    const val ALPHA_SLOW = 0.12f
+
+    /**
+     * Adaptive-alpha ceiling for fast strokes (responsive; a flick must not
+     * smear). Chosen so the legacy default window 8 spans exactly this band.
+     */
+    const val ALPHA_FAST = 0.55f
+
+    /** Velocity (px/ms) at which the alpha reaches [ALPHA_FAST]. */
+    const val ADAPT_VELOCITY_FULL_PX_PER_MS = 6f
+
+    /**
+     * How far below/above the tuned base alpha (`2/(w+1)`) adaptation may
+     * stray, as multiplicative bounds. With the default window 8
+     * (base ≈ 0.222) the band is [0.111 .. 0.556], which CONTAINS the full
+     * spec range [0.12 .. 0.55] — i.e. default-tuned sessions get the exact
+     * documented behaviour. Extreme windows stay near their brush character:
+     * window 2 never damps below ⅓ of raw responsiveness, window 12 never
+     * jumps above ~2× its designed smoothness.
+     */
+    const val ALPHA_WINDOW_SLOW_GAIN = 0.5f
+    const val ALPHA_WINDOW_FAST_GAIN = 2.5f
+
+    /**
+     * Velocity-adaptive EWMA alpha for one sample.
+     *
+     * Model: `t = clamp(v / 6, 0..1)`; target lerps [ALPHA_SLOW]..[ALPHA_FAST];
+     * the result is clamped into `[max(0.12, base·0.5) .. min(0.55, base·2.5)]`
+     * where `base = 2/(effectiveWindowSize+1)` — so slow→stable, fast→responsive,
+     * and the user's per-brush/per-input tuning still bounds the response.
+     *
+     * A null/NaN velocity (no timestamp pair yet) falls back to the STATIC
+     * base alpha — byte-identical to the pre-214 filter.
+     */
+    fun adaptiveAlpha(effectiveWindowSize: Int, velocityPxPerMs: Float?): Float {
+        val w = effectiveWindowSize.coerceAtLeast(MIN_WINDOW_SIZE)
+        val base = 2f / (w + 1f)
+        if (velocityPxPerMs == null || velocityPxPerMs.isNaN()) return base
+        val t = (velocityPxPerMs / ADAPT_VELOCITY_FULL_PX_PER_MS).coerceIn(0f, 1f)
+        val target = ALPHA_SLOW + (ALPHA_FAST - ALPHA_SLOW) * t
+        val loRaw = maxOf(ALPHA_SLOW, base * ALPHA_WINDOW_SLOW_GAIN)
+        val hiRaw = minOf(ALPHA_FAST, base * ALPHA_WINDOW_FAST_GAIN)
+        return target.coerceIn(minOf(loRaw, hiRaw), maxOf(loRaw, hiRaw))
+    }
+
+    // ---- Phase 214: pressure/tilt low-pass channel -----------------------------
+
+    /** Dedicated pressure/tilt EWMA window bounds (light-touch width jitter). */
+    const val PRESSURE_MIN_WINDOW = 2
+    const val PRESSURE_MAX_WINDOW = 6
+
+    /**
+     * Pressure/tilt channel window, derived from the main x/y window so one
+     * slider tunes everything: maps the main window range linearly onto
+     * `PRESSURE_MIN_WINDOW..PRESSURE_MAX_WINDOW`. Pressure noise
+     * is narrower-band than positional jitter, so its window saturates lower;
+     * out-of-range inputs clamp to the band floor.
+     */
+    fun pressureWindowSize(effectiveWindowSize: Int): Int {
+        val w = effectiveWindowSize.coerceIn(MIN_WINDOW_SIZE, MAX_WINDOW_SIZE)
+        val span = MAX_WINDOW_SIZE - MIN_WINDOW_SIZE
+        if (span <= 0) return PRESSURE_MIN_WINDOW
+        val mapped = PRESSURE_MIN_WINDOW +
+            roundHalfUp((w - MIN_WINDOW_SIZE) / span.toFloat() * (PRESSURE_MAX_WINDOW - PRESSURE_MIN_WINDOW))
+        return mapped.coerceIn(PRESSURE_MIN_WINDOW, PRESSURE_MAX_WINDOW)
+    }
+
+    // ---- Phase 214: prediction ("tension") percent ------------------------------
+
+    /** Slider/pref value meaning "the legacy 0.15 lag compensation". */
+    const val DEFAULT_PREDICTION_PERCENT = 15
+
+    /** Upper bound of the tension dial (0.35 — above this corners overshoot). */
+    const val MAX_PREDICTION_PERCENT = 35
+
+    fun sanitizePredictionPercent(raw: Int): Int = raw.coerceIn(0, MAX_PREDICTION_PERCENT)
+
+    /** Maps the persisted 0..35 dial onto the retune prediction fraction. */
+    fun predictionFromPercent(percent: Int): Float =
+        sanitizePredictionPercent(percent) / 100f
+
+    // ---- Phase 214: stabilizer model selection -----------------------------------
+
+    /** Classic per-axis EWMA + velocity lag compensation (pre-214 model). */
+    const val MODEL_EWMA = "ewma"
+
+    /** One-Euro adaptive cutoff (speed-dependent smoothing, low lag at speed). */
+    const val MODEL_ONE_EURO = "one_euro"
+
+    private val KNOWN_MODELS = setOf(MODEL_EWMA, MODEL_ONE_EURO)
+
+    /** Unknown/hand-edited keys fail safe to the classic EWMA model. */
+    fun sanitizeModelKey(raw: String?): String =
+        if (raw != null && raw in KNOWN_MODELS) raw else MODEL_EWMA
+
+    /**
+     * One-Euro speed coefficient for a configured main window: strongly
+     * smoothed presets compensate MORE at high speed (higher beta), so their
+     * low-speed stability does not cost lag while writing fast.
+     */
+    const val ONE_EURO_MIN_CUTOFF_HZ = 1.2f
+    const val ONE_EURO_DCUTOFF = 1.0f
+    const val ONE_EURO_BETA_AT_MIN_WINDOW = 0.004f
+    const val ONE_EURO_BETA_AT_MAX_WINDOW = 0.03f
+
+    fun oneEuroBetaFor(effectiveWindowSize: Int): Float {
+        val w = effectiveWindowSize.coerceIn(MIN_WINDOW_SIZE, MAX_WINDOW_SIZE)
+        val t = (w - MIN_WINDOW_SIZE) / (MAX_WINDOW_SIZE - MIN_WINDOW_SIZE).toFloat()
+        return ONE_EURO_BETA_AT_MIN_WINDOW +
+            t * (ONE_EURO_BETA_AT_MAX_WINDOW - ONE_EURO_BETA_AT_MIN_WINDOW)
+    }
 }

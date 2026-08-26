@@ -230,6 +230,29 @@ class SettingsManager(context: Context) {
             .putInt("stroke_stabilizer_strength_percent", StrokeSmoothingPolicy.sanitizeSliderPercent(value))
             .apply()
 
+    // Phase 214: stabilizer lag-compensation dial ("tension"), 0–35 (%).
+    // 15 = the pre-214 legacy prediction constant 0.15; 0 = no compensation.
+    // Sanitized on read AND write; applied at the NEXT stroke start via the
+    // existing retune path (never mid-stroke). Prefs only, no schema impact.
+    var strokeStabilizerPredictionPercent: Int
+        get() = StrokeSmoothingPolicy.sanitizePredictionPercent(
+            prefs.getInt("stroke_stabilizer_prediction_percent", StrokeSmoothingPolicy.DEFAULT_PREDICTION_PERCENT)
+        )
+        set(value) = prefs.edit()
+            .putInt("stroke_stabilizer_prediction_percent", StrokeSmoothingPolicy.sanitizePredictionPercent(value))
+            .apply()
+
+    // Phase 214: smoothing model selection ("ewma" classic | "one_euro"
+    // adaptive cutoff). Unknown/hand-edited values fail safe to EWMA on read;
+    // applies to the NEXT stroke (model swap happens at stroke start).
+    var strokeStabilizerModelKey: String
+        get() = StrokeSmoothingPolicy.sanitizeModelKey(
+            prefs.getString("stroke_stabilizer_model_key", StrokeSmoothingPolicy.MODEL_EWMA)
+        )
+        set(value) = prefs.edit()
+            .putString("stroke_stabilizer_model_key", StrokeSmoothingPolicy.sanitizeModelKey(value))
+            .apply()
+
     // Pressure-response curve (LINEAR = identity, so default behaviour is unchanged).
     var pressureCurveKey: String
         get() = prefs.getString("pressure_curve_key", "linear") ?: "linear"

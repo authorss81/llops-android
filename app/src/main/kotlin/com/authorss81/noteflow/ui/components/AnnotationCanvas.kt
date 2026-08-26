@@ -67,6 +67,11 @@ import com.authorss81.noteflow.services.MinimapGeometryPolicy
 import com.authorss81.noteflow.services.PressureCurve
 import com.authorss81.noteflow.services.PressureCurveHelper
 import com.authorss81.noteflow.services.ProtobufBrushLoader
+import com.authorss81.noteflow.services.BrushStrokeMath
+import com.authorss81.noteflow.services.RawInputSample
+import com.authorss81.noteflow.services.StrokeBatchPolicy
+import com.authorss81.noteflow.services.StrokeInputBatcher
+import com.authorss81.noteflow.services.StrokeSmoothingPolicy
 import com.authorss81.noteflow.services.StrokeStabilizer
 import com.authorss81.noteflow.services.SymmetryHelper
 import com.authorss81.noteflow.services.SymmetryMode
@@ -188,6 +193,12 @@ fun AnnotationCanvas(
     // smoothing baseline. 100 (= default) is neutral, preserving the pre-197
     // window-8 behavior for stylus + no-preset sessions exactly.
     stabilizerStrengthPercent: Int = com.authorss81.noteflow.services.StrokeSmoothingPolicy.DEFAULT_SLIDER_PERCENT,
+    // Phase 214: lag-compensation dial 0..35 (%) mapped onto the retune
+    // prediction fraction (15 = the legacy 0.15 constant), and the smoothing
+    // model selection ("ewma" | "one_euro"). Both apply at the NEXT stroke
+    // start via rememberUpdatedState reads — never mid-stroke.
+    stabilizerPredictionPercent: Int = com.authorss81.noteflow.services.StrokeSmoothingPolicy.DEFAULT_PREDICTION_PERCENT,
+    stabilizerModelKey: String = com.authorss81.noteflow.services.StrokeSmoothingPolicy.MODEL_EWMA,
     pressureCurve: PressureCurve = PressureCurve.LINEAR,
     symmetryMode: SymmetryMode = SymmetryMode.OFF,
     // Phase 13: rich canvas content.
@@ -400,6 +411,25 @@ fun AnnotationCanvas(
     // true so a first stroke that somehow skips ACTION_DOWN keeps the exact
     // legacy stylus behavior; every real touch reports a tool type anyway.
     var lastInputIsStylus by remember { mutableStateOf(true) }
+
+    // Phase 214: coalesced-history ingestion. The passive interop bridge pushes
+    // every getHistorical* sample of each ACTION_MOVE into this lock-free ring;
+    // the drag handler drains it BEFORE the EWMA runs, so batching digitizers
+    // contribute 2-3x the temporal resolution instead of one sample per event.
+    // Plain objects (not snapshot state): feeding/draining must never
+    // invalidate composition.
+    val strokeInputBatcher = remember { com.authorss81.noteflow.services.StrokeInputBatcher() }
+    val batchDrainScratch = remember {
+        ArrayList<com.authorss81.noteflow.services.RawInputSample>(StrokeInputBatcher.DEFAULT_CAPACITY)
+    }
+    // Monotonic gate stamp: last timestamp actually ingested into the stroke.
+    var lastIngestedInputTimestampMs by remember { mutableStateOf<Long?>(null) }
+
+    // Phase 214: model + tension reach the gesture closures without restarting
+    // pointerInput (a restart would cancel an in-flight drag). Both apply at
+    // the NEXT stroke start — same contract as the strength slider.
+    val stabilizerModelKeyState = rememberUpdatedState(stabilizerModelKey)
+    val stabilizerPredictionPercentState = rememberUpdatedState(stabilizerPredictionPercent)
 
     // Eyedropper Magnifying Loupe State
     var sampledColorPreview by remember { mutableStateOf<Color?>(null) }
@@ -940,6 +970,43 @@ fun AnnotationCanvas(
                     android.view.MotionEvent.TOOL_TYPE_ERASER -> lastInputIsStylus = true
                     else -> lastInputIsStylus = false
                 }
+                // Phase 214: coalesced-history ingestion. Each ACTION_MOVE
+                // pushes ALL getHistorical* samples FIRST, then the current
+                // sample — FIFO order preserved for the drag handler that
+                // drains before smoothing. historySize == 0 (non-batching
+                // devices) offers exactly ONE sample per event: pre-214
+                // behaviour, pinned by HistoryBatchTest. Coordinates stay in
+                // RAW window space; world mapping happens at drain time.
+                if (motionEvent.actionMasked == android.view.MotionEvent.ACTION_MOVE) {
+                    val historySize = StrokeBatchPolicy.historicalCount(motionEvent.historySize)
+                    for (h in 0 until historySize) {
+                        strokeInputBatcher.offer(
+                            RawInputSample(
+                                x = motionEvent.getHistoricalX(0, h),
+                                y = motionEvent.getHistoricalY(0, h),
+                                pressure = motionEvent.getHistoricalPressure(0, h),
+                                tiltRad = motionEvent.getHistoricalAxisValue(
+                                    android.view.MotionEvent.AXIS_TILT, 0, h
+                                ),
+                                timestampMs = motionEvent.getHistoricalEventTime(h).toLong()
+                            )
+                        )
+                    }
+                    strokeInputBatcher.offer(
+                        RawInputSample(
+                            x = motionEvent.x,
+                            y = motionEvent.y,
+                            pressure = motionEvent.pressure,
+                            tiltRad = tiltRad,
+                            timestampMs = motionEvent.eventTime
+                        )
+                    )
+                } else if (motionEvent.actionMasked == android.view.MotionEvent.ACTION_UP ||
+                    motionEvent.actionMasked == android.view.MotionEvent.ACTION_CANCEL
+                ) {
+                    // Gesture over: nothing may leak into the next stroke.
+                    strokeInputBatcher.clear()
+                }
                 // Phase 196: record the REAL event with the OS motion predictor
                 // before anything else reacts to it (documented usage). This
                 // stays strictly passive — it consumes nothing, and the frame
@@ -1274,6 +1341,15 @@ fun AnnotationCanvas(
                             // Reset unconditionally so stale smoothing state can never leak into a
                             // new stroke if the toggle changed mid-stroke.
                             stabilizerFilter.reset()
+                            // Phase 214: no coalesced sample from a PREVIOUS gesture may leak into
+                            // this one; the monotonic gate restarts with it.
+                            strokeInputBatcher.clear()
+                            lastIngestedInputTimestampMs = null
+                            // Phase 214: model selection applies here (stroke start), reading the
+                            // rememberUpdatedState holder so a settings change never needs to
+                            // restart pointerInput. Unknown keys fail safe to EWMA inside
+                            // selectModel; re-selecting the current key is a no-op.
+                            stabilizerFilter.selectModel(stabilizerModelKeyState.value)
                             // Phase 197: re-tune the EWMA window for THIS stroke from
                             // the active brush preset's smoothing, the user strength
                             // slider, and the pointer input source (finger gets extra
@@ -1292,7 +1368,11 @@ fun AnnotationCanvas(
                                         sliderPercent = stabilizerStrengthPercent,
                                         isStylus = lastInputIsStylus
                                     ),
-                                    prediction = com.authorss81.noteflow.services.StrokeSmoothingPolicy.PREDICTION
+                                    // Phase 214: lag compensation ("tension") dial, sanitized in
+                                    // SettingsManager; 15% reproduces the legacy PREDICTION constant.
+                                    prediction = StrokeSmoothingPolicy.predictionFromPercent(
+                                        stabilizerPredictionPercentState.value
+                                    )
                                 )
                             }
                             val startPressure = PressureCurveHelper.remapPressure(lastPressure, pressureCurve)
@@ -1333,84 +1413,179 @@ fun AnnotationCanvas(
                             if (isDraggingCard) return@detectDragGestures
                             change.consume()
 
-                            val rawCanvasX = (change.position.x - internalPanOffset.x) / internalZoomScale
-                            val rawCanvasY = (change.position.y - internalPanOffset.y) / internalZoomScale
-
                             if (isPanningBlackSpace || currentTool == StrokeTool.SELECT || currentTool == StrokeTool.PAN) {
                                 updateZoomAndPan(internalZoomScale, internalPanOffset + dragAmount)
                                 return@detectDragGestures
                             }
-                            val targetPageYStart = calculatePageYOffset(activeTargetPage)
-                            val targetPageYEnd = targetPageYStart + pageHeightPx
 
-                            // Prevent drawing across page boundaries:
-                            // If the pointer coordinates move outside the active target page, do not add points!
-                            val isOutsidePage = rawCanvasX < 0f || rawCanvasX > pageWidthPx ||
-                                    rawCanvasY < targetPageYStart || rawCanvasY > targetPageYEnd
+                            // Phase 214: one ingestion path for EVERY pointer sample,
+                            // live or coalesced-historical. Coordinates arrive in the
+                            // modifier's BOX-LOCAL space (raw window coords are mapped
+                            // by subtracting the box origin BEFORE the pan/zoom transform).
+                            fun ingestPointerSample(
+                                boxLocalX: Float,
+                                boxLocalY: Float,
+                                rawPressure: Float,
+                                tiltDegrees: Float,
+                                sampleTimestampMs: Long?
+                            ) {
+                                val rawCanvasX = (boxLocalX - internalPanOffset.x) / internalZoomScale
+                                val rawCanvasY = (boxLocalY - internalPanOffset.y) / internalZoomScale
 
-                            if (isOutsidePage && currentTool != StrokeTool.EYEDROPPER && currentTool != StrokeTool.ERASER) {
-                                return@detectDragGestures
+                                val targetPageYStart = calculatePageYOffset(activeTargetPage)
+                                val targetPageYEnd = targetPageYStart + pageHeightPx
+
+                                // Prevent drawing across page boundaries:
+                                // If the pointer coordinates move outside the active target page, do not add points!
+                                val isOutsidePage = rawCanvasX < 0f || rawCanvasX > pageWidthPx ||
+                                        rawCanvasY < targetPageYStart || rawCanvasY > targetPageYEnd
+
+                                if (isOutsidePage && currentTool != StrokeTool.EYEDROPPER && currentTool != StrokeTool.ERASER) {
+                                    return
+                                }
+
+                                val currentPressure = PressureCurveHelper.remapPressure(rawPressure, pressureCurve)
+                                val currentPoint = PointF(
+                                    x = rawCanvasX.coerceIn(0f, pageWidthPx),
+                                    y = rawCanvasY.coerceIn(targetPageYStart, targetPageYEnd),
+                                    pressure = currentPressure,
+                                    tilt = tiltDegrees,
+                                    timestampMs = sampleTimestampMs
+                                )
+
+                                if (currentTool == StrokeTool.EYEDROPPER) {
+                                    val canvasPosition = Offset(rawCanvasX, rawCanvasY)
+                                    eyedropperPosition = Offset(boxLocalX, boxLocalY)
+                                    sampledColorPreview = sampleColorAt(canvasPosition, activeTargetPage)
+                                } else if (currentTool == StrokeTool.ERASER) {
+                                    val canvasPosition = Offset(rawCanvasX, rawCanvasY)
+                                    eraseSamples.add(EraseSample(canvasPosition, rawPressure))
+                                    applyEraser(canvasPosition)
+                                } else if (currentTool.isFreehandTool) {
+                                    // Phase 07: stabilizer smooths touch jitter while staying
+                                    // responsive; disabled => identical behaviour.
+                                    // Phase 214: pressure (+tilt) ride through the SAME adaptive
+                                    // low-pass as x/y, and the curve remap happens AFTER smoothing
+                                    // so gamma curves cannot amplify un-smoothed digitizer jitter.
+                                    // Velocity vs the previous ACCEPTED point adapts alpha:
+                                    // slow writing damps harder, fast strokes stay responsive;
+                                    // no timing pair yet => static base alpha (pre-214 parity).
+                                    var drawPoint = currentPoint
+                                    if (stabilizerEnabled) {
+                                        val prevAccepted = activePoints.lastOrNull()
+                                        val velocity = if (
+                                            prevAccepted != null &&
+                                            prevAccepted.timestampMs != null &&
+                                            sampleTimestampMs != null &&
+                                            sampleTimestampMs > prevAccepted.timestampMs!!
+                                        ) {
+                                            BrushStrokeMath.segmentVelocity(
+                                                com.authorss81.noteflow.data.model.PointF(
+                                                    prevAccepted.x,
+                                                    prevAccepted.y,
+                                                    timestampMs = prevAccepted.timestampMs
+                                                ),
+                                                com.authorss81.noteflow.data.model.PointF(
+                                                    currentPoint.x,
+                                                    currentPoint.y,
+                                                    timestampMs = sampleTimestampMs
+                                                )
+                                            )
+                                        } else {
+                                            null
+                                        }
+                                        val s = stabilizerFilter.next(
+                                            x = currentPoint.x,
+                                            y = currentPoint.y,
+                                            pressure = rawPressure,
+                                            tiltDeg = tiltDegrees,
+                                            velocityPxPerMs = velocity,
+                                            timestampMs = sampleTimestampMs
+                                        )
+                                        drawPoint = PointF(
+                                            s.x,
+                                            s.y,
+                                            PressureCurveHelper.remapPressure(s.pressure ?: rawPressure, pressureCurve),
+                                            s.tilt ?: tiltDegrees,
+                                            sampleTimestampMs
+                                        )
+                                    }
+                                    // Vector Stroke Smoothing & Touch jitter filtering: add point if distance > 1.5px
+                                    val last = activePoints.lastOrNull()
+                                    val lastTime = if (activePoints.size >= 2) System.currentTimeMillis() - 16L else System.currentTimeMillis() - 100L
+                                    val curTime = System.currentTimeMillis()
+
+                                    if (wetBrushEngine.shouldProcessPoint(last?.let { Offset(it.x, it.y) }, Offset(drawPoint.x, drawPoint.y), lastTime, curTime)) {
+                                        if (last != null && BrushStrokeMath.isWetRenderedTool(currentTool)) {
+                                            val interpolated = wetBrushEngine.interpolateSegment(
+                                                prev = Offset(last.x, last.y),
+                                                cur = Offset(drawPoint.x, drawPoint.y),
+                                                radius = currentWidth * 1.5f
+                                            )
+                                            for (interp in interpolated) {
+                                                val interpPt = PointF(
+                                                    x = interp.x,
+                                                    y = interp.y,
+                                                    pressure = drawPoint.pressure,
+                                                    tilt = drawPoint.tilt,
+                                                    timestampMs = drawPoint.timestampMs
+                                                )
+                                                activePoints.add(interpPt)
+
+                                                wetCanvasEngine.markPaintDeposited(currentTool)
+                                            }
+                                            activeEnd = activePoints.lastOrNull() ?: drawPoint
+                                        } else {
+                                            activePoints.add(drawPoint)
+                                            activeEnd = drawPoint
+                                        }
+                                    }
+                                } else {
+                                    activeEnd = currentPoint
+                                }
                             }
 
-                            val currentPressure = PressureCurveHelper.remapPressure(lastPressure, pressureCurve)
-                            val currentPoint = PointF(
-                                x = rawCanvasX.coerceIn(0f, pageWidthPx),
-                                y = rawCanvasY.coerceIn(targetPageYStart, targetPageYEnd),
-                                pressure = currentPressure,
-                                tilt = lastTilt,
-                                timestampMs = lastTimestampMs
-                            )
-
-                            if (currentTool == StrokeTool.EYEDROPPER) {
-                                val canvasPosition = Offset(rawCanvasX, rawCanvasY)
-                                eyedropperPosition = change.position
-                                sampledColorPreview = sampleColorAt(canvasPosition, activeTargetPage)
-                            } else if (currentTool == StrokeTool.ERASER) {
-                                val canvasPosition = Offset(rawCanvasX, rawCanvasY)
-                                eraseSamples.add(EraseSample(canvasPosition, lastPressure))
-                                applyEraser(canvasPosition)
-                            } else if (currentTool.isFreehandTool) {
-                                // Phase 07: stabilizer (per-axis EWMA) smooths touch jitter
-                                // while staying responsive; disabled => identical behaviour.
-                                val drawPoint = if (stabilizerEnabled) {
-                                    val s = stabilizerFilter.next(currentPoint.x, currentPoint.y)
-                                    PointF(s.x, s.y, currentPoint.pressure, currentPoint.tilt, currentPoint.timestampMs)
-                                } else {
-                                    currentPoint
+                            // Phase 214: consume coalesced history FIRST so every
+                            // getHistorical* sample flows through the SAME pipeline
+                            // (bounds gate → smooth → wet gate) as live ones. Freehand
+                            // drawing ingests the WHOLE batch (2-3× temporal resolution);
+                            // eraser/eyedropper/shape paths stay on the NEWEST sample only
+                            // (applyEraser/sampleColorAt rebuild per call — cost containment,
+                            // documented in workspace/phase-214/REPORT.md).
+                            val drainedCount = strokeInputBatcher.drainInto(batchDrainScratch)
+                            if (drainedCount > 1 && currentTool.isFreehandTool) {
+                                for (sample in batchDrainScratch) {
+                                    if (StrokeBatchPolicy.isStale(sample.timestampMs, lastIngestedInputTimestampMs)) continue
+                                    ingestPointerSample(
+                                        boxLocalX = sample.x - canvasBoxWindowOffset.x,
+                                        boxLocalY = sample.y - canvasBoxWindowOffset.y,
+                                        rawPressure = sample.pressure,
+                                        tiltDegrees = if (sample.tiltRad != 0f) Math.toDegrees(sample.tiltRad.toDouble()).toFloat() else 0f,
+                                        sampleTimestampMs = sample.timestampMs
+                                    )
+                                    lastIngestedInputTimestampMs = sample.timestampMs
                                 }
-                                // Vector Stroke Smoothing & Touch jitter filtering: add point if distance > 1.5px
-                                val last = activePoints.lastOrNull()
-                                val lastTime = if (activePoints.size >= 2) System.currentTimeMillis() - 16L else System.currentTimeMillis() - 100L
-                                val curTime = System.currentTimeMillis()
-
-                                if (wetBrushEngine.shouldProcessPoint(last?.let { Offset(it.x, it.y) }, Offset(drawPoint.x, drawPoint.y), lastTime, curTime)) {
-                                    if (last != null && com.authorss81.noteflow.services.BrushStrokeMath.isWetRenderedTool(currentTool)) {
-                                        val interpolated = wetBrushEngine.interpolateSegment(
-                                            prev = Offset(last.x, last.y),
-                                            cur = Offset(drawPoint.x, drawPoint.y),
-                                            radius = currentWidth * 1.5f
-                                        )
-                                        for (interp in interpolated) {
-                                            val interpPt = PointF(
-                                                x = interp.x,
-                                                y = interp.y,
-                                                pressure = currentPressure,
-                                                tilt = lastTilt,
-                                                timestampMs = lastTimestampMs
-                                            )
-                                            activePoints.add(interpPt)
-
-                                            wetCanvasEngine.markPaintDeposited(currentTool)
-                                        }
-                                        activeEnd = activePoints.lastOrNull() ?: drawPoint
-                                    } else {
-                                        activePoints.add(drawPoint)
-                                        activeEnd = drawPoint
-                                    }
+                            } else if (drainedCount > 0) {
+                                val newest = batchDrainScratch.last()
+                                if (!StrokeBatchPolicy.isStale(newest.timestampMs, lastIngestedInputTimestampMs)) {
+                                    ingestPointerSample(
+                                        boxLocalX = newest.x - canvasBoxWindowOffset.x,
+                                        boxLocalY = newest.y - canvasBoxWindowOffset.y,
+                                        rawPressure = newest.pressure,
+                                        tiltDegrees = if (newest.tiltRad != 0f) Math.toDegrees(newest.tiltRad.toDouble()).toFloat() else 0f,
+                                        sampleTimestampMs = newest.timestampMs
+                                    )
+                                    lastIngestedInputTimestampMs = newest.timestampMs
                                 }
                             } else {
-                                activeEnd = currentPoint
-                             }
+                                // Defensive fallback: an event that somehow bypassed the passive
+                                // bridge (queue empty) still processes exactly ONE sample, using the
+                                // pre-214 state values — behaviour identical to the old single-sample path.
+                                if (!StrokeBatchPolicy.isStale(lastTimestampMs ?: Long.MIN_VALUE, lastIngestedInputTimestampMs)) {
+                                    ingestPointerSample(change.position.x, change.position.y, lastPressure, lastTilt, lastTimestampMs)
+                                    if (lastTimestampMs != null) lastIngestedInputTimestampMs = lastTimestampMs
+                                }
+                            }
                         },
                         onDragEnd = {
                             // Phase 206: the stroke is over — disarm the frame pump on
@@ -1512,11 +1687,31 @@ fun AnnotationCanvas(
                                         // (0.6-0.8 px), everything else stays at the
                                         // legacy 1.3 px. Runs ONLY here, on pointer-up;
                                         // the live preview never simplifies mid-stroke.
-                                        candidateStroke.copy(
-                                            points = com.authorss81.noteflow.utils.RamerDouglasPeucker.simplify(
-                                                pointsToSimplify,
-                                                epsilon = com.authorss81.noteflow.services.StrokeSimplifyPolicy.epsilonFor(tool, width)
+                                        val simplifiedPoints = com.authorss81.noteflow.utils.RamerDouglasPeucker.simplify(
+                                            pointsToSimplify,
+                                            epsilon = com.authorss81.noteflow.services.StrokeSimplifyPolicy.epsilonFor(tool, width)
+                                        )
+                                        // Phase 214: ONE Chaikin fairing pass on hairline ink
+                                        // only (fine-tip brush, narrow width, hairline-band
+                                        // epsilon, > 8 surviving points). Converts the residual
+                                        // EWMA kinks into a visually fair curve; shape-snapped
+                                        // strokes never reach this branch. The geometry cap is
+                                        // re-enforced AFTER fairing (chaikinOnce itself refuses
+                                        // to run when the doubled result would exceed it).
+                                        val fairedPoints = if (
+                                            com.authorss81.noteflow.services.StrokeFairingPolicy.shouldFair(
+                                                survivingPointCount = simplifiedPoints.size,
+                                                tool = tool,
+                                                strokeWidthPx = width,
+                                                appliedEpsilon = com.authorss81.noteflow.services.StrokeSimplifyPolicy.epsilonFor(tool, width)
                                             )
+                                        ) {
+                                            com.authorss81.noteflow.services.StrokeFairingPolicy.chaikinOnce(simplifiedPoints)
+                                        } else {
+                                            simplifiedPoints
+                                        }
+                                        candidateStroke.copy(
+                                            points = com.authorss81.noteflow.services.StrokeGeometryPolicy.capLoadedPoints(fairedPoints)
                                         )
                                     } else {
                                         candidateStroke
@@ -1561,6 +1756,10 @@ fun AnnotationCanvas(
                             }
                             activePoints.clear()
                             predictedTailTracker.clear()
+                            // Phase 214: gesture over — no coalesced sample may leak into
+                            // the next stroke; the monotonic gate restarts with it.
+                            strokeInputBatcher.clear()
+                            lastIngestedInputTimestampMs = null
                             activeStart = null
                             activeEnd = null
                             onDrawingEnd()
@@ -1572,6 +1771,9 @@ fun AnnotationCanvas(
                             sampledColorPreview = null
                             activePoints.clear()
                             predictedTailTracker.clear()
+                            // Phase 214: same boundary hygiene as onDragEnd.
+                            strokeInputBatcher.clear()
+                            lastIngestedInputTimestampMs = null
                             activeStart = null
                             activeEnd = null
                             onDrawingEnd()

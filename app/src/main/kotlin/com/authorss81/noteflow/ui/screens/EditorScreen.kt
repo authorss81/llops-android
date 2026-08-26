@@ -505,6 +505,11 @@ fun EditorScreen(
     var stabilizerEnabled by remember { mutableStateOf(viewModel.settings.strokeStabilizerEnabled) }
     // Phase 197: user strength trim 0–100 over the per-brush smoothing baseline.
     var stabilizerStrengthPercent by remember { mutableIntStateOf(viewModel.settings.strokeStabilizerStrengthPercent) }
+    // Phase 214: lag-compensation dial (0–35 %, 15 = legacy 0.15 constant) and
+    // smoothing model selection ("ewma" | "one_euro"). Both persist instantly
+    // and apply at the NEXT stroke start.
+    var stabilizerPredictionPercent by remember { mutableIntStateOf(viewModel.settings.strokeStabilizerPredictionPercent) }
+    var stabilizerModelKey by remember { mutableStateOf(viewModel.settings.strokeStabilizerModelKey) }
     var pressureCurve by remember { mutableStateOf(PressureCurve.fromSettingKey(viewModel.settings.pressureCurveKey)) }
 
 
@@ -2183,6 +2188,8 @@ fun EditorScreen(
                 hapticsEnabled = hapticsEnabled,
                 stabilizerEnabled = stabilizerEnabled,
                 stabilizerStrengthPercent = stabilizerStrengthPercent,
+                stabilizerPredictionPercent = stabilizerPredictionPercent,
+                stabilizerModelKey = stabilizerModelKey,
                 pressureCurve = pressureCurve,
                 symmetryMode = symmetryMode,
                 onZoomScaleChanged = { zoomScale = it },
@@ -2697,6 +2704,20 @@ fun EditorScreen(
                     // next stroke start resolves its window from this value.
                     stabilizerStrengthPercent = percent
                     viewModel.settings.strokeStabilizerStrengthPercent = percent
+                },
+                stabilizerPredictionPercent = stabilizerPredictionPercent,
+                onStabilizerPredictionChange = { percent ->
+                    // Phase 214: lag-compensation dial; applies at the next stroke
+                    // start via the existing retune path (never mid-stroke).
+                    stabilizerPredictionPercent = percent
+                    viewModel.settings.strokeStabilizerPredictionPercent = percent
+                },
+                stabilizerModelKey = stabilizerModelKey,
+                onStabilizerModelSelect = { key ->
+                    // Phase 214: smoothing model selection; applies at the next
+                    // stroke start (model swap inside selectModel).
+                    stabilizerModelKey = key
+                    viewModel.settings.strokeStabilizerModelKey = key
                 },
                 pressureCurve = pressureCurve,
                 onPressureCurveSelect = { curve ->
@@ -4809,6 +4830,12 @@ private fun CanvasSettingsBottomSheet(
     onStabilizerToggle: (Boolean) -> Unit = {},
     stabilizerStrengthPercent: Int = com.authorss81.noteflow.services.StrokeSmoothingPolicy.DEFAULT_SLIDER_PERCENT,
     onStabilizerStrengthChange: (Int) -> Unit = {},
+    // Phase 214: lag-compensation ("tension") dial 0–35 % and smoothing model
+    // selection. Both persist via SettingsManager and apply at the NEXT stroke.
+    stabilizerPredictionPercent: Int = com.authorss81.noteflow.services.StrokeSmoothingPolicy.DEFAULT_PREDICTION_PERCENT,
+    onStabilizerPredictionChange: (Int) -> Unit = {},
+    stabilizerModelKey: String = com.authorss81.noteflow.services.StrokeSmoothingPolicy.MODEL_EWMA,
+    onStabilizerModelSelect: (String) -> Unit = {},
     pressureCurve: PressureCurve = PressureCurve.LINEAR,
     onPressureCurveSelect: (PressureCurve) -> Unit = {},
     symmetryMode: SymmetryMode = SymmetryMode.OFF,
@@ -5562,6 +5589,62 @@ private fun CanvasSettingsBottomSheet(
                             )
                             Text(
                                 "Higher = steadier lines, more lag · Lower = more responsive",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+
+                            // Phase 214: lag-compensation ("tension") dial. Maps onto the
+                            // stabilizer's prediction term (15% = the pre-214 default 0.15;
+                            // 35% max — above that sharp corners visibly overshoot).
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    "Tension (lag compensation)",
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                                Text(
+                                    "$stabilizerPredictionPercent%",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                            Slider(
+                                value = stabilizerPredictionPercent.toFloat(),
+                                onValueChange = { onStabilizerPredictionChange(Math.round(it).toInt().coerceIn(0, com.authorss81.noteflow.services.StrokeSmoothingPolicy.MAX_PREDICTION_PERCENT)) },
+                                valueRange = 0f..com.authorss81.noteflow.services.StrokeSmoothingPolicy.MAX_PREDICTION_PERCENT.toFloat(),
+                                steps = com.authorss81.noteflow.services.StrokeSmoothingPolicy.MAX_PREDICTION_PERCENT - 1
+                            )
+                            Text(
+                                "Higher = snappier follow-through · Lower = rounder, calmer lines",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+
+                            // Phase 214: smoothing model. Classic EWMA is the pre-214
+                            // behaviour; One-Euro eases damping off as writing speed rises.
+                            // Applies to strokes drawn AFTER the change.
+                            val modelScroll = rememberScrollState()
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(modelScroll),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                FilterChip(
+                                    selected = stabilizerModelKey == com.authorss81.noteflow.services.StrokeSmoothingPolicy.MODEL_EWMA,
+                                    onClick = { onStabilizerModelSelect(com.authorss81.noteflow.services.StrokeSmoothingPolicy.MODEL_EWMA) },
+                                    label = { Text("Classic", style = MaterialTheme.typography.labelSmall) }
+                                )
+                                FilterChip(
+                                    selected = stabilizerModelKey == com.authorss81.noteflow.services.StrokeSmoothingPolicy.MODEL_ONE_EURO,
+                                    onClick = { onStabilizerModelSelect(com.authorss81.noteflow.services.StrokeSmoothingPolicy.MODEL_ONE_EURO) },
+                                    label = { Text("Adaptive (One-Euro)", style = MaterialTheme.typography.labelSmall) }
+                                )
+                            }
+                            Text(
+                                "Affects strokes drawn after the change",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )

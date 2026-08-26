@@ -356,7 +356,10 @@ class Phase196MotionPredictionTest {
         val src = canvasSource()
         assertTrue(src.contains("val stabilizerFilter = remember { StrokeStabilizer.create() }"))
         assertTrue(src.contains("stabilizerFilter.reset()"))
-        assertTrue(src.contains("stabilizerFilter.next(currentPoint.x, currentPoint.y)"))
+        // Phase 214 moved the capture call to the full-channel overload
+        // (pressure/tilt/velocity/timestamp); the prediction tail pipeline
+        // around it is unchanged.
+        assertTrue(src.contains("val s = stabilizerFilter.next("))
     }
 
     @Test

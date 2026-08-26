@@ -320,6 +320,12 @@ class Phase197StrokeSmoothingTest {
         val src = canvasSource()
         assertTrue(src.contains("val stabilizerFilter = remember { StrokeStabilizer.create() }"))
         assertTrue(src.contains("stabilizerFilter.reset()"))
-        assertTrue(src.contains("stabilizerFilter.next(currentPoint.x, currentPoint.y)"))
+        // Phase 214: the capture path feeds the full-channel overload (raw
+        // pressure + tilt + velocity + timestamp) so pressure is smoothed
+        // BEFORE the curve remap; the legacy two-argument next(x, y) stays on
+        // StrokeStabilizer itself for byte-parity (covered by StrokeStabilizerTest).
+        assertTrue(src.contains("val s = stabilizerFilter.next("))
+        assertTrue(src.contains("pressure = rawPressure,"))
+        assertTrue(src.contains("velocityPxPerMs = velocity,"))
     }
 }

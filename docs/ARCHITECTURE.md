@@ -547,6 +547,31 @@
 > `StrokeStabilizerTest` (10), `Phase197StrokeSmoothingTest` (17 behavior+source pins).
 > No schema change, no new deps.
 
+> **Implemented in phase-214** (2026-08-26, Stroke Smoothing v2, see
+> `workspace/phase-214/REPORT.md`): the capture chain gained four upgrades behind the
+> same `stroke_stabilizer_enabled` gate. (1) Coalesced history: the passive
+> `pointerInteropFilter` pushes every `getHistorical*` sample of each ACTION_MOVE into a
+> lock-free SPSC ring (`services/StrokeInputBatcher.kt`); `onDrag` drains FIFO into the
+> shared ingestion path (monotonic `StrokeBatchPolicy.isStale` gate; ring+gate reset at
+> stroke boundaries; freehand = whole batch, eraser/eyedropper/shape = newest-only;
+> `historySize==0` ⇒ one sample per event, pre-214 parity). (2) Pressure/tilt ride their
+> own EWMA channel (window mapped 2..12→2..6 by `StrokeSmoothingPolicy.pressureWindowSize`)
+> and `remapPressure` now runs AFTER smoothing (smooth-then-remap). (3) Per-sample
+> velocity adapts the EWMA alpha (`StrokeSmoothingPolicy.adaptiveAlpha`: 0.12..0.55 over
+> v/6, clamped around base `2/(w+1)`; null velocity ⇒ static base ⇒ bit-identical legacy
+> `next(x,y)`). (4) Model selection: `services/StreamFilters.kt` defines
+> `StrokeStreamFilter` + `OneEuroStreamFilter` (minCutoff 1.2 Hz, window-derived beta);
+> `StrokeStabilizer.selectModel` swaps at stroke start from the sanitized
+> `stroke_stabilizer_model_key` pref (unknown ⇒ EWMA). New "Tension" dial
+> (`stroke_stabilizer_prediction_percent` 0..35, 15 = legacy 0.15) feeds the existing
+> `retune`; both new dials reach the gesture closures via `rememberUpdatedState`
+> (pointerInput is never restarted mid-gesture). Commit-time: `services/StrokeFairingPolicy.kt`
+> fairs hairline-only RDP output with ONE Chaikin pass (endpoints exact, size 2n−2,
+> snapped shapes excluded) and the geometry cap is re-enforced AFTER fairing.
+> Tests: `HistoryBatchTest`/`PressureSmoothingTest`/`VelocityAdaptiveAlphaTest`/
+> `OneEuroParityTest`/`Phase214StrokeSmoothingV2Test` (42 new @Test). No schema change,
+> no new deps.
+
 > **Implemented in phase-196** (2026-08-24, stylus motion prediction — PERF 1.1, see
 > `workspace/phase-196/REPORT.md`): the ink canvas now records every raw `MotionEvent`
 > with `androidx.input:input-motionprediction:1.0.0` (`MotionEventPredictor.newInstance`,
