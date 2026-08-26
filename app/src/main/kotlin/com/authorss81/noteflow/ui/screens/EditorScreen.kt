@@ -95,6 +95,8 @@ import com.authorss81.noteflow.services.SymmetryMode
 import com.authorss81.noteflow.services.VoiceNoteManager
 import com.authorss81.noteflow.services.ReferenceImagePolicy
 import com.authorss81.noteflow.services.InlineImagePathPolicy
+import com.authorss81.noteflow.services.StrokeSelectionActionPolicy
+import com.authorss81.noteflow.services.ClipboardGuard
 import com.authorss81.noteflow.ui.components.AnnotationCanvas
 import com.authorss81.noteflow.ui.components.decodeBoundedImage
 import com.authorss81.noteflow.ui.components.rememberSaFExporter
@@ -986,6 +988,85 @@ fun EditorScreen(
         // wave keeps the vault consistent with what the user saw.
         strokes = newStrokes
         triggerAutoSave(newStrokes)
+    }
+
+    // ---- Phase 216: selection actions ---------------------------------------
+
+    /**
+     * Copy selected strokes to the system clipboard. The clipboard is a shared
+     * non-encrypted surface — [ClipboardGuard] + [ClipboardScrubPolicy] handle
+     * scrubbing on lock and the ON_PAUSE lifecycle hook.
+     */
+    fun copySelectedStrokes() {
+        if (strokeSelection.isEmpty) return
+        val selected = strokes.filter { it.id in strokeSelection.ids }
+        if (selected.isEmpty()) return
+        val json = StrokeSelectionActionPolicy.serializeForClipboard(selected)
+        val clip = android.content.ClipData.newPlainText(
+            StrokeSelectionActionPolicy.CLIPBOARD_MIME, json
+        )
+        val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        cm.setPrimaryClip(clip)
+        ClipboardGuard.recordCopy()
+        viewModel.showSnackbar("Copied ${selected.size} stroke(s)")
+    }
+
+    /**
+     * Cut = copy + delete as a single undo entry.
+     */
+    fun cutSelectedStrokes() {
+        if (strokeSelection.isEmpty) return
+        val selectedIds = strokeSelection.ids
+        copySelectedStrokes()
+        val newStrokes = StrokeSelectionActionPolicy.deleteSelected(strokes, selectedIds)
+        handleStrokesChange(newStrokes)
+        strokeSelection = com.authorss81.noteflow.data.model.StrokeSelection.EMPTY
+    }
+
+    /**
+     * Duplicate selected strokes in place (single-page, with offset). One undo
+     * entry; selection moves to the duplicates.
+     */
+    fun duplicateSelectedStrokes() {
+        if (strokeSelection.isEmpty) return
+        val selected = strokes.filter { it.id in strokeSelection.ids }
+        if (selected.isEmpty()) return
+        val copies = StrokeSelectionActionPolicy.duplicateStrokes(selected, zoomScale)
+        handleStrokesChange(strokes + copies)
+        // Select the newly created duplicates
+        strokeSelection = com.authorss81.noteflow.data.model.StrokeSelection(
+            ids = copies.map { it.id }.toSet(),
+            bounds = StrokeSelectionActionPolicy.recomputeBounds(strokes + copies, copies.map { it.id }.toSet()),
+            layerId = strokeSelection.layerId
+        )
+    }
+
+    /**
+     * Delete selected strokes (single undo entry). Clears selection after.
+     */
+    fun deleteSelectedStrokes() {
+        if (strokeSelection.isEmpty) return
+        val newStrokes = StrokeSelectionActionPolicy.deleteSelected(strokes, strokeSelection.ids)
+        handleStrokesChange(newStrokes)
+        strokeSelection = com.authorss81.noteflow.data.model.StrokeSelection.EMPTY
+    }
+
+    /**
+     * Translate (move) selected strokes by a world-coordinate delta. Called
+     * once per drag-end from the canvas. Single undo entry.
+     */
+    fun translateSelectedStrokes(dx: Float, dy: Float) {
+        if (strokeSelection.isEmpty) return
+        val pageStride = 1592f
+        val pageHeight = 1528f
+        val newStrokes = StrokeSelectionActionPolicy.translateSelected(
+            strokes, strokeSelection.ids, dx, dy, pageStride, pageHeight
+        )
+        handleStrokesChange(newStrokes)
+        // Recompute selection bounds after translation
+        strokeSelection = strokeSelection.copy(
+            bounds = StrokeSelectionActionPolicy.recomputeBounds(newStrokes, strokeSelection.ids)
+        )
     }
 
     fun handleLayersChange(newLayers: List<LayerEntity>) {
@@ -2385,7 +2466,16 @@ fun EditorScreen(
                 referenceImageY = referenceImage?.y ?: 0f,
                 referenceImageWidth = referenceImage?.width ?: 0f,
                 referenceImageHeight = referenceImage?.height ?: 0f,
-                referenceImagePage = referenceImage?.pdfPage ?: 0
+                referenceImagePage = referenceImage?.pdfPage ?: 0,
+                // Phase 216: wire the lasso selection state into the canvas so
+                // the overlay renders and gesture callbacks update EditorScreen.
+                strokeSelection = strokeSelection,
+                onSelectionChanged = { newSelection ->
+                    strokeSelection = newSelection ?: com.authorss81.noteflow.data.model.StrokeSelection.EMPTY
+                },
+                onSelectionTranslate = { dx, dy ->
+                    translateSelectedStrokes(dx, dy)
+                }
             )
 
             // Voice note failure banner (real recorder/playback errors — no silent fakes)

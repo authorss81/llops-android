@@ -20,4 +20,5 @@
     <string name="canvas_model_classic">Classic</string>
     <string name="canvas_model_one_euro">Adaptive (One-Euro)</string>
     <string name="canvas_model_apply_note">Affects strokes drawn after the change</string>
+    <string name="selection_count_a11y">%1$d strokes selected</string>
 </resources>

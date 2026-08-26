@@ -579,6 +579,23 @@
 > extracted to `strings.xml`; REPORT test inventory + failure manifest corrected.
 > No schema change, no new deps.
 
+> **Implemented in phase-216** (2026-08-26, Selection Actions — clipboard copy/cut,
+> duplicate, delete, shape-aware hit-test, and drag-to-translate for lasso-selected
+> strokes, see `workspace/phase-216/REPORT.md`): pure-JVM
+> `services/StrokeSelectionActionPolicy.kt` (clipboard serialize/deserialize via
+> `EncryptionService`, duplicate with fresh UUIDs + offset, delete selected, hit-test
+> for RECTANGLE/ELLIPSE/LINE/ARROW/freehand points, translate with `pdfPage`
+> recomputation, `recomputeBounds`, `getPageFromCanvasY`); wired into EditorScreen
+> (`copySelectedStrokes`, `cutSelectedStrokes`, `duplicateSelectedStrokes`,
+> `deleteSelectedStrokes`, `translateSelectedStrokes` — all via single
+> `handleStrokesChange` undo entry); AnnotationCanvas gains `onSelectionTranslate`
+> parameter + translate-drag gesture (inside selection bounds → accumulate delta →
+> commit on drag-end; outside → new lasso). Also fixed pre-existing Phase 215
+> omissions: `LassoTrailPolicy` FQN qualification in `StrokeSelectionOverlay`
+> (`AnnotationCanvas.kt:3528-3577`) and `selection_count_a11y` string resource.
+> Tests: `StrokeSelectionActionPolicyTest` (41) + `Phase216SelectionWiringTest`
+> (24). `assembleDebug` green, no schema change, no new deps.
+
 > **Implemented in phase-196** (2026-08-24, stylus motion prediction — PERF 1.1, see
 > `workspace/phase-196/REPORT.md`): the ink canvas now records every raw `MotionEvent`
 > with `androidx.input:input-motionprediction:1.0.0` (`MotionEventPredictor.newInstance`,
