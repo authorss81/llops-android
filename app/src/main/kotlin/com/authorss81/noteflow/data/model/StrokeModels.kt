@@ -1,6 +1,7 @@
 package com.authorss81.noteflow.data.model
 
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 
@@ -160,6 +161,29 @@ data class Stroke(
 ) {
     val color: Color
         get() = Color(colorInt)
+}
+
+/**
+ * Phase 215: TRANSIENT lasso/marquee stroke selection produced by the (now real)
+ * [StrokeTool.SELECT] tool. Never persisted — no Room schema, no backup payload;
+ * it lives only in the editor composition (rememberSaveable so a rotation keeps
+ * the selection, cleared on page switch / tool change / Escape).
+ *
+ * [ids] are stroke ids into the page's live stroke list; [bounds] is the world-
+ * coordinate union box of the selected geometry (drives the dashed overlay);
+ * [layerId] is the common layer of the selection when every selected stroke
+ * lives on ONE layer (null when mixed — phase 216 move/duplicate semantics).
+ */
+data class StrokeSelection(
+    val ids: Set<String> = emptySet(),
+    val bounds: Rect = Rect.Zero,
+    val layerId: String? = null
+) {
+    val isEmpty: Boolean get() = ids.isEmpty()
+
+    companion object {
+        val EMPTY = StrokeSelection()
+    }
 }
 
 enum class MediaEmbedType {

@@ -243,7 +243,15 @@ fun AnnotationCanvas(
     referenceImageY: Float = 0f,
     referenceImageWidth: Float = 0f,
     referenceImageHeight: Float = 0f,
-    referenceImagePage: Int = 0
+    referenceImagePage: Int = 0,
+    // Phase 215: real lasso/box-marquee stroke selection on the SELECT tool.
+    // The selection itself is TRANSIENT state owned by EditorScreen (survives
+    // rotation via rememberSaveable; cleared on page switch/tool change); this
+    // canvas only renders it and reports completed lasso/marquee gestures
+    // through [onSelectionChanged] (null = clear). Defaults keep pre-existing
+    // call sites compiling unchanged.
+    strokeSelection: com.authorss81.noteflow.data.model.StrokeSelection = com.authorss81.noteflow.data.model.StrokeSelection.EMPTY,
+    onSelectionChanged: (com.authorss81.noteflow.data.model.StrokeSelection?) -> Unit = {}
 ) {
     val vibrancyBoost = if (vibrancyEnabled) vibrancyBoostLevel.coerceIn(0f, 1f) else 0f
     var internalZoomScale by remember { mutableFloatStateOf(zoomScale) }
@@ -397,6 +405,47 @@ fun AnnotationCanvas(
     // highlight for STROKE). Updated by a non-consuming pointer tracker; cleared
     // when no pointer is pressed.
     var eraserCursorCanvas by remember { mutableStateOf<androidx.compose.ui.geometry.Offset?>(null) }
+
+    // Phase 215: lasso path for the SELECT tool, in canvas (world) coords.
+    // Mutated per drag sample; ONLY the dedicated selection-overlay node reads
+    // it in its draw scope (phase-198 discipline: per-sample mutations must not
+    // invalidate the main canvas pass). Cleared on gesture end/cancel — the
+    // committed selection lives in [strokeSelection] (owned by EditorScreen).
+    val lassoPathPoints = remember { mutableStateListOf<PointF>() }
+    var lassoActive by remember { mutableStateOf(false) }
+    val currentOnSelectionChanged by rememberUpdatedState(onSelectionChanged)
+
+    /**
+     * Phase 215: finalize a SELECT drag. Classifies the accumulated path via
+     * [LassoPolicy.classifyDrag] — tap → clear, straight drag → box marquee,
+     * loop → winding-number lasso — and reports the resulting selection once.
+     * Selection changes are deliberately NOT undoable and NEVER touch
+     * onStrokesChanged / autosave: only future stroke MUTATIONS (phase 216)
+     * go through handleStrokesChange's single undo push.
+     */
+    fun finishLassoSelection(): com.authorss81.noteflow.data.model.StrokeSelection {
+        val path = lassoPathPoints.toList()
+        lassoActive = false
+        lassoPathPoints.clear()
+        return when (com.authorss81.noteflow.services.LassoPolicy.classifyDrag(path)) {
+            com.authorss81.noteflow.services.LassoPolicy.DragKind.TAP -> null
+            com.authorss81.noteflow.services.LassoPolicy.DragKind.MARQUEE_BOX ->
+                com.authorss81.noteflow.services.StrokeHitPolicy.selectFromRect(
+                    allStrokes = activeStrokeList.toList(),
+                    rect = com.authorss81.noteflow.services.LassoPolicy.boundsOf(path),
+                    layers = layers,
+                    activeLayerId = activeLayerId
+                )
+            com.authorss81.noteflow.services.LassoPolicy.DragKind.LASSO ->
+                com.authorss81.noteflow.services.StrokeHitPolicy.selectFromPolygon(
+                    allStrokes = activeStrokeList.toList(),
+                    polygon = path,
+                    layers = layers,
+                    activeLayerId = activeLayerId
+                )
+        }?.also { currentOnSelectionChanged(it) }
+            ?: com.authorss81.noteflow.data.model.StrokeSelection.EMPTY
+    }
 
     // Phase 07: stroke stabilizer (one filter instance per continuous stroke).
     // Phase 197: the instance is RE-TUNED at each stroke start (see onDragStart)
@@ -1143,6 +1192,11 @@ fun AnnotationCanvas(
                             if (selectedStickerId != null) {
                                 onPlaceSticker(canvasOffset, targetPage)
                             }
+                        } else if (currentTool == StrokeTool.SELECT) {
+                            // Phase 215: a quick tap (no drag slop) with the SELECT
+                            // tool clears the selection — the same affordance as
+                            // Escape, and never a degenerate empty marquee.
+                            currentOnSelectionChanged(null)
                         }
                     }
                 )
@@ -1314,8 +1368,19 @@ fun AnnotationCanvas(
                             }
                             isDraggingCard = false
 
-                            if (currentTool == StrokeTool.SELECT || currentTool == StrokeTool.PAN) {
-                                // SELECT and PAN tools act as smooth single-finger Pan / Hand tool
+                            if (currentTool == StrokeTool.SELECT) {
+                                // Phase 215: SELECT is now a REAL selection tool.
+                                // One finger starts a lasso/marquee path in world
+                                // coords (two-finger pan/zoom above still works);
+                                // the committed selection is computed once at drag
+                                // end via LassoPolicy + StrokeHitPolicy.
+                                lassoActive = true
+                                lassoPathPoints.clear()
+                                lassoPathPoints.add(PointF(canvasOffset.x, canvasOffset.y))
+                                return@detectDragGestures
+                            }
+                            if (currentTool == StrokeTool.PAN) {
+                                // PAN remains the dedicated single-finger pan/hand tool.
                                 return@detectDragGestures
                             }
                             val targetPage = getPageFromCanvasY(canvasOffset.y)
@@ -1413,7 +1478,21 @@ fun AnnotationCanvas(
                             if (isDraggingCard) return@detectDragGestures
                             change.consume()
 
-                            if (isPanningBlackSpace || currentTool == StrokeTool.SELECT || currentTool == StrokeTool.PAN) {
+                            if (currentTool == StrokeTool.SELECT) {
+                                // Phase 215: extend the lasso path (world coords).
+                                // Only the selection-overlay node reads this list,
+                                // so per-sample appends never invalidate the main
+                                // canvas pass.
+                                lassoPathPoints.add(
+                                    PointF(
+                                        x = (change.position.x - internalPanOffset.x) / internalZoomScale,
+                                        y = (change.position.y - internalPanOffset.y) / internalZoomScale
+                                    )
+                                )
+                                return@detectDragGestures
+                            }
+
+                            if (isPanningBlackSpace || currentTool == StrokeTool.PAN) {
                                 updateZoomAndPan(internalZoomScale, internalPanOffset + dragAmount)
                                 return@detectDragGestures
                             }
@@ -1603,11 +1682,21 @@ fun AnnotationCanvas(
                                 isDraggingCard = false
                                 return@detectDragGestures
                             }
-                            if (currentTool == StrokeTool.EYEDROPPER) {
+                            if (currentTool == StrokeTool.SELECT) {
+                                // Phase 215: commit the lasso/marquee selection
+                                // (tap-classified paths clear via the tap handler).
+                                // A light tick confirms a non-empty capture.
+                                val selection = finishLassoSelection()
+                                if (!selection.isEmpty &&
+                                    com.authorss81.noteflow.services.MotionPolicy.hapticsAllowed(hapticsEnabled, reduceMotion)
+                                ) {
+                                    hapticFeedback.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                                }
+                            } else if (currentTool == StrokeTool.EYEDROPPER) {
                                 sampledColorPreview?.let { onColorSampled(it) }
                                 eyedropperPosition = null
                                 sampledColorPreview = null
-                            } else if (currentTool != StrokeTool.ERASER && currentTool != StrokeTool.SELECT) {
+                            } else if (currentTool != StrokeTool.ERASER) {
                                 if (activePoints.isNotEmpty() || (activeStart != null && activeEnd != null)) {
                                     val pointsToSimplify = activePoints.toList()
                                     val startPoint = activeStart
@@ -1772,6 +1861,10 @@ fun AnnotationCanvas(
                             isDraggingCard = false
                             eyedropperPosition = null
                             sampledColorPreview = null
+                            // Phase 215: an interrupted lasso leaves NO selection
+                            // behind (the pre-cancel path is preserved untouched).
+                            lassoActive = false
+                            lassoPathPoints.clear()
                             activePoints.clear()
                             predictedTailTracker.clear()
                             // Phase 214: same boundary hygiene as onDragEnd.
@@ -2577,6 +2670,37 @@ fun AnnotationCanvas(
                 )
             }
 
+            // Phase 215: SELECTION OVERLAY — visible-at-rest dashed bounds +
+            // per-stroke highlight while the SELECT tool holds a selection, and
+            // the live lasso/marquee trail while one is being drawn. A separate
+            // node with the IDENTICAL world transform (phase-198 pattern): the
+            // per-sample lasso appends are read in THIS node's draw scope only,
+            // so they never invalidate the main canvas pass, and no extra frame
+            // pump runs — the overlay re-draws only when its inputs change.
+            if (currentTool == StrokeTool.SELECT &&
+                (lassoActive || strokeSelection.ids.isNotEmpty())
+            ) {
+                StrokeSelectionOverlay(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .testTag("stroke_selection_overlay")
+                        .graphicsLayer {
+                            scaleX = internalZoomScale
+                            scaleY = internalZoomScale
+                            translationX = internalPanOffset.x
+                            translationY = internalPanOffset.y
+                            transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0f, 0f)
+                        },
+                    accentColor = MaterialTheme.colorScheme.primary,
+                    strokesProvider = { activeStrokeList },
+                    selectedIds = strokeSelection.ids,
+                    selectionBounds = strokeSelection.bounds,
+                    lassoPointsProvider = { lassoPathPoints.toList() },
+                    lassoVisible = lassoActive,
+                    zoomScale = internalZoomScale
+                )
+            }
+
             // Render Floating Draggable Canvas Sticky Notes Overlay
             for (note in activeStickyNoteList) {
                 DraggableStickyNoteCard(
@@ -3313,6 +3437,99 @@ private fun LiveStrokePreview(
  * magnified ~4x so users can micro-target sub-finger strokes. Pure rendering —
  * the color pick logic stays in [sampleColorAt]/EyedropperSamplingMath.
  */
+/**
+ * Phase 215: stroke-selection visuals for the real SELECT tool. Draws, in WORLD
+ * coordinates under the same zoom/pan transform as ink:
+ *  1. while a lasso/marquee drag is live ([lassoVisible]) — the closed trail as
+ *     a translucent fill + dashed outline;
+ *  2. at rest — every selected stroke highlighted (eraser-highlight geometry:
+ *     `width + 10f` round pass at low alpha, but in the ACCENT color so it is
+ *     never mistaken for an erase preview) plus a dashed bounding box around
+ *     [selectionBounds] (visible at rest by design — unlike the phase-193
+ *     resize handles, selection must stay legible between gestures).
+ *
+ * No animation pump: the node re-draws only when its inputs change.
+ * `internal` so the phase-215 Paparazzi screenshot can render it directly.
+ */
+@Composable
+internal fun StrokeSelectionOverlay(
+    modifier: Modifier,
+    accentColor: Color,
+    strokesProvider: () -> List<Stroke>,
+    selectedIds: Set<String>,
+    selectionBounds: androidx.compose.ui.geometry.Rect,
+    lassoPointsProvider: () -> List<PointF>,
+    lassoVisible: Boolean,
+    // Current canvas zoom — dash patterns divide by it so dashes keep a
+    // constant SCREEN size at any magnification.
+    zoomScale: Float = 1f
+) {
+    Canvas(modifier = modifier) {
+        // 1. Live lasso / marquee trail.
+        val lasso = if (lassoVisible) lassoPointsProvider() else emptyList()
+        if (lasso.size >= 2) {
+            val trail = androidx.compose.ui.graphics.Path().apply {
+                moveTo(lasso.first().x, lasso.first().y)
+                for (i in 1 until lasso.size) lineTo(lasso[i].x, lasso[i].y)
+                close()
+            }
+            drawPath(trail, accentColor.copy(alpha = LassoTrailPolicy.TRAIL_FILL_ALPHA))
+            drawPath(
+                trail,
+                accentColor.copy(alpha = LassoTrailPolicy.TRAIL_OUTLINE_ALPHA),
+                style = DrawStrokeStyle(
+                    width = LassoTrailPolicy.TRAIL_STROKE_WIDTH_PX,
+                    cap = androidx.compose.ui.graphics.StrokeCap.Round,
+                    join = androidx.compose.ui.graphics.StrokeJoin.Round,
+                    pathEffect = PathEffect.dashPathEffect(LassoTrailPolicy.trailDashPattern(zoomScale))
+                )
+            )
+        }
+
+        // 2. Resting selection: per-stroke highlight + dashed union bounds.
+        if (selectedIds.isNotEmpty()) {
+            for (stroke in strokesProvider()) {
+                if (stroke.id !in selectedIds) continue
+                if (stroke.points.size > 1) {
+                    val highlight = androidx.compose.ui.graphics.Path().apply {
+                        moveTo(stroke.points.first().x, stroke.points.first().y)
+                        for (i in 1 until stroke.points.size) lineTo(stroke.points[i].x, stroke.points[i].y)
+                    }
+                    drawPath(
+                        highlight,
+                        accentColor.copy(alpha = LassoTrailPolicy.HIGHLIGHT_ALPHA),
+                        style = DrawStrokeStyle(
+                            width = stroke.width + 10f,
+                            cap = androidx.compose.ui.graphics.StrokeCap.Round,
+                            join = androidx.compose.ui.graphics.StrokeJoin.Round
+                        )
+                    )
+                } else {
+                    val anchor = stroke.start ?: stroke.end ?: continue
+                    drawCircle(
+                        accentColor.copy(alpha = LassoTrailPolicy.HIGHLIGHT_ALPHA),
+                        radius = stroke.width + 18f,
+                        center = Offset(anchor.x, anchor.y)
+                    )
+                }
+            }
+            if (selectionBounds.width > 0f || selectionBounds.height > 0f) {
+                val padded = selectionBounds.inflate(com.authorss81.noteflow.services.StrokeHitPolicy.SELECTION_BOUNDS_PADDING_PX)
+                drawRoundRect(
+                    color = accentColor.copy(alpha = LassoTrailPolicy.BOUNDS_OUTLINE_ALPHA),
+                    topLeft = Offset(padded.left, padded.top),
+                    size = Size(padded.width, padded.height),
+                    cornerRadius = CornerRadius(6f, 6f),
+                    style = DrawStrokeStyle(
+                        width = LassoTrailPolicy.BOUNDS_STROKE_WIDTH_PX,
+                        pathEffect = PathEffect.dashPathEffect(LassoTrailPolicy.boundsDashPattern(zoomScale))
+                    )
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun EyedropperMagnifierLoupe(
     pos: Offset,

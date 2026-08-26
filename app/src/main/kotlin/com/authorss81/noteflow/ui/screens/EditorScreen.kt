@@ -41,6 +41,7 @@ import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -55,6 +56,11 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -121,6 +127,40 @@ enum class FloatingToolbarState {
     BRUSH_PRESETS,  // Phase 13: ready-made wet-brush preset gallery (BrushPresetPack)
     HIDDEN_DRAWING  // Fully hidden while actively drawing on the canvas
 }
+
+/**
+ * Phase 215: Bundle-safe saver for the TRANSIENT [StrokeSelection] so a
+ * rotation/config change keeps the selection (ids + bounds + common layer).
+ * Only primitives are stored — nothing secret, nothing persisted beyond the
+ * process; page switches and tool changes clear the state outright.
+ */
+val StrokeSelectionSaver: Saver<com.authorss81.noteflow.data.model.StrokeSelection, List<Any>> =
+    Saver(
+        save = { selection ->
+            arrayListOf(
+                ArrayList(selection.ids),
+                selection.bounds.left,
+                selection.bounds.top,
+                selection.bounds.right,
+                selection.bounds.bottom,
+                selection.layerId ?: ""
+            )
+        },
+        restore = { saved ->
+            runCatching {
+                com.authorss81.noteflow.data.model.StrokeSelection(
+                    ids = (saved[0] as ArrayList<*>).filterIsInstance<String>().toSet(),
+                    bounds = androidx.compose.ui.geometry.Rect(
+                        saved[1] as Float,
+                        saved[2] as Float,
+                        saved[3] as Float,
+                        saved[4] as Float
+                    ),
+                    layerId = (saved[5] as String).takeIf { it.isNotEmpty() }
+                )
+            }.getOrDefault(com.authorss81.noteflow.data.model.StrokeSelection.EMPTY)
+        }
+    )
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -476,6 +516,17 @@ fun EditorScreen(
     var undoStack by remember { mutableStateOf<List<List<Stroke>>>(emptyList()) }
     var redoStack by remember { mutableStateOf<List<List<Stroke>>>(emptyList()) }
 
+    // Phase 215: TRANSIENT lasso/box-marquee stroke selection for the (now real)
+    // SELECT tool. Never persisted, never part of undo history — only the
+    // SELECTION state rides through rememberSaveable so a rotation/config change
+    // keeps it; page switches and leaving SELECT clear it (effect below, after
+    // the page-state declarations). Stroke MUTATIONS made against a selection
+    // (phase 216) will go through handleStrokesChange like every other edit —
+    // one single undo push.
+    var strokeSelection by rememberSaveable(
+        stateSaver = com.authorss81.noteflow.ui.screens.StrokeSelectionSaver
+    ) { mutableStateOf(com.authorss81.noteflow.data.model.StrokeSelection.EMPTY) }
+
     // Layers State
     var layers by remember { mutableStateOf<List<LayerEntity>>(emptyList()) }
     var activeLayerId by remember { mutableStateOf<String?>(null) }
@@ -729,6 +780,36 @@ fun EditorScreen(
     // Interactive Zoom & Pan State
     var zoomScale by remember { mutableFloatStateOf(1f) }
     var panOffset by remember { mutableStateOf(Offset.Zero) }
+
+    // Phase 215: selection invalidation. Switching PAGES invalidates the
+    // selection (stroke ids are per-page); leaving the SELECT tool does too, so
+    // highlights can never linger under an ink tool. Continuous-mode scrolling
+    // is NOT a page switch (strokes span pages in one world), so only real
+    // currentPdfPage changes clear here.
+    val selectionPageKey = if (isPdf) currentPdfPage else 0
+    var lastSelectionPageKey by remember { mutableIntStateOf(0) }
+    LaunchedEffect(currentTool, selectionPageKey) {
+        if (currentTool != StrokeTool.SELECT) {
+            strokeSelection = com.authorss81.noteflow.data.model.StrokeSelection.EMPTY
+        }
+        if (selectionPageKey != lastSelectionPageKey) {
+            lastSelectionPageKey = selectionPageKey
+            strokeSelection = com.authorss81.noteflow.data.model.StrokeSelection.EMPTY
+        }
+    }
+
+    // Phase 215: TalkBack announcement when a capture completes ("3 strokes
+    // selected"). The overlay itself is decorative ink highlighting, so this
+    // live-region-style announcement is the accessible surface for it.
+    val accessibilityView = androidx.compose.ui.platform.LocalView.current
+    LaunchedEffect(strokeSelection.ids.size) {
+        val count = strokeSelection.ids.size
+        if (count > 0) {
+            accessibilityView.announceForAccessibility(
+                context.getString(com.authorss81.noteflow.R.string.selection_count_a11y, count)
+            )
+        }
+    }
 
     // Auto-Save Debounce Job & Initial Load Guard
     var saveJob by remember { mutableStateOf<Job?>(null) }
