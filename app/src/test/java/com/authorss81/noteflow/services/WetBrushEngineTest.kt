@@ -64,8 +64,7 @@ class WetBrushEngineTest {
 
     @Test
     fun `moderate thermal throttling alone does not degrade`() {
-        val engine = WetBrushEngine()
-        engine.recordFrameTime(16.6f) // healthy EMA
+        val engine = WetBrushEngine() // EMA starts at the healthy 16.6
 
         engine.updateTierAndFallback(true, 2, true, 100L)
 

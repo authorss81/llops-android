@@ -63,7 +63,7 @@ class PluginArtifactStorage(context: Context) : PluginArtifactResolver {
     // files, so the plugin's own native/asset loader can bind them. Extract only
     // the CURRENT device ABI. Idempotent via a per-artifact marker.
 
-    private val currentAbi: String = Build.SUPPORTED_ABIS.firstOrNull() ?: "arm64-v8a"
+    private val currentAbi: String = Build.SUPPORTED_ABIS?.firstOrNull() ?: "arm64-v8a"
 
     /** App-private directory holding a downloaded plugin's extracted payloads. */
     fun payloadDir(pluginId: String): File =

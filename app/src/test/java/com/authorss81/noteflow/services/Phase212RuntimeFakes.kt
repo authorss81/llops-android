@@ -13,6 +13,8 @@ import com.authorss81.noteflow.plugins.runtime.PluginVersion
 import com.authorss81.noteflow.plugins.runtime.RuntimeOutcome
 import java.lang.reflect.Proxy
 import java.io.File
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 
 /**
  * Phase 212 shared fakes for the downloadable-plugin runtime seams.
@@ -136,15 +138,21 @@ internal class WritingFakeTransport(private val payload: ByteArray = "apk-bytes"
     }
 }
 
+/** Mirrors [com.authorss81.noteflow.plugins.runtime.PluginDownloader] id sanitization. */
+internal fun sanitizeArtifactToken(value: String): String =
+    value.replace(Regex("[^A-Za-z0-9._-]"), "_").ifBlank { "plugin" }
+
 /** Asserts no partial install residue exists for [id]. */
 internal fun assertNoResidue(
     entryStore: com.authorss81.noteflow.plugins.runtime.PluginEntryStore,
     storageDir: File,
     id: String
 ) {
-    check(entryStore.find(id) == null) { "persisted entry must be removed after failure" }
+    assertNull("persisted entry must be removed after failure", entryStore.find(id))
+    val token = sanitizeArtifactToken(id)
     val files = storageDir.listFiles()?.map { it.name }.orEmpty()
-    check(files.none { it.contains(id.substringAfterLast('.')) || it.endsWith(".part") }) {
-        "artifact/part files must be cleaned after failure, found: $files"
-    }
+    assertTrue(
+        "artifact/part files must be cleaned after failure, found: $files",
+        files.none { it.contains(token) || it.endsWith(".part") }
+    )
 }

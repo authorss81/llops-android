@@ -67,6 +67,17 @@ class HtmlToMarkdownConverterTest {
     }
 
     @Test
+    fun `paragraph-separated blockquotes keep their line breaks`() {
+        // Review fix (phase-212): <p>-separated quote lines used to glue the
+        // same way <br> did ("ab") — paragraph closes now become newlines too.
+        val (_, body) = convert("<blockquote><p>first</p><p>second</p></blockquote>")
+
+        assertTrue(body.contains("> first"))
+        assertTrue(body.contains("> second"))
+        assertFalse(body.contains("firstsecond"))
+    }
+
+    @Test
     fun `paragraphs and rules survive conversion`() {
         val (_, body) = convert("<p>alpha</p><hr/><p>beta</p>")
 
@@ -118,7 +129,8 @@ class HtmlToMarkdownConverterTest {
 
         assertTrue("[[other|Other page]]" in linked)
         assertTrue("[[dir|Dir page]]" in aliased)
-        // A link whose text equals its target keeps no alias:
+        // Alias equality is checked against the STRIPPED TARGET, not the raw
+        // href: "same.html" ≠ target "same", so the alias is kept.
         assertTrue("[[same|same.html]]" in self)
         assertFalse(linked.contains("\""))
     }

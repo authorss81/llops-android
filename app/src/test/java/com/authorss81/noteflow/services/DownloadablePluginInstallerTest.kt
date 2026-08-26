@@ -13,7 +13,6 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
-import org.junit.BeforeClass
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -26,42 +25,6 @@ import org.junit.rules.TemporaryFolder
  * over fake prefs/temp dirs; transport + runtime are fault-injected fakes.
  */
 class DownloadablePluginInstallerTest {
-
-    companion object {
-        /**
-         * The mockable android.jar leaves `Build.SUPPORTED_ABIS` null on the
-         * JVM, and [PluginArtifactStorage]'s class initializer dereferences it.
-         * Seed a plausible ABI before the class ever loads. Test-only state —
-         * nothing else in the unit-test JVM reads it.
-         */
-        @BeforeClass
-        @JvmStatic
-        fun seedSupportedAbis() {
-            // The unit-test compile seals sun.* behind --release, so the whole
-            // Unsafe access stays reflective. Field.set alone is refused by
-            // JDK 21 for static finals; Unsafe's static-field put is the one
-            // reliable write path on the test JVM.
-            val unsafeClass = Class.forName("sun.misc.Unsafe")
-            val theUnsafe = unsafeClass.getDeclaredField("theUnsafe")
-            theUnsafe.isAccessible = true
-            val unsafe = theUnsafe.get(null)
-            val field = android.os.Build::class.java.getDeclaredField("SUPPORTED_ABIS")
-            val base = unsafeClass
-                .getMethod("staticFieldBase", java.lang.reflect.Field::class.java)
-                .invoke(unsafe, field)
-            val offset = unsafeClass
-                .getMethod("staticFieldOffset", java.lang.reflect.Field::class.java)
-                .invoke(unsafe, field) as Long
-            unsafeClass
-                .getMethod(
-                    "putObject",
-                    Any::class.java,
-                    Long::class.javaPrimitiveType,
-                    Any::class.java
-                )
-                .invoke(unsafe, base, offset, arrayOf("arm64-v8a"))
-        }
-    }
 
     @get:Rule
     val tmp = TemporaryFolder()
@@ -81,7 +44,7 @@ class DownloadablePluginInstallerTest {
 
     private fun newFixture(verifyOk: Boolean = true, loadOk: Boolean = true): Fixture {
         val prefs = FakePrefs()
-        val files = tmp.newFolder("files-$systemTimeNanos")
+        val files = tmp.newFolder("files-" + System.nanoTime())
         val settings = settingsOver(prefs, files)
         val entryStore = SettingsPluginEntryStore(settings)
         val storage = PluginArtifactStorage(FakeContext(prefs, files))
@@ -109,8 +72,6 @@ class DownloadablePluginInstallerTest {
         )
         return Fixture(prefs, settings, entryStore, storage, runtime, transport, registry, installer)
     }
-
-    private var systemTimeNanos: Long = System.nanoTime()
 
     @Test
     fun `consent is persisted through SettingsManager`() {
@@ -142,6 +103,25 @@ class DownloadablePluginInstallerTest {
         // The runtime saw verify BEFORE load, with the pinned digests from the entry.
         assertEquals(1, f.runtime.verifiedArtifacts.size)
         assertEquals(1, f.runtime.loadedEntries.size)
+    }
+
+    @Test
+    fun `unextractable payloads keep the plugin installed but write no payload marker`() = runBlocking {
+        // Phase 175 contract: a refused payload extraction must NOT fail the
+        // install — the verified+loaded plugin stays installed-but-unavailable
+        // (its availability gate reports the missing payloads). The default
+        // transport writes non-zip bytes, so JarFile parsing refuses below.
+        val f = newFixture()
+
+        val outcome = f.installer.install(Phase212Fakes.remoteEntry(), {})
+
+        assertEquals(PluginStoreController.DownloadOutcome.Installed(id), outcome)
+        assertTrue("a refused extraction must keep the registry install", f.registry.allPlugins.any { it.id == id })
+        assertFalse(f.registry.isEnabled(id))
+        assertNull(
+            "a refused extraction must not write any payload file",
+            f.storage.payloadDir(id).listFiles()?.firstOrNull()
+        )
     }
 
     @Test

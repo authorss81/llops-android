@@ -181,6 +181,28 @@ class ShapeRecognitionHelperTest {
         assertEquals(100f, snapped.snappedStroke.end!!.x, 0.01f)
     }
 
+    @Test
+    fun `a jittered hand-drawn circle still snaps to an ELLIPSE (no false corner evidence)`() {
+        // Review fix (phase-212): the corner-evidence gate fires at >=4% of
+        // points hugging BOTH bbox axes — pin that ordinary pen noise on a real
+        // circle never trips it into the RECTANGLE branch.
+        val noisy = (0..24).map { i ->
+            val a = 2 * PI * i / 24
+            val jx = if (i % 2 == 0) 1.7f else -1.7f
+            val jy = if (i % 3 == 0) -1.4f else 1.6f
+            PointF(
+                60f + 40f * cos(a).toFloat() + jx,
+                60f + 40f * sin(a).toFloat() + jy
+            )
+        }
+        val closed = noisy + noisy.first()
+
+        val snapped = ShapeRecognitionHelper.trySnapShape(stroke(closed))
+
+        assertNotNull(snapped)
+        assertEquals(ShapeRecognitionHelper.ShapeType.ELLIPSE, snapped!!.type)
+    }
+
     // ---- ARROW --------------------------------------------------------------
 
     @Test

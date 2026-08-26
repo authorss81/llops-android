@@ -54,10 +54,15 @@ object HtmlToMarkdownConverter {
 
         // 3. Blockquotes
         processed = processed.replace(Regex("(?is)<blockquote.*?>(.*?)</blockquote>")) { matchResult ->
-            // Phase 212 fix: <br> inside a quote becomes a line break BEFORE the
-            // "> " prefix pass — the pre-fix stripTags silently glued the quote's
-            // lines together ("firstsecond").
-            val content = stripTags(matchResult.groupValues[1].replace(Regex("(?i)<br\\s*/?>"), "\n")).trim()
+            // Phase 212 fix (review-hardened): line-break carriers inside a
+            // quote (<br> variants AND paragraph closes) become newlines BEFORE
+            // the "> " prefix pass — the pre-fix stripTags silently glued the
+            // quote's lines together ("firstsecond", "ab").
+            val content = stripTags(
+                matchResult.groupValues[1]
+                    .replace(Regex("(?i)<br\\s*/?>"), "\n")
+                    .replace(Regex("(?i)</p\\s*>"), "\n")
+            ).trim()
             val lines = content.lines().joinToString("\n") { "> $it" }
             "\n\n$lines\n\n"
         }

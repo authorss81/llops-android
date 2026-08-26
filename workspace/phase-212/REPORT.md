@@ -59,4 +59,17 @@ Writing these tests exposed three real defects + one fidelity defect; each is fi
 
 - The ARROW detector keys on path-length deficit (shaft+head lands below the LINE threshold); it has NO structural head check, so a wavy-but-mostly-straight mark in the 0.55–0.82 direct/path band can become an arrow. Changing this needs UX calibration against real arrow gestures — out of scope for a hardening phase; the unambiguous noise fixtures (ratio ≈ 0.27 zigzag) are pinned rejected.
 - Nested HTML lists flatten into their parent bullet (`- parentchild`) and list numbering is dropped — regex single-pass limitation, now pinned as documented behavior so a future recursive parser shows up as an intentional diff.
-- `DownloadablePluginInstallerTest` seeds `Build.SUPPORTED_ABIS` via reflective Unsafe static-field put (the mockable android.jar leaves it null; JDK 21 refuses plain `Field.set` on static finals). Test-only state.
+
+## 5. Review fixes (2026-08-26)
+
+All 7 review findings actioned; touched suites re-run green (67 tests — phase-212 total now **120 `@Test` methods**), full suite re-run post-fix (see §5 verification line).
+
+1. **Blockquote `<p>` gluing (residual of FIX 4)** — `HtmlToMarkdownConverter.kt:55-67`: paragraph CLOSES (`</p>`) inside a blockquote now also become newlines before the `"> "` prefix pass, so `<blockquote><p>a</p><p>b</p></blockquote>` yields two quoted lines instead of `> ab`. Pinned by `paragraph-separated blockquotes keep their line breaks`.
+2. **Misleading test comment** — `HtmlToMarkdownConverterTest` wikilink case: the comment claimed "keeps no alias" while the pin asserts `[[same|same.html]]`; rewritten to state the actual rule (alias equality is checked against the STRIPPED TARGET "same", not the raw href "same.html").
+3. **Unsafe ABI-seed fragility removed** — root cause fixed in PRODUCTION: `PluginArtifactStorage.currentAbi` now reads `Build.SUPPORTED_ABIS?.firstOrNull() ?: "arm64-v8a"` (`PluginArtifactStorage.kt:66`; null only on the mockable android.jar — no device behavior change), which let the entire reflective `sun.misc.Unsafe` @BeforeClass hack be DELETED from `DownloadablePluginInstallerTest`. No test-ordering hazard remains.
+4. **Noisy-circle false-corner fixture added** — `ShapeRecognitionHelperTest.a jittered hand-drawn circle still snaps to an ELLIPSE (no false corner evidence)`: ±~2 px pen noise on a closed 25-point circle stays outside the both-axis margin window and keeps snapping ELLIPSE.
+5. **Installed-but-unavailable path covered** — new `DownloadablePluginInstallerTest.unextractable payloads keep the plugin installed but write no payload marker`: non-zip artifact bytes make `extractPayload` refuse AFTER registry install; pins Installed outcome + REGISTERED-off + empty payload dir.
+6. **`assertNoResidue` hardened** — `Phase212RuntimeFakes.sanitizeArtifactToken` mirrors `PluginDownloader.sanitizeId` exactly (full sanitized id token, not the weak last-dot segment) and uses JUnit asserts instead of `check`.
+7. **Nits** — `DownloadablePluginInstallerTest.newFixture` folder suffix computed locally (`System.nanoTime()` per call; the misleadingly stable-looking `systemTimeNanos` property is gone); redundant `recordFrameTime(16.6f)` (equal to the initial EMA) dropped from `WetBrushEngineTest.moderate thermal throttling alone does not degrade`.
+
+Superseded §4 note: the former third bullet ("seeds Build.SUPPORTED_ABIS via reflective Unsafe") described the now-deleted hack.
