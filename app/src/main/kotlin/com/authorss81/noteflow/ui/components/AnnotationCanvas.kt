@@ -6028,6 +6028,10 @@ private fun DraggableMediaEmbedCard(
     val currentPan by rememberUpdatedState(panOffset)
     val currentOnMediaEmbedsChanged by rememberUpdatedState(onMediaEmbedsChanged)
 
+    // Phase 217: haptic tick on handle grab (same pattern as AnnotationCanvas line 264).
+    val hapticFeedback = androidx.compose.ui.platform.LocalHapticFeedback.current
+    val reduceMotion = com.authorss81.noteflow.theme.LocalReduceMotion.current
+
     var dragOffsetX by remember { mutableFloatStateOf(0f) }
     var dragOffsetY by remember { mutableFloatStateOf(0f) }
 
@@ -6049,6 +6053,20 @@ private fun DraggableMediaEmbedCard(
             }
         )
     }
+
+    // Phase 217: PHOTO aspect-lock — when locked, width/height drag respects
+    // the initial aspect ratio (rawW/rawH from PhotoEmbedCard decode).
+    var photoAspectLocked by remember(currentEmbed.id) { mutableStateOf(false) }
+    val photoAspect by remember(currentEmbed.width, currentEmbed.height) {
+        mutableFloatStateOf(
+            if (currentEmbed.width > 0f && currentEmbed.height > 0f) {
+                currentEmbed.width / currentEmbed.height
+            } else 4f / 3f
+        )
+    }
+
+    // Phase 217: min/max boundary feedback — fires once per boundary hit during resize.
+    var lastMinMaxFeedback by remember(currentEmbed.id) { mutableStateOf("") }
 
     // Phase 13: live rotation during handle drag; committed on drag end.
     var liveRotation by remember(currentEmbed.rotationDegrees) { mutableFloatStateOf(currentEmbed.rotationDegrees) }
@@ -6295,11 +6313,46 @@ private fun DraggableMediaEmbedCard(
                     .size(24.dp)
                     .pointerInput(currentEmbed.id) {
                         detectDragGestures(
-                            onDragStart = { interacting = true },
+                            onDragStart = {
+                                interacting = true
+                                // Phase 217: haptic tick on handle grab.
+                                if (!reduceMotion) {
+                                    hapticFeedback.performHapticFeedback(
+                                        androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove
+                                    )
+                                }
+                            },
                             onDrag = { change, dragAmount ->
                                 change.consume()
-                                resizeWidth = (resizeWidth + dragAmount.x / currentZoom).coerceIn(minW, maxW)
-                                resizeHeight = (resizeHeight + dragAmount.y / currentZoom).coerceIn(minH, maxH)
+                                val prevW = resizeWidth
+                                val prevH = resizeHeight
+                                var newW = (resizeWidth + dragAmount.x / currentZoom).coerceIn(minW, maxW)
+                                var newH = (resizeHeight + dragAmount.y / currentZoom).coerceIn(minH, maxH)
+                                // Phase 217: PHOTO aspect-lock enforcement.
+                                if (photoAspectLocked && currentEmbed.type == MediaEmbedType.PHOTO) {
+                                    newH = (newW / photoAspect).coerceIn(minH, maxH)
+                                    newW = (newH * photoAspect).coerceIn(minW, maxW)
+                                }
+                                resizeWidth = newW
+                                resizeHeight = newH
+                                // Phase 217: min/max boundary detection (fires once per hit).
+                                val feedback = when {
+                                    newW <= minW -> com.authorss81.noteflow.services.ResizeHandleVisibilityPolicy.RESIZE_MIN_WIDTH_TOAST
+                                    newW >= maxW -> com.authorss81.noteflow.services.ResizeHandleVisibilityPolicy.RESIZE_MAX_WIDTH_TOAST
+                                    newH <= minH -> com.authorss81.noteflow.services.ResizeHandleVisibilityPolicy.RESIZE_MIN_HEIGHT_TOAST
+                                    newH >= maxH -> com.authorss81.noteflow.services.ResizeHandleVisibilityPolicy.RESIZE_MAX_HEIGHT_TOAST
+                                    else -> ""
+                                }
+                                if (feedback.isNotEmpty() && feedback != lastMinMaxFeedback) {
+                                    lastMinMaxFeedback = feedback
+                                    if (!reduceMotion) {
+                                        hapticFeedback.performHapticFeedback(
+                                            androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress
+                                        )
+                                    }
+                                } else if (feedback.isEmpty()) {
+                                    lastMinMaxFeedback = ""
+                                }
                             },
                             onDragEnd = saveCurrentEmbedState,
                             onDragCancel = { interacting = false }
@@ -6327,15 +6380,44 @@ private fun DraggableMediaEmbedCard(
                     .size(24.dp)
                     .pointerInput(currentEmbed.id) {
                         detectDragGestures(
-                            onDragStart = { interacting = true },
+                            onDragStart = {
+                                interacting = true
+                                if (!reduceMotion) {
+                                    hapticFeedback.performHapticFeedback(
+                                        androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove
+                                    )
+                                }
+                            },
                             onDrag = { change, dragAmount ->
                                 change.consume()
                                 val dx = dragAmount.x / currentZoom
                                 val dy = dragAmount.y / currentZoom
-                                val newW = (resizeWidth - dx).coerceAtLeast(minW)
+                                var newW = (resizeWidth - dx).coerceAtLeast(minW)
+                                var newH = (resizeHeight + dy).coerceAtLeast(minH)
+                                if (photoAspectLocked && currentEmbed.type == MediaEmbedType.PHOTO) {
+                                    newH = (newW / photoAspect).coerceIn(minH, maxH)
+                                    newW = (newH * photoAspect).coerceAtLeast(minW)
+                                }
                                 dragOffsetX += (resizeWidth - newW)
                                 resizeWidth = newW
-                                resizeHeight = (resizeHeight + dy).coerceAtLeast(minH)
+                                resizeHeight = newH
+                                val feedback = when {
+                                    newW <= minW -> com.authorss81.noteflow.services.ResizeHandleVisibilityPolicy.RESIZE_MIN_WIDTH_TOAST
+                                    newW >= maxW -> com.authorss81.noteflow.services.ResizeHandleVisibilityPolicy.RESIZE_MAX_WIDTH_TOAST
+                                    newH <= minH -> com.authorss81.noteflow.services.ResizeHandleVisibilityPolicy.RESIZE_MIN_HEIGHT_TOAST
+                                    newH >= maxH -> com.authorss81.noteflow.services.ResizeHandleVisibilityPolicy.RESIZE_MAX_HEIGHT_TOAST
+                                    else -> ""
+                                }
+                                if (feedback.isNotEmpty() && feedback != lastMinMaxFeedback) {
+                                    lastMinMaxFeedback = feedback
+                                    if (!reduceMotion) {
+                                        hapticFeedback.performHapticFeedback(
+                                            androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress
+                                        )
+                                    }
+                                } else if (feedback.isEmpty()) {
+                                    lastMinMaxFeedback = ""
+                                }
                             },
                             onDragEnd = saveCurrentEmbedState,
                             onDragCancel = { interacting = false }
@@ -6363,15 +6445,45 @@ private fun DraggableMediaEmbedCard(
                     .size(24.dp)
                     .pointerInput(currentEmbed.id) {
                         detectDragGestures(
-                            onDragStart = { interacting = true },
+                            onDragStart = {
+                                interacting = true
+                                if (!reduceMotion) {
+                                    hapticFeedback.performHapticFeedback(
+                                        androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove
+                                    )
+                                }
+                            },
                             onDrag = { change, dragAmount ->
                                 change.consume()
                                 val dx = dragAmount.x / currentZoom
                                 val dy = dragAmount.y / currentZoom
-                                resizeWidth = (resizeWidth + dx).coerceAtLeast(minW)
-                                val newH = (resizeHeight - dy).coerceAtLeast(minH)
-                                dragOffsetY += (resizeHeight - newH)
+                                var newW = (resizeWidth + dx).coerceAtLeast(minW)
+                                var newH = (resizeHeight - dy).coerceAtLeast(minH)
+                                if (photoAspectLocked && currentEmbed.type == MediaEmbedType.PHOTO) {
+                                    newH = (newW / photoAspect).coerceAtLeast(minH)
+                                    newW = (newH * photoAspect).coerceAtLeast(minW)
+                                }
+                                val newOffsetY = resizeHeight - newH
+                                dragOffsetY += newOffsetY
+                                resizeWidth = newW
                                 resizeHeight = newH
+                                val feedback = when {
+                                    newW <= minW -> com.authorss81.noteflow.services.ResizeHandleVisibilityPolicy.RESIZE_MIN_WIDTH_TOAST
+                                    newW >= maxW -> com.authorss81.noteflow.services.ResizeHandleVisibilityPolicy.RESIZE_MAX_WIDTH_TOAST
+                                    newH <= minH -> com.authorss81.noteflow.services.ResizeHandleVisibilityPolicy.RESIZE_MIN_HEIGHT_TOAST
+                                    newH >= maxH -> com.authorss81.noteflow.services.ResizeHandleVisibilityPolicy.RESIZE_MAX_HEIGHT_TOAST
+                                    else -> ""
+                                }
+                                if (feedback.isNotEmpty() && feedback != lastMinMaxFeedback) {
+                                    lastMinMaxFeedback = feedback
+                                    if (!reduceMotion) {
+                                        hapticFeedback.performHapticFeedback(
+                                            androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress
+                                        )
+                                    }
+                                } else if (feedback.isEmpty()) {
+                                    lastMinMaxFeedback = ""
+                                }
                             },
                             onDragEnd = saveCurrentEmbedState,
                             onDragCancel = { interacting = false }
@@ -6399,17 +6511,47 @@ private fun DraggableMediaEmbedCard(
                     .size(24.dp)
                     .pointerInput(currentEmbed.id) {
                         detectDragGestures(
-                            onDragStart = { interacting = true },
+                            onDragStart = {
+                                interacting = true
+                                if (!reduceMotion) {
+                                    hapticFeedback.performHapticFeedback(
+                                        androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove
+                                    )
+                                }
+                            },
                             onDrag = { change, dragAmount ->
                                 change.consume()
                                 val dx = dragAmount.x / currentZoom
                                 val dy = dragAmount.y / currentZoom
-                                val newW = (resizeWidth - dx).coerceAtLeast(minW)
-                                dragOffsetX += (resizeWidth - newW)
+                                var newW = (resizeWidth - dx).coerceAtLeast(minW)
+                                var newH = (resizeHeight - dy).coerceAtLeast(minH)
+                                if (photoAspectLocked && currentEmbed.type == MediaEmbedType.PHOTO) {
+                                    newH = (newW / photoAspect).coerceAtLeast(minH)
+                                    newW = (newH * photoAspect).coerceAtLeast(minW)
+                                }
+                                val newOffsetX = resizeWidth - newW
+                                val newOffsetY = resizeHeight - newH
+                                dragOffsetX += newOffsetX
+                                dragOffsetY += newOffsetY
                                 resizeWidth = newW
-                                val newH = (resizeHeight - dy).coerceAtLeast(minH)
-                                dragOffsetY += (resizeHeight - newH)
                                 resizeHeight = newH
+                                val feedback = when {
+                                    newW <= minW -> com.authorss81.noteflow.services.ResizeHandleVisibilityPolicy.RESIZE_MIN_WIDTH_TOAST
+                                    newW >= maxW -> com.authorss81.noteflow.services.ResizeHandleVisibilityPolicy.RESIZE_MAX_WIDTH_TOAST
+                                    newH <= minH -> com.authorss81.noteflow.services.ResizeHandleVisibilityPolicy.RESIZE_MIN_HEIGHT_TOAST
+                                    newH >= maxH -> com.authorss81.noteflow.services.ResizeHandleVisibilityPolicy.RESIZE_MAX_HEIGHT_TOAST
+                                    else -> ""
+                                }
+                                if (feedback.isNotEmpty() && feedback != lastMinMaxFeedback) {
+                                    lastMinMaxFeedback = feedback
+                                    if (!reduceMotion) {
+                                        hapticFeedback.performHapticFeedback(
+                                            androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress
+                                        )
+                                    }
+                                } else if (feedback.isEmpty()) {
+                                    lastMinMaxFeedback = ""
+                                }
                             },
                             onDragEnd = saveCurrentEmbedState,
                             onDragCancel = { interacting = false }

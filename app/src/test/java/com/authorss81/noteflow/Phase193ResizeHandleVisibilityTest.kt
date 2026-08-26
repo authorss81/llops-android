@@ -32,7 +32,8 @@ class Phase193ResizeHandleVisibilityTest {
 
     @Test
     fun `resting alpha hides the visual layer`() {
-        assertEquals(0f, ResizeHandleVisibilityPolicy.handleAlpha(visible = false), 0f)
+        // Phase-217: resting alpha is now 0.45f (dim but visible for discoverability).
+        assertEquals(0.45f, ResizeHandleVisibilityPolicy.handleAlpha(visible = false), 0.01f)
     }
 
     // ---- 2. Dragging/resizing = visible -------------------------------------
@@ -60,11 +61,10 @@ class Phase193ResizeHandleVisibilityTest {
 
     @Test
     fun `hidden handles keep a composed hit-box (zero-alpha, still present)`() {
-        // The policy's contract: hidden handles are ALPHA 0f but remain composed
-        // in the layout (the cards keep the Box + pointerInput at rest rather
-        // than removing it), so a touch on/near a corner still begins a resize.
-        assertEquals(0f, ResizeHandleVisibilityPolicy.HIDDEN_HANDLE_ALPHA, 0f)
-        assertEquals(0f, ResizeHandleVisibilityPolicy.handleAlpha(false), 0f)
+        // Phase-217: HIDDEN_HANDLE_ALPHA raised to 0.45f for discoverability;
+        // the hit-box is still composed in the layout (dim, not invisible).
+        assertEquals(0.45f, ResizeHandleVisibilityPolicy.HIDDEN_HANDLE_ALPHA, 0.01f)
+        assertEquals(0.45f, ResizeHandleVisibilityPolicy.handleAlpha(false), 0.01f)
         // And the hit-box dims are shared constants used by both item types.
         assertEquals(24f, ResizeHandleVisibilityPolicy.HANDLE_SIZE_DP, 0f)
         assertEquals(26f, ResizeHandleVisibilityPolicy.ROTATION_HANDLE_SIZE_DP, 0f)
@@ -96,9 +96,12 @@ class Phase193ResizeHandleVisibilityTest {
                 "val cornerVisible = com.authorss81.noteflow.services.ResizeHandleVisibilityPolicy.shouldShow("
             )
         )
-        // Every corner gesture reveals the handles (4 corners + the sticky-note
-        // bottom-right handle share the same inline gesture toggle).
-        assertEquals(5, src.countOccurrences("onDragStart = { interacting = true }"))
+        // Phase-217: the four media-embed corner handles now have multi-line
+        // onDragStart with haptic feedback; the sticky-note bottom-right handle
+        // still uses the simple one-liner `onDragStart = { interacting = true }`.
+        assertEquals(1, src.countOccurrences("onDragStart = { interacting = true }"))
+        // All four media embed corners still set interacting = true in onDragStart.
+        assertTrue(src.countOccurrences("interacting = true") >= 5)
     }
 
     @Test
