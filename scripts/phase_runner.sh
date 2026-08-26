@@ -108,7 +108,13 @@ run_models() {
   for m in "${MODELS[@]}"; do
     echo "== [models] trying ${m} ==" >> "${logfile}"
     pre="$(wc -c < "${logfile}" 2>/dev/null || echo 0)"
-    opencode run --model "${m}" "$@" >> "${logfile}" 2>&1
+    # Fix stdin-consumption bug: ctx was piped via outer `< ctx` which is exhausted after first model.
+    # Re-open the phase ctx file per-model attempt so fallback chain can actually retry.
+    if [ -n "${PHASE:-}" ] && [ -f "${LOG_DIR}/${PHASE}.ctx" ]; then
+      opencode run --model "${m}" "$@" < "${LOG_DIR}/${PHASE}.ctx" >> "${logfile}" 2>&1
+    else
+      opencode run --model "${m}" "$@" >> "${logfile}" 2>&1
+    fi
     code=$?
     post="$(wc -c < "${logfile}" 2>/dev/null || echo 0)"
     growth=$((post - pre))
@@ -336,8 +342,7 @@ run_phase() {
   run_models "${LOG_DIR}/${PHASE}.log" \
     --agent build \
     "${SESSION_ARGS[@]}" \
-    --title "llops-${PHASE}" \
-    < "${LOG_DIR}/${PHASE}.ctx"
+    --title "llops-${PHASE}"
   local code=$?
   kill "${CHECK_PID}" 2>/dev/null || true
   set -e
