@@ -12,7 +12,16 @@ data class BrushStudioParams(
     val pull: Float = 0.7f,           // Smudge & blend pull strength
     val impasto: Float = 0.4f,        // 3D oil paint ridge height
     val paperGrain: Float = 0.5f,     // Cold press paper valley granulation
-    val splatterSpread: Float = 0.3f  // Droplet spray spread
+    val splatterSpread: Float = 0.3f, // Droplet spray spread
+    // Phase 220: pro brush controls.
+    // blenderStrength: 0..1, maps to the AGSL shader's uMixStrength when
+    // SMUDGE tool is active. 0.85 = the pre-220 ToolPreset(SMUDGE).mixStrength.
+    // Non-SMUDGE tools ignore this field (the shader uses ToolPreset.mixStrength).
+    val blenderStrength: Float = 0.85f,
+    // scatterAmount: 0..1, modulates bitmap-stamp spacing + scatter for
+    // texture-engine tools (SPLATTER/SMUDGE family). 0 = legacy tight
+    // spacing, 1 = wide scatter.
+    val scatterAmount: Float = 0f
 )
 
 /**

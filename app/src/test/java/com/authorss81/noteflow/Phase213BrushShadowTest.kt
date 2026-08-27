@@ -83,11 +83,11 @@ class Phase213BrushShadowTest {
         val flat = normalized(src)
         assertTrue(
             "the wet-pass call site must pass strokeShadowEnabled",
-            flat.contains("vibrancyBoost = vibrancyBoost, strokeShadowEnabled = strokeShadowEnabled )")
+            flat.contains("vibrancyBoost = vibrancyBoost, strokeShadowEnabled = strokeShadowEnabled")
         )
         assertTrue(
             "drawWetLayerPass must accept a strokeShadowEnabled param",
-            flat.contains("vibrancyBoost: Float = 0f, strokeShadowEnabled: Boolean = false )")
+            flat.contains("vibrancyBoost: Float = 0f, strokeShadowEnabled: Boolean = false")
         )
         // LiveStrokePreview casts the same shadow as the committed stroke will.
         assertEquals(

@@ -205,6 +205,10 @@ fun AnnotationCanvas(
     selectedStickerId: String? = null,
     onPlaceSticker: (Offset, Int) -> Unit = { _, _ -> },
     activeBrushPresetId: String? = null,
+    // Phase 220: pro brush controls — blender strength (SMUDGE) and texture
+    // scatter. Both override ToolPreset defaults; 0 = legacy behaviour.
+    blenderStrengthPercent: Int = 85,
+    scatterAmountPercent: Int = 0,
     // Phase 19: dual erasers (STROKE = classic whole-stroke, PARTIAL = trim to
     // surviving segments) + render-time vibrancy/saturation boost (0 = off).
     eraserMode: com.authorss81.noteflow.services.EraserMode = com.authorss81.noteflow.services.EraserMode.STROKE,
@@ -2440,7 +2444,9 @@ fun AnnotationCanvas(
                         symmetryCenterY = symmetryCenterFor(size.width, 0f).y,
                         strokeRenderOpts = strokeRenderOpts,
                         liveStrokeSeed = currentStrokeSeed,
-                        vibrancyBoost = vibrancyBoost
+                        vibrancyBoost = vibrancyBoost,
+                        blenderStrengthPercent = blenderStrengthPercent,
+                        scatterAmountPercent = scatterAmountPercent
                     )
                 } else if (!divideIntoPages) {
                     // Continuous Infinite Canvas (Seamless, without page division gaps)
@@ -2492,7 +2498,9 @@ fun AnnotationCanvas(
                         symmetryCenterY = symmetryCenterFor(size.width, 0f).y,
                         strokeRenderOpts = strokeRenderOpts,
                         liveStrokeSeed = currentStrokeSeed,
-                        vibrancyBoost = vibrancyBoost
+                        vibrancyBoost = vibrancyBoost,
+                        blenderStrengthPercent = blenderStrengthPercent,
+                        scatterAmountPercent = scatterAmountPercent
                     )
                 } else {
                     // Continuous Infinite Canvas with Page Divisions & Page Break Badges
@@ -2637,7 +2645,9 @@ fun AnnotationCanvas(
                             symmetryCenterY = symmetryCenterFor(size.width, pageTopY).y,
                             strokeRenderOpts = strokeRenderOpts,
                             liveStrokeSeed = currentStrokeSeed,
-                            vibrancyBoost = vibrancyBoost
+                            vibrancyBoost = vibrancyBoost,
+                            blenderStrengthPercent = blenderStrengthPercent,
+                            scatterAmountPercent = scatterAmountPercent
                         )
                     }
                 }
@@ -2731,7 +2741,8 @@ fun AnnotationCanvas(
                     currentGradientToColor = currentGradientToColor,
                     eraserCursorProvider = { eraserCursorCanvas },
                     eraserMode = eraserMode,
-                    activeStrokes = activeStrokeList
+                    activeStrokes = activeStrokeList,
+                    scatterAmountPercent = scatterAmountPercent
                 )
             }
 
@@ -3360,7 +3371,9 @@ private fun LiveStrokePreview(
     currentGradientToColor: Color,
     eraserCursorProvider: () -> Offset?,
     eraserMode: com.authorss81.noteflow.services.EraserMode,
-    activeStrokes: List<Stroke>
+    activeStrokes: List<Stroke>,
+    // Phase 220: pro brush controls — scatter for bitmap stamps.
+    scatterAmountPercent: Int = 0
 ) {
     Canvas(modifier = modifier) {
         val hasLiveInk = activePoints.isNotEmpty() || (activeStartProvider() != null && activeEndProvider() != null)
@@ -3388,7 +3401,8 @@ private fun LiveStrokePreview(
                 inkRenderer = inkRenderer,
                 renderOpts = strokeRenderOpts,
                 vibrancy = vibrancyBoost,
-                shadowEnabled = strokeShadowEnabled
+                shadowEnabled = strokeShadowEnabled,
+                scatterAmountPercent = scatterAmountPercent
             )
             // Phase 07: view-time symmetry mirror of the live preview — same
             // page-anchored axis center the committed strokes mirror through.
@@ -3409,7 +3423,8 @@ private fun LiveStrokePreview(
                     inkRenderer = inkRenderer,
                     renderOpts = strokeRenderOpts,
                     vibrancy = vibrancyBoost,
-                    shadowEnabled = strokeShadowEnabled
+                    shadowEnabled = strokeShadowEnabled,
+                    scatterAmountPercent = scatterAmountPercent
                 )
             }
         }
@@ -4258,9 +4273,11 @@ private fun DrawScope.drawCompositedLayersStrokes(
     symmetryCenterY: Float = 0f,
     strokeRenderOpts: StrokeRenderOpts = StrokeRenderOpts(),
     liveStrokeSeed: Float = 0f,
-    vibrancyBoost: Float = 0f
+    vibrancyBoost: Float = 0f,
+    // Phase 220: pro brush controls.
+    blenderStrengthPercent: Int = 85,
+    scatterAmountPercent: Int = 0
 ) {
-    // Phase 203: committed strokes render EXACTLY ONCE. Symmetry is baked at
     // capture time (see SymmetryCommitPolicy): a stroke drawn while a mode was
     // active persisted BOTH rows (original + mirrored twin), so re-mirroring
     // committed strokes here retroactively duplicated old ink on enable and
@@ -4268,13 +4285,13 @@ private fun DrawScope.drawCompositedLayersStrokes(
     // view-time mirror is the LIVE in-progress preview below, so the user still
     // sees the symmetric effect while drawing, before lift-off.
     fun DrawScope.drawCommittedStrokeOnce(stroke: Stroke, offsetY: Float) {
-        drawSingleStroke(stroke, offsetY, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer, renderOpts = strokeRenderOpts, vibrancy = vibrancyBoost, shadowEnabled = strokeShadowEnabled)
+        drawSingleStroke(stroke, offsetY, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer, renderOpts = strokeRenderOpts, vibrancy = vibrancyBoost, shadowEnabled = strokeShadowEnabled, scatterAmountPercent = scatterAmountPercent)
     }
 
     // Live preview only: draws [stroke] plus its mirror when [sMode] is active.
     // TEXT strokes are never mirrored (text cannot sensibly reflect).
     fun DrawScope.drawLivePreviewWithSymmetry(stroke: Stroke, offsetY: Float, sMode: SymmetryMode, centerX: Float = symmetryCenterX, centerY: Float = symmetryCenterY) {
-        drawSingleStroke(stroke, offsetY, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer, renderOpts = strokeRenderOpts, vibrancy = vibrancyBoost, shadowEnabled = strokeShadowEnabled)
+        drawSingleStroke(stroke, offsetY, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer, renderOpts = strokeRenderOpts, vibrancy = vibrancyBoost, shadowEnabled = strokeShadowEnabled, scatterAmountPercent = scatterAmountPercent)
         if (sMode != SymmetryMode.OFF && stroke.tool != StrokeTool.TEXT) {
             drawSingleStroke(
                 stroke.copy(
@@ -4296,7 +4313,8 @@ private fun DrawScope.drawCompositedLayersStrokes(
                 inkRenderer = inkRenderer,
                 renderOpts = strokeRenderOpts,
                 vibrancy = vibrancyBoost,
-                shadowEnabled = strokeShadowEnabled
+                shadowEnabled = strokeShadowEnabled,
+                scatterAmountPercent = scatterAmountPercent
             )
         }
     }
@@ -4438,7 +4456,9 @@ private fun DrawScope.drawCompositedLayersStrokes(
                 strokeRenderOpts = strokeRenderOpts,
                 liveStrokeSeed = liveStrokeSeed,
                 vibrancyBoost = vibrancyBoost,
-                strokeShadowEnabled = strokeShadowEnabled
+                strokeShadowEnabled = strokeShadowEnabled,
+                blenderStrengthPercent = blenderStrengthPercent,
+                scatterAmountPercent = scatterAmountPercent
             )
             continue
         }
@@ -4562,7 +4582,10 @@ private fun DrawScope.drawWetLayerPass(
     strokeRenderOpts: StrokeRenderOpts = StrokeRenderOpts(),
     liveStrokeSeed: Float = 0f,
     vibrancyBoost: Float = 0f,
-    strokeShadowEnabled: Boolean = false
+    strokeShadowEnabled: Boolean = false,
+    // Phase 220: pro brush controls — blender strength + scatter.
+    blenderStrengthPercent: Int = 85,
+    scatterAmountPercent: Int = 0
 ) {
     if (ShaderCapabilityHelper.isAgslSupported && wetMixingEffect != null) {
         val brushPos = activePoints.lastOrNull() ?: activeStart
@@ -4621,7 +4644,13 @@ private fun DrawScope.drawWetLayerPass(
                     color = currentColor,
                     wetness = preset.wetness,
                     pigmentLoad = preset.pigmentLoad,
-                    mixStrength = preset.mixStrength,
+                    // Phase 220: SMUDGE uses the user blender-strength slider;
+                    // all other tools keep the ToolPreset mixStrength.
+                    mixStrength = if (currentTool == com.authorss81.noteflow.data.model.StrokeTool.SMUDGE) {
+                        blenderStrengthPercent.coerceIn(0, 100) / 100f
+                    } else {
+                        preset.mixStrength
+                    },
                     impasto = preset.impasto,
                     hardness = preset.hardness,
                     paperGrain = wetCanvasEngine.brushParams.paperGrain,
@@ -4656,10 +4685,10 @@ private fun DrawScope.drawWetLayerPass(
 
         fun drawStrokes() {
             for (stroke in layerStrokes) {
-                drawSingleStroke(stroke, 0f, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer, renderOpts = strokeRenderOpts, vibrancy = vibrancyBoost, shadowEnabled = strokeShadowEnabled)
+                drawSingleStroke(stroke, 0f, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer, renderOpts = strokeRenderOpts, vibrancy = vibrancyBoost, shadowEnabled = strokeShadowEnabled, scatterAmountPercent = scatterAmountPercent)
             }
             if (previewStroke != null) {
-                drawSingleStroke(previewStroke, 0f, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer, renderOpts = strokeRenderOpts, vibrancy = vibrancyBoost, shadowEnabled = strokeShadowEnabled)
+                drawSingleStroke(previewStroke, 0f, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer, renderOpts = strokeRenderOpts, vibrancy = vibrancyBoost, shadowEnabled = strokeShadowEnabled, scatterAmountPercent = scatterAmountPercent)
             }
         }
 
@@ -4728,10 +4757,10 @@ private fun DrawScope.drawWetLayerPass(
         }
     } else {
         for (stroke in layerStrokes) {
-            drawSingleStroke(stroke, 0f, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer, renderOpts = strokeRenderOpts, vibrancy = vibrancyBoost, shadowEnabled = strokeShadowEnabled)
+            drawSingleStroke(stroke, 0f, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer, renderOpts = strokeRenderOpts, vibrancy = vibrancyBoost, shadowEnabled = strokeShadowEnabled, scatterAmountPercent = scatterAmountPercent)
         }
         if (previewStroke != null) {
-            drawSingleStroke(previewStroke, 0f, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer, renderOpts = strokeRenderOpts, vibrancy = vibrancyBoost, shadowEnabled = strokeShadowEnabled)
+            drawSingleStroke(previewStroke, 0f, isDarkPaper = isDarkPaper, inkRenderer = inkRenderer, renderOpts = strokeRenderOpts, vibrancy = vibrancyBoost, shadowEnabled = strokeShadowEnabled, scatterAmountPercent = scatterAmountPercent)
         }
     }
 }
@@ -4801,7 +4830,9 @@ private fun DrawScope.drawSingleStroke(
     // Phase 213: composition-level gate threaded from the canvas (user setting
     // AND non-low-end tier). The per-stroke decision still runs through
     // BrushShadowPolicy.plan below, which can still return null per tool.
-    shadowEnabled: Boolean = false
+    shadowEnabled: Boolean = false,
+    // Phase 220: scatter amount for SPLATTER/SMUDGE bitmap stamps.
+    scatterAmountPercent: Int = 0
 ) {
     // Phase 213 ("Paper elevation"): soft drop-shadow UNDER the ink, drawn
     // BEFORE both render paths (the androidx.ink advanced path returns early
@@ -5074,6 +5105,9 @@ private fun DrawScope.drawSingleStroke(
         }
         StrokeTool.SPLATTER, StrokeTool.SMUDGE -> {
             val nativeCanvas = drawContext.canvas.nativeCanvas
+            // Phase 220: scatter-amount lerp — at 0 the legacy tight defaults
+            // are preserved; at 1 stamps spread wide and far.
+            val scatter = scatterAmountPercent.coerceIn(0, 100) / 100f
             BrushTextureEngine.drawBitmapStampSequence(
                 nativeCanvas = nativeCanvas,
                 points = stroke.points,
@@ -5081,8 +5115,8 @@ private fun DrawScope.drawSingleStroke(
                 baseSize = strokeWidth * 3.0f,
                 color = if (isMultiColor) derivedColorAt(0.5f) else color.copy(alpha = 0.65f),
                 textureType = BrushTextureEngine.TextureType.SPLATTER_DROPS,
-                spacingFactor = 0.45f,
-                scatterFactor = 0.55f
+                spacingFactor = 0.45f + (0.12f - 0.45f) * scatter,
+                scatterFactor = 0.15f + (0.55f - 0.15f) * scatter
             )
         }
         // Phase 18: six NEW brush families — each renders visibly distinct. These are

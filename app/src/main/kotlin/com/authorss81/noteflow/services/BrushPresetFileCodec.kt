@@ -87,6 +87,9 @@ object BrushPresetFileCodec {
         params.addProperty("impasto", preset.brushParams.impasto.toDouble())
         params.addProperty("paperGrain", preset.brushParams.paperGrain.toDouble())
         params.addProperty("splatterSpread", preset.brushParams.splatterSpread.toDouble())
+        // Phase 220: pro brush controls — OPTIONAL on decode for backward compat.
+        params.addProperty("blenderStrength", preset.brushParams.blenderStrength.toDouble())
+        params.addProperty("scatterAmount", preset.brushParams.scatterAmount.toDouble())
         root.add("brushParams", params)
 
         return root.toString().toByteArray(Charsets.UTF_8)
@@ -207,7 +210,12 @@ object BrushPresetFileCodec {
             pull = opt("pull", 0.7f),
             impasto = opt("impasto", 0.4f),
             paperGrain = opt("paperGrain", 0.5f),
-            splatterSpread = opt("splatterSpread", 0.3f)
+            splatterSpread = opt("splatterSpread", 0.3f),
+            // Phase 220: pro brush controls — optional for backward compat;
+            // bundles written before phase 220 lack the keys and fall back
+            // to the defaults (blenderStrength 0.85, scatterAmount 0.0).
+            blenderStrength = opt("blenderStrength", 0.85f),
+            scatterAmount = opt("scatterAmount", 0f)
         )
     }
 

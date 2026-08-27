@@ -181,6 +181,8 @@ object BrushPresetPack {
         if (brushParams.impasto !in 0f..1f) problems += "impasto ${brushParams.impasto} out of [0,1]"
         if (brushParams.paperGrain !in 0f..1f) problems += "paperGrain ${brushParams.paperGrain} out of [0,1]"
         if (brushParams.splatterSpread !in 0f..1f) problems += "splatterSpread ${brushParams.splatterSpread} out of [0,1]"
+        if (brushParams.blenderStrength !in 0f..1f) problems += "blenderStrength ${brushParams.blenderStrength} out of [0,1]"
+        if (brushParams.scatterAmount !in 0f..1f) problems += "scatterAmount ${brushParams.scatterAmount} out of [0,1]"
         return problems
     }
 

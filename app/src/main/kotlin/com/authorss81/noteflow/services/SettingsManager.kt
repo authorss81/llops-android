@@ -253,6 +253,17 @@ class SettingsManager(context: Context) {
             .putString("stroke_stabilizer_model_key", StrokeSmoothingPolicy.sanitizeModelKey(value))
             .apply()
 
+    // Phase 220: pro brush controls — blender strength (SMUDGE) and texture
+    // scatter, 0–100%. Persisted per-session; applied at the NEXT stroke.
+    // Sanitized on read AND write so a hand-edited pref can never leave range.
+    var blenderStrengthPercent: Int
+        get() = prefs.getInt("blender_strength_percent", 85).coerceIn(0, 100)
+        set(value) = prefs.edit().putInt("blender_strength_percent", value.coerceIn(0, 100)).apply()
+
+    var scatterAmountPercent: Int
+        get() = prefs.getInt("scatter_amount_percent", 0).coerceIn(0, 100)
+        set(value) = prefs.edit().putInt("scatter_amount_percent", value.coerceIn(0, 100)).apply()
+
     // Pressure-response curve (LINEAR = identity, so default behaviour is unchanged).
     var pressureCurveKey: String
         get() = prefs.getString("pressure_curve_key", "linear") ?: "linear"

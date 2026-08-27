@@ -20,5 +20,11 @@
     <string name="canvas_model_classic">Classic</string>
     <string name="canvas_model_one_euro">Adaptive (One-Euro)</string>
     <string name="canvas_model_apply_note">Affects strokes drawn after the change</string>
+    <string name="canvas_blender_strength_label">Blender Strength</string>
+    <string name="canvas_blender_strength_helper">Higher = stronger smudge pickup · Lower = lighter blending</string>
+    <string name="canvas_scatter_amount_label">Scatter Amount</string>
+    <string name="canvas_scatter_amount_helper">Wider spray pattern for splatter &amp; smudge textures</string>
+    <string name="canvas_scatter_zero_helper">0%% = tight stamps · 100%% = wide scattered droplets</string>
+    <string name="canvas_blender_affects_smudge">Affects SMUDGE tool blending intensity</string>
     <string name="selection_count_a11y">%1$d strokes selected</string>
 </resources>

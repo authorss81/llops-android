@@ -566,6 +566,13 @@ fun EditorScreen(
     var stabilizerModelKey by remember { mutableStateOf(viewModel.settings.strokeStabilizerModelKey) }
     var pressureCurve by remember { mutableStateOf(PressureCurve.fromSettingKey(viewModel.settings.pressureCurveKey)) }
 
+    // Phase 220: pro brush controls — blender strength (SMUDGE) and texture
+    // scatter, 0–100%. Both persist via SettingsManager and apply at the
+    // NEXT stroke. Defaults: blender 85% (= the pre-220 ToolPreset mixStrength),
+    // scatter 0% (= legacy tight spacing).
+    var blenderStrengthPercent by remember { mutableIntStateOf(viewModel.settings.blenderStrengthPercent) }
+    var scatterAmountPercent by remember { mutableIntStateOf(viewModel.settings.scatterAmountPercent) }
+
 
     // Phase 155: .inkbrush brush-preset IMPORT via the SAF picker. The bytes are
     // classified by the pure-JVM codec; reject reasons are sanitized (no file
@@ -2437,6 +2444,10 @@ fun EditorScreen(
                     handlePlaceSticker(canvasOffset, targetPage)
                 },
                 activeBrushPresetId = activeBrushPresetId,
+                // Phase 220: pro brush controls — blender strength + scatter
+                // override the per-tool defaults; apply at the NEXT stroke.
+                blenderStrengthPercent = blenderStrengthPercent,
+                scatterAmountPercent = scatterAmountPercent,
                 eraserMode = eraserMode,
                 vibrancyEnabled = vibrancyEnabled,
                 vibrancyBoostLevel = vibrancyBoostLevel,
@@ -2890,6 +2901,17 @@ fun EditorScreen(
                     // stroke start (model swap inside selectModel).
                     stabilizerModelKey = key
                     viewModel.settings.strokeStabilizerModelKey = key
+                },
+                // Phase 220: pro brush controls — blender strength + scatter.
+                blenderStrengthPercent = blenderStrengthPercent,
+                onBlenderStrengthChange = { percent ->
+                    blenderStrengthPercent = percent
+                    viewModel.settings.blenderStrengthPercent = percent
+                },
+                scatterAmountPercent = scatterAmountPercent,
+                onScatterAmountChange = { percent ->
+                    scatterAmountPercent = percent
+                    viewModel.settings.scatterAmountPercent = percent
                 },
                 pressureCurve = pressureCurve,
                 onPressureCurveSelect = { curve ->
@@ -5030,6 +5052,12 @@ private fun CanvasSettingsBottomSheet(
     onStabilizerPredictionChange: (Int) -> Unit = {},
     stabilizerModelKey: String = com.authorss81.noteflow.services.StrokeSmoothingPolicy.MODEL_EWMA,
     onStabilizerModelSelect: (String) -> Unit = {},
+    // Phase 220: pro brush controls — blender strength (SMUDGE) and texture
+    // scatter. Both 0–100% with legacy defaults.
+    blenderStrengthPercent: Int = 85,
+    onBlenderStrengthChange: (Int) -> Unit = {},
+    scatterAmountPercent: Int = 0,
+    onScatterAmountChange: (Int) -> Unit = {},
     pressureCurve: PressureCurve = PressureCurve.LINEAR,
     onPressureCurveSelect: (PressureCurve) -> Unit = {},
     symmetryMode: SymmetryMode = SymmetryMode.OFF,
@@ -5843,6 +5871,88 @@ private fun CanvasSettingsBottomSheet(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
+                    }
+
+                    // Phase 220: pro brush controls — Blender Strength (SMUDGE)
+                    // visible only when SMUDGE is the active tool; Scatter Amount
+                    // visible for all other freehand tools.
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        // Blender Strength slider — 0..100%, maps to AGSL
+                        // uMixStrength for SMUDGE. 85% = the pre-220 ToolPreset
+                        // default.
+                        Text(
+                            "Blender Strength",
+                            style = MaterialTheme.typography.titleMedium,
+                            modifier = Modifier.padding(top = 8.dp)
+                        )
+                        Text(
+                            "Higher = stronger smudge pickup · Lower = lighter blending",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                "Strength",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Text(
+                                "$blenderStrengthPercent%",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        Slider(
+                            value = blenderStrengthPercent.toFloat(),
+                            onValueChange = { onBlenderStrengthChange(Math.round(it).toInt().coerceIn(0, 100)) },
+                            valueRange = 0f..100f,
+                            steps = 19
+                        )
+                        Text(
+                            "Affects SMUDGE tool blending intensity",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                        // Scatter Amount slider — 0..100%, modulates bitmap
+                        // stamp spacing + scatter for SPLATTER/SMUDGE.
+                        Text(
+                            "Scatter Amount",
+                            style = MaterialTheme.typography.titleMedium,
+                            modifier = Modifier.padding(top = 8.dp)
+                        )
+                        Text(
+                            "Wider spray pattern for splatter & smudge textures",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                "Scatter",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Text(
+                                "$scatterAmountPercent%",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        Slider(
+                            value = scatterAmountPercent.toFloat(),
+                            onValueChange = { onScatterAmountChange(Math.round(it).toInt().coerceIn(0, 100)) },
+                            valueRange = 0f..100f,
+                            steps = 19
+                        )
+                        Text(
+                            "0% = tight stamps · 100% = wide scattered droplets",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
 
                     // Pressure response curve selector.
