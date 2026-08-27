@@ -496,6 +496,10 @@ fun AnnotationCanvas(
     var sampledColorPreview by remember { mutableStateOf<Color?>(null) }
     var eyedropperPosition by remember { mutableStateOf<Offset?>(null) }
 
+    // Phase 221: gradient drag state — start/end in canvas coords.
+    var gradientDragStart by remember { mutableStateOf<Offset?>(null) }
+    var gradientDragCurrent by remember { mutableStateOf<Offset?>(null) }
+
     // Phase 155: two-finger undo/redo classifier (pure JVM) + quick-color ring.
     // The classifier lives inside the canvas because it must observe the SAME
     // pointer frames the pinch-zoom handler sees; it never consumes, so the zoom
@@ -1222,6 +1226,66 @@ fun AnnotationCanvas(
                             // tool clears the selection — the same affordance as
                             // Escape, and never a degenerate empty marquee.
                             currentOnSelectionChanged(null)
+                        } else if (currentTool == StrokeTool.FILL) {
+                            // Phase 221: flood fill — tap fills the contiguous region
+                            // at the tap point on the active layer.
+                            if (!isLayerLocked) {
+                                val rawBmp = activeRawBitmapMap[targetPage]
+                                if (rawBmp != null && !rawBmp.isRecycled) {
+                                    val pageTopY = calculatePageYOffset(targetPage)
+                                    val px = com.authorss81.noteflow.services.EyedropperSamplingMath.canvasToPagePixel(
+                                        canvasX = canvasOffset.x,
+                                        canvasY = canvasOffset.y,
+                                        pageTopY = pageTopY,
+                                        pageWidthPx = pageWidthPx,
+                                        pageHeightPx = pageHeightPx,
+                                        bitmapWidth = rawBmp.width,
+                                        bitmapHeight = rawBmp.height
+                                    )
+                                    if (px != null) {
+                                        val fillColor = currentColor.toArgb()
+                                        val filledPoints = com.authorss81.noteflow.services.FloodFillEngine.floodFillBitmap(
+                                            source = rawBmp,
+                                            seedX = px.first,
+                                            seedY = px.second,
+                                            fillColorArgb = fillColor,
+                                            tolerancePercent = com.authorss81.noteflow.services.FloodFillEngine.DEFAULT_TOLERANCE_PERCENT
+                                        )
+                                        if (filledPoints.isNotEmpty()) {
+                                            val minX = filledPoints.minOf { it.x } - 0.5f
+                                            val maxX = filledPoints.maxOf { it.x } - 0.5f
+                                            val minY = filledPoints.minOf { it.y } - 0.5f
+                                            val maxY = filledPoints.maxOf { it.y } - 0.5f
+                                            val fillStroke = Stroke(
+                                                id = java.util.UUID.randomUUID().toString(),
+                                                tool = StrokeTool.FILL,
+                                                colorInt = fillColor,
+                                                width = 1f,
+                                                points = filledPoints,
+                                                start = PointF(minX, minY),
+                                                end = PointF(maxX, maxY),
+                                                pdfPage = targetPage,
+                                                layerId = activeLayerId ?: "layer_default",
+                                                colorMode = currentColorMode,
+                                                colorSeed = currentColorSeed,
+                                                gradientToColorInt = currentGradientToColor.toArgb()
+                                            )
+                                            activeStrokeList.add(fillStroke)
+                                            onStrokesChanged(
+                                                com.authorss81.noteflow.services.CanvasCommitListPolicy.emittedList(
+                                                    currentAll = currentStrokesProvider(),
+                                                    isContinuousMode = isContinuousMode,
+                                                    pageOf = { it.pdfPage },
+                                                    pdfPageFilter = pdfPageFilter,
+                                                    scopedReplacement = activeStrokeList
+                                                )
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        } else if (currentTool == StrokeTool.GRADIENT) {
+                            // Phase 221: gradient fill is drag-only; tap is a no-op.
                         }
                     }
                 )
@@ -1428,6 +1492,13 @@ fun AnnotationCanvas(
                                 // PAN remains the dedicated single-finger pan/hand tool.
                                 return@detectDragGestures
                             }
+                            if (currentTool == StrokeTool.GRADIENT) {
+                                // Phase 221: gradient drag — record start point.
+                                gradientDragStart = canvasOffset
+                                gradientDragCurrent = canvasOffset
+                                activeTargetPage = getPageFromCanvasY(canvasOffset.y)
+                                return@detectDragGestures
+                            }
                             val targetPage = getPageFromCanvasY(canvasOffset.y)
                             val targetPageYStart = calculatePageYOffset(targetPage)
                             val targetPageYEnd = targetPageYStart + pageHeightPx
@@ -1539,6 +1610,15 @@ fun AnnotationCanvas(
                                         x = (change.position.x - internalPanOffset.x) / internalZoomScale,
                                         y = (change.position.y - internalPanOffset.y) / internalZoomScale
                                     )
+                                )
+                                return@detectDragGestures
+                            }
+
+                            if (currentTool == StrokeTool.GRADIENT) {
+                                // Phase 221: update gradient drag endpoint.
+                                gradientDragCurrent = Offset(
+                                    x = (change.position.x - internalPanOffset.x) / internalZoomScale,
+                                    y = (change.position.y - internalPanOffset.y) / internalZoomScale
                                 )
                                 return@detectDragGestures
                             }
@@ -1762,6 +1842,44 @@ fun AnnotationCanvas(
                                 sampledColorPreview?.let { onColorSampled(it) }
                                 eyedropperPosition = null
                                 sampledColorPreview = null
+                            } else if (currentTool == StrokeTool.GRADIENT) {
+                                // Phase 221: commit gradient fill — drag vector defines the
+                                // gradient direction; the fill covers the entire active page.
+                                val start = gradientDragStart
+                                val end = gradientDragCurrent
+                                if (start != null && end != null) {
+                                    val targetPage = activeTargetPage
+                                    val pageTopY = calculatePageYOffset(targetPage)
+                                    val gradientStroke = Stroke(
+                                        id = java.util.UUID.randomUUID().toString(),
+                                        tool = StrokeTool.GRADIENT,
+                                        colorInt = currentColor.toArgb(),
+                                        width = 1f,
+                                        points = listOf(PointF(start.x, start.y), PointF(end.x, end.y)),
+                                        start = PointF(0f, pageTopY),
+                                        end = PointF(pageWidthPx, pageTopY + pageHeightPx),
+                                        pdfPage = targetPage,
+                                        layerId = activeLayerId ?: "layer_default",
+                                        colorMode = com.authorss81.noteflow.data.model.StrokeColorMode.GRADIENT,
+                                        colorSeed = currentColorSeed,
+                                        gradientToColorInt = currentGradientToColor.toArgb()
+                                    )
+                                    activeStrokeList.add(gradientStroke)
+                                    onStrokesChanged(
+                                        com.authorss81.noteflow.services.CanvasCommitListPolicy.emittedList(
+                                            currentAll = currentStrokesProvider(),
+                                            isContinuousMode = isContinuousMode,
+                                            pageOf = { it.pdfPage },
+                                            pdfPageFilter = pdfPageFilter,
+                                            scopedReplacement = activeStrokeList
+                                        )
+                                    )
+                                    if (com.authorss81.noteflow.services.MotionPolicy.hapticsAllowed(hapticsEnabled, reduceMotion)) {
+                                        hapticFeedback.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                                    }
+                                }
+                                gradientDragStart = null
+                                gradientDragCurrent = null
                             } else if (currentTool != StrokeTool.ERASER) {
                                 if (activePoints.isNotEmpty() || (activeStart != null && activeEnd != null)) {
                                     val pointsToSimplify = activePoints.toList()
@@ -1930,6 +2048,8 @@ fun AnnotationCanvas(
                             selectionTranslateAccY = 0f
                             eyedropperPosition = null
                             sampledColorPreview = null
+                            gradientDragStart = null
+                            gradientDragCurrent = null
                             // Phase 215: an interrupted lasso leaves NO selection
                             // behind (the pre-cancel path is preserved untouched).
                             lassoActive = false
