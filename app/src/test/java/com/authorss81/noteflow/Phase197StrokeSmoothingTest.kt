@@ -293,7 +293,7 @@ class Phase197StrokeSmoothingTest {
         assertTrue("retune must sit behind the stabilizerEnabled gate", gateIdx >= 0)
         // New inputs join the drag-detector keys so stale closures are impossible.
         assertTrue(
-            src.contains(".pointerInput(currentTool, currentColor, currentWidth, pdfPageFilter, isContinuousMode, activeRawBitmapMap, isLayerLocked, symmetryMode, stabilizerEnabled, eraserMode, activeLayerId, layers, stabilizerStrengthPercent, activeBrushPresetId, importedBrushPresets)")
+            src.contains(".pointerInput(currentTool, currentColor, currentWidth, pdfPageFilter, isContinuousMode, activeRawBitmapMap, isLayerLocked, symmetryMode, stabilizerEnabled, eraserMode, activeLayerId, layers, stabilizerStrengthPercent, activeBrushPresetId, importedBrushPresets, rulerEnabled)")
         )
     }
 

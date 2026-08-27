@@ -11,6 +11,7 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateRotation
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.AnimationSpec
@@ -263,11 +264,29 @@ fun AnnotationCanvas(
     tiltShadingEnabled: Boolean = false,
     // Phase 222: per-layer alpha-lock + clipping-mask sets.
     alphaLockLayerIds: Set<String> = emptySet(),
-    clippingMaskLayerIds: Set<String> = emptySet()
+    clippingMaskLayerIds: Set<String> = emptySet(),
+    // Phase 223: canvas rotate (two-finger twist). rotationDegrees drives the
+    // graphicsLayer rotationZ; onRotationDegreesChanged reports the sanitized
+    // value so the parent can persist it per page (settings, NO schema change).
+    rotationDegrees: Float = 0f,
+    onRotationDegreesChanged: (Float) -> Unit = {},
+    // Phase 223: ruler/straight-line snap. When enabled the live preview snaps a
+    // rough freehand drag to an exact straight LINE (bypassing the shape-snap
+    // perpendicularDeviation gate) and draws a live start→current guide.
+    rulerEnabled: Boolean = false,
+    // Phase 223: gate for two-finger twist. When false the two-finger handler
+    // keeps classic pinch-zoom + pan exactly (rotation never applies).
+    canvasTwistEnabled: Boolean = true
 ) {
     val vibrancyBoost = if (vibrancyEnabled) vibrancyBoostLevel.coerceIn(0f, 1f) else 0f
     var internalZoomScale by remember { mutableFloatStateOf(zoomScale) }
     var internalPanOffset by remember { mutableStateOf(panOffset) }
+    // Phase 223: canvas rotate — sanitized rotation degrees alongside zoom/pan.
+    var internalRotationDegrees by remember {
+        mutableFloatStateOf(com.authorss81.noteflow.services.CanvasRotationPolicy.sanitize(rotationDegrees))
+    }
+    val currentOnRotationDegreesChanged by rememberUpdatedState(onRotationDegreesChanged)
+    val currentCanvasTwistEnabled by rememberUpdatedState(canvasTwistEnabled)
 
     // 22.9: light tick when a stroke is committed (skipped under reduce-motion).
     val hapticFeedback = androidx.compose.ui.platform.LocalHapticFeedback.current
@@ -1142,15 +1161,25 @@ fun AnnotationCanvas(
                     }
                 }
             }
-            // 1. Two-finger Zoom and Pan Gestures
+            // 1. Two-finger Zoom, Pan and (Phase 223) Rotate Gestures.
+            // Rotation reuses the SAME event stream: calculateRotation() reports
+            // the gesture's angle relative to its FIRST event, so the running
+            // `pastRotation` diff converts it into per-event deltas we accumulate
+            // into the sanitized internalRotationDegrees (which drives the applied
+            // graphicsLayer rotationZ). A single finger still draws, exactly as
+            // before — rotation only ever applies while two pointers are down.
             .pointerInput(Unit) {
                 awaitPointerEventScope {
+                    var pastRotation = 0f
                     while (true) {
                         val event = awaitPointerEvent()
                         if (event.changes.size > 1) {
                             val zoomChange = event.calculateZoom()
                             val panChange = event.calculatePan()
-                            if (zoomChange != 1f || panChange != Offset.Zero) {
+                            val rot = event.calculateRotation()
+                            val rotationChange = rot - pastRotation
+                            pastRotation = rot
+                            if (zoomChange != 1f || panChange != Offset.Zero || rotationChange != 0f) {
                                 val newScale = (internalZoomScale * zoomChange).coerceIn(0.5f, 4.0f)
                                 val actualZoomChange = newScale / internalZoomScale
 
@@ -1161,6 +1190,16 @@ fun AnnotationCanvas(
                                 val newPanOffset = centroid - (centroid - internalPanOffset) * actualZoomChange + panChange
 
                                 updateZoomAndPan(newScale, newPanOffset)
+                                // Phase 223: rotation only applies when the twist
+                                // gesture is enabled (default on); a single finger
+                                // still only draws.
+                                if (currentCanvasTwistEnabled && rotationChange != 0f) {
+                                    val newRot = com.authorss81.noteflow.services.CanvasRotationPolicy.accumulate(
+                                        internalRotationDegrees, rotationChange
+                                    )
+                                    internalRotationDegrees = newRot
+                                    currentOnRotationDegreesChanged(newRot)
+                                }
                                 event.changes.forEach { it.consume() }
                             }
                         }
@@ -1405,7 +1444,7 @@ fun AnnotationCanvas(
             // importedBrushPresets join the keys so the drag handler always
             // captures the CURRENT smoothing inputs (same pattern as
             // stabilizerEnabled).
-            .pointerInput(currentTool, currentColor, currentWidth, pdfPageFilter, isContinuousMode, activeRawBitmapMap, isLayerLocked, symmetryMode, stabilizerEnabled, eraserMode, activeLayerId, layers, stabilizerStrengthPercent, activeBrushPresetId, importedBrushPresets) {
+            .pointerInput(currentTool, currentColor, currentWidth, pdfPageFilter, isContinuousMode, activeRawBitmapMap, isLayerLocked, symmetryMode, stabilizerEnabled, eraserMode, activeLayerId, layers, stabilizerStrengthPercent, activeBrushPresetId, importedBrushPresets, rulerEnabled) {
                 // Phase 203: plain per-stroke hit-testing covers both symmetry
                 // copies — a stroke drawn while a mode was active persisted TWO
                 // independent rows (original + baked twin, see
@@ -1988,7 +2027,21 @@ fun AnnotationCanvas(
                                     val stylePreservingTool = tool == StrokeTool.DOTTED || tool == StrokeTool.NEON ||
                                         tool == StrokeTool.CHARCOAL || tool == StrokeTool.OIL_PASTEL ||
                                         tool == StrokeTool.DRY_BRUSH || tool == StrokeTool.PALETTE_KNIFE
-                                    val snappedShape = if (shapeAutoSnapEnabled && tool.isFreehandTool && !isWetOrFleeting && !stylePreservingTool) {
+                                    // Phase 223: the RULER forces an exact start→end LINE
+                                    // for ANY freehand drag (bypassing trySnapShape's
+                                    // perpendicularDeviation/direct-distance gate), so the
+                                    // committed geometry always matches the ruler guide the
+                                    // live preview showed. It applies even when
+                                    // shapeAutoSnapEnabled is OFF and takes precedence over
+                                    // the optional auto-snap. Wet/fleeting and
+                                    // style-preserving tools are excluded as in auto-snap.
+                                    val rulerForcingLine = rulerEnabled && tool.isFreehandTool && !isWetOrFleeting && !stylePreservingTool
+                                    val snappedShape = if (rulerForcingLine) {
+                                        com.authorss81.noteflow.services.ShapeRecognitionHelper.SnappedShape(
+                                            com.authorss81.noteflow.services.ShapeRecognitionHelper.ShapeType.LINE,
+                                            com.authorss81.noteflow.services.ShapeRecognitionHelper.forceLineSnap(candidateStroke)
+                                        )
+                                    } else if (shapeAutoSnapEnabled && tool.isFreehandTool && !isWetOrFleeting && !stylePreservingTool) {
                                         com.authorss81.noteflow.services.ShapeRecognitionHelper.trySnapShape(candidateStroke)
                                     } else {
                                         null
@@ -2464,6 +2517,7 @@ fun AnnotationCanvas(
                     .graphicsLayer {
                         scaleX = internalZoomScale
                         scaleY = internalZoomScale
+                        rotationZ = internalRotationDegrees
                         translationX = internalPanOffset.x
                         translationY = internalPanOffset.y
                         transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0f, 0f)
@@ -2880,6 +2934,7 @@ fun AnnotationCanvas(
                         .graphicsLayer {
                             scaleX = internalZoomScale
                             scaleY = internalZoomScale
+                            rotationZ = internalRotationDegrees
                             translationX = internalPanOffset.x
                             translationY = internalPanOffset.y
                             transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0f, 0f)
@@ -2908,7 +2963,8 @@ fun AnnotationCanvas(
                     activeStrokes = activeStrokeList,
                     scatterAmountPercent = scatterAmountPercent,
                     gradientDragStart = gradientDragStart,
-                    gradientDragCurrent = gradientDragCurrent
+                    gradientDragCurrent = gradientDragCurrent,
+                    rulerEnabled = rulerEnabled
                 )
             }
 
@@ -2929,6 +2985,7 @@ fun AnnotationCanvas(
                         .graphicsLayer {
                             scaleX = internalZoomScale
                             scaleY = internalZoomScale
+                            rotationZ = internalRotationDegrees
                             translationX = internalPanOffset.x
                             translationY = internalPanOffset.y
                             transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0f, 0f)
@@ -3542,7 +3599,11 @@ private fun LiveStrokePreview(
     scatterAmountPercent: Int = 0,
     // Phase 221 review fix #6: gradient drag live preview state.
     gradientDragStart: Offset? = null,
-    gradientDragCurrent: Offset? = null
+    gradientDragCurrent: Offset? = null,
+    // Phase 223: ruler — draw a live straight guide (start→current) ON TOP of
+    // the freehand preview so the user sees exactly where the committed LINE
+    // will snap.
+    rulerEnabled: Boolean = false
 ) {
     Canvas(modifier = modifier) {
         val hasLiveInk = activePoints.isNotEmpty() || (activeStartProvider() != null && activeEndProvider() != null)
@@ -3594,6 +3655,25 @@ private fun LiveStrokePreview(
                     vibrancy = vibrancyBoost,
                     shadowEnabled = strokeShadowEnabled,
                     scatterAmountPercent = scatterAmountPercent
+                )
+            }
+        }
+
+        // Phase 223: ruler guide — while dragging with the ruler on, draw a
+        // straight start→current line over the freehand preview so the user sees
+        // the exact geometry that will be committed (it is drawn AFTER the
+        // freehand preview so it reads as the authoritative line).
+        if (rulerEnabled && !com.authorss81.noteflow.services.BrushStrokeMath.isWetRenderedTool(currentTool) && currentTool.isFreehandTool) {
+            val rs = activeStartProvider()
+            val re = activeEndProvider()
+            if (rs != null && re != null) {
+                val guideColor = currentColor.copy(alpha = 0.85f)
+                drawLine(
+                    color = guideColor,
+                    start = Offset(rs.x, rs.y),
+                    end = Offset(re.x, re.y),
+                    strokeWidth = currentWidth,
+                    cap = StrokeCap.Round
                 )
             }
         }
@@ -4329,6 +4409,40 @@ private fun DrawScope.drawPaperTemplate(
                 // Caption line at bottom of panel
                 val captionY = panelY + panelH - 28.dp.toPx()
                 drawLine(gridColor, Offset(panelX + 12.dp.toPx(), captionY), Offset(panelX + panelW - 12.dp.toPx(), captionY), strokeWidth = 1f)
+            }
+        }
+        // Phase 223: drafting grids — perspective (one/two point) and isometric.
+        // All line families come from PerspectiveGridPolicy (pure JVM, unit-tested
+        // vanishing-point/isometric math); this pass only converts its returned
+        // (start, end) pairs into drawLine calls with the shared gridColor.
+        "perspective_1pt" -> {
+            val g = com.authorss81.noteflow.services.PerspectiveGridPolicy.onePoint(width, height)
+            for (l in com.authorss81.noteflow.services.PerspectiveGridPolicy.depthLines(width, height, g.horizonY)) {
+                drawLine(gridColor, Offset(l.first.first + xOffset, l.first.second + yOffset), Offset(l.second.first + xOffset, l.second.second + yOffset), strokeWidth = 1f)
+            }
+            for (l in com.authorss81.noteflow.services.PerspectiveGridPolicy.onePointRays(g)) {
+                drawLine(gridColor, Offset(l.first.first + xOffset, l.first.second + yOffset), Offset(l.second.first + xOffset, l.second.second + yOffset), strokeWidth = 1f)
+            }
+            // Emphasise the horizon line so the vanishing row reads clearly.
+            drawLine(gridColor.copy(alpha = gridAlpha), Offset(xOffset, g.horizonY + yOffset), Offset(xOffset + width, g.horizonY + yOffset), strokeWidth = 1.5f)
+        }
+        "perspective_2pt" -> {
+            val g = com.authorss81.noteflow.services.PerspectiveGridPolicy.twoPoint(width, height)
+            for (l in com.authorss81.noteflow.services.PerspectiveGridPolicy.depthLines(width, height, g.horizonY)) {
+                drawLine(gridColor, Offset(l.first.first + xOffset, l.first.second + yOffset), Offset(l.second.first + xOffset, l.second.second + yOffset), strokeWidth = 1f)
+            }
+            for (l in com.authorss81.noteflow.services.PerspectiveGridPolicy.twoPointRays(g)) {
+                val d = kotlin.math.abs(l.first.first - l.second.first) + kotlin.math.abs(l.first.second - l.second.second)
+                if (d > 1f) {
+                    drawLine(gridColor, Offset(l.first.first + xOffset, l.first.second + yOffset), Offset(l.second.first + xOffset, l.second.second + yOffset), strokeWidth = 1f)
+                }
+            }
+            drawLine(gridColor.copy(alpha = gridAlpha), Offset(xOffset, g.horizonY + yOffset), Offset(xOffset + width, g.horizonY + yOffset), strokeWidth = 1.5f)
+        }
+        "isometric" -> {
+            val g = com.authorss81.noteflow.services.PerspectiveGridPolicy.isometric(width, height)
+            for (l in com.authorss81.noteflow.services.PerspectiveGridPolicy.isometricDiagonals(g)) {
+                drawLine(gridColor, Offset(l.first.first + xOffset, l.first.second + yOffset), Offset(l.second.first + xOffset, l.second.second + yOffset), strokeWidth = 1f)
             }
         }
     }

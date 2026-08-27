@@ -215,7 +215,7 @@
 | `data/model/` | `Entities.kt`, `StrokeModels.kt` | Room entities (8) + stroke/ink types |
 | `data/db/` | `NoteflowDatabase.kt`, `Daos.kt` | Room DB (schema v9, 8 DAOs), corrupt-DB quarantine |
 | `data/repository/` | `NoteRepository.kt`, `LruBoundedMap.kt` | Encrypted read/write, search corpus, WAL checkpoint, re-key |
-| `services/` | `EncryptionService.kt`, `SecurityService.kt`, `DatabaseSecurityHelper.kt`, `VaultKeyHolder.kt`, `ExportSessionPolicy.kt`, `WetBrushEngine.kt`, `WebDavSyncService.kt`, `ImportExportService.kt`, `ImportArchivePolicy.kt`, `PaletteCatalog.kt`, `ColorModePersistencePolicy.kt`, `ShapeRecognitionHelper.kt`, `SsrfHostPolicy.kt`, `VoiceNoteCrypto.kt`, `DecryptFailurePolicy.kt`, `BrushEdgePolicy.kt` | Non-UI: crypto/vault, brush math, sync, import/export, zip-import zip-bomb policy (B1-DB-5), palette, rainbow-mode persistence decision table (phase-122), SSRF blocklist (B1-NET-04), voice-note audio cryptor (B1-DB-3), decrypt-failure render decision (B1-DB-8), brush cap/join roundness policy (phase-121) |
+| `services/` | `EncryptionService.kt`, `SecurityService.kt`, `DatabaseSecurityHelper.kt`, `VaultKeyHolder.kt`, `ExportSessionPolicy.kt`, `WetBrushEngine.kt`, `WebDavSyncService.kt`, `ImportExportService.kt`, `ImportArchivePolicy.kt`, `PaletteCatalog.kt`, `ColorModePersistencePolicy.kt`, `ShapeRecognitionHelper.kt`, `SsrfHostPolicy.kt`, `VoiceNoteCrypto.kt`, `DecryptFailurePolicy.kt`, `BrushEdgePolicy.kt`, `PerspectiveGridPolicy.kt`, `CanvasRotationPolicy.kt` | Non-UI: crypto/vault, brush math, sync, import/export, zip-import zip-bomb policy (B1-DB-5), palette, rainbow-mode persistence decision table (phase-122), SSRF blocklist (B1-NET-04), voice-note audio cryptor (B1-DB-3), decrypt-failure render decision (B1-DB-8), brush cap/join roundness policy (phase-121); phase-223 drafting-grid geometry + canvas-rotation math |
 | `services/localsend/` | `LocalSendProtocol.kt`, `LocalSendSender.kt`, `LocalSendPairing.kt`, `SettingsLocalSendPairedDeviceStore.kt`, `LocalSendDiscoveryPolicy.kt`, `FileTransferSender.kt`, `LocalSendSenderFactory.kt` | Pure-JVM LocalSend v2.2 + real network sender + TOFU pairing gate (B1-NET-02) + discovery/sweep gate (B1-NET-06) + FileTransfer seam/factory (phase-173) |
 | `plugins/` | `NoteflowPlugin.kt`, `PluginRegistry.kt`, `PluginManager.kt`, `PluginDiagnostics.kt`, `PluginLifecycle.kt` | Compile-time plugin framework + typed serving interfaces + capability routes |
 | `plugins/runtime/` | `RuntimePluginLoader.kt`, `SignatureVerifiedPluginRuntime.kt`, `ArtifactSignatureVerifier.kt`, `PinnedCertHash.kt`, `PinnedTlsConnector.kt`, `PluginManifestFetcher.kt`, `HttpsPluginDownloadTransport.kt`, `PluginDownloader.kt`, `PluginUpdateEngine.kt`, `CompileTimePluginPinStore.kt`, `PluginFrameworkClassLoader.kt`, `ArtifactStaticScan.kt` | Downloadable-plugin runtime: pinned-cert verify (manifest + artifact transports, no redirects), DexClassLoader (scoped `plugins.*`-only parent), verify-time static content scan (B1-AUTH-01), updates |
@@ -606,6 +606,27 @@
 > panels). `BrushPresetPack.soft_shade` (PENCIL, size 18, LIGHT curve, charge
 > 0.25, smoothing 0.75) for portrait shade build-up. SMUDGE in quick tool dock
 > with "Blend" label. No schema change, no new deps.
+
+> **Implemented in phase-223** (2026-08-27, Perspective Grid + Canvas Rotate +
+> Straight-Line Ruler, see `workspace/phase-223/REPORT.md`): drafting aids on the
+> existing template/zoom math. (1) **Grids** — pure-JVM `services/PerspectiveGridPolicy.kt`
+> centralises the one-point/two-point/isometric line math (VP at `w/2`, horizon
+> `h*0.35`, two VPs 55% off-edge, Liang–Barsky `clipRay`/`clipSlopedLine`, 30°
+> lattice); `AnnotationCanvas.drawPaperTemplate` extended with
+> `perspective_1pt`/`perspective_2pt`/`isometric`; editor picker chips +
+> `TemplateLibraryDialog` customisable-paper gating; `PaperTemplatePreview` renders
+> the real geometry as the thumbnail. (2) **Rotate** — pure-JVM
+> `services/CanvasRotationPolicy.kt` (sanitize/rotatePoint/accumulate ±360);
+> two-finger twist folded into the existing pinch/pan handler via a `calculateRotation()`
+> diff gated by `canvasTwistEnabled`; `rotationZ` applied to all 3 world
+> `graphicsLayer` blocks; per-page `SettingsManager.canvas_rotation_<page>` prefs
+> (no schema), ruler + twist toggles in `CanvasSettingsBottomSheet`, rotation reset
+> via `onResetZoomPan`. (3) **Ruler** — `ShapeRecognitionHelper.forceLineSnap`
+> collapses ANY drag to an exact start→end LINE (bypasses the auto-snap
+> `perpendicularDeviation` gate), live start→current preview, shared long-press
+> haptic; `rulerEnabled` added to the drag-`pointerInput` key list. No schema, no
+> new deps.
+
 
 > **Implemented in phase-196** (2026-08-24, stylus motion prediction — PERF 1.1, see
 > `workspace/phase-196/REPORT.md`): the ink canvas now records every raw `MotionEvent`

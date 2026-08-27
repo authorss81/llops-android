@@ -211,6 +211,19 @@ class SettingsManager(context: Context) {
         get() = prefs.getBoolean("shape_auto_snap_enabled", false)
         set(value) = prefs.edit().putBoolean("shape_auto_snap_enabled", value).apply()
 
+    // Phase 223: ruler / straight-line snap. When ON any freehand drag collapses
+    // to an exact start→end LINE (with a live straight guide). Off by default.
+    var rulerEnabled: Boolean
+        get() = prefs.getBoolean("ruler_enabled", false)
+        set(value) = prefs.edit().putBoolean("ruler_enabled", value).apply()
+
+    // Phase 223: two-finger canvas twist. When OFF the two-finger gesture keeps
+    // the classic pinch-zoom + pan behaviour exactly (rotation never applies).
+    // On by default once the feature ships; users can disable it in settings.
+    var canvasTwistEnabled: Boolean
+        get() = prefs.getBoolean("canvas_twist_enabled", true)
+        set(value) = prefs.edit().putBoolean("canvas_twist_enabled", value).apply()
+
     // Phase 07 painting features (see PressureCurveHelper / SymmetryMode / StrokeStabilizer):
     // stroke stabilizer defaults OFF so classic rendering is unchanged.
     var strokeStabilizerEnabled: Boolean
@@ -320,6 +333,22 @@ class SettingsManager(context: Context) {
             if (key.startsWith("paper_texture_") && value is String) out.add(value)
         }
         return out
+    }
+
+    // Phase 223: per-page canvas rotation (two-finger twist). Keyed by page id
+    // in SharedPreferences (like paper-texture-packs) — NO DB schema change. The
+    // value is sanitized through CanvasRotationPolicy when read so a corrupt
+    // stored angle can never spin the page to a random value.
+    fun canvasRotationDegreesForPage(pageId: String): Float {
+        val stored = prefs.getFloat("canvas_rotation_$pageId", 0f)
+        return com.authorss81.noteflow.services.CanvasRotationPolicy.sanitize(stored)
+    }
+
+    fun setPageCanvasRotationDegrees(pageId: String, degrees: Float) {
+        prefs.edit().putFloat(
+            "canvas_rotation_$pageId",
+            com.authorss81.noteflow.services.CanvasRotationPolicy.sanitize(degrees)
+        ).apply()
     }
 
     // Phase 219: per-template-type visual overrides (line spacing, grid opacity,

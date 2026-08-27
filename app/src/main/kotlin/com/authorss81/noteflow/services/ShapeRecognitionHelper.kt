@@ -193,6 +193,27 @@ object ShapeRecognitionHelper {
     }
 
     /**
+     * Phase 223 — ruler line snap. Unlike [trySnapShape]'s LINE branch, this does
+     * NOT gate on the perpendicularDeviation/direct-distance fit: the RULER is an
+     * explicit "draw a straight line" mode, so ANY freehand drag is collapsed to
+     * an exact start→end LINE regardless of how far it wavers. Returns the snapped
+     * stroke directly (no SnappedShape wrapper) so callers can also drive the
+     * distinct ruler snap tick.
+     */
+    fun forceLineSnap(rawStroke: Stroke): Stroke {
+        val first = rawStroke.points.firstOrNull() ?: rawStroke.start ?: PointF(0f, 0f)
+        val last = rawStroke.points.lastOrNull() ?: rawStroke.end ?: first
+        val start = PointF(first.x, first.y)
+        val end = PointF(last.x, last.y)
+        return rawStroke.copy(
+            tool = StrokeTool.LINE,
+            start = start,
+            end = end,
+            points = listOf(start, end)
+        )
+    }
+
+    /**
      * Average perpendicular distance of every point from the start→end line,
      * normalized by callers against the direct distance. Measures how much the
      * stroke wavers around a straight path.

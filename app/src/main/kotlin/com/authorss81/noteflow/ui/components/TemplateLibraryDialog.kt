@@ -209,7 +209,10 @@ fun TemplateLibraryDialog(
                 ) {
                     items(templates) { template ->
                         val isExpanded = expandedTemplateId == template.id
-                        val hasCustomizablePaper = template.paperTemplate in listOf("lined", "grid", "dots", "cross_grid")
+                        val hasCustomizablePaper = template.paperTemplate in listOf(
+                            "lined", "grid", "dots", "cross_grid",
+                            "perspective_1pt", "perspective_2pt", "isometric"
+                        )
 
                         Card(
                             modifier = Modifier.fillMaxWidth(),
@@ -228,6 +231,17 @@ fun TemplateLibraryDialog(
                                         },
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
+                                    // Phase 223: real paper thumbnail for drafting grids.
+                                    Box(
+                                        modifier = Modifier
+                                            .size(40.dp)
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .background(scheme.surface, RoundedCornerShape(6.dp))
+                                            .border(1.dp, scheme.outlineVariant, RoundedCornerShape(6.dp))
+                                    ) {
+                                        PaperTemplatePreview(template = template.paperTemplate, modifier = Modifier.fillMaxSize())
+                                    }
+                                    Spacer(modifier = Modifier.width(10.dp))
                                     Icon(
                                         template.icon,
                                         contentDescription = null,
@@ -356,7 +370,7 @@ private fun TemplateCustomizationControls(
                 }
             }
 
-            if (paperTemplate in listOf("lined", "grid", "dots", "cross_grid")) {
+            if (paperTemplate in listOf("lined", "grid", "dots", "cross_grid", "perspective_1pt", "perspective_2pt", "isometric")) {
                 Spacer(modifier = Modifier.height(10.dp))
                 // Line spacing
                 val spacingOptions = listOf("24" to "24dp", "28" to "28dp", "36" to "36dp")
@@ -380,7 +394,7 @@ private fun TemplateCustomizationControls(
                 }
             }
 
-            if (paperTemplate in listOf("grid", "cross_grid")) {
+            if (paperTemplate in listOf("grid", "cross_grid", "perspective_1pt", "perspective_2pt", "isometric")) {
                 Spacer(modifier = Modifier.height(10.dp))
                 // Grid opacity
                 val opacityOptions = listOf("0.12" to "Faint", "0.22" to "Normal", "0.35" to "Bold")

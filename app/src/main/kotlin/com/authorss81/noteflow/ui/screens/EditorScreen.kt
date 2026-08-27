@@ -545,6 +545,9 @@ fun EditorScreen(
     var divideIntoPages by remember { mutableStateOf(true) }
     var gpuWetBrushesEnabled by remember { mutableStateOf(viewModel.settings.gpuWetBrushesEnabled) }
     var shapeAutoSnapEnabled by remember { mutableStateOf(viewModel.settings.shapeAutoSnapEnabled) }
+    // Phase 223: ruler (straight-line snap) + two-finger canvas twist toggles.
+    var rulerEnabled by remember { mutableStateOf(viewModel.settings.rulerEnabled) }
+    var canvasTwistEnabled by remember { mutableStateOf(viewModel.settings.canvasTwistEnabled) }
     // Phase 213: per-stroke soft drop shadows ("paper elevation"). Default ON.
     var paperElevationEnabled by remember { mutableStateOf(viewModel.settings.paperElevationEnabled) }
     var hapticsEnabled by remember { mutableStateOf(viewModel.settings.hapticsEnabled) }
@@ -792,6 +795,11 @@ fun EditorScreen(
     // Interactive Zoom & Pan State
     var zoomScale by remember { mutableFloatStateOf(1f) }
     var panOffset by remember { mutableStateOf(Offset.Zero) }
+    // Phase 223: canvas rotate — per-page, persisted via settings (NO schema
+    // change); keyed on page.id so switching pages reloads that page's angle.
+    var rotationDegrees by remember(page.id) {
+        mutableFloatStateOf(viewModel.settings.canvasRotationDegreesForPage(page.id))
+    }
 
     // Phase 215: selection invalidation. Switching PAGES invalidates the
     // selection (stroke ids are per-page); leaving the SELECT tool does too, so
@@ -2367,6 +2375,13 @@ fun EditorScreen(
                 symmetryMode = symmetryMode,
                 onZoomScaleChanged = { zoomScale = it },
                 onPanOffsetChanged = { panOffset = it },
+                rotationDegrees = rotationDegrees,
+                onRotationDegreesChanged = { deg ->
+                    rotationDegrees = deg
+                    viewModel.settings.setPageCanvasRotationDegrees(page.id, deg)
+                },
+                rulerEnabled = rulerEnabled,
+                canvasTwistEnabled = canvasTwistEnabled,
                 onVisiblePageWindowChanged = { newWindow ->
                     visiblePageWindow = newWindow
                 },
@@ -2936,6 +2951,22 @@ fun EditorScreen(
                         viewModel.showSnackbar("Symmetry on: GPU wet-mix falls back to classic rendering while active")
                     }
                 },
+                rulerEnabled = rulerEnabled,
+                onRulerToggle = { enabled ->
+                    rulerEnabled = enabled
+                    viewModel.settings.rulerEnabled = enabled
+                },
+                canvasTwistEnabled = canvasTwistEnabled,
+                onCanvasTwistToggle = { enabled ->
+                    canvasTwistEnabled = enabled
+                    viewModel.settings.canvasTwistEnabled = enabled
+                },
+                rotationDegrees = rotationDegrees,
+                onRotationReset = {
+                    rotationDegrees = 0f
+                    viewModel.settings.setPageCanvasRotationDegrees(page.id, 0f)
+                    viewModel.showSnackbar("Page rotation reset")
+                },
                 onContinuousModeToggle = { isContinuousMode = !isContinuousMode },
                 onDividePagesToggle = { divideIntoPages = !divideIntoPages },
                 onTemplateSelect = { selectedTemplate ->
@@ -2977,6 +3008,9 @@ fun EditorScreen(
                 onResetZoomPan = {
                     zoomScale = 1f
                     panOffset = Offset.Zero
+                    // Phase 223: resetting the canvas also restores upright rotation.
+                    rotationDegrees = 0f
+                    viewModel.settings.setPageCanvasRotationDegrees(page.id, 0f)
                 },
                 onInsertPageBefore = { insertPage(before = true) },
                 onInsertPageAfter = { insertPage(before = false) },
@@ -5075,6 +5109,14 @@ private fun CanvasSettingsBottomSheet(
     onTiltShadingToggle: (Boolean) -> Unit = {},
     symmetryMode: SymmetryMode = SymmetryMode.OFF,
     onSymmetryModeSelect: (SymmetryMode) -> Unit = {},
+    // Phase 223: ruler (straight-line snap) + two-finger canvas twist + per-page
+    // rotation controls in the canvas settings sheet.
+    rulerEnabled: Boolean = false,
+    onRulerToggle: (Boolean) -> Unit = {},
+    canvasTwistEnabled: Boolean = true,
+    onCanvasTwistToggle: (Boolean) -> Unit = {},
+    rotationDegrees: Float = 0f,
+    onRotationReset: () -> Unit = {},
     paperTexturePath: String? = null,
     onUploadPaperTexture: () -> Unit = {},
     onClearPaperTexture: () -> Unit = {},
@@ -5189,7 +5231,11 @@ private fun CanvasSettingsBottomSheet(
                 "dots" to "Dot Grid",
                 "cornell" to "Cornell",
                 "meeting" to "Meeting",
-                "todo" to "To-Do Grid"
+                "todo" to "To-Do Grid",
+                // Phase 223: drafting grids.
+                "perspective_1pt" to "1-Pt Persp",
+                "perspective_2pt" to "2-Pt Persp",
+                "isometric" to "Isometric"
             )
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(
@@ -5210,7 +5256,7 @@ private fun CanvasSettingsBottomSheet(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    for ((key, label) in templates.drop(4)) {
+                    for ((key, label) in templates.drop(4).take(4)) {
                         val selected = template == key
                         FilterChip(
                             selected = selected,
@@ -5218,6 +5264,22 @@ private fun CanvasSettingsBottomSheet(
                             label = { Text(label, style = MaterialTheme.typography.labelSmall) },
                             modifier = Modifier.weight(1f)
                         )
+                    }
+                }
+                if (templates.drop(8).isNotEmpty()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        for ((key, label) in templates.drop(8)) {
+                            val selected = template == key
+                            FilterChip(
+                                selected = selected,
+                                onClick = { onTemplateSelect(key) },
+                                label = { Text(label, style = MaterialTheme.typography.labelSmall) },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
                     }
                 }
             }
@@ -6068,6 +6130,90 @@ private fun CanvasSettingsBottomSheet(
                             )
                             if (mode != SymmetryMode.entries.last()) {
                                 Spacer(modifier = Modifier.width(4.dp))
+                            }
+                        }
+                    }
+
+                    // Phase 223: ruler — straight-line snap.
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onRulerToggle(!rulerEnabled) }
+                            .padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Icon(
+                            Icons.Outlined.Straighten,
+                            contentDescription = null,
+                            tint = if (rulerEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Column(Modifier.weight(1f)) {
+                            Text("Ruler", style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                "Snap a rough stroke to a straight line",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(checked = rulerEnabled, onCheckedChange = onRulerToggle)
+                    }
+
+                    // Phase 223: two-finger canvas twist + rotation reset.
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onCanvasTwistToggle(!canvasTwistEnabled) }
+                            .padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Icon(
+                            Icons.Outlined.RotateRight,
+                            contentDescription = null,
+                            tint = if (canvasTwistEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Column(Modifier.weight(1f)) {
+                            Text("Canvas Twist", style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                "Rotate the page with two fingers",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(checked = canvasTwistEnabled, onCheckedChange = onCanvasTwistToggle)
+                    }
+
+                    if (rotationDegrees != 0f) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onRotationReset() }
+                                .padding(vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Icon(
+                                Icons.Outlined.RestartAlt,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    "Rotated ${rotationDegrees.toInt()}°",
+                                    style = MaterialTheme.typography.titleMedium
+                                )
+                                Text(
+                                    "Tap to reset page rotation",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            TextButton(onClick = onRotationReset) {
+                                Text("Reset")
                             }
                         }
                     }
