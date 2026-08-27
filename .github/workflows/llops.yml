@@ -142,7 +142,7 @@ jobs:
         uses: android-actions/setup-android@v4
         with:
           cmdline-tools-version: latest
-          sdk: platforms;android-36,build-tools;36.0.0,ndk;27.0.12077973,cmake;3.22.1
+          packages: platforms;android-36,build-tools;36.0.0,ndk;27.0.12077973,cmake;3.22.1
 
       - name: Install opencode (pinned 1.15.12 — CLI has no --prompt flag; message is positional)
         run: |
@@ -295,7 +295,7 @@ jobs:
     needs: [select-phase, run-phase]
     if: needs.select-phase.outputs.exists == 'true' && needs.run-phase.outputs.done == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -317,7 +317,7 @@ jobs:
         uses: android-actions/setup-android@v4
         with:
           cmdline-tools-version: latest
-          sdk: platforms;android-36,build-tools;36.0.0,ndk;27.0.12077973,cmake;3.22.1
+          packages: platforms;android-36,build-tools;36.0.0,ndk;27.0.12077973,cmake;3.22.1
 
       - name: Install opencode (pinned 1.15.12 — CLI has no --prompt flag; message is positional)
         run: |
@@ -327,7 +327,7 @@ jobs:
       - name: Pull latest main
         run: git pull --ff-only origin main || true
 
-      - name: Review and fix phase (dedicated 90-min budget)
+      - name: Review and fix phase (dedicated 120-min budget)
         id: review
         run: |
           bash scripts/phase_runner.sh "${{ needs.select-phase.outputs.phase }}" --review-only
