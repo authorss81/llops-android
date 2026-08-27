@@ -90,6 +90,7 @@ painting engine, free features).
 | phase-225 | **Eyedropper from reference image** — samples `referenceImage` bitmap / `LayerBitmapLruCache` pixel, applies to `currentColor` | painting |
 | phase-226 | **Selection transform** — scale (corner handles) + rotate (`CanvasItemRotationMath`) for lasso selection, baked into points | painting |
 | phase-227 | **Paper deckled edge + texture + layered export** — wavy `Path` clip, `paperTextureStrength` slider, PSD per-layer + PNG transparent toggle | painting |
+| phase-228 | **Fix all failing tests + green APK/CI** — `testDebugUnitTest` 0 failures, `assembleDebug`/`assembleRelease` green, `lintDebug` 0 errors, full `gradle build` CI green, no regressions (6h) | quality |
 
 ## How phases run
 
