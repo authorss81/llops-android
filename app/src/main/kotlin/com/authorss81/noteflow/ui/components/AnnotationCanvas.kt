@@ -250,6 +250,14 @@ fun AnnotationCanvas(
     // null keeps pre-existing call sites compiling; without a path the eyedropper
     // falls back to the layer/paper sampling path.
     referenceImagePath: String? = null,
+    // Phase 225 (review fix): the reference FILE's real pixel dimensions,
+    // resolved ONCE by the caller when the path is read (the eye-dropper samples
+    // against these, not the on-screen dims). Threading them in avoids re-opening
+    // the file with a bounds-only decode on every eye-dropper preview move, which
+    // would add synchronous disk I/O to the UI thread while dragging. Zero/0
+    // means "unknown" → the sample falls through to the layer/paper path.
+    referenceImageFileWidth: Int = 0,
+    referenceImageFileHeight: Int = 0,
     referenceImageOpacity: Float = com.authorss81.noteflow.services.ReferenceImagePolicy.DEFAULT_OPACITY,
     referenceImageX: Float = 0f,
     referenceImageY: Float = 0f,
@@ -864,10 +872,22 @@ fun AnnotationCanvas(
         return try {
             val file = java.io.File(path)
             if (!file.exists()) return null
-            val boundsOptions = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            android.graphics.BitmapFactory.decodeFile(file.absolutePath, boundsOptions) ?: return null
-            val fileW = boundsOptions.outWidth
-            val fileH = boundsOptions.outHeight
+            // Phase 225 (review fix): the file's real pixel dims are resolved ONCE
+            // by the caller and threaded in, so the per-move eye-dropper preview
+            // does NOT re-open the file with a bounds-only decode (which added
+            // synchronous disk I/O to the UI thread on every drag). Zero dims mean
+            // "unknown" → fall back to the classic bounds-only decode, then bail
+            // out of the reference branch so a rare uncached call still can't
+            // block on a big photo (the layer/paper sampler takes over).
+            var fileW = referenceImageFileWidth
+            var fileH = referenceImageFileHeight
+            if (fileW <= 0 || fileH <= 0) {
+                if (file.length() > MAX_REFERENCE_SAMPLING_FILE_BYTES) return null
+                val boundsOptions = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                android.graphics.BitmapFactory.decodeFile(file.absolutePath, boundsOptions) ?: return null
+                fileW = boundsOptions.outWidth
+                fileH = boundsOptions.outHeight
+            }
             if (fileW <= 0 || fileH <= 0) return null
             val pixel = com.authorss81.noteflow.services.EyedropperSamplingMath.referencePixel(
                 canvasX = canvasX,
@@ -4662,6 +4682,13 @@ private fun convertToInkStroke(stroke: Stroke, context: android.content.Context?
         return null
     }
 }
+
+// Phase 225 (review fix): upper bound on a reference photo's on-disk size before
+// the eye-dropper's UNCACHED sampling fallback (dims not threaded in) bails to
+// the layer/paper path instead of doing a synchronous bounds-only decode of a
+// large file on the UI thread. The cached-dims hot path passes this check because
+// the file's dimensions were already resolved offline once at read time.
+private const val MAX_REFERENCE_SAMPLING_FILE_BYTES: Long = 8L * 1024L * 1024L
 
 private val layerBlendPorterDuff: Map<String, android.graphics.PorterDuff.Mode> = mapOf(
     "NORMAL" to android.graphics.PorterDuff.Mode.SRC_OVER,

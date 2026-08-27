@@ -159,11 +159,13 @@ class Phase178ReferenceImageUnderlayTest {
             editor.contains("contentUrlOrPath = File(savedFile).name")
         )
         // Both the decode effect and the remove handler must route through the
-        // confined resolver — never a raw File(path).
+        // confined resolver — never a raw File(path). The regex spans
+        // whitespace/newlines so the multi-line `InlineImagePathPolicy\n.resolve(...)`
+        // call in the remove handler is counted, not just the single-line read.
         assertEquals(
             "the confine-and-decode path must be used exactly twice (read + delete)",
             2,
-            Regex("InlineImagePathPolicy\\.resolve").findAll(editor).count()
+            Regex("InlineImagePathPolicy\\s*\\.\\s*resolve").findAll(editor).count()
         )
         assertTrue(
             "decode must be the bounded decoder",

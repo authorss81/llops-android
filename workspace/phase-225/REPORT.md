@@ -104,3 +104,29 @@ on a reference photo, exactly as the prompt demands.
   prompt specifies.
 - `lastColorHex` in the prompt maps to the actual settings field `brushColorArgb`
   used by every other palette pick in this codebase.
+
+## Review fixes (2026-08-27)
+
+1. **Main-thread per-move disk I/O reduced.** The reference file's real pixel dims
+   are now resolved ONCE in `EditorScreen`'s decode effect (off the UI thread) and
+   threaded into the canvas as `referenceImageFileWidth/Height`. `sampleReferenceRegion`
+   uses those cached dims for the hot path, so it no longer calls `File.exists()` +
+   bounds-only `decodeFile` on every eye-dropper drag move. The rare uncached path
+   (dims=0) bails to the layer/paper sampler for files over 8 MiB rather than
+   blocking the UI thread on a big photo (`MAX_REFERENCE_SAMPLING_FILE_BYTES`).
+2. **Stale handle cleared on removal.** `handleRemoveReferenceImage` now nulls
+   `referenceImagePath` and zeroes `referenceImageFileWidth/Height` alongside the
+   bitmap, so no stale confined path survives removal.
+3. **Single confirmation toast.** Removed the redundant "Eyedropper sampled a solid
+   color" toast from the multi-color reset; "Picked #RRGGBB" is now the one and only
+   confirmation of a pick.
+4. **Phase-178 pin actually pins both call sites.** The test regex now
+   `InlineImagePathPolicy\s*\.\s*resolve` spans whitespace/newlines so it counts
+   BOTH real call sites (read + remove handler) instead of accidentally matching a
+   code comment. The misleading editor/doc comment ("exactly two: this read + the
+   remove handler") was reworded to match reality.
+
+Findings #5 (JPEG region-decode alignment edge) and #6 (ink-over-reference ignored)
+are intentional/accepted behavior: #5 is an inherent BitmapRegionDecoder lossy-codec
+trait (cosmetic), and #6 matches the prompt's "reference hit vs layer hit priority"
+spec for photo-palette building.

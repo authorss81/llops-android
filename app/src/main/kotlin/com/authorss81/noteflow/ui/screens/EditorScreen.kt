@@ -246,8 +246,12 @@ fun EditorScreen(
     var referenceImageControlsVisible by remember { mutableStateOf(false) }
     // Phase 225: the CONFINED absolute path of the reference photo, resolved once
     // (same InlineImagePathPolicy gate as the bitmap) so the eyedropper can
-    // sample a raw 1:1 region of the file for palette building.
+    // sample a raw 1:1 region of the file for palette building. The file's real
+    // pixel dims are resolved alongside, so the eyedropper never re-opens the
+    // file with a bounds-only decode on the UI thread (review fix).
     var referenceImagePath by remember { mutableStateOf<String?>(null) }
+    var referenceImageFileWidth by remember { mutableStateOf(0) }
+    var referenceImageFileHeight by remember { mutableStateOf(0) }
 
     // Phase 13: the sticker the STICKER tool currently places (id from
     // StickerCatalog; "sparkles" default), persisted in memory for the session.
@@ -881,16 +885,16 @@ fun EditorScreen(
 
     // Phase 178: confined decode of the underlay artwork. The stored
     // contentUrlOrPath is the RELATIVE file name inside the app-private imports
-    // dir; InlineImagePathPolicy.resolve re-verifies the canonical destination
+    // dir; the confined resolver re-verifies the canonical destination
     // still lives inside that subtree (B1-AUTH-05 contract) before any decode.
     // A policy-blocked or missing path yields null → the canvas renders no
     // underlay (fail-closed, never an arbitrary file read).
     LaunchedEffect(referenceImage?.contentUrlOrPath) {
         val storedRelative = referenceImage?.contentUrlOrPath ?: return@LaunchedEffect
-        // ONE confined resolve feeds both the rendered underlay bitmap and the
-        // eyedropper's raw-sample path (the Phase178 source-pinning test asserts
-        // the resolver's read site count stays at exactly two: this read + the
-        // remove handler).
+        // ONE confined resolve feeds the rendered underlay bitmap and the
+        // eyedropper's raw-sample path — this read plus the remove handler are
+        // the only two resolved-passthroughs in the editor (the Phase178
+        // source-pinning test counts both call sites).
         val resolved = withContext(Dispatchers.IO) {
             InlineImagePathPolicy.resolve(
                 storedRelative,
@@ -899,9 +903,21 @@ fun EditorScreen(
         } ?: run {
             referenceImageBitmap = null
             referenceImagePath = null
+            referenceImageFileWidth = 0
+            referenceImageFileHeight = 0
             return@LaunchedEffect
         }
         referenceImagePath = resolved.absolutePath
+        // Phase 225 (review fix): resolve the file's real pixel dims ONCE here
+        // (off the main thread) so the eye-dropper's hot sampling path never
+        // re-opens the file for a bounds-only decode while the user drags.
+        val (fileW, fileH) = withContext(Dispatchers.IO) {
+            val opts = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            android.graphics.BitmapFactory.decodeFile(resolved.absolutePath, opts)
+            (opts.outWidth to opts.outHeight)
+        }
+        referenceImageFileWidth = fileW
+        referenceImageFileHeight = fileH
         referenceImageBitmap = withContext(Dispatchers.IO) {
             decodeBoundedImage(resolved.absolutePath, maxDim = 1600)?.asImageBitmap()
         }
@@ -1382,6 +1398,9 @@ fun EditorScreen(
             }
             referenceImage = null
             referenceImageBitmap = null
+            referenceImagePath = null
+            referenceImageFileWidth = 0
+            referenceImageFileHeight = 0
             referenceImageControlsVisible = false
             viewModel.saveReferenceImage(page.id, null)
             viewModel.showSnackbar("Reference image removed")
@@ -2459,10 +2478,13 @@ fun EditorScreen(
                     viewModel.recordRecentColor(sampledColor.toArgb())
                     // Eyedropper returns a concrete pixel color → back to SOLID (a
                     // reasonable default the user can re-override with a mode chip).
+                    // The mode reset is silent — the single "Picked #RRGGBB" toast
+                    // below is the one confirmation of the whole pick (review fix; the
+                    // old extra "sampled a solid color" toast stacked a second
+                    // message behind it for every multi-color pick).
                     if (currentColorMode.isMultiColor) {
                         currentColorMode = StrokeColorMode.SOLID
                         viewModel.settings.brushColorModeKey = StrokeColorMode.SOLID.persistenceKey
-                        viewModel.showSnackbar("Eyedropper sampled a solid color")
                     }
                     if (sampledColor !in customPalette) {
                         customPalette = customPalette + sampledColor
@@ -2528,6 +2550,8 @@ fun EditorScreen(
                 // InlineImagePathPolicy; opacity range-gated by the policy).
                 referenceImage = referenceImageBitmap,
                 referenceImagePath = referenceImagePath,
+                referenceImageFileWidth = referenceImageFileWidth,
+                referenceImageFileHeight = referenceImageFileHeight,
                 referenceImageOpacity = referenceImage?.let { ReferenceImagePolicy.decodeOpacity(it.textContent) }
                     ?: ReferenceImagePolicy.DEFAULT_OPACITY,
                 referenceImageX = referenceImage?.x ?: 0f,

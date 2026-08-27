@@ -1481,8 +1481,7 @@
     tests reference bounds FIRST; on a hit `sampleReferenceRegion` decodes a raw 1:1 REGION via
     `BitmapRegionDecoder` (decodeFile fallback) and recycles it immediately, so the picked color is the
     UNDIMMED source pixel, then falls through to the existing layer/paper path. `EditorScreen` resolves
-    `referenceImagePath` through the SAME confined resolver (Phase178 pins exactly two resolve sites),
-    `onColorSampled` shows `Snackbar "Picked #RRGGBB"` and dismisses to `lastDrawingTool`, and the
+    `referenceImagePath` through the SAME confined resolver; `onColorSampled` shows `Snackbar "Picked #RRGGBB"` and dismisses to `lastDrawingTool`, and the
     canvas adds `contentDescription "Reference image, tap eyedropper to sample"` while the eyedropper
     is active. Tests: `EyedropperSamplingTest` (15), `paparazzi/Phase225EyedropperSamplingSnapshotTest`.
 - **Plugins**: `plugin-sdk` → `plugins/FrameworkPlugin.kt:58` (`interface NoteflowPlugin`),
