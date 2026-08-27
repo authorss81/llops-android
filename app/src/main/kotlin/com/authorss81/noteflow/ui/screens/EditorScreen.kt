@@ -96,6 +96,7 @@ import com.authorss81.noteflow.services.VoiceNoteManager
 import com.authorss81.noteflow.services.ReferenceImagePolicy
 import com.authorss81.noteflow.services.InlineImagePathPolicy
 import com.authorss81.noteflow.services.StrokeSelectionActionPolicy
+import com.authorss81.noteflow.services.SelectionTransformPolicy
 import com.authorss81.noteflow.services.ClipboardGuard
 import com.authorss81.noteflow.ui.components.AnnotationCanvas
 import com.authorss81.noteflow.ui.components.decodeBoundedImage
@@ -1123,6 +1124,54 @@ fun EditorScreen(
         )
         handleStrokesChange(newStrokes)
         // Recompute selection bounds after translation
+        strokeSelection = strokeSelection.copy(
+            bounds = StrokeSelectionActionPolicy.recomputeBounds(newStrokes, strokeSelection.ids)
+        )
+    }
+
+    /**
+     * Phase 226: scale selected strokes about (centerX, centerY) by
+     * (scaleX, scaleY). Single undo entry + bounds refresh; the geometry is
+     * baked into the points (no schema migration).
+     */
+    fun scaleSelectedStrokes(scaleX: Float, scaleY: Float, centerX: Float, centerY: Float) {
+        if (strokeSelection.isEmpty) return
+        val pageStride = 1592f
+        val newStrokes = SelectionTransformPolicy.transformSelected(
+            strokes = strokes,
+            selectedIds = strokeSelection.ids,
+            centerX = centerX,
+            centerY = centerY,
+            sx = scaleX,
+            sy = scaleY,
+            degrees = 0f,
+            pageStride = pageStride
+        )
+        handleStrokesChange(newStrokes)
+        strokeSelection = strokeSelection.copy(
+            bounds = StrokeSelectionActionPolicy.recomputeBounds(newStrokes, strokeSelection.ids)
+        )
+    }
+
+    /**
+     * Phase 226: rotate selected strokes about (centerX, centerY) by [degrees].
+     * Single undo entry + bounds refresh; the rotation is baked into the points
+     * (no schema migration, no Stroke.rotationDegrees field this phase).
+     */
+    fun rotateSelectedStrokes(degrees: Float, centerX: Float, centerY: Float) {
+        if (strokeSelection.isEmpty) return
+        val pageStride = 1592f
+        val newStrokes = SelectionTransformPolicy.transformSelected(
+            strokes = strokes,
+            selectedIds = strokeSelection.ids,
+            centerX = centerX,
+            centerY = centerY,
+            sx = 1f,
+            sy = 1f,
+            degrees = degrees,
+            pageStride = pageStride
+        )
+        handleStrokesChange(newStrokes)
         strokeSelection = strokeSelection.copy(
             bounds = StrokeSelectionActionPolicy.recomputeBounds(newStrokes, strokeSelection.ids)
         )
@@ -2568,6 +2617,15 @@ fun EditorScreen(
                 onSelectionTranslate = { dx, dy ->
                     translateSelectedStrokes(dx, dy)
                 },
+                // Phase 226: scale + rotate selected strokes. The canvas commits
+                // ONE gesture-end call: a single undo entry + bounds refresh.
+                onSelectionScale = { scaleX, scaleY, centerX, centerY ->
+                    scaleSelectedStrokes(scaleX, scaleY, centerX, centerY)
+                },
+                onSelectionRotate = { degrees, centerX, centerY ->
+                    rotateSelectedStrokes(degrees, centerX, centerY)
+                },
+                selectionTransformLocked = true,
                 // Phase 222: tilt shading (stylus angle → width/alpha modulation).
                 tiltShadingEnabled = tiltShadingEnabled
             )

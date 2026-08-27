@@ -275,6 +275,15 @@ fun AnnotationCanvas(
     // Phase 216: translate (move) selected strokes by a world-coordinate delta.
     // Called once per drag-end from the selection drag surface.
     onSelectionTranslate: (dx: Float, dy: Float) -> Unit = { _, _ -> },
+    // Phase 226: scale + rotate selected strokes. Called once per gesture end
+    // (the gesture accumulates in the selection overlay, previewing via a
+    // dashed outline only; the single commit call feeds ONE undo entry in
+    // EditorScreen). centre is the selection centre in world coords.
+    onSelectionScale: (scaleX: Float, scaleY: Float, centerX: Float, centerY: Float) -> Unit = { _, _, _, _ -> },
+    onSelectionRotate: (degrees: Float, centerX: Float, centerY: Float) -> Unit = { _, _, _ -> },
+    // Phase 226: when true a corner scale-drag keeps the selection's aspect
+    // ratio (uniform scale); when false X/Y scale independently.
+    selectionTransformLocked: Boolean = true,
     // Phase 222: tilt shading (stylus angle → width/alpha modulation).
     tiltShadingEnabled: Boolean = false,
     // Phase 222: per-layer alpha-lock + clipping-mask sets.
@@ -473,6 +482,10 @@ fun AnnotationCanvas(
     var selectionTranslateAccY by remember { mutableFloatStateOf(0f) }
     val currentOnSelectionChanged by rememberUpdatedState(onSelectionChanged)
     val currentOnSelectionTranslate by rememberUpdatedState(onSelectionTranslate)
+    // Phase 226: scale + rotate commit callbacks read through updated-state so a
+    // mid-gesture recomposition never restarts (cancels) the handle drag.
+    val currentOnSelectionScale by rememberUpdatedState(onSelectionScale)
+    val currentOnSelectionRotate by rememberUpdatedState(onSelectionRotate)
 
     /**
      * Phase 215: finalize a SELECT drag. Classifies the accumulated path via
@@ -3137,7 +3150,11 @@ fun AnnotationCanvas(
                     selectionBounds = strokeSelection.bounds,
                     lassoPointsProvider = { lassoPathPoints.toList() },
                     lassoVisible = lassoActive,
-                    zoomScale = internalZoomScale
+                    zoomScale = internalZoomScale,
+                    // Phase 226: transform handles + preview wiring.
+                    transformLocked = selectionTransformLocked,
+                    onSelectionScale = currentOnSelectionScale,
+                    onSelectionRotate = currentOnSelectionRotate
                 )
             }
 
@@ -3986,71 +4003,334 @@ internal fun StrokeSelectionOverlay(
     lassoVisible: Boolean,
     // Current canvas zoom — dash patterns divide by it so dashes keep a
     // constant SCREEN size at any magnification.
-    zoomScale: Float = 1f
+    zoomScale: Float = 1f,
+    // Phase 226: transform handles — visible AT REST (alpha 1) for a held
+    // selection, unlike the phase-193 dim canvas resize handles. 4 corner
+    // handles scale; the top handle rotates. Mid-drag preview is a dashed
+    // outline only; the single commit call fires on gesture end.
+    transformLocked: Boolean = true,
+    onSelectionScale: (scaleX: Float, scaleY: Float, centerX: Float, centerY: Float) -> Unit = { _, _, _, _ -> },
+    onSelectionRotate: (degrees: Float, centerX: Float, centerY: Float) -> Unit = { _, _, _ -> }
 ) {
-    Canvas(modifier = modifier) {
-        // 1. Live lasso / marquee trail.
-        val lasso = if (lassoVisible) lassoPointsProvider() else emptyList()
-        if (lasso.size >= 2) {
-            val trail = androidx.compose.ui.graphics.Path().apply {
-                moveTo(lasso.first().x, lasso.first().y)
-                for (i in 1 until lasso.size) lineTo(lasso[i].x, lasso[i].y)
-                close()
-            }
-            drawPath(trail, accentColor.copy(alpha = com.authorss81.noteflow.services.LassoTrailPolicy.TRAIL_FILL_ALPHA))
-            drawPath(
-                trail,
-                accentColor.copy(alpha = com.authorss81.noteflow.services.LassoTrailPolicy.TRAIL_OUTLINE_ALPHA),
-                style = DrawStrokeStyle(
-                    width = com.authorss81.noteflow.services.LassoTrailPolicy.TRAIL_STROKE_WIDTH_PX,
-                    cap = androidx.compose.ui.graphics.StrokeCap.Round,
-                    join = androidx.compose.ui.graphics.StrokeJoin.Round,
-                    pathEffect = PathEffect.dashPathEffect(com.authorss81.noteflow.services.LassoTrailPolicy.trailDashPattern(zoomScale))
-                )
-            )
-        }
+    val density = LocalDensity.current
+    val handlePx = with(density) { com.authorss81.noteflow.services.ResizeHandleVisibilityPolicy.HANDLE_SIZE_DP.dp.toPx() }
+    val rotHandlePx = with(density) { com.authorss81.noteflow.services.ResizeHandleVisibilityPolicy.ROTATION_HANDLE_SIZE_DP.dp.toPx() }
+    val gapPx = with(density) { 8.dp.toPx() }
 
-        // 2. Resting selection: per-stroke highlight + dashed union bounds.
-        if (selectedIds.isNotEmpty()) {
-            for (stroke in strokesProvider()) {
-                if (stroke.id !in selectedIds) continue
-                if (stroke.points.size > 1) {
-                    val highlight = androidx.compose.ui.graphics.Path().apply {
-                        moveTo(stroke.points.first().x, stroke.points.first().y)
-                        for (i in 1 until stroke.points.size) lineTo(stroke.points[i].x, stroke.points[i].y)
-                    }
-                    drawPath(
-                        highlight,
-                        accentColor.copy(alpha = com.authorss81.noteflow.services.LassoTrailPolicy.HIGHLIGHT_ALPHA),
-                        style = DrawStrokeStyle(
-                            width = stroke.width + 10f,
-                            cap = androidx.compose.ui.graphics.StrokeCap.Round,
-                            join = androidx.compose.ui.graphics.StrokeJoin.Round
-                        )
+    // Phase 226: transient transform-preview state (scale and rotation), owned
+    // here so mid-drag previews render in this node's draw scope and the main
+    // canvas pass is never invalidated per sample.
+    var previewScaleX by remember { mutableFloatStateOf(1f) }
+    var previewScaleY by remember { mutableFloatStateOf(1f) }
+    var previewRotation by remember { mutableFloatStateOf(0f) }
+    var transformActive by remember { mutableStateOf(false) }
+    var scaleDragCorner by remember { mutableStateOf<com.authorss81.noteflow.services.SelectionTransformPolicy.Corner?>(null) }
+
+    val currentSelectionBounds by rememberUpdatedState(selectionBounds)
+    val currentZoom by rememberUpdatedState(zoomScale)
+
+    Box(modifier = modifier) {
+        Canvas(Modifier.fillMaxSize()) {
+            // 1. Live lasso / marquee trail.
+            val lasso = if (lassoVisible) lassoPointsProvider() else emptyList()
+            if (lasso.size >= 2) {
+                val trail = androidx.compose.ui.graphics.Path().apply {
+                    moveTo(lasso.first().x, lasso.first().y)
+                    for (i in 1 until lasso.size) lineTo(lasso[i].x, lasso[i].y)
+                    close()
+                }
+                drawPath(trail, accentColor.copy(alpha = com.authorss81.noteflow.services.LassoTrailPolicy.TRAIL_FILL_ALPHA))
+                drawPath(
+                    trail,
+                    accentColor.copy(alpha = com.authorss81.noteflow.services.LassoTrailPolicy.TRAIL_OUTLINE_ALPHA),
+                    style = DrawStrokeStyle(
+                        width = com.authorss81.noteflow.services.LassoTrailPolicy.TRAIL_STROKE_WIDTH_PX,
+                        cap = androidx.compose.ui.graphics.StrokeCap.Round,
+                        join = androidx.compose.ui.graphics.StrokeJoin.Round,
+                        pathEffect = PathEffect.dashPathEffect(com.authorss81.noteflow.services.LassoTrailPolicy.trailDashPattern(zoomScale))
                     )
-                } else {
-                    val anchor = stroke.start ?: stroke.end ?: continue
-                    drawCircle(
-                        accentColor.copy(alpha = com.authorss81.noteflow.services.LassoTrailPolicy.HIGHLIGHT_ALPHA),
-                        radius = stroke.width + 18f,
-                        center = Offset(anchor.x, anchor.y)
+                )
+            }
+
+            // 2. Resting (or live-preview) selection: per-stroke highlight +
+            //    dashed union bounds.
+            if (selectedIds.isNotEmpty()) {
+                for (stroke in strokesProvider()) {
+                    if (stroke.id !in selectedIds) continue
+                    if (stroke.points.size > 1) {
+                        val highlight = androidx.compose.ui.graphics.Path().apply {
+                            moveTo(stroke.points.first().x, stroke.points.first().y)
+                            for (i in 1 until stroke.points.size) lineTo(stroke.points[i].x, stroke.points[i].y)
+                        }
+                        drawPath(
+                            highlight,
+                            accentColor.copy(alpha = com.authorss81.noteflow.services.LassoTrailPolicy.HIGHLIGHT_ALPHA),
+                            style = DrawStrokeStyle(
+                                width = stroke.width + 10f,
+                                cap = androidx.compose.ui.graphics.StrokeCap.Round,
+                                join = androidx.compose.ui.graphics.StrokeJoin.Round
+                            )
+                        )
+                    } else {
+                        val anchor = stroke.start ?: stroke.end ?: continue
+                        drawCircle(
+                            accentColor.copy(alpha = com.authorss81.noteflow.services.LassoTrailPolicy.HIGHLIGHT_ALPHA),
+                            radius = stroke.width + 18f,
+                            center = Offset(anchor.x, anchor.y)
+                        )
+                    }
+                }
+
+                // The dashed box: resting bounds, OR the live transform preview
+                // (scaled / rotated) while a handle is being dragged. The preview
+                // is render-side only — nothing is committed until drag-end.
+                val displayBounds = when {
+                    transformActive && scaleDragCorner != null ->
+                        com.authorss81.noteflow.services.SelectionTransformPolicy.scaledBounds(
+                            currentSelectionBounds, previewScaleX, previewScaleY
+                        )
+                    transformActive && previewRotation != 0f ->
+                        com.authorss81.noteflow.services.SelectionTransformPolicy.rotatedBounds(
+                            currentSelectionBounds, previewRotation
+                        )
+                    else -> currentSelectionBounds
+                }
+
+                if (displayBounds.width > 0f || displayBounds.height > 0f) {
+                    val padded = displayBounds.inflate(com.authorss81.noteflow.services.StrokeHitPolicy.SELECTION_BOUNDS_PADDING_PX)
+                    drawRoundRect(
+                        color = accentColor.copy(alpha = com.authorss81.noteflow.services.LassoTrailPolicy.BOUNDS_OUTLINE_ALPHA),
+                        topLeft = Offset(padded.left, padded.top),
+                        size = Size(padded.width, padded.height),
+                        cornerRadius = CornerRadius(6f, 6f),
+                        style = DrawStrokeStyle(
+                            width = com.authorss81.noteflow.services.LassoTrailPolicy.BOUNDS_STROKE_WIDTH_PX,
+                            pathEffect = PathEffect.dashPathEffect(com.authorss81.noteflow.services.LassoTrailPolicy.boundsDashPattern(zoomScale))
+                        )
                     )
                 }
             }
-            if (selectionBounds.width > 0f || selectionBounds.height > 0f) {
-                val padded = selectionBounds.inflate(com.authorss81.noteflow.services.StrokeHitPolicy.SELECTION_BOUNDS_PADDING_PX)
-                drawRoundRect(
-                    color = accentColor.copy(alpha = com.authorss81.noteflow.services.LassoTrailPolicy.BOUNDS_OUTLINE_ALPHA),
-                    topLeft = Offset(padded.left, padded.top),
-                    size = Size(padded.width, padded.height),
-                    cornerRadius = CornerRadius(6f, 6f),
-                    style = DrawStrokeStyle(
-                        width = com.authorss81.noteflow.services.LassoTrailPolicy.BOUNDS_STROKE_WIDTH_PX,
-                        pathEffect = PathEffect.dashPathEffect(com.authorss81.noteflow.services.LassoTrailPolicy.boundsDashPattern(zoomScale))
-                    )
+        }
+
+        // 3. Phase 226: transform handles — visible AT REST for a held
+        //    selection. Composed only while a selection is held (never during a
+        //    lasso draw). Each corner handles a scale drag; the top-center
+        //    handle rotates.
+        if (selectedIds.isNotEmpty() && !lassoVisible) {
+            val bounds = selectionBounds
+            val cx = (bounds.left + bounds.right) / 2f
+            val cy = (bounds.top + bounds.bottom) / 2f
+            com.authorss81.noteflow.services.SelectionTransformPolicy.Corner.entries.forEach { corner ->
+                val (hx, hy) = com.authorss81.noteflow.services.SelectionTransformPolicy.cornerPosition(bounds, corner)
+                SelectionCornerHandle(
+                    modifier = Modifier.offset { IntOffset(hx.roundToInt() - (handlePx / 2f).roundToInt(), hy.roundToInt() - (handlePx / 2f).roundToInt()) },
+                    sizePx = handlePx,
+                    accentColor = accentColor,
+                    zoomScale = currentZoom,
+                    corner = corner,
+                    locked = transformLocked,
+                    onDragUpdate = { worldDx, worldDy ->
+                        val (sx, sy) = com.authorss81.noteflow.services.SelectionTransformPolicy.cornerScaleFromDrag(
+                            corner = corner, bounds = bounds, dragWorldDx = worldDx, dragWorldDy = worldDy, locked = transformLocked
+                        )
+                        scaleDragCorner = corner
+                        transformActive = true
+                        previewScaleX = sx
+                        previewScaleY = sy
+                        previewRotation = 0f
+                    },
+                    onDragEnd = { worldDx, worldDy ->
+                        val (sx, sy) = com.authorss81.noteflow.services.SelectionTransformPolicy.cornerScaleFromDrag(
+                            corner = corner, bounds = bounds, dragWorldDx = worldDx, dragWorldDy = worldDy, locked = transformLocked
+                        )
+                        scaleDragCorner = null
+                        transformActive = false
+                        previewScaleX = 1f
+                        previewScaleY = 1f
+                        if (sx != 1f || sy != 1f) {
+                            onSelectionScale(sx, sy, cx, cy)
+                        }
+                    },
+                    onDragCancel = {
+                        scaleDragCorner = null
+                        transformActive = false
+                        previewScaleX = 1f
+                        previewScaleY = 1f
+                    }
                 )
             }
+
+            SelectionRotationHandle(
+                modifier = Modifier.offset { IntOffset(cx.roundToInt() - (rotHandlePx / 2f).roundToInt(), (bounds.top - gapPx - rotHandlePx).roundToInt()) },
+                sizePx = rotHandlePx,
+                gapPx = gapPx,
+                selectionHalfWidth = bounds.width / 2f,
+                selectionHalfHeight = bounds.height / 2f,
+                accentColor = accentColor,
+                zoomScale = currentZoom,
+                onDragUpdate = { degrees ->
+                    transformActive = true
+                    scaleDragCorner = null
+                    previewScaleX = 1f
+                    previewScaleY = 1f
+                    previewRotation = degrees
+                },
+                onDragEnd = { degrees ->
+                    transformActive = false
+                    previewRotation = 0f
+                    if (degrees != 0f) {
+                        onSelectionRotate(degrees, cx, cy)
+                    }
+                },
+                onDragCancel = {
+                    transformActive = false
+                    previewRotation = 0f
+                }
+            )
         }
+    }
+}
+
+/**
+ * Phase 226: a single corner scale handle for a held selection. Visible at rest
+ * (alpha 1). Dragging accumulates the world-coordinate delta and reports it
+ * (for preview) every sample via [onDragUpdate] and once on release via
+ * [onDragEnd] — the caller derives scale factors through
+ * [com.authorss81.noteflow.services.SelectionTransformPolicy].
+ */
+@Composable
+private fun SelectionCornerHandle(
+    modifier: Modifier,
+    sizePx: Float,
+    accentColor: Color,
+    zoomScale: Float,
+    corner: com.authorss81.noteflow.services.SelectionTransformPolicy.Corner,
+    locked: Boolean,
+    onDragUpdate: (worldDx: Float, worldDy: Float) -> Unit,
+    onDragEnd: (worldDx: Float, worldDy: Float) -> Unit,
+    onDragCancel: () -> Unit
+) {
+    val hapticFeedback = androidx.compose.ui.platform.LocalHapticFeedback.current
+    val reduceMotion = com.authorss81.noteflow.theme.LocalReduceMotion.current
+    var accDx by remember { mutableFloatStateOf(0f) }
+    var accDy by remember { mutableFloatStateOf(0f) }
+    val currentOnUpdate by rememberUpdatedState(onDragUpdate)
+    val currentOnEnd by rememberUpdatedState(onDragEnd)
+    val currentOnCancel by rememberUpdatedState(onDragCancel)
+    val currentZoom by rememberUpdatedState(zoomScale)
+    val currentLocked by rememberUpdatedState(locked)
+    val sizePxDp = with(LocalDensity.current) { sizePx.toDp() }
+
+    Box(
+        modifier = modifier
+            .size(sizePxDp)
+            .pointerInput(corner) {
+                detectDragGestures(
+                    onDragStart = {
+                        accDx = 0f
+                        accDy = 0f
+                        if (com.authorss81.noteflow.services.MotionPolicy.hapticsAllowed(true, reduceMotion)) {
+                            hapticFeedback.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                        }
+                    },
+                    onDrag = { change, dragAmount ->
+                        change.consume()
+                        accDx += dragAmount.x / currentZoom.coerceAtLeast(0.01f)
+                        accDy += dragAmount.y / currentZoom.coerceAtLeast(0.01f)
+                        currentOnUpdate(accDx, accDy)
+                    },
+                    onDragEnd = {
+                        currentOnEnd(accDx, accDy)
+                    },
+                    onDragCancel = {
+                        currentOnCancel()
+                    }
+                )
+            }
+            .background(MaterialTheme.colorScheme.primary, CircleShape)
+            .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f), CircleShape),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            Icons.Outlined.OpenWith,
+            contentDescription = "Scale selection",
+            tint = MaterialTheme.colorScheme.onPrimary,
+            modifier = Modifier.size(12.dp)
+        )
+    }
+}
+
+/**
+ * Phase 226: rotation handle for a held selection, above its top-centre. Uses
+ * the SAME drag math as the canvas items'
+ * [com.authorss81.noteflow.services.CanvasItemRotationMath.rotationFromHandleDrag]
+ * (the selection has no persistent rotation, so [currentDegrees] is 0 each
+ * gesture — the resulting angle IS the absolute rotation to bake into points).
+ */
+@Composable
+private fun SelectionRotationHandle(
+    modifier: Modifier,
+    sizePx: Float,
+    gapPx: Float,
+    selectionHalfWidth: Float,
+    selectionHalfHeight: Float,
+    accentColor: Color,
+    zoomScale: Float,
+    onDragUpdate: (degrees: Float) -> Unit,
+    onDragEnd: (degrees: Float) -> Unit,
+    onDragCancel: () -> Unit
+) {
+    val hapticFeedback = androidx.compose.ui.platform.LocalHapticFeedback.current
+    val reduceMotion = com.authorss81.noteflow.theme.LocalReduceMotion.current
+    val currentOnUpdate by rememberUpdatedState(onDragUpdate)
+    val currentOnEnd by rememberUpdatedState(onDragEnd)
+    val currentOnCancel by rememberUpdatedState(onDragCancel)
+    val currentZoom by rememberUpdatedState(zoomScale)
+    val sizePxDp = with(LocalDensity.current) { sizePx.toDp() }
+    var lastDegrees by remember { mutableFloatStateOf(0f) }
+
+    Box(
+        modifier = modifier
+            .size(sizePxDp)
+            .pointerInput(Unit) {
+                detectDragGestures(
+                    onDragStart = {
+                        lastDegrees = 0f
+                        if (com.authorss81.noteflow.services.MotionPolicy.hapticsAllowed(true, reduceMotion)) {
+                            hapticFeedback.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                        }
+                    },
+                    onDrag = { change, _ ->
+                        change.consume()
+                        val degrees = com.authorss81.noteflow.services.CanvasItemRotationMath.rotationFromHandleDrag(
+                            handleCenterRelCardCenterX = 0f,
+                            handleCenterRelCardCenterY = -(gapPx + sizePx / 2f + selectionHalfHeight),
+                            pointerRelHandleCenterX = change.position.x - sizePx / 2f,
+                            pointerRelHandleCenterY = change.position.y - sizePx / 2f,
+                            zoom = currentZoom,
+                            currentDegrees = 0f
+                        )
+                        lastDegrees = degrees
+                        currentOnUpdate(degrees)
+                    },
+                    onDragEnd = {
+                        currentOnEnd(lastDegrees)
+                    },
+                    onDragCancel = {
+                        currentOnCancel()
+                    }
+                )
+            }
+            .background(MaterialTheme.colorScheme.primary, CircleShape)
+            .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f), CircleShape),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            Icons.Outlined.RotateRight,
+            contentDescription = "Rotate selection",
+            tint = MaterialTheme.colorScheme.onPrimary,
+            modifier = Modifier.size(13.dp)
+        )
     }
 }
 

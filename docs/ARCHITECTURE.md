@@ -593,8 +593,26 @@
 > commit on drag-end; outside → new lasso). Also fixed pre-existing Phase 215
 > omissions: `LassoTrailPolicy` FQN qualification in `StrokeSelectionOverlay`
 > (`AnnotationCanvas.kt:3528-3577`) and `selection_count_a11y` string resource.
-> Tests: `StrokeSelectionActionPolicyTest` (41) + `Phase216SelectionWiringTest`
+ > Tests: `StrokeSelectionActionPolicyTest` (41) + `Phase216SelectionWiringTest`
 > (24). `assembleDebug` green, no schema change, no new deps.
+
+> **Implemented in phase-226** (2026-08-27, Selection transform — scale + rotate
+> handles for lasso-selected strokes/shapes, see `workspace/phase-226/REPORT.md`):
+> pure-JVM `services/SelectionTransformPolicy.kt` (`Corner` enum + corner signs,
+> `candidateScaleFromDrag`/`clampScales` `MIN/MAX_SELECTION_SIZE_PX` 20/2000,
+> `scalePoint`/`rotatePoint` (same `CanvasItemRotationMath` matrix),
+> `scaleStroke`/`rotateStroke` with `pdfPage` recompute, `transformSelected`
+> rotate-then-scale only on selected ids, `rotatedBounds`/`scaledBounds` preview
+> helpers). `StrokeSelectionOverlay` (`AnnotationCanvas.kt`) is now a Box over the
+> Canvas: 4 `SelectionCornerHandle`s + top `SelectionRotationHandle`, **visible at
+> rest (alpha 1)**, world-delta drag, dashed **preview** bounds mid-drag, single
+> commit on release. EditorScreen `scaleSelectedStrokes`/`rotateSelectedStrokes`
+> each call `handleStrokesChange` ONCE then refresh bounds
+> (`StrokeSelectionActionPolicy.recomputeBounds`). Transform baked into points —
+> no `rotationDegrees` field, no schema migration. Tests:
+> `SelectionTransformPolicyTest` (12) + `paparazzi/SelectionTransformOverlayPaparazziTest`
+> (env-broken on runner; VisDoD via `RenderSelectionTransform.java` Java2D → PNG).
+> `assembleDebug` green, no schema, no new deps.
 
 > **Implemented in phase-219** (2026-08-26, Templates + Pencil Shade Preset, see
 > `workspace/phase-219/REPORT.md`): template customization via JSON prefs
