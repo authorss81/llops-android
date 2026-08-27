@@ -165,7 +165,17 @@ class HttpsManifestTransport(
                     )
                 }
                 val body = connection.inputStream.use { input ->
-                    val bytes = input.readNBytes(MAX_BYTES + 1)
+                    // API-independent bounded read (InputStream.readNBytes is API
+                    // 33+; minSdk is 26). Read at most MAX_BYTES+1 bytes so an
+                    // oversized manifest is detected and refused, never loaded.
+                    val buffer = ByteArray(MAX_BYTES + 1)
+                    var total = 0
+                    while (total < buffer.size) {
+                        val read = input.read(buffer, total, buffer.size - total)
+                        if (read <= 0) break
+                        total += read
+                    }
+                    val bytes = if (total == buffer.size) buffer else buffer.copyOf(total)
                     if (bytes.size > MAX_BYTES) {
                         return@withContext ManifestFetchResult.Failed(
                             "Update manifest exceeds the ${MAX_BYTES / 1024} KB cap and was refused."

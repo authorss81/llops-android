@@ -1065,12 +1065,8 @@ fun EditorScreen(
         val selected = strokes.filter { it.id in strokeSelection.ids }
         if (selected.isEmpty()) return
         val json = StrokeSelectionActionPolicy.serializeForClipboard(selected)
-        val clip = android.content.ClipData.newPlainText(
-            StrokeSelectionActionPolicy.CLIPBOARD_MIME, json
-        )
-        val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-        cm.setPrimaryClip(clip)
         ClipboardGuard.recordCopy()
+        ClipboardGuard.writePlainText(context, StrokeSelectionActionPolicy.CLIPBOARD_MIME, json)
         viewModel.showSnackbar("Copied ${selected.size} stroke(s)")
     }
 

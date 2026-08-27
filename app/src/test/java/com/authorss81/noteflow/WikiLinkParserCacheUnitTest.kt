@@ -14,7 +14,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import java.io.File
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Phase 101 (B2-DOS-11): the backlink/tag-hierarchy/knowledge-graph builders
@@ -237,26 +239,33 @@ class WikiLinkParserCacheUnitTest {
             page("p$i", "Page $i", text = "some content mentioning [[Target]] here " + "x".repeat(400))
         } + page("target", "Target", text = "target body")
 
-        var worker: Job? = null
+        val workerRef = AtomicReference<Job?>(null)
         val sawPage = AtomicBoolean(false)
         val cancelled = AtomicBoolean(false)
+        // Gates the worker until the test thread has published `workerRef` so
+        // the seam's self-cancel is never a no-op from `worker` still being null
+        // when the scan dispatches its very first page (the race that made this
+        // test flaky under shared-pool contention).
+        val ready = CountDownLatch(1)
 
         // Test seam: cancel the scan deterministically — AFTER the build has
         // started processing pages, but BEFORE it can reach the end and cache.
         WikiLinkParser.onPageScanned = {
             if (sawPage.compareAndSet(false, true)) {
-                worker?.cancel()
+                workerRef.get()?.cancel()
             }
         }
-        worker = launch(Dispatchers.Default) {
+        workerRef.set(launch(Dispatchers.Default) {
+            ready.await()
             try {
                 WikiLinkParser.findBacklinks(pages.last(), pages)
             } catch (e: CancellationException) {
                 cancelled.set(true)
                 throw e
             }
-        }
-        worker.join()
+        })
+        ready.countDown()
+        workerRef.get()!!.join()
         WikiLinkParser.onPageScanned = null
 
         assertTrue("the scan must have started before cancellation", sawPage.get())

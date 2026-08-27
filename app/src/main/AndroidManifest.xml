@@ -9,6 +9,12 @@
          to/from the user's own WebDAV/Nextcloud server (HTTPS enforced). No
          other network use. -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- ACCESS_NETWORK_STATE (normal, auto-granted): required by the
+         connectivity checks in the web-search/weather/web-capture plugins
+         (DuckDuckGoWebSearchPlugin.kt / WeatherPluginImpl.kt /
+         WebCaptureEngine.kt) to read active-network capabilities before an
+         optional network call. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <application
         android:extractNativeLibs="true"

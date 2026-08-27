@@ -1,5 +1,6 @@
 package com.authorss81.noteflow.services
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.util.Log
 import androidx.ink.brush.BrushFamily
@@ -123,7 +124,15 @@ object ProtobufBrushLoader {
      * DRY_BRUSH get the unstable/rough graphite family (grainy, split tips),
      * INK_WASH and GOUACHE get the solid marker family (heavier deposits than
      * the classic pressurePen), the rest keep the stable pressure-sensitive pen.
+     *
+     * `@SuppressLint("RestrictedApi")`: the only pencil/graphite family
+     * androidx.ink exposes is `pencilUnstable`, which is `@RestrictTo` the ink
+     * library group. There is no non-restricted pencil brush, so this fallback
+     * deliberately keeps the graphite family (its whole purpose is matching the
+     * PENCIL/CHARCOAL/DRY_BRUSH tools) rather than degrading them to a solid
+     * pen.
      */
+    @SuppressLint("RestrictedApi")
     fun getStockFallback(tool: StrokeTool): BrushFamily {
         return when (tool) {
             StrokeTool.FOUNTAIN_PEN -> StockBrushes.pressurePen()

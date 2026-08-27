@@ -6,7 +6,6 @@ import java.io.OutputStream
 import java.security.cert.Certificate
 import java.security.cert.X509Certificate
 import java.util.jar.JarFile
-
 /**
  * THE security-critical signature-verification gate of the downloadable-plugin
  * runtime (Phase 23, see `docs/plugin-architecture.md` § Security model).
@@ -44,6 +43,15 @@ import java.util.jar.JarFile
  * involved. Pure JVM — fully unit-testable.
  */
 class ArtifactSignatureVerifier {
+
+    /**
+     * API-independent sink that discards every byte (a per-API no-`nullOutputStream`
+     * fallback — `OutputStream.nullOutputStream()` is API 33+, minSdk is 26).
+     * JAR verification only needs each signed entry fully READ, not stored.
+     */
+    private val discard = object : OutputStream() {
+        override fun write(b: Int) {}
+    }
 
     /** Outcome of verifying an artifact. */
     sealed class Result {
@@ -167,7 +175,7 @@ class ArtifactSignatureVerifier {
                 val entry = entries.nextElement()
                 if (entry.isDirectory || entry.name.startsWith("META-INF/")) continue
                 jar.getInputStream(entry).use { stream ->
-                    stream.copyTo(OutputStream.nullOutputStream())
+                    stream.copyTo(discard)
                 }
                 val certs = entry.certificates
                 if (certs == null || certs.isEmpty()) {

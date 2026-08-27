@@ -53,6 +53,26 @@ object ClipboardGuard {
     }
 
     /**
+     * B2-UI-2 source-pin helper: the ONLY production path that writes note
+     * content to the system clipboard is this one (plus [clearPrimaryClip]).
+     * It writes the primary clip so the lock-time scrub can clear it. Keeping
+     * every raw `setPrimaryClip` inside this file is what allows the
+     * source-level pin to prove no note-content surface can bypass the
+     * lock-time scrub. Callers are responsible for stamping [recordCopy] first
+     * (the Phase 216 `copySelectedStrokes` source-pin requires the literal call
+     * in the editor), so a clipboard write is always t=tracked as an app copy.
+     * Best-effort: a platform failure is swallowed.
+     */
+    fun writePlainText(context: Context, label: String, text: String) {
+        try {
+            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            cm.setPrimaryClip(ClipData.newPlainText(label, text))
+        } catch (e: Exception) {
+            // best-effort — never crash the copy path
+        }
+    }
+
+    /**
      * Clears the primary clip when the last app copy is within [windowMs].
      *
      * [context] is only consulted when [clearPrimaryClipOverride] is null; if

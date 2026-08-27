@@ -163,8 +163,8 @@ fun CodeBlockTextView(
                 // Phase 218: copy button with 48dp hit-area.
                 IconButton(
                     onClick = {
-                        clipboardManager.setText(AnnotatedString(codeText))
                         ClipboardGuard.recordCopy()
+                        clipboardManager.setText(AnnotatedString(codeText))
                         justCopied = true
                     },
                     modifier = Modifier.size(48.dp)

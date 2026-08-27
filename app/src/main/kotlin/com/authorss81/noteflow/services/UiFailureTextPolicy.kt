@@ -135,8 +135,8 @@ object UiFailureTextPolicy {
             // Windows drive paths (C:\Users\name\...).
             "|[A-Za-z]:[\\\\/][\\p{Alnum} _.#@%+~={}:()\\[\\]-]+" +
             "(?:[\\\\/][\\p{Alnum} _.#@%+~={}:()\\[\\]-]+)*" +
-            // UNC share paths (\\server\share\file...).
-            "|//[^/\\s]+[\\\\/][\\p{Alnum} _.#@%+~={}:()\\[\\]-]+" +
+            // UNC share paths (//server/share/file or \\server\share\file).
+            "|(?:\\\\\\\\|//)[^\\\\/\\s]+[\\\\/][\\p{Alnum} _.#@%+~={}:()\\[\\]-]+" +
             "(?:[\\\\/][\\p{Alnum} _.#@%+~={}:()\\[\\]-]+)*"
     )
     private val URL_USERINFO_REGEX = Regex("([A-Za-z][A-Za-z0-9+.-]*://)[^/@\\s]*@")
