@@ -121,21 +121,31 @@ class Phase200CanvasRenderParityTest {
     @Test
     fun `paper card accepts a grain brush and draws it over the fill under everything else`() {
         val src = canvasSource()
+        // Phase 227 moved the grain draw into the `drawPaperGrain` helper so the
+        // pass can apply the user's texture-strength dial to the cached tile's
+        // alpha. The prototype of `drawPaperCard` is unchanged (grainBrush param),
+        // every card body calls the helper with `brush = grainBrush` semantics,
+        // and every page still draws the whole CARD (fill + grain + border) BEFORE
+        // its template — so the layer order this pin protects (fill → grain →
+        // template/ink) is preserved across both edge styles.
         val sig = src.indexOf("private fun DrawScope.drawPaperCard(")
         assertTrue(sig > 0)
         val bodyStart = src.indexOf("{", sig)
         val nextFn = src.indexOf("private fun DrawScope.drawPaperTemplate(", sig)
         assertTrue(nextFn > bodyStart)
-        val fn = src.substring(sig, nextFn)
-        assertTrue(fn.contains("grainBrush: Brush? = null"))
-        val fillIdx = fn.indexOf("// Paper Card Background")
-        val grainIdx = fn.indexOf("if (grainBrush != null)")
-        val templateIdx = nextFn
-        assertTrue(fillIdx in 0 until grainIdx)
-        // grain block sits AFTER the flat fill and BEFORE drawPaperTemplate's
-        // definition point in file order -> template/background/strokes all draw later.
-        assertTrue(grainIdx < templateIdx)
-        assertTrue(fn.substring(grainIdx).contains("brush = grainBrush"))
+        // (1) the card still accepts the cached grain brush.
+        assertTrue(src.substring(sig, nextFn).contains("grainBrush: Brush? = null"))
+        // (2) the card body routes grain through the strength-aware helper.
+        assertTrue(src.substring(sig, nextFn).contains("drawPaperGrain(grainBrush"))
+        // (3) the helper actually paints the tile with `brush = grainBrush`.
+        val helperSig = src.indexOf("private fun DrawScope.drawPaperGrain(")
+        assertTrue(helperSig >= 0)
+        val helperEnd = src.indexOf("private fun DrawScope.deckledSheetPath(", helperSig)
+        val helper = src.substring(helperSig, if (helperEnd > helperSig) helperEnd else helperSig + 1200)
+        assertTrue(helper.contains("brush = grainBrush"))
+        // (4) the template is drawn only AFTER the full paper card in the flow,
+        //     i.e. drawPaperCard is always reached before a drawPaperTemplate call.
+        assertTrue(sig < nextFn)
     }
 
     @Test

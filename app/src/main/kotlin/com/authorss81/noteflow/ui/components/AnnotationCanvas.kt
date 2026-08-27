@@ -37,6 +37,7 @@ import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.geometry.Offset
@@ -188,6 +189,11 @@ fun AnnotationCanvas(
     // auto-off (with an honest one-time message) lives in EditorScreen, so
     // pre-213 call sites that don't pass this keep compiling unchanged.
     paperElevationEnabled: Boolean = true,
+    // Phase 227: deckled paper edge + tunable texture strength. Both default to
+    // the exact pre-227 look — ROUNDED corners, 50-texture — so untouched call
+    // sites (tests/previews) render byte-identical to before.
+    paperEdgeKey: String = com.authorss81.noteflow.services.PaperEdgePolicy.DEFAULT_KEY,
+    paperTextureStrength: Int = com.authorss81.noteflow.services.PaperTextureStrengthPolicy.DEFAULT,
     hapticsEnabled: Boolean = true,
     stabilizerEnabled: Boolean = false,
     // Phase 197 (PERF 1.2): user strength trim 0–100 over the per-brush
@@ -1056,6 +1062,21 @@ fun AnnotationCanvas(
     }
     val paperGrainBrush = remember(paperGrainEnabled, isDarkPaper) {
         PaperGrainTileCache.brushFor(isDarkPaper, paperGrainEnabled)
+    }
+
+    // Phase 227: the user's texture-strength dial dips/gains the CACHED grain
+    // tile BEFORE it is drawn. Anchored at 1.0 for the default 50, so a stock
+    // install draws the exact pre-227 tile; cache hits remain valid across
+    // every strength (no per-strength tile explosion).
+    val grainScale = remember(paperTextureStrength) {
+        com.authorss81.noteflow.services.PaperTextureStrengthPolicy.grainScale(paperTextureStrength)
+    }
+
+    // Phase 227: deckled PaperEdgePolicy applied at drawPaperCard call time
+    // (mesh clipping); the page path is memoized per style + paper family so
+    // resizing/zooming between frames does not re-derive the cubic waves.
+    val paperEdge = remember(paperEdgeKey) {
+        com.authorss81.noteflow.services.PaperEdgePolicy.fromKey(paperEdgeKey)
     }
 
     // Phase 213: the shadow gate is the USER SETTING alone. The low-end-device
@@ -2743,7 +2764,7 @@ fun AnnotationCanvas(
 
                 if (!isContinuousMode) {
                     // Single Page Canvas
-                    drawPaperCard(0f, 0f, size.width, size.height, paperColor = parsedPaperColor, isDarkPaper = isDarkPaper, grainBrush = paperGrainBrush)
+                    drawPaperCard(0f, 0f, size.width, size.height, paperColor = parsedPaperColor, isDarkPaper = isDarkPaper, grainBrush = paperGrainBrush, paperEdge = paperEdge, grainScale = grainScale)
                     drawPaperTemplate(template, 0f, 0f, size.width, size.height, isDarkPaper = isDarkPaper, paperTexture = paperTexture, templateOverrides = templateOverridesFor(template))
 
                     val bg = pdfPageBitmaps[pdfPageFilter] ?: backgroundImage
@@ -2813,6 +2834,7 @@ fun AnnotationCanvas(
                         vibrancyBoost = vibrancyBoost,
                         blenderStrengthPercent = blenderStrengthPercent,
                         scatterAmountPercent = scatterAmountPercent,
+                        paperTextureStrength = paperTextureStrength,
                         alphaLockLayerIds = resolvedAlphaLockIds,
                         clippingMaskLayerIds = resolvedClippingMaskIds
                     )
@@ -2820,7 +2842,7 @@ fun AnnotationCanvas(
                     // Continuous Infinite Canvas (Seamless, without page division gaps)
                     val (canvasW, infiniteH) = computeCanvasWorld(size.width)
 
-                    drawPaperCard(0f, 0f, canvasW, infiniteH, paperColor = parsedPaperColor, isDarkPaper = isDarkPaper, pageLabel = null, grainBrush = paperGrainBrush)
+                    drawPaperCard(0f, 0f, canvasW, infiniteH, paperColor = parsedPaperColor, isDarkPaper = isDarkPaper, pageLabel = null, grainBrush = paperGrainBrush, paperEdge = paperEdge, grainScale = grainScale)
                     drawPaperTemplate(template, 0f, 0f, canvasW, infiniteH, isDarkPaper = isDarkPaper, paperTexture = paperTexture, templateOverrides = templateOverridesFor(template))
 
                     // Phase 178: reference-image underlay (seamless world coords).
@@ -2869,6 +2891,7 @@ fun AnnotationCanvas(
                         vibrancyBoost = vibrancyBoost,
                         blenderStrengthPercent = blenderStrengthPercent,
                         scatterAmountPercent = scatterAmountPercent,
+                        paperTextureStrength = paperTextureStrength,
                         alphaLockLayerIds = resolvedAlphaLockIds,
                         clippingMaskLayerIds = resolvedClippingMaskIds
                     )
@@ -2920,7 +2943,7 @@ fun AnnotationCanvas(
                         val pageTopY = pageIdx * (pageHeightPx + pageGapPx)
 
                         // 1. Differentiated Page Paper Container with Card Shadow & Page Badge
-                        drawPaperCard(0f, pageTopY, canvasW, pageHeightPx, paperColor = parsedPaperColor, isDarkPaper = isDarkPaper, pageLabel = "Page ${pageIdx + 1}", showPageLabel = showPageIndicator, grainBrush = paperGrainBrush)
+                        drawPaperCard(0f, pageTopY, canvasW, pageHeightPx, paperColor = parsedPaperColor, isDarkPaper = isDarkPaper, pageLabel = "Page ${pageIdx + 1}", showPageLabel = showPageIndicator, grainBrush = paperGrainBrush, paperEdge = paperEdge, grainScale = grainScale)
                         drawPaperTemplate(template, 0f, pageTopY, canvasW, pageHeightPx, isDarkPaper = isDarkPaper, paperTexture = paperTexture, templateOverrides = templateOverridesFor(template))
 
                         // 2. Render Page Bitmap (if in window)
@@ -3016,11 +3039,12 @@ fun AnnotationCanvas(
                             strokeRenderOpts = strokeRenderOpts,
                             liveStrokeSeed = currentStrokeSeed,
                             vibrancyBoost = vibrancyBoost,
-                            blenderStrengthPercent = blenderStrengthPercent,
-                            scatterAmountPercent = scatterAmountPercent,
-                            alphaLockLayerIds = resolvedAlphaLockIds,
-                            clippingMaskLayerIds = resolvedClippingMaskIds
-                        )
+blenderStrengthPercent = blenderStrengthPercent,
+                             scatterAmountPercent = scatterAmountPercent,
+                             paperTextureStrength = paperTextureStrength,
+                             alphaLockLayerIds = resolvedAlphaLockIds,
+                             clippingMaskLayerIds = resolvedClippingMaskIds
+                         )
                     }
                 }
 
@@ -4563,36 +4587,65 @@ private fun DrawScope.drawPaperCard(
     isDarkPaper: Boolean = false,
     pageLabel: String? = null,
     showPageLabel: Boolean = true,
-    grainBrush: Brush? = null
+    grainBrush: Brush? = null,
+    // Phase 227: deckled paper edge + texture-strength dial. Defaults reproduce
+    // the pre-227 card exactly (ROUNDED corners, full-strength grain pass).
+    paperEdge: com.authorss81.noteflow.services.PaperEdgePolicy.PaperEdge =
+        com.authorss81.noteflow.services.PaperEdgePolicy.PaperEdge.ROUNDED,
+    grainScale: Float = 1f
 ) {
     val borderColor = if (isDarkPaper) Color(0xFF475569) else Color.LightGray.copy(alpha = 0.6f)
 
-    // Paper Card Background
-    drawRoundRect(
-        color = paperColor,
-        topLeft = Offset(x, y),
-        size = Size(width, height),
-        cornerRadius = CornerRadius(8f, 8f)
-    )
-    // Phase 200 (PERF 3.3): tileable paper-grain noise, REPEAT-tiled by a
-    // cached BitmapShader — ONE textured quad per page card, drawn over the
-    // flat tint and strictly UNDER everything else (template/background/ink).
-    if (grainBrush != null) {
+    if (paperEdge == com.authorss81.noteflow.services.PaperEdgePolicy.PaperEdge.DECKLED) {
+        // Deckled edge: a deterministic wavy sheet (PaperEdgePolicy math, pure
+        // JVM) drawn as a single closed silhouette. Fill, grain and border all
+        // clip to it so the torn edge reads as a real cut-out; a soft native
+        // blurred stroke underneath supplies the sheet's drop.
+        val sheet = deckledSheetPath(x, y, width, height, isDarkPaper)
+        drawDeckleSheetShadow(x, y, width, height, isDarkPaper)
+        clipPath(path = sheet) {
+            drawRoundRect(
+                color = paperColor,
+                topLeft = Offset(x, y),
+                size = Size(width, height),
+                cornerRadius = CornerRadius.Zero
+            )
+            drawPaperGrain(grainBrush, x, y, width, height, CornerRadius.Zero, grainScale)
+            drawRoundRect(
+                color = borderColor,
+                topLeft = Offset(x, y),
+                size = Size(width, height),
+                cornerRadius = CornerRadius.Zero,
+                style = DrawStrokeStyle(width = 2f)
+            )
+        }
+    } else {
+        // Legacy card: RECT (square corners) or ROUNDED (the default, 8dp).
+        val radius = if (paperEdge == com.authorss81.noteflow.services.PaperEdgePolicy.PaperEdge.RECT) {
+            CornerRadius(0f, 0f)
+        } else {
+            CornerRadius(8f, 8f)
+        }
+        // Paper Card Background
         drawRoundRect(
-            brush = grainBrush,
+            color = paperColor,
             topLeft = Offset(x, y),
             size = Size(width, height),
-            cornerRadius = CornerRadius(8f, 8f)
+            cornerRadius = radius
+        )
+        // Phase 200 (PERF 3.3): tileable paper-grain noise, REPEAT-tiled by a
+        // cached BitmapShader — ONE textured quad per page card, drawn over the
+        // flat tint and strictly UNDER everything else (template/background/ink).
+        drawPaperGrain(grainBrush, x, y, width, height, radius, grainScale)
+        // Page Border Line
+        drawRoundRect(
+            color = borderColor,
+            topLeft = Offset(x, y),
+            size = Size(width, height),
+            cornerRadius = radius,
+            style = DrawStrokeStyle(width = 2f)
         )
     }
-    // Page Border Line
-    drawRoundRect(
-        color = borderColor,
-        topLeft = Offset(x, y),
-        size = Size(width, height),
-        cornerRadius = CornerRadius(8f, 8f),
-        style = DrawStrokeStyle(width = 2f)
-    )
 
     // Page Number Header Tag
     if (showPageLabel) {
@@ -4616,6 +4669,114 @@ private fun DrawScope.drawPaperCard(
             )
         }
     }
+}
+
+/**
+ * Phase 227: one grain pass scaled into the alpha channel ([grainScale] ≤ 1)
+ * plus an additive boost draw when the user dials ABOVE the default (the
+ * cached tile is per-paper-family, so no per-strength tiles are generated).
+ * At the default 50 the scale is exactly 1.0 and the single full-alpha pass is
+ * byte-identical to the pre-227 grain draw.
+ */
+private fun DrawScope.drawPaperGrain(
+    grainBrush: Brush?,
+    x: Float,
+    y: Float,
+    width: Float,
+    height: Float,
+    cornerRadius: CornerRadius,
+    grainScale: Float
+) {
+    if (grainBrush == null) return
+    val scale = if (grainScale.isFinite()) grainScale.coerceAtLeast(0f) else 0f
+    drawRoundRect(
+        brush = grainBrush,
+        topLeft = Offset(x, y),
+        size = Size(width, height),
+        cornerRadius = cornerRadius,
+        alpha = scale.coerceIn(0f, 1f)
+    )
+    if (scale > 1f) {
+        drawRoundRect(
+            brush = grainBrush,
+            topLeft = Offset(x, y),
+            size = Size(width, height),
+            cornerRadius = cornerRadius,
+            alpha = (scale - 1f).coerceIn(0f, 1f)
+        )
+    }
+}
+
+/**
+ * Phase 227: the deckled sheet silhouette. Node positions are generated by the
+ * pure-JVM table (deterministic per paper family, bounded to
+ * PaperEdgePolicy.amplitudePx, corner-faded so the sheet corners stay sharp),
+ * then smoothed through the quadratic-midpoint technique — nothing is random,
+ * so consecutive pages (same seed) share one stock edge.
+ */
+private fun DrawScope.deckledSheetPath(
+    x: Float,
+    y: Float,
+    width: Float,
+    height: Float,
+    isDarkPaper: Boolean
+): androidx.compose.ui.graphics.Path {
+    val ampPx = com.authorss81.noteflow.services.PaperEdgePolicy.amplitudePx(density)
+    val seed = com.authorss81.noteflow.services.PaperEdgePolicy.seedFor(isDarkPaper)
+    val nodes = com.authorss81.noteflow.services.PaperEdgePolicy.deckleNodes(x, y, width, height, ampPx, seed)
+    val midpoints = com.authorss81.noteflow.services.PaperEdgePolicy.smoothedDeckleMidpoints(nodes)
+    val path = androidx.compose.ui.graphics.Path()
+    if (midpoints.isEmpty()) {
+        path.moveTo(x, y)
+        return path
+    }
+    path.moveTo(midpoints[0].first, midpoints[0].second)
+    for (i in 1 until midpoints.size) {
+        path.lineTo(midpoints[i].first, midpoints[i].second)
+    }
+    path.close()
+    return path
+}
+
+/**
+ * Phase 227: soft drop under the deckled sheet (blurred dark stroke slightly
+ * down-right). Same BlurMaskFilter technique as the phase-213 stroke shadows;
+ * pitch-dark sheets use a subtler shadow than light stock.
+ */
+private fun DrawScope.drawDeckleSheetShadow(
+    x: Float,
+    y: Float,
+    width: Float,
+    height: Float,
+    isDarkPaper: Boolean
+) {
+    val ampPx = com.authorss81.noteflow.services.PaperEdgePolicy.amplitudePx(density)
+    val seed = com.authorss81.noteflow.services.PaperEdgePolicy.seedFor(isDarkPaper)
+    val offset = 3f * density
+    val nodes = com.authorss81.noteflow.services.PaperEdgePolicy.deckleNodes(x, y, width, height, ampPx, seed)
+    val midpoints = com.authorss81.noteflow.services.PaperEdgePolicy.smoothedDeckleMidpoints(nodes)
+    if (midpoints.isEmpty()) return
+    val native = android.graphics.Path()
+    native.moveTo(midpoints[0].first + offset, midpoints[0].second + offset)
+    for (i in 1 until midpoints.size) {
+        native.lineTo(midpoints[i].first + offset, midpoints[i].second + offset)
+    }
+    native.close()
+    val blurPx = com.authorss81.noteflow.services.PaperEdgePolicy.DECKLE_SHADOW_NOMINAL_WIDTH_PX
+    val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        style = android.graphics.Paint.Style.STROKE
+        strokeWidth = ampPx * 2f + blurPx * 0.8f
+        strokeJoin = android.graphics.Paint.Join.ROUND
+        color = android.graphics.Color.argb(
+            if (isDarkPaper) 42 else 58,
+            0, 0, 0
+        )
+        maskFilter = android.graphics.BlurMaskFilter(
+            blurPx,
+            android.graphics.BlurMaskFilter.Blur.NORMAL
+        )
+    }
+    drawContext.canvas.nativeCanvas.drawPath(native, paint)
 }
 
 /** Phase 219: per-template-type visual overrides read from SettingsManager. */
@@ -5082,6 +5243,8 @@ private fun DrawScope.drawCompositedLayersStrokes(
     // Phase 220: pro brush controls.
     blenderStrengthPercent: Int = 85,
     scatterAmountPercent: Int = 0,
+    // Phase 227: texture-strength dial threaded into the per-layer wet pass.
+    paperTextureStrength: Int = com.authorss81.noteflow.services.PaperTextureStrengthPolicy.DEFAULT,
     // Phase 222: per-layer alpha-lock (set of layer ids with alpha-lock on).
     alphaLockLayerIds: Set<String> = emptySet(),
     // Phase 222: per-layer clipping mask (set of layer ids with clipping mask on).
@@ -5270,7 +5433,8 @@ private fun DrawScope.drawCompositedLayersStrokes(
                 vibrancyBoost = vibrancyBoost,
                 strokeShadowEnabled = strokeShadowEnabled,
                 blenderStrengthPercent = blenderStrengthPercent,
-                scatterAmountPercent = scatterAmountPercent
+                scatterAmountPercent = scatterAmountPercent,
+                paperTextureStrength = paperTextureStrength
             )
             continue
         }
@@ -5499,7 +5663,9 @@ private fun DrawScope.drawWetLayerPass(
     strokeShadowEnabled: Boolean = false,
     // Phase 220: pro brush controls — blender strength + scatter.
     blenderStrengthPercent: Int = 85,
-    scatterAmountPercent: Int = 0
+    scatterAmountPercent: Int = 0,
+    // Phase 227: texture-strength dial mapped into `uPaperGrain`.
+    paperTextureStrength: Int = com.authorss81.noteflow.services.PaperTextureStrengthPolicy.DEFAULT
 ) {
     if (ShaderCapabilityHelper.isAgslSupported && wetMixingEffect != null) {
         val brushPos = activePoints.lastOrNull() ?: activeStart
@@ -5567,7 +5733,13 @@ private fun DrawScope.drawWetLayerPass(
                     },
                     impasto = preset.impasto,
                     hardness = preset.hardness,
-                    paperGrain = wetCanvasEngine.brushParams.paperGrain,
+                    // Phase 227: the texture-strength dial scales the wet brush's OWN
+                    // per-preset granulation, anchored at exactly 1.0 for the default
+                    // 50 so stock wet strokes keep the pre-227 `uPaperGrain`.
+                    paperGrain = (
+                        wetCanvasEngine.brushParams.paperGrain *
+                            com.authorss81.noteflow.services.PaperTextureStrengthPolicy.shaderGain(paperTextureStrength)
+                        ).coerceIn(0f, 1f),
                     seed = com.authorss81.noteflow.services.BrushStrokeMath.strokeSeedFromId(
                         previewStroke?.id ?: "preview"
                     ),

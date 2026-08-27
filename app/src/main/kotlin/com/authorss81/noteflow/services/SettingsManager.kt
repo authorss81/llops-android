@@ -163,6 +163,26 @@ class SettingsManager(context: Context) {
         get() = prefs.getBoolean("paper_elevation_enabled", true)
         set(value) = prefs.edit().putBoolean("paper_elevation_enabled", value).apply()
 
+    // Phase 227: paper edge style (RECT / ROUNDED / DECKLED). Sanitized through
+    // PaperEdgePolicy so a corrupt stored key can never produce an edge outside
+    // the supported set; the default ("rounded") preserves the legacy card.
+    var paperEdgeKey: String
+        get() = PaperEdgePolicy.sanitizeKey(prefs.getString("paper_edge", null))
+        set(value) = prefs.edit()
+            .putString("paper_edge", PaperEdgePolicy.sanitizeKey(value))
+            .apply()
+
+    // Phase 227: paper texture ("tooth") strength dial, 0..100, default 50 (the
+    // exact pre-227 grain). Clamped on both read and write so a stale or corrupt
+    // stored value can never leave the dial range.
+    var paperTextureStrength: Int
+        get() = PaperTextureStrengthPolicy.clamp(
+            prefs.getInt("paper_texture_strength", PaperTextureStrengthPolicy.DEFAULT)
+        )
+        set(value) = prefs.edit()
+            .putInt("paper_texture_strength", PaperTextureStrengthPolicy.clamp(value))
+            .apply()
+
     // 36.0: master haptics toggle. All gesture-milestone haptics (shape snap, color
     // detents, slider notches) are additionally gated by reduce-motion via
     // MotionPolicy.hapticsAllowed.

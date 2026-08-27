@@ -31,9 +31,33 @@ object PsdExportPolicy {
     /** How many channels each PSD layer record declares (A, R, G, B). */
     const val CHANNELS_PER_LAYER = 4
 
-    /** Clamp a raw layer count to the export budget (never negative). */
+    /**
+     * Clamp a raw layer count to the export budget (never negative).
+     */
     fun capLayerCount(layerCount: Int): Int =
         layerCount.coerceAtLeast(0).coerceAtMost(MAX_EXPORT_LAYER_COUNT)
+
+    /**
+     * Phase 227: the layer record's 4-char PSD blend-key for a stored
+     * [LayerEntity.blendMode]. Every mode the on-canvas renderer accepts
+     * (LayerBlendPresetPolicy.RENDERER_SUPPORTED_MODES) maps to its Photoshop
+     * key so a round-trip export reopens with the SAME blend the editor showed;
+     * unknown/corrupt strings and NORMAL fall back to "norm" (the PSD default).
+     */
+    fun psdBlendSignature(blendMode: String): String = when (blendMode.uppercase()) {
+        "MULTIPLY" -> "mul "
+        "SCREEN" -> "scrn"
+        "OVERLAY" -> "over"
+        "DARKEN" -> "dark"
+        "LIGHTEN" -> "lite"
+        "COLOR_DODGE" -> "ldiv"
+        "COLOR_BURN" -> "idiv"
+        "HARD_LIGHT" -> "hLit"
+        "SOFT_LIGHT" -> "sLit"
+        "DIFFERENCE" -> "diff"
+        "EXCLUSION" -> "smud"
+        else -> "norm"
+    }
 
     /** True when [layerCount] exceeds the budget and some layers would be dropped. */
     fun isLayerCountCapped(layerCount: Int): Boolean =

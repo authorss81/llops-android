@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Paint
 import com.authorss81.noteflow.data.model.LayerEntity
 import com.authorss81.noteflow.data.model.Stroke
 import kotlinx.coroutines.Dispatchers
@@ -19,7 +20,11 @@ object PsdExportService {
         val name: String,
         val bitmap: Bitmap,
         val isVisible: Boolean = true,
-        val opacity: Int = 255
+        val opacity: Int = 255,
+        // Phase 227: 4-char PSD blend key ("norm", "mul ", "scrn", ...). The
+        // defaultValue keeps pre-existing callers (and the phase-82 tests) and
+        // a flat NORMAL stack byte-identical to the pre-227 writer.
+        val blendSignature: String = "norm"
     )
 
     /**
@@ -102,12 +107,28 @@ object PsdExportService {
                     // 5. Merged Composite Image Data
                     val compositeBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
                     val compCanvas = Canvas(compositeBitmap)
+                    // Phase 227: deckled-edge style clips the flattened preview to
+                    // the same wavy sheet silhouette as every layer (clip BEFORE
+                    // the fill, so the outside of the sheet exports transparent),
+                    // and the PSD's thumbnail matches the hand-cut page instead of
+                    // a white rectangle behind a torn edge. RECT/ROUNDED no-op.
+                    val deckleApplied = if (DeckleExportHelper.deckledEnabled(context)) {
+                        compCanvas.save()
+                        compCanvas.clipPath(
+                            DeckleExportHelper.sheetPath(width.toFloat(), height.toFloat(), width / 360f)
+                        )
+                        true
+                    } else false
                     compCanvas.drawColor(Color.WHITE)
                     // Stack order from the only caller: the paper/Background bitmap is the
                     // bottom-most element; when layers were omitted (B2-DOS-06 phase-82
                     // review) the merged-preview of the omitted BOTTOM layers sits ABOVE the
                     // paper but BELOW the exported data layers, so the flattened composite
                     // still shows the full page. All three passes are bounded defensively.
+                    // Phase 227: each DATA layer now carries its real opacity + blend key,
+                    // so the embedded flattened preview applies them the same way the
+                    // editor does — a non-NORMAL stack no longer flattens to a washed-out
+                    // SRC_OVER paste of 100%-opacity layers.
                     val background = activeLayers.firstOrNull()
                     if (background != null && background.isVisible) {
                         compCanvas.drawBitmap(background.bitmap, 0f, 0f, null)
@@ -119,9 +140,10 @@ object PsdExportService {
                     }
                     for (layer in activeLayers.drop(1)) {
                         if (layer.isVisible) {
-                            compCanvas.drawBitmap(layer.bitmap, 0f, 0f, null)
+                            compCanvas.drawBitmap(layer.bitmap, 0f, 0f, blendPaint(layer))
                         }
                     }
+                    if (deckleApplied) compCanvas.restore()
 
                     // Write composite image data: 0 = Raw Uncompressed
                     dos.writeShort(0)
@@ -184,7 +206,9 @@ object PsdExportService {
         opacity: Int,
         width: Int,
         height: Int,
-        channelSize: Int
+        channelSize: Int,
+        // Phase 227: 4-char PSD blend key (defaults keep the phase-82 layout pin).
+        blendSignature: String = "norm"
     ): ByteArray {
         val bos = java.io.ByteArrayOutputStream()
         val dos = DataOutputStream(bos)
@@ -213,7 +237,7 @@ object PsdExportService {
 
         // Signature & Blend Mode
         dos.writeBytes("8BIM")
-        dos.writeBytes("norm") // Normal blend mode
+        dos.writeBytes(blendSignature.take(4).padEnd(4, ' '))
         dos.writeByte(opacity.coerceIn(0, 255)) // Opacity
         dos.writeByte(0) // Clipping = base
         dos.writeByte(if (isVisible) 0 else 2) // Flags (bit 1 = visible)
@@ -254,7 +278,7 @@ object PsdExportService {
         dos.writeShort(count)
 
         for (layer in layers) {
-            val record = layerRecordBytes(layer.name, layer.isVisible, layer.opacity, width, height, channelSize)
+            val record = layerRecordBytes(layer.name, layer.isVisible, layer.opacity, width, height, channelSize, layer.blendSignature)
             dos.write(record)
         }
 
@@ -297,5 +321,46 @@ object PsdExportService {
             8 -> for (p in pixels) dos.writeByte((p shr 8) and 0xFF)
             else -> for (p in pixels) dos.writeByte(p and 0xFF)
         }
+    }
+
+    /**
+     * Phase 227: a Paint honoring a [PsdLayer]'s opacity + blend signature for
+     * the embedded flattened composite. Mirrors the on-canvas layer composite
+     * (`ImportExportService.renderLayersAndStrokesToCanvas`): the API-29+
+     * `android.graphics.BlendMode` table with a PorterDuff fallback for
+     * older devices (the app floor is API 26). NORMAL + full opacity is a plain
+     * SRC_OVER draw — byte-identical to the pre-227 composite pass.
+     */
+    private fun blendPaint(layer: PsdLayer): Paint {
+        val paint = Paint().apply {
+            isAntiAlias = true
+            alpha = layer.opacity.coerceIn(0, 255)
+        }
+        val signature = layer.blendSignature.trim()
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            paint.blendMode = when (signature) {
+                "mul" -> android.graphics.BlendMode.MULTIPLY
+                "scrn" -> android.graphics.BlendMode.SCREEN
+                "over" -> android.graphics.BlendMode.OVERLAY
+                "dark" -> android.graphics.BlendMode.DARKEN
+                "lite" -> android.graphics.BlendMode.LIGHTEN
+                "ldiv" -> android.graphics.BlendMode.COLOR_DODGE
+                "idiv" -> android.graphics.BlendMode.COLOR_BURN
+                "hLit" -> android.graphics.BlendMode.HARD_LIGHT
+                "sLit" -> android.graphics.BlendMode.SOFT_LIGHT
+                "diff" -> android.graphics.BlendMode.DIFFERENCE
+                "smud" -> android.graphics.BlendMode.EXCLUSION
+                else -> android.graphics.BlendMode.SRC_OVER
+            }
+        } else {
+            paint.xfermode = when (signature) {
+                "mul" -> android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.MULTIPLY)
+                "scrn" -> android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.SCREEN)
+                "dark" -> android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.DARKEN)
+                "lite" -> android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.LIGHTEN)
+                else -> null
+            }
+        }
+        return paint
     }
 }

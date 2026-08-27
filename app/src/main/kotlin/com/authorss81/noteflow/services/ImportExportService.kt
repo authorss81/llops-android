@@ -384,7 +384,12 @@ object ImportExportService {
         mediaEmbeds: List<CanvasMediaEmbed> = emptyList(),
         pageIndex: Int = 0,
         sourceFilePath: String? = null,
-        exportImageFormat: ExportImageFormat = ExportImageFormat.PNG
+        exportImageFormat: ExportImageFormat = ExportImageFormat.PNG,
+        // Phase 227: flat PNG/WEBP with a TRANSPARENT background (the white
+        // paper fill is skipped; the template grid + ink draw directly on
+        // alpha). Ignored for PDF (a PDF page is always opaque) and for pages
+        // that carry a background image (the image is opaque anyway).
+        transparentBackground: Boolean = false
     ): File? = withContext(Dispatchers.IO) {
         try {
             val resolvedBg = bgBitmap ?: if (!sourceFilePath.isNullOrBlank()) {
@@ -400,7 +405,28 @@ object ImportExportService {
             val bitmap = android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.ARGB_8888)
             val canvas = android.graphics.Canvas(bitmap)
 
-            canvas.drawColor(android.graphics.Color.WHITE)
+            // Phase 227: transparent-background PNG/WEBP skips the opaque white
+            // paper fill (a resolved background image is opaque regardless).
+            if (!transparentBackground) {
+                canvas.drawColor(android.graphics.Color.WHITE)
+            }
+
+            // Phase 227: a deckled-edge transparent export clips the ENTIRE page
+            // (template grid + ink + layers) to the same wavy sheet silhouette
+            // the editor shows — corners export as clean alpha, never a white
+            // fringe. PDF pages stay rectangular (opaque by nature); RECT and
+            // ROUNDED edges leave the canvas untouched (legacy files).
+            val deckleClip = transparentBackground &&
+                !exportAsPdf &&
+                com.authorss81.noteflow.services.DeckleExportHelper.deckledEnabled(context)
+            if (deckleClip) {
+                canvas.save()
+                canvas.clipPath(
+                    com.authorss81.noteflow.services.DeckleExportHelper.sheetPath(
+                        width.toFloat(), height.toFloat(), width / 360f
+                    )
+                )
+            }
 
             if (resolvedBg == null) {
                 drawTemplateBackground(canvas, template, width, height)
@@ -425,6 +451,10 @@ object ImportExportService {
                 layers = layers,
                 inkRenderer = inkRenderer
             )
+
+            if (deckleClip) {
+                canvas.restore()
+            }
 
             val sanitizeTitle = title.replace(Regex("[^a-zA-Z0-9_-]"), "_").ifBlank { "Page_Export" }
             val exportDir = File(context.cacheDir, "exports").apply { if (!exists()) mkdirs() }
@@ -3696,13 +3726,27 @@ object ImportExportService {
             val width = 1080
             val height = 1528
 
+            // Phase 227: when the deckled edge is the user's paper style, EVERY
+            // PSD layer — Background, per-entity sheet, merged-preview — is
+            // clipped to the same wavy silhouette so a re-opened PSD preserves
+            // the hand-cut sheet instead of a white-edged rectangle. RECT /
+            // ROUNDED leave the layers untouched (legacy files unchanged).
+            val psdDeckleClip = com.authorss81.noteflow.services.DeckleExportHelper.deckledEnabled(context)
+
             val psdLayers = mutableListOf<PsdExportService.PsdLayer>()
 
             // Background layer
             val bgBitmap = android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.ARGB_8888)
             val bgCanvas = android.graphics.Canvas(bgBitmap)
             bgCanvas.drawColor(android.graphics.Color.WHITE)
+            if (psdDeckleClip) {
+                bgCanvas.save()
+                bgCanvas.clipPath(
+                    com.authorss81.noteflow.services.DeckleExportHelper.sheetPath(width.toFloat(), height.toFloat(), width / 360f)
+                )
+            }
             drawTemplateBackground(bgCanvas, page.template ?: "blank", width, height)
+            if (psdDeckleClip) bgCanvas.restore()
             psdLayers.add(PsdExportService.PsdLayer("Background", bgBitmap))
 
             val inkRenderer = try {
@@ -3723,7 +3767,12 @@ object ImportExportService {
             if (layers.isEmpty()) {
                 val layerBitmap = android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.ARGB_8888)
                 val canvas = android.graphics.Canvas(layerBitmap)
+                if (psdDeckleClip) {
+                    canvas.save()
+                    canvas.clipPath(com.authorss81.noteflow.services.DeckleExportHelper.sheetPath(width.toFloat(), height.toFloat(), width / 360f))
+                }
                 renderLayersAndStrokesToCanvas(canvas, width, height, 0, strokes, emptyList(), inkRenderer)
+                if (psdDeckleClip) canvas.restore()
                 psdLayers.add(PsdExportService.PsdLayer("Drawing Layer 1", layerBitmap))
                 exportedDataLayers = 1
             } else {
@@ -3741,15 +3790,37 @@ object ImportExportService {
                 exportedEntities.forEachIndexed { idx, layerEntity ->
                     val layerBitmap = android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.ARGB_8888)
                     val canvas = android.graphics.Canvas(layerBitmap)
+                    if (psdDeckleClip) {
+                        canvas.save()
+                        canvas.clipPath(com.authorss81.noteflow.services.DeckleExportHelper.sheetPath(width.toFloat(), height.toFloat(), width / 360f))
+                    }
                     val layerStrokes = strokes.filter { it.layerId == layerEntity.id }
                     renderLayersAndStrokesToCanvas(canvas, width, height, 0, layerStrokes, listOf(layerEntity), inkRenderer)
-                    psdLayers.add(PsdExportService.PsdLayer(layerEntity.name.ifBlank { "Layer ${idx + 1}" }, layerBitmap, layerEntity.visible))
+                    if (psdDeckleClip) canvas.restore()
+                    // Phase 227: the per-layer record now carries the entity's REAL
+                    // opacity (Float 0..1 -> PSD 0..255) and blend key, so a PSD
+                    // re-opened in an editor composites exactly like the on-canvas
+                    // sheet (previously every layer reopened at 100% / NORMAL).
+                    psdLayers.add(
+                        PsdExportService.PsdLayer(
+                            name = layerEntity.name.ifBlank { "Layer ${idx + 1}" },
+                            bitmap = layerBitmap,
+                            isVisible = layerEntity.visible,
+                            opacity = (layerEntity.opacity * 255f).toInt().coerceIn(0, 255),
+                            blendSignature = PsdExportPolicy.psdBlendSignature(layerEntity.blendMode)
+                        )
+                    )
                 }
                 if (omittedDataLayers > 0 && exportedDataLayers < sortedAsc.size) {
                     val omittedEntities = sortedAsc.dropLast(exportedDataLayers)
                     val previewBitmap = android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.ARGB_8888)
                     val previewCanvas = android.graphics.Canvas(previewBitmap)
+                    if (psdDeckleClip) {
+                        previewCanvas.save()
+                        previewCanvas.clipPath(com.authorss81.noteflow.services.DeckleExportHelper.sheetPath(width.toFloat(), height.toFloat(), width / 360f))
+                    }
                     renderLayersAndStrokesToCanvas(previewCanvas, width, height, 0, strokes, omittedEntities, inkRenderer)
+                    if (psdDeckleClip) previewCanvas.restore()
                     compositeExtras = listOf(
                         PsdExportService.PsdLayer("Merged preview (omitted layers)", previewBitmap)
                     )

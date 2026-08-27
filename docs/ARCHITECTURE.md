@@ -510,6 +510,33 @@
 > `workspace/phase-200/before-after.png` (rendered from the real compiled
 > policy classes; no emulator on CI). No schema change, no new deps.
 
+> **Implemented in phase-227** (2026-08-27, paper deckled edge + tunable texture
+> strength + layered PSD blend fidelity + transparent/deckled exports, see
+> `workspace/phase-227/REPORT.md`): (1) paper edge is now a pure-JVM table in
+> `services/PaperEdgePolicy.kt` — `RECT`/`ROUNDED` (radius 8dp, the pre-227 card,
+> default key `"rounded"`) /`DECKLED`, with `deckleNodes` (4 sides, edge
+> proportions >=4 ratio, corner fade, deterministic per-family seed) +
+> `smoothedDeckleMidpoints` (midpoint polyline set shared by the canvas AND the
+> exporters so the editor, transparent PNG, and every PSD layer clip to the SAME
+> geometry); (2) `services/PaperTextureStrengthPolicy.kt` — 0–100 dial, default
+> 50 = `grainScale`/`shaderGain` 1.0 so untouched installs are byte-identical to
+> pre-227 grain; `AnnotationCanvas.drawPaperCard` gained a DECKLED branch
+> (clipPath to `deckledSheetPath` + `drawDeckleSheetShadow` blurred stroke) and
+> a `drawPaperGrain(grainBrush,..,grainScale)` helper, with `paperTextureStrength`
+> routed into the wet `uPaperGrain` update as `shaderGain`; `SettingsManager`
+> `paperEdgeKey` + `paperTextureStrength`; (3) PSD blend fidelity —
+> `PsdExportPolicy.psdBlendSignature(layerEntity.blendMode)` maps every renderer
+> blend mode to a 4-char PSD blend key written at record offsets 46-49, and
+> `PsdExportService` `blendPaint` honors per-layer opacity+blend (API29+ `BlendMode`,
+> PorterDuff <29; NORMAL/full = SRC_OVER byte-identical) — shallow, no PSD writer
+> re-architecture; (4) `ImportExportService.exportAnnotatedPage(transparentBackground)`
+> + "Export Page as Transparent PNG" menu item skip the white fill, and
+> `DeckleExportHelper` applies the same deckled clip to transparent raster + every
+> PSD layer. DoD visual: `visual-qa/screenshots/phase-227/deckled-edge-texture.png`
+> from `workspace/phase-227/RenderDeckledEdge.java` (Java2D driver on the REAL
+> policy classes; Paparazzi broken on this runner). No schema, no migration, no
+> new deps, base-APK-size rule intact.
+
 > **Implemented in phase-198** (2026-08-24, live-stroke invalidation isolation +
 > O(visible) culling — PERF 2.1+2.5, see `workspace/phase-198/REPORT.md`): pen samples
 > no longer re-run the whole canvas draw pass. The live ink + eraser aim cursor render

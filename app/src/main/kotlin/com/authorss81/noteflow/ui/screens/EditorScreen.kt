@@ -569,6 +569,9 @@ fun EditorScreen(
     var canvasTwistEnabled by remember { mutableStateOf(viewModel.settings.canvasTwistEnabled) }
     // Phase 213: per-stroke soft drop shadows ("paper elevation"). Default ON.
     var paperElevationEnabled by remember { mutableStateOf(viewModel.settings.paperElevationEnabled) }
+    // Phase 227: deckled paper edge + tunable texture (grain) strength.
+    var paperEdgeKey by remember { mutableStateOf(viewModel.settings.paperEdgeKey) }
+    var paperTextureStrength by remember { mutableIntStateOf(viewModel.settings.paperTextureStrength) }
     var hapticsEnabled by remember { mutableStateOf(viewModel.settings.hapticsEnabled) }
 
     // Phase 19: dual eraser mode + render-time vibrancy. Stored in SharedPreferences
@@ -2033,6 +2036,47 @@ fun EditorScreen(
                                 }
                             }
                         )
+                        // Phase 227: transparent-background PNG — the white paper
+                        // fill is skipped so layers + ink composite over a clean
+                        // alpha in downstream editors (PDF is natively opaque and
+                        // skipped here on purpose).
+                        DropdownMenuItem(
+                            text = { Text("Export Page as Transparent PNG") },
+                            leadingIcon = { Icon(Icons.Outlined.Layers, contentDescription = null) },
+                            onClick = {
+                                showOverflowMenu = false
+                                scope.launch {
+                                    val bgBmp = pdfPageBitmaps[currentPdfPage]?.asAndroidBitmap()
+                                    val file = ImportExportService.exportAnnotatedPage(
+                                        context = context,
+                                        title = "${page.title}_Page_${currentPdfPage + 1}_transparent",
+                                        strokes = strokes,
+                                        bgBitmap = bgBmp,
+                                        template = template,
+                                        exportAsPdf = false,
+                                        layers = layers,
+                                        stickyNotes = stickyNotes,
+                                        mediaEmbeds = mediaEmbeds,
+                                        pageIndex = currentPdfPage,
+                                        transparentBackground = true
+                                    )
+                                    if (file != null) {
+                                        exporter.export(
+                                            ExportDestinationPolicy.ExportKind.PAGE_PNG,
+                                            file
+                                        ) { result ->
+                                            when (result) {
+                                                SaFExportResult.SAVED -> Unit
+                                                SaFExportResult.CANCELLED -> viewModel.showSnackbar("Export cancelled")
+                                                SaFExportResult.FAILED -> viewModel.showSnackbar("Export to the chosen destination failed")
+                                            }
+                                        }
+                                    } else {
+                                        viewModel.showSnackbar("Export failed")
+                                    }
+                                }
+                            }
+                        )
                         DropdownMenuItem(
                             text = { Text("Export Page as WebP") },
                             leadingIcon = { Icon(Icons.Outlined.Image, contentDescription = null) },
@@ -2467,6 +2511,8 @@ fun EditorScreen(
                 gpuWetBrushesEnabled = gpuWetBrushesEnabled,
                 shapeAutoSnapEnabled = shapeAutoSnapEnabled,
                 paperElevationEnabled = paperElevationEnabled,
+                paperEdgeKey = paperEdgeKey,
+                paperTextureStrength = paperTextureStrength,
                 hapticsEnabled = hapticsEnabled,
                 stabilizerEnabled = stabilizerEnabled,
                 stabilizerStrengthPercent = stabilizerStrengthPercent,
@@ -2992,6 +3038,17 @@ fun EditorScreen(
                 onPaperElevationToggle = { enabled ->
                     paperElevationEnabled = enabled
                     viewModel.settings.paperElevationEnabled = enabled
+                },
+                // Phase 227: deckled edge + texture strength persisted instantly.
+                paperEdgeKey = paperEdgeKey,
+                onPaperEdgeChange = { key ->
+                    paperEdgeKey = key
+                    viewModel.settings.paperEdgeKey = key
+                },
+                paperTextureStrength = paperTextureStrength,
+                onPaperTextureStrengthChange = { strength ->
+                    paperTextureStrength = strength
+                    viewModel.settings.paperTextureStrength = strength
                 },
                 hapticsEnabled = hapticsEnabled,
                 onHapticsToggle = { enabled ->
@@ -5249,6 +5306,12 @@ private fun CanvasSettingsBottomSheet(
     // auto-offed once with a message by the editor's device-tier effect).
     paperElevationEnabled: Boolean = true,
     onPaperElevationToggle: (Boolean) -> Unit = {},
+    // Phase 227: deckled paper edge + texture-strength dial (both default to the
+    // exact pre-227 look — ROUNDED edges, 50 strength).
+    paperEdgeKey: String = com.authorss81.noteflow.services.PaperEdgePolicy.DEFAULT_KEY,
+    onPaperEdgeChange: (String) -> Unit = {},
+    paperTextureStrength: Int = com.authorss81.noteflow.services.PaperTextureStrengthPolicy.DEFAULT,
+    onPaperTextureStrengthChange: (Int) -> Unit = {},
     hapticsEnabled: Boolean = true,
     onHapticsToggle: (Boolean) -> Unit = {},
     // Phase 208 fix #5: palm rejection surfaced as a chip in this sheet (it used
@@ -5749,6 +5812,75 @@ private fun CanvasSettingsBottomSheet(
                 Switch(
                     checked = paperElevationEnabled,
                     onCheckedChange = onPaperElevationToggle
+                )
+            }
+
+            // Phase 227: deckled paper edge — Square / Rounded / Deckled. Latest
+            // value persists instantly through SettingsManager (pure-JVM
+            // PaperEdgePolicy owns the persisted keys + sanitization).
+            Spacer(modifier = Modifier.height(16.dp))
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Icon(Icons.Outlined.Crop, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    Text("Paper Edge", style = MaterialTheme.typography.titleMedium)
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilterChip(
+                        selected = paperEdgeKey == com.authorss81.noteflow.services.PaperEdgePolicy.KEY_RECT,
+                        onClick = { onPaperEdgeChange(com.authorss81.noteflow.services.PaperEdgePolicy.KEY_RECT) },
+                        label = { Text("Square", style = MaterialTheme.typography.labelSmall) }
+                    )
+                    FilterChip(
+                        selected = paperEdgeKey == com.authorss81.noteflow.services.PaperEdgePolicy.KEY_ROUNDED,
+                        onClick = { onPaperEdgeChange(com.authorss81.noteflow.services.PaperEdgePolicy.KEY_ROUNDED) },
+                        label = { Text("Rounded", style = MaterialTheme.typography.labelSmall) }
+                    )
+                    FilterChip(
+                        selected = paperEdgeKey == com.authorss81.noteflow.services.PaperEdgePolicy.KEY_DECKLED,
+                        onClick = { onPaperEdgeChange(com.authorss81.noteflow.services.PaperEdgePolicy.KEY_DECKLED) },
+                        label = { Text("Deckled", style = MaterialTheme.typography.labelSmall) }
+                    )
+                }
+            }
+
+            // Phase 227: texture (paper-grain "tooth") strength, 0–100. 50 is the
+            // exact pre-227 grain; below/above tunes the fleck (tile alpha) and
+            // the wet-brush granulation. Persists instantly.
+            Spacer(modifier = Modifier.height(16.dp))
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Icon(Icons.Outlined.Grain, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        Text("Paper Texture", style = MaterialTheme.typography.titleMedium)
+                    }
+                    Text(
+                        "${paperTextureStrength.coerceIn(0, 100)}%",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Text(
+                    if (paperTextureStrength <= 0) "Barely any tooth — a smooth sheet"
+                    else if (paperTextureStrength < 50) "Subtle grain, lighter than default"
+                    else if (paperTextureStrength == 50) "Default grain (50%)"
+                    else if (paperTextureStrength <= 75) "Deeper tooth, above default"
+                    else "Maximum tooth — a coarse sheet",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Slider(
+                    value = paperTextureStrength.coerceIn(0, 100).toFloat(),
+                    onValueChange = { onPaperTextureStrengthChange(it.toInt()) },
+                    valueRange = 0f..100f,
+                    modifier = Modifier.fillMaxWidth()
                 )
             }
 
