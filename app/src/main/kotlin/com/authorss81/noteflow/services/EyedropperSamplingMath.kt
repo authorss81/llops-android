@@ -48,6 +48,79 @@ object EyedropperSamplingMath {
     }
 
     /**
+     * Phase 225: maps a canvas-space tap to a pixel inside the per-page
+     * reference-image bitmap, or returns null when the tap falls OUTSIDE the
+     * reference bounds (or the bitmap is invalid).
+     *
+     * The reference underlay is drawn at world rect (refX, pageTopY + refY) with
+     * the size (refWidth, refHeight); the source bitmap is scaled to fit that
+     * rect (aspect preserved by [ReferenceImagePolicy.fitForPage]). Per-axis
+     * scales are used so a tiny rounding difference between the two axes can
+     * never push the pixel out of bounds.
+     */
+    fun referencePixel(
+        canvasX: Float,
+        canvasY: Float,
+        pageTopY: Float,
+        refX: Float,
+        refY: Float,
+        refWidth: Float,
+        refHeight: Float,
+        bitmapWidth: Int,
+        bitmapHeight: Int
+    ): Pair<Int, Int>? {
+        if (bitmapWidth <= 0 || bitmapHeight <= 0) return null
+        if (refWidth <= 0f || refHeight <= 0f) return null
+        val localX = canvasX - refX
+        val localY = canvasY - (pageTopY + refY)
+        if (localX < 0f || localY < 0f || localX > refWidth || localY > refHeight) return null
+        val px = (localX / refWidth * bitmapWidth).toInt().coerceIn(0, bitmapWidth - 1)
+        val py = (localY / refHeight * bitmapHeight).toInt().coerceIn(0, bitmapHeight - 1)
+        return px to py
+    }
+
+    /**
+     * Phase 225: 1:1 extraction rect (enlarged by [margin]) around the target
+     * pixel, clamped to the bitmap bounds. Used to decode ONLY the sampled region
+     * of the reference file instead of the whole photo. Returns null when the
+     * pixel is out of range or the bitmap is invalid.
+     */
+    fun referenceSamplingRect(
+        px: Int,
+        py: Int,
+        bitmapWidth: Int,
+        bitmapHeight: Int,
+        margin: Int = 1
+    ): Rect? {
+        if (bitmapWidth <= 0 || bitmapHeight <= 0) return null
+        if (px < 0 || py < 0 || px >= bitmapWidth || py >= bitmapHeight) return null
+        val left = (px - margin).coerceAtLeast(0)
+        val top = (py - margin).coerceAtLeast(0)
+        val right = (px + margin + 1).coerceAtMost(bitmapWidth)
+        val bottom = (py + margin + 1).coerceAtMost(bitmapHeight)
+        if (right <= left || bottom <= top) return null
+        return Rect(left, top, right, bottom)
+    }
+
+    /** Phase 225: pure-JVM integer rect mirroring android.graphics.Rect for the sampling region. */
+    data class Rect(val left: Int, val top: Int, val right: Int, val bottom: Int) {
+        val width: Int get() = right - left
+        val height: Int get() = bottom - top
+    }
+
+    /**
+     * Phase 225: the eyedropper resolution PRIORITY — the per-page reference
+     * underlay wins over the layer raster when a tap lands inside it, so palette
+     * building from a photo samples the photo (not the dimmed overlay frame or
+     * the ink on top). Pure lookup so the ordering is unit-testable.
+     */
+    fun resolveSampleSource(referenceHit: Boolean): Source =
+        if (referenceHit) Source.REFERENCE else Source.LAYER
+
+    /** Phase 225: the two pixel sources an eyedropper tap can resolve to. */
+    enum class Source { REFERENCE, LAYER }
+
+    /**
      * Minimum distance from [p] to the polyline of [points]. Used for tight
      * stroke hit-testing (eyedropper) where the rendering margin must not make a
      * tap land on a stroke that is visually far away.

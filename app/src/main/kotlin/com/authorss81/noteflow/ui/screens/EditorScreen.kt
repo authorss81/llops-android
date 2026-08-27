@@ -176,8 +176,12 @@ fun EditorScreen(
     val scope = rememberCoroutineScope()
     var currentTool by remember { mutableStateOf(StrokeTool.PEN) }
     var lastDrawingTool by remember { mutableStateOf(StrokeTool.PEN) }
+    // Phase 225: EYEDROPPER is added to the non-drawing set so lastDrawingTool
+    // retains the tool in use BEFORE the pick — dismissing the eyedropper after a
+    // sample (and the existing PAN/SELECT restore) both return to a real tool,
+    // never back to the eyedropper itself.
     LaunchedEffect(currentTool) {
-        if (currentTool != StrokeTool.PAN && currentTool != StrokeTool.SELECT) {
+        if (currentTool != StrokeTool.PAN && currentTool != StrokeTool.SELECT && currentTool != StrokeTool.EYEDROPPER) {
             lastDrawingTool = currentTool
         }
     }
@@ -240,6 +244,10 @@ fun EditorScreen(
     var referenceImage by remember { mutableStateOf<CanvasMediaEmbed?>(null) }
     var referenceImageBitmap by remember { mutableStateOf<ImageBitmap?>(null) }
     var referenceImageControlsVisible by remember { mutableStateOf(false) }
+    // Phase 225: the CONFINED absolute path of the reference photo, resolved once
+    // (same InlineImagePathPolicy gate as the bitmap) so the eyedropper can
+    // sample a raw 1:1 region of the file for palette building.
+    var referenceImagePath by remember { mutableStateOf<String?>(null) }
 
     // Phase 13: the sticker the STICKER tool currently places (id from
     // StickerCatalog; "sparkles" default), persisted in memory for the session.
@@ -878,12 +886,23 @@ fun EditorScreen(
     // A policy-blocked or missing path yields null → the canvas renders no
     // underlay (fail-closed, never an arbitrary file read).
     LaunchedEffect(referenceImage?.contentUrlOrPath) {
-        referenceImageBitmap = withContext(Dispatchers.IO) {
-            val storedRelative = referenceImage?.contentUrlOrPath ?: return@withContext null
-            val resolved = InlineImagePathPolicy.resolve(
+        val storedRelative = referenceImage?.contentUrlOrPath ?: return@LaunchedEffect
+        // ONE confined resolve feeds both the rendered underlay bitmap and the
+        // eyedropper's raw-sample path (the Phase178 source-pinning test asserts
+        // the resolver's read site count stays at exactly two: this read + the
+        // remove handler).
+        val resolved = withContext(Dispatchers.IO) {
+            InlineImagePathPolicy.resolve(
                 storedRelative,
                 ImportExportService.getImportsDir(context)
-            ) ?: return@withContext null
+            )
+        } ?: run {
+            referenceImageBitmap = null
+            referenceImagePath = null
+            return@LaunchedEffect
+        }
+        referenceImagePath = resolved.absolutePath
+        referenceImageBitmap = withContext(Dispatchers.IO) {
             decodeBoundedImage(resolved.absolutePath, maxDim = 1600)?.asImageBitmap()
         }
     }
@@ -2448,6 +2467,11 @@ fun EditorScreen(
                     if (sampledColor !in customPalette) {
                         customPalette = customPalette + sampledColor
                     }
+                    // Phase 225: confirm the picked color explicitly and return to
+                    // the last drawing tool (eyedropper is a pick-once affordance).
+                    val hex = "#%06X".format(java.util.Locale.US, sampledColor.toArgb() and 0xFFFFFF)
+                    viewModel.showSnackbar("Picked $hex")
+                    currentTool = lastDrawingTool
                 },
                 onDrawingStart = {
                     if (currentColorMode.isMultiColor) {
@@ -2503,6 +2527,7 @@ fun EditorScreen(
                 // Phase 178: reference-image underlay (bitmap confined via
                 // InlineImagePathPolicy; opacity range-gated by the policy).
                 referenceImage = referenceImageBitmap,
+                referenceImagePath = referenceImagePath,
                 referenceImageOpacity = referenceImage?.let { ReferenceImagePolicy.decodeOpacity(it.textContent) }
                     ?: ReferenceImagePolicy.DEFAULT_OPACITY,
                 referenceImageX = referenceImage?.x ?: 0f,

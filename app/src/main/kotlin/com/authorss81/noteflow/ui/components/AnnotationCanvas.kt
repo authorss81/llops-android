@@ -243,6 +243,13 @@ fun AnnotationCanvas(
     // coordinates matching the stroke space); opacity is range-gated by
     // ReferenceImagePolicy. All defaults keep pre-existing call sites unchanged.
     referenceImage: ImageBitmap? = null,
+    // Phase 225: the CONFINED on-disk path of the reference photo (already
+    // resolved through InlineImagePathPolicy by the caller). The eyedropper
+    // samples a 1:1 REGION of this file directly so the picked color is the RAW
+    // (undimmed) source pixel — never the alpha-clamped underlay frame. Default
+    // null keeps pre-existing call sites compiling; without a path the eyedropper
+    // falls back to the layer/paper sampling path.
+    referenceImagePath: String? = null,
     referenceImageOpacity: Float = com.authorss81.noteflow.services.ReferenceImagePolicy.DEFAULT_OPACITY,
     referenceImageX: Float = 0f,
     referenceImageY: Float = 0f,
@@ -838,8 +845,98 @@ fun AnnotationCanvas(
     // page background) instead of guessing via a loose point-in-+18px radius. The
     // inverse screen->canvas transform (divide by zoom) lives in
     // EyedropperSamplingMath so tests can prove it round-trips exactly.
+    // Phase 225: a tap inside the per-page reference-underlay bounds wins FIRST
+    // (photoreal palette building); it decodes a 1:1 REGION of the RAW file so
+    // the picked color is the undimmed source pixel, then falls through to the
+    // layer/paper path when the reference is absent or the decode fails.
+
+    /**
+     * Phase 225: decodes the raw reference file's 1:1 integer region around the
+     * sampled canvas tap and reads its ARGB. The FILE's own dimensions resolve the
+     * pixel (the rendered underlay bitmap is downscaled for memory, but the
+     * decode is full-fidelity), so mapping is self-consistent file-to-file. The
+     * decode is transient and recycled on the spot (never pooled — the eyedropper
+     * decodes are rare and unbounded in the bytes we should NOT hold). Returns
+     * null on any failure so the caller falls through to the layer/paper path.
+     */
+    fun sampleReferenceRegion(canvasX: Float, canvasY: Float, pageTopY: Float): Color? {
+        val path = referenceImagePath ?: return null
+        return try {
+            val file = java.io.File(path)
+            if (!file.exists()) return null
+            val boundsOptions = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            android.graphics.BitmapFactory.decodeFile(file.absolutePath, boundsOptions) ?: return null
+            val fileW = boundsOptions.outWidth
+            val fileH = boundsOptions.outHeight
+            if (fileW <= 0 || fileH <= 0) return null
+            val pixel = com.authorss81.noteflow.services.EyedropperSamplingMath.referencePixel(
+                canvasX = canvasX,
+                canvasY = canvasY,
+                pageTopY = pageTopY,
+                refX = referenceImageX,
+                refY = referenceImageY,
+                refWidth = referenceImageWidth,
+                refHeight = referenceImageHeight,
+                bitmapWidth = fileW,
+                bitmapHeight = fileH
+            ) ?: return null
+            val rect = com.authorss81.noteflow.services.EyedropperSamplingMath.referenceSamplingRect(
+                pixel.first, pixel.second, fileW, fileH, margin = 1
+            ) ?: return null
+            val regionBitmap = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.ICE_CREAM_SANDWICH) {
+                val regionDecoder = android.graphics.BitmapRegionDecoder.newInstance(file.absolutePath, false)
+                try {
+                    val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = 1 }
+                    regionDecoder.decodeRegion(
+                        android.graphics.Rect(rect.left, rect.top, rect.right, rect.bottom), opts
+                    )
+                } finally {
+                    regionDecoder.recycle()
+                }
+            } else {
+                android.graphics.BitmapFactory.decodeFile(file.absolutePath) ?: return null
+            }
+            val pixelX = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.ICE_CREAM_SANDWICH) {
+                pixel.first - rect.left
+            } else {
+                pixel.first
+            }
+            val pixelY = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.ICE_CREAM_SANDWICH) {
+                pixel.second - rect.top
+            } else {
+                pixel.second
+            }
+            val argb = regionBitmap.getPixel(pixelX, pixelY)
+            regionBitmap.recycle()
+            Color(argb)
+        } catch (e: Throwable) {
+            null
+        }
+    }
+
     fun sampleColorAt(canvasOffset: Offset, targetPage: Int): Color {
         val pageTopY = calculatePageYOffset(targetPage)
+
+        if (referenceImagePage == targetPage && referenceImage != null &&
+            referenceImageWidth > 0f && referenceImageHeight > 0f
+        ) {
+            val refPx = com.authorss81.noteflow.services.EyedropperSamplingMath.referencePixel(
+                canvasX = canvasOffset.x,
+                canvasY = canvasOffset.y,
+                pageTopY = pageTopY,
+                refX = referenceImageX,
+                refY = referenceImageY,
+                refWidth = referenceImageWidth,
+                refHeight = referenceImageHeight,
+                bitmapWidth = referenceImage.width,
+                bitmapHeight = referenceImage.height
+            )
+            if (refPx != null) {
+                val sampled = sampleReferenceRegion(canvasOffset.x, canvasOffset.y, pageTopY)
+                if (sampled != null) return sampled
+            }
+        }
+
         val rawBmp = activeRawBitmapMap[targetPage]
 
         var baseArgb: Int? = null
@@ -2525,6 +2622,19 @@ fun AnnotationCanvas(
                 modifier = Modifier
                     .fillMaxSize()
                     .testTag("annotation_canvas")
+                    // Phase 225: surface the reference underlay to accessibility.
+                    // Only when a reference image is present AND the eyedropper is
+                    // active (the tool that can sample it), so an ordinary edit
+                    // session is never labelled "reference image".
+                    .then(
+                        if (referenceImage != null && currentTool == StrokeTool.EYEDROPPER) {
+                            Modifier.semantics {
+                                contentDescription = "Reference image, tap eyedropper to sample"
+                            }
+                        } else {
+                            Modifier
+                        }
+                    )
                     .graphicsLayer {
                         scaleX = internalZoomScale
                         scaleY = internalZoomScale

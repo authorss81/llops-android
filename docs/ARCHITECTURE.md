@@ -1474,6 +1474,17 @@
     UI: overflow Insert/Remove, SAF picker, an opacity slider + removal card, and `insertPage` shifts
     the underlay's page index/y. It is never exported — the only embed→render export surface draws
     `PHOTO` embeds only. Tests: `Phase178ReferenceImageUnderlayTest` (6 policy + 5 source-pins).
+  - **Implemented in phase-225** (see `workspace/phase-225/REPORT.md`): the eyedropper samples the
+    raw reference underlay. `EyedropperSamplingMath` gained `referencePixel` (canvas tap → reference
+    bitmap pixel, `null` OOB/bad-size, honours paginated `pageTopY`), `referenceSamplingRect` (clamped
+    1:1 extraction rect), and `resolveSampleSource` REFERENCE-over-LAYER priority. `AnnotationCanvas.sampleColorAt`
+    tests reference bounds FIRST; on a hit `sampleReferenceRegion` decodes a raw 1:1 REGION via
+    `BitmapRegionDecoder` (decodeFile fallback) and recycles it immediately, so the picked color is the
+    UNDIMMED source pixel, then falls through to the existing layer/paper path. `EditorScreen` resolves
+    `referenceImagePath` through the SAME confined resolver (Phase178 pins exactly two resolve sites),
+    `onColorSampled` shows `Snackbar "Picked #RRGGBB"` and dismisses to `lastDrawingTool`, and the
+    canvas adds `contentDescription "Reference image, tap eyedropper to sample"` while the eyedropper
+    is active. Tests: `EyedropperSamplingTest` (15), `paparazzi/Phase225EyedropperSamplingSnapshotTest`.
 - **Plugins**: `plugin-sdk` → `plugins/FrameworkPlugin.kt:58` (`interface NoteflowPlugin`),
   `plugins/PluginCapability.kt:28` (sealed capability set); `plugins/PluginRegistry.kt:75`,
   `plugins/PluginManager.kt:83`; store: `plugins/store/PluginStoreCatalog.kt:57`, `PluginStoreController.kt:45`.
