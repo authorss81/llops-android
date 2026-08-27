@@ -310,6 +310,14 @@ fun AnnotationCanvas(
         internalPanOffset = panOffset
     }
 
+    // Phase 223 review fix: the hoisted rotationDegrees must re-sync into the
+    // internal state (same pattern as zoom/pan above) so a parent-side reset
+    // (rotation reset row / onResetZoomPan) or a page switch actually restores
+    // the upright canvas instead of leaving the last gesture's angle applied.
+    LaunchedEffect(rotationDegrees) {
+        internalRotationDegrees = com.authorss81.noteflow.services.CanvasRotationPolicy.sanitize(rotationDegrees)
+    }
+
     val coroutineScope = rememberCoroutineScope()
     var debounceJob by remember { mutableStateOf<Job?>(null) }
 
@@ -1162,23 +1170,21 @@ fun AnnotationCanvas(
                 }
             }
             // 1. Two-finger Zoom, Pan and (Phase 223) Rotate Gestures.
-            // Rotation reuses the SAME event stream: calculateRotation() reports
-            // the gesture's angle relative to its FIRST event, so the running
-            // `pastRotation` diff converts it into per-event deltas we accumulate
-            // into the sanitized internalRotationDegrees (which drives the applied
-            // graphicsLayer rotationZ). A single finger still draws, exactly as
-            // before — rotation only ever applies while two pointers are down.
+            // Rotation reuses the SAME event stream. calculateRotation() reports
+            // the angle change between the PREVIOUS and CURRENT pointer events
+            // (it is a per-event delta, exactly like calculateZoom/calculatePan),
+            // so each frame's delta is accumulated straight into the sanitized
+            // internalRotationDegrees that drives the applied graphicsLayer
+            // rotationZ. A single finger still draws, exactly as before —
+            // rotation only ever applies while two pointers are down.
             .pointerInput(Unit) {
                 awaitPointerEventScope {
-                    var pastRotation = 0f
                     while (true) {
                         val event = awaitPointerEvent()
                         if (event.changes.size > 1) {
                             val zoomChange = event.calculateZoom()
                             val panChange = event.calculatePan()
-                            val rot = event.calculateRotation()
-                            val rotationChange = rot - pastRotation
-                            pastRotation = rot
+                            val rotationChange = event.calculateRotation()
                             if (zoomChange != 1f || panChange != Offset.Zero || rotationChange != 0f) {
                                 val newScale = (internalZoomScale * zoomChange).coerceIn(0.5f, 4.0f)
                                 val actualZoomChange = newScale / internalZoomScale
@@ -2035,7 +2041,12 @@ fun AnnotationCanvas(
                                     // shapeAutoSnapEnabled is OFF and takes precedence over
                                     // the optional auto-snap. Wet/fleeting and
                                     // style-preserving tools are excluded as in auto-snap.
-                                    val rulerForcingLine = rulerEnabled && tool.isFreehandTool && !isWetOrFleeting && !stylePreservingTool
+                                    // Phase 223 review fix: the ruler also skips
+                                    // degenerate (tap / hairline) drags via
+                                    // rulerLineEligible so no zero-length LINE
+                                    // stroke is ever committed.
+                                    val rulerForcingLine = rulerEnabled && tool.isFreehandTool && !isWetOrFleeting && !stylePreservingTool &&
+                                        com.authorss81.noteflow.services.ShapeRecognitionHelper.rulerLineEligible(candidateStroke)
                                     val snappedShape = if (rulerForcingLine) {
                                         com.authorss81.noteflow.services.ShapeRecognitionHelper.SnappedShape(
                                             com.authorss81.noteflow.services.ShapeRecognitionHelper.ShapeType.LINE,
@@ -3663,7 +3674,16 @@ private fun LiveStrokePreview(
         // straight start→current line over the freehand preview so the user sees
         // the exact geometry that will be committed (it is drawn AFTER the
         // freehand preview so it reads as the authoritative line).
-        if (rulerEnabled && !com.authorss81.noteflow.services.BrushStrokeMath.isWetRenderedTool(currentTool) && currentTool.isFreehandTool) {
+        // Phase 223 review fix: the ruler guide uses the SAME exclusion set the
+        // commit path uses (wet/fleeting + LASER + style-preserving tools stay
+        // freehand), so a straight guide is never shown over a stroke that will
+        // be committed as a wavy line.
+        val rulerGuideExcludedTool = currentTool == StrokeTool.LASER ||
+            com.authorss81.noteflow.services.BrushStrokeMath.isWetRenderedTool(currentTool) ||
+            currentTool == StrokeTool.DOTTED || currentTool == StrokeTool.NEON ||
+            currentTool == StrokeTool.CHARCOAL || currentTool == StrokeTool.OIL_PASTEL ||
+            currentTool == StrokeTool.DRY_BRUSH || currentTool == StrokeTool.PALETTE_KNIFE
+        if (rulerEnabled && !rulerGuideExcludedTool && currentTool.isFreehandTool) {
             val rs = activeStartProvider()
             val re = activeEndProvider()
             if (rs != null && re != null) {
@@ -4416,22 +4436,28 @@ private fun DrawScope.drawPaperTemplate(
         // vanishing-point/isometric math); this pass only converts its returned
         // (start, end) pairs into drawLine calls with the shared gridColor.
         "perspective_1pt" -> {
+            // Phase 223 review fix: honour the phase-219 line-spacing override
+            // (spacing chips 24/28/36dp) — the drafting line families scale their
+            // step fractions by spacingDp/28 so denser/sparser spacing actually
+            // takes effect instead of being a silent no-op.
+            val stepFactor = (templateOverrides.lineSpacingDp ?: 28f) / 28f
             val g = com.authorss81.noteflow.services.PerspectiveGridPolicy.onePoint(width, height)
-            for (l in com.authorss81.noteflow.services.PerspectiveGridPolicy.depthLines(width, height, g.horizonY)) {
+            for (l in com.authorss81.noteflow.services.PerspectiveGridPolicy.depthLines(width, height, g.horizonY, stepFactor)) {
                 drawLine(gridColor, Offset(l.first.first + xOffset, l.first.second + yOffset), Offset(l.second.first + xOffset, l.second.second + yOffset), strokeWidth = 1f)
             }
-            for (l in com.authorss81.noteflow.services.PerspectiveGridPolicy.onePointRays(g)) {
+            for (l in com.authorss81.noteflow.services.PerspectiveGridPolicy.onePointRays(g, stepFactor)) {
                 drawLine(gridColor, Offset(l.first.first + xOffset, l.first.second + yOffset), Offset(l.second.first + xOffset, l.second.second + yOffset), strokeWidth = 1f)
             }
             // Emphasise the horizon line so the vanishing row reads clearly.
             drawLine(gridColor.copy(alpha = gridAlpha), Offset(xOffset, g.horizonY + yOffset), Offset(xOffset + width, g.horizonY + yOffset), strokeWidth = 1.5f)
         }
         "perspective_2pt" -> {
+            val stepFactor = (templateOverrides.lineSpacingDp ?: 28f) / 28f
             val g = com.authorss81.noteflow.services.PerspectiveGridPolicy.twoPoint(width, height)
-            for (l in com.authorss81.noteflow.services.PerspectiveGridPolicy.depthLines(width, height, g.horizonY)) {
+            for (l in com.authorss81.noteflow.services.PerspectiveGridPolicy.depthLines(width, height, g.horizonY, stepFactor)) {
                 drawLine(gridColor, Offset(l.first.first + xOffset, l.first.second + yOffset), Offset(l.second.first + xOffset, l.second.second + yOffset), strokeWidth = 1f)
             }
-            for (l in com.authorss81.noteflow.services.PerspectiveGridPolicy.twoPointRays(g)) {
+            for (l in com.authorss81.noteflow.services.PerspectiveGridPolicy.twoPointRays(g, stepFactor)) {
                 val d = kotlin.math.abs(l.first.first - l.second.first) + kotlin.math.abs(l.first.second - l.second.second)
                 if (d > 1f) {
                     drawLine(gridColor, Offset(l.first.first + xOffset, l.first.second + yOffset), Offset(l.second.first + xOffset, l.second.second + yOffset), strokeWidth = 1f)
@@ -4440,8 +4466,9 @@ private fun DrawScope.drawPaperTemplate(
             drawLine(gridColor.copy(alpha = gridAlpha), Offset(xOffset, g.horizonY + yOffset), Offset(xOffset + width, g.horizonY + yOffset), strokeWidth = 1.5f)
         }
         "isometric" -> {
+            val stepFactor = (templateOverrides.lineSpacingDp ?: 28f) / 28f
             val g = com.authorss81.noteflow.services.PerspectiveGridPolicy.isometric(width, height)
-            for (l in com.authorss81.noteflow.services.PerspectiveGridPolicy.isometricDiagonals(g)) {
+            for (l in com.authorss81.noteflow.services.PerspectiveGridPolicy.isometricDiagonals(g, stepFactor)) {
                 drawLine(gridColor, Offset(l.first.first + xOffset, l.first.second + yOffset), Offset(l.second.first + xOffset, l.second.second + yOffset), strokeWidth = 1f)
             }
         }

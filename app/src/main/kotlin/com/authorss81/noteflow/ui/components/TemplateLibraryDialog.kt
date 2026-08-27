@@ -45,6 +45,11 @@ private val templateAccentColors = listOf(
     "#059669", "#10B981", "#DC2626", "#F97316"
 )
 
+// Phase 223: the drafting grids — the only paper templates that expose template
+// customization (colour/spacing/opacity) and render a real PaperTemplatePreview
+// thumbnail in the picker.
+private val draftingPaperTemplates = listOf("perspective_1pt", "perspective_2pt", "isometric")
+
 @Composable
 fun TemplateLibraryDialog(
     viewModel: NoteflowViewModel,
@@ -147,6 +152,45 @@ fun TemplateLibraryDialog(
                 pagesToCreate = listOf(
                     "Sequence 1" to "# Sequence 1\n\n## Panel 1\n\n## Panel 2\n\n## Panel 3\n\n---\n**Notes:** "
                 )
+            ),
+            // Phase 223: drafting-grid vaults — these are the only templates whose
+            // cards render a real PaperTemplatePreview thumbnail (the same
+            // PerspectiveGridPolicy geometry the full-page renderer uses).
+            WorkspaceTemplate(
+                id = "perspective_1pt_notes",
+                title = "\uD83D\uDDD0\uFE0F 1-Point Perspective Drafting",
+                description = "Single vanishing point on the horizon — architectural one-point floor grids and receding-line sketches.",
+                icon = Icons.Outlined.Book,
+                defaultNotebookName = "1-Pt Drafting",
+                defaultSectionName = "Drafts",
+                paperTemplate = "perspective_1pt",
+                pagesToCreate = listOf(
+                    "Room One-Point" to "# Room One-Point\n\n#drafting\n\nOne-point interior: all parallel lines recede to the single vanishing point at the horizon centre."
+                )
+            ),
+            WorkspaceTemplate(
+                id = "perspective_2pt_notes",
+                title = "\uD83D\uDDD0\uFE0F 2-Point Perspective Drafting",
+                description = "Two off-page vanishing points — corner views, streets, and building elevations.",
+                icon = Icons.Outlined.Groups,
+                defaultNotebookName = "2-Pt Drafting",
+                defaultSectionName = "Drafts",
+                paperTemplate = "perspective_2pt",
+                pagesToCreate = listOf(
+                    "Corner Two-Point" to "# Corner Two-Point\n\n#drafting\n\nTwo-point corner: floor lines recede to vanishing points beyond each page edge."
+                )
+            ),
+            WorkspaceTemplate(
+                id = "isometric_notes",
+                title = "\uD83D\uDDD0\uFE0F Isometric Drafting",
+                description = "30° isometric lattice for technical illustrations and exploded views.",
+                icon = Icons.Outlined.Dashboard,
+                defaultNotebookName = "Isometric",
+                defaultSectionName = "Drafts",
+                paperTemplate = "isometric",
+                pagesToCreate = listOf(
+                    "Isometric Sketch" to "# Isometric Sketch\n\n#drafting\n\n30° isometric lattice — left/right diagonals plus verticals for technical drawing."
+                )
             )
         )
     }
@@ -210,9 +254,8 @@ fun TemplateLibraryDialog(
                     items(templates) { template ->
                         val isExpanded = expandedTemplateId == template.id
                         val hasCustomizablePaper = template.paperTemplate in listOf(
-                            "lined", "grid", "dots", "cross_grid",
-                            "perspective_1pt", "perspective_2pt", "isometric"
-                        )
+                            "lined", "grid", "dots", "cross_grid"
+                        ) || template.paperTemplate in draftingPaperTemplates
 
                         Card(
                             modifier = Modifier.fillMaxWidth(),
@@ -231,17 +274,22 @@ fun TemplateLibraryDialog(
                                         },
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    // Phase 223: real paper thumbnail for drafting grids.
-                                    Box(
-                                        modifier = Modifier
-                                            .size(40.dp)
-                                            .clip(RoundedCornerShape(6.dp))
-                                            .background(scheme.surface, RoundedCornerShape(6.dp))
-                                            .border(1.dp, scheme.outlineVariant, RoundedCornerShape(6.dp))
-                                    ) {
-                                        PaperTemplatePreview(template = template.paperTemplate, modifier = Modifier.fillMaxSize())
+                                    // Phase 223 review fix: only the DRAFTING
+                                    // templates render a thumbnail — the other
+                                    // cards no longer show a blank bordered square
+                                    // (PaperTemplatePreview is a no-op for them).
+                                    if (template.paperTemplate in draftingPaperTemplates) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(40.dp)
+                                                .clip(RoundedCornerShape(6.dp))
+                                                .background(scheme.surface, RoundedCornerShape(6.dp))
+                                                .border(1.dp, scheme.outlineVariant, RoundedCornerShape(6.dp))
+                                        ) {
+                                            PaperTemplatePreview(template = template.paperTemplate, modifier = Modifier.fillMaxSize())
+                                        }
+                                        Spacer(modifier = Modifier.width(10.dp))
                                     }
-                                    Spacer(modifier = Modifier.width(10.dp))
                                     Icon(
                                         template.icon,
                                         contentDescription = null,
@@ -370,7 +418,7 @@ private fun TemplateCustomizationControls(
                 }
             }
 
-            if (paperTemplate in listOf("lined", "grid", "dots", "cross_grid", "perspective_1pt", "perspective_2pt", "isometric")) {
+            if (paperTemplate in listOf("lined", "grid", "dots", "cross_grid") || paperTemplate in draftingPaperTemplates) {
                 Spacer(modifier = Modifier.height(10.dp))
                 // Line spacing
                 val spacingOptions = listOf("24" to "24dp", "28" to "28dp", "36" to "36dp")
@@ -394,7 +442,7 @@ private fun TemplateCustomizationControls(
                 }
             }
 
-            if (paperTemplate in listOf("grid", "cross_grid", "perspective_1pt", "perspective_2pt", "isometric")) {
+            if (paperTemplate in listOf("grid", "cross_grid") || paperTemplate in draftingPaperTemplates) {
                 Spacer(modifier = Modifier.height(10.dp))
                 // Grid opacity
                 val opacityOptions = listOf("0.12" to "Faint", "0.22" to "Normal", "0.35" to "Bold")

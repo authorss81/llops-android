@@ -96,6 +96,44 @@ class Phase223PerspectiveGridPolicyTest {
         }
     }
 
+    @Test
+    fun twoPoint_raysRecedeFromBottomAndConvergeOnTheVanishingPoints() {
+        val w = 1000f
+        val h = 800f
+        val g = PerspectiveGridPolicy.twoPoint(w, h)
+        val rays = PerspectiveGridPolicy.twoPointRays(g)
+        assertTrue("fan is populated", rays.isNotEmpty())
+        var receding = 0
+        for (ray in rays) {
+            val (a, b) = ray
+            val dx = b.first - a.first
+            val dy = b.second - a.second
+            // Phase 223 review fix: the rays must NOT be degenerate horizon-on-
+            // horizon segments — every fan ray starts on the page bottom edge and
+            // recedes upward toward an off-page vanishing point.
+            if (kotlin.math.abs(dx) + kotlin.math.abs(dy) > 1f) {
+                receding++
+                assertEquals("starts on the bottom edge", h, a.second, 0.01f)
+                assertTrue("recedes upward toward the horizon", dy < 0f)
+                // The (clipped) segment stays collinear with one of the two VPs.
+                fun cross(vpx: Float, vpy: Float): Float {
+                    val e1x = b.first - a.first
+                    val e1y = b.second - a.second
+                    val e2x = vpx - a.first
+                    val e2y = vpy - a.second
+                    return e1x * e2y - e1y * e2x
+                }
+                val crossLeft = cross(g.vpLeftX, g.horizonY)
+                val crossRight = cross(g.vpRightX, g.horizonY)
+                assertTrue(
+                    "ray lies on a line through a VP (left=$crossLeft right=$crossRight)",
+                    kotlin.math.abs(crossLeft) < 0.5f || kotlin.math.abs(crossRight) < 0.5f
+                )
+            }
+        }
+        assertTrue("fan contains genuinely receding rays", receding > 0)
+    }
+
     // --- Isometric math ---
     @Test
     fun isometric_default30Degrees() {
@@ -166,22 +204,51 @@ class Phase223PerspectiveGridPolicyTest {
     }
 
     @Test
-    fun sanitize_wrapsFullTurnsToUpright() {
+    fun sanitize_boundsWithoutDiscontinuousSnap() {
         assertEquals(0f, CanvasRotationPolicy.sanitize(0f), 1e-5f)
-        assertEquals(0f, CanvasRotationPolicy.sanitize(360f), 1e-5f)
-        assertEquals(0f, CanvasRotationPolicy.sanitize(-360f), 1e-5f)
+        // ±360 is visually identical to upright via rotationZ, so it clamps at
+        // the bound (no mid-gesture snap-to-0 jump at ~359.5°).
+        assertEquals(360f, CanvasRotationPolicy.sanitize(360f), 1e-5f)
+        assertEquals(-360f, CanvasRotationPolicy.sanitize(-360f), 1e-5f)
         assertEquals(90f, CanvasRotationPolicy.sanitize(90f), 1e-5f)
+        assertEquals(360f, CanvasRotationPolicy.sanitize(450f), 1e-5f)
+        assertEquals(-360f, CanvasRotationPolicy.sanitize(-450f), 1e-5f)
         assertEquals(0f, CanvasRotationPolicy.sanitize(Float.NaN), 1e-5f)
         assertEquals(0f, CanvasRotationPolicy.sanitize(Float.POSITIVE_INFINITY), 1e-5f)
+        assertEquals(0f, CanvasRotationPolicy.sanitize(Float.NEGATIVE_INFINITY), 1e-5f)
     }
 
     @Test
     fun accumulate_sumsIntoSanitizedTotal() {
         assertEquals(45f, CanvasRotationPolicy.accumulate(10f, 35f), 1e-5f)
         assertEquals(-40f, CanvasRotationPolicy.accumulate(-10f, -30f), 1e-5f)
-        // 350 + 20 -> wraps to ~10 (via the near-360 clamp).
-        val wrapped = CanvasRotationPolicy.accumulate(350f, 20f)
-        assertEquals(0f, wrapped, 1f)
+        // 350 + 20 -> clamps to the +360 bound; rotationZ(360) renders upright.
+        assertEquals(360f, CanvasRotationPolicy.accumulate(350f, 20f), 1f)
+        // A full turn accumulates continuously (clamps to the bound, never a
+        // discontinuous fold back to 0).
+        assertEquals(360f, CanvasRotationPolicy.accumulate(0f, 360f), 1e-5f)
+        assertEquals(-10f, CanvasRotationPolicy.accumulate(30f, -40f), 1e-5f)
+    }
+
+    @Test
+    fun stepFactor_scalesLineFamiliesWithoutBreakingGeometry() {
+        val w = 1000f
+        val h = 800f
+        val oneG = PerspectiveGridPolicy.onePoint(w, h)
+        val twoG = PerspectiveGridPolicy.twoPoint(w, h)
+        // Halving/doubling the step factor roughly doubles/halves depth lines.
+        val dense = PerspectiveGridPolicy.depthLines(w, h, oneG.horizonY, stepFactor = 0.5f)
+        val default = PerspectiveGridPolicy.depthLines(w, h, oneG.horizonY)
+        val sparse = PerspectiveGridPolicy.depthLines(w, h, oneG.horizonY, stepFactor = 2f)
+        assertTrue("denser factor -> more lines", dense.size > default.size)
+        assertTrue("sparser factor -> fewer lines", sparse.size < default.size)
+        // Rays still converge on the vanishing point regardless of density.
+        for (ray in PerspectiveGridPolicy.onePointRays(oneG, stepFactor = 2f)) {
+            assertEquals(oneG.vanishingX, ray.second.first, 0.01f)
+            assertEquals(oneG.horizonY, ray.second.second, 0.01f)
+        }
+        assertTrue(PerspectiveGridPolicy.isometricDiagonals(PerspectiveGridPolicy.isometric(w, h), stepFactor = 1.5f).isNotEmpty())
+        assertTrue("two-point fan honours step factor", PerspectiveGridPolicy.twoPointRays(twoG, stepFactor = 1.5f).isNotEmpty())
     }
 
     // --- Ruler straight-line snap (Phase 223 Task 3) ---
@@ -224,5 +291,36 @@ class Phase223PerspectiveGridPolicyTest {
         assertEquals(6f, out.points[0].y, 1e-3f)
         assertEquals(5f, out.points[1].x, 1e-3f)
         assertEquals(6f, out.points[1].y, 1e-3f)
+    }
+
+    @Test
+    fun rulerLineEligible_acceptsRealDragsRejectsTapsAndHairlines() {
+        val longDrag = Stroke(
+            id = "s3",
+            tool = StrokeTool.PEN,
+            start = PointF(10f, 10f),
+            points = listOf(PointF(10f, 10f), PointF(50f, 60f))
+        )
+        assertTrue("a real drag is ruler-eligible", ShapeRecognitionHelper.rulerLineEligible(longDrag))
+        val tap = Stroke(
+            id = "s4",
+            tool = StrokeTool.PEN,
+            start = PointF(5f, 6f),
+            points = listOf(PointF(5f, 6f))
+        )
+        assertFalse(
+            "a tap below the min distance is NOT ruler-eligible",
+            ShapeRecognitionHelper.rulerLineEligible(tap)
+        )
+        val hairline = Stroke(
+            id = "s5",
+            tool = StrokeTool.PEN,
+            start = PointF(4f, 4f),
+            points = listOf(PointF(4f, 4f), PointF(4.5f, 4.5f))
+        )
+        assertFalse(
+            "a hairline jiggle is NOT ruler-eligible",
+            ShapeRecognitionHelper.rulerLineEligible(hairline)
+        )
     }
 }

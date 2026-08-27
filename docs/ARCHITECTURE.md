@@ -626,6 +626,16 @@
 > `perpendicularDeviation` gate), live start→current preview, shared long-press
 > haptic; `rulerEnabled` added to the drag-`pointerInput` key list. No schema, no
 > new deps.
+>
+> **Review fixes (2026-08-27):** `calculateRotation()` accumulated directly (it is a
+> per-event delta — the old `pastRotation` diff telescoped); `LaunchedEffect(rotationDegrees)`
+> re-syncs `internalRotationDegrees` like the zoom/pan blocks; `PerspectiveGridPolicy.twoPointRays`
+> rays start on the page bottom edge and recede toward the off-page VPs (`clipRay`), fixing the
+> degenerate horizon-to-horizon fan; line families take a `stepFactor` so the spacing chips
+> (24/28/36dp via `TemplateOverrides.lineSpacingDp`) rescale drafting grids; the ruler live-guide
+> uses the commit path's exclusion set; 3 drafting `WorkspaceTemplate`s + gated picker thumbnail;
+> `ShapeRecognitionHelper.rulerLineEligible` (min 15px) blocks zero-length ruler LINES; `sanitize`
+> clamps ±360 without the 359.5→0 mid-gesture snap. `Phase223PerspectiveGridPolicyTest` now 20 tests.
 
 
 > **Implemented in phase-196** (2026-08-24, stylus motion prediction — PERF 1.1, see

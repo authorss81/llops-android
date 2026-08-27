@@ -193,12 +193,30 @@ object ShapeRecognitionHelper {
     }
 
     /**
+     * Phase 223 review fix: minimum start→end distance before the RULER should
+     * force an exact LINE. Mirrors trySnapShape's "ignore tiny specks" gate
+     * (boundingDiag < 15f) so a tap or a hairline jiggle never commits a
+     * degenerate zero-length LINE stroke.
+     */
+    const val MIN_RULER_LINE_DISTANCE_PX = 15f
+
+    /** Whether a raw stroke is long enough to become a ruler-forced LINE. */
+    fun rulerLineEligible(rawStroke: Stroke): Boolean {
+        val first = rawStroke.points.firstOrNull() ?: rawStroke.start ?: return false
+        val last = rawStroke.points.lastOrNull() ?: rawStroke.end ?: return false
+        val dx = last.x - first.x
+        val dy = last.y - first.y
+        return sqrt(dx * dx + dy * dy) >= MIN_RULER_LINE_DISTANCE_PX
+    }
+
+    /**
      * Phase 223 — ruler line snap. Unlike [trySnapShape]'s LINE branch, this does
      * NOT gate on the perpendicularDeviation/direct-distance fit: the RULER is an
      * explicit "draw a straight line" mode, so ANY freehand drag is collapsed to
-     * an exact start→end LINE regardless of how far it wavers. Returns the snapped
-     * stroke directly (no SnappedShape wrapper) so callers can also drive the
-     * distinct ruler snap tick.
+     * an exact start→end LINE regardless of how far it wavers (callers should
+     * still gate on [rulerLineEligible] so taps don't commit zero-length lines).
+     * Returns the snapped stroke directly (no SnappedShape wrapper) so callers
+     * can also drive the distinct ruler snap tick.
      */
     fun forceLineSnap(rawStroke: Stroke): Stroke {
         val first = rawStroke.points.firstOrNull() ?: rawStroke.start ?: PointF(0f, 0f)

@@ -21,24 +21,23 @@ object CanvasRotationPolicy {
     const val DEFAULT_DEGREES = 0f
 
     /**
-     * Sanitise a rotation value: coerce to [-MAX_ABS, +MAX_ABS] and squeeze
-     * anything within a hair of ±360 down to 0 (so spinning full turns reads as
-     * upright). Non-finite input falls back to the default.
+     * Sanitise a rotation value: coerce to [-MAX_ABS, +MAX_ABS] (non-finite input
+     * falls back to the default). Full turns never snap — a rotation of ±360 is
+     * visually identical to upright, so there is no discontinuous mid-gesture
+     * jump when a twist crosses the bound (it simply clamps at the edge).
      */
     fun sanitize(degrees: Float): Float {
         if (!degrees.isFinite()) return DEFAULT_DEGREES
-        var d = degrees.coerceIn(-MAX_ABS_DEGREES, MAX_ABS_DEGREES)
-        if (d in -0.5f..0.5f || abs(d) >= 359.5f) d = 0f
-        return d
+        return degrees.coerceIn(-MAX_ABS_DEGREES, MAX_ABS_DEGREES)
     }
 
-    private fun abs(v: Float): Float = if (v < 0f) -v else v
-
     /**
-     * Rotate a point about the origin by [degreesDeg] (counter-clockwise for
-     * positive degrees, matching Compose's rotationZ convention). Used purely by
-     * the unit tests to confirm the gesture-driven degrees are applied as the
-     * same rotation the renderer applies.
+     * Rotate a point about the origin by [degreesDeg] using the standard
+     * counter-clockwise (math / y-up) rotation matrix. NOTE: this is a pure math
+     * helper used by the unit tests to relate gesture degrees to the applied
+     * transform; Compose's graphicsLayer rotationZ lives in y-down screen space,
+     * where a positive angle appears clockwise. The SAME degrees value is used in
+     * both places, so the tests' y-up check remains a faithful sanity probe.
      */
     fun rotatePoint(x: Float, y: Float, degreesDeg: Float): Pair<Float, Float> {
         val rad = java.lang.Math.toRadians(degreesDeg.toDouble()).toFloat()
@@ -52,9 +51,10 @@ object CanvasRotationPolicy {
 
     /**
      * Two-finger twist delta → page-rotation delta, applying the bounded arc.
-     * [gestureRotationDeltaDeg] is what Compose's detectTransformGestures reports
-     * (it is already the net angular change of the gesture). We simply accumulate;
-     * no magnitude clamp here — the caller sums into a sanitized total.
+     * [gestureRotationDeltaDeg] is what Compose's calculateRotation() reports for
+     * an event (the net angular change between the PREVIOUS and CURRENT event —
+     * a per-event delta, not a cumulative gesture angle), so it is accumulated
+     * straight into the sanitized total.
      */
     fun accumulate(currentDeg: Float, gestureDeltaDeg: Float): Float =
         sanitize(currentDeg + gestureDeltaDeg)

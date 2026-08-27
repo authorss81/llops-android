@@ -87,8 +87,13 @@ object PerspectiveGridPolicy {
      * horizontally at a series of y positions below (and above) the horizon,
      * spaced by [DEPTH_STEP_FRACTION] of the width.
      */
-    fun depthLines(width: Float, height: Float, horizonY: Float): List<Pair<Pair<Float, Float>, Pair<Float, Float>>> {
-        val step = width * DEPTH_STEP_FRACTION
+    fun depthLines(
+        width: Float,
+        height: Float,
+        horizonY: Float,
+        stepFactor: Float = 1f
+    ): List<Pair<Pair<Float, Float>, Pair<Float, Float>>> {
+        val step = width * DEPTH_STEP_FRACTION * stepFactor
         if (step <= 0f) return emptyList()
         val out = mutableListOf<Pair<Pair<Float, Float>, Pair<Float, Float>>>()
         var y = horizonY
@@ -109,8 +114,8 @@ object PerspectiveGridPolicy {
      * sample column x emits a ray from the bottom of the page to the VP,
      * producing the classic "floor boards receding to a point" fan.
      */
-    fun onePointRays(g: OnePointGeometry): List<Pair<Pair<Float, Float>, Pair<Float, Float>>> {
-        val step = g.width * VERTICAL_SAMPLE_FRACTION
+    fun onePointRays(g: OnePointGeometry, stepFactor: Float = 1f): List<Pair<Pair<Float, Float>, Pair<Float, Float>>> {
+        val step = g.width * VERTICAL_SAMPLE_FRACTION * stepFactor
         if (step <= 0f) return emptyList()
         val out = mutableListOf<Pair<Pair<Float, Float>, Pair<Float, Float>>>()
         var x = 0f
@@ -123,19 +128,24 @@ object PerspectiveGridPolicy {
     }
 
     /**
-     * Two fans receding toward the left and right vanishing points. Handles the
-     * perspective projection precisely: a ray from any sample point to a VP
-     * that lies OUTSIDE [0, width] is clipped to the page rect so the line never
-     * extends past the paper edge.
+     * Two fans receding toward the left and right vanishing points. Each floor
+     * line starts on the page's BOTTOM edge (like one-point's fan) and recedes
+     * toward one of the two off-page vanishing points on the horizon, clipped to
+     * the page rect via Liang–Barsky so no ray ever extends past the paper edge.
+     * Together with the horizon-parallel depth lines this reads as the classic
+     * two-point floor grid (left recedes to VPL, right recedes to VPR).
      */
-    fun twoPointRays(g: TwoPointGeometry): List<Pair<Pair<Float, Float>, Pair<Float, Float>>> {
-        val step = g.width * VERTICAL_SAMPLE_FRACTION
+    fun twoPointRays(
+        g: TwoPointGeometry,
+        stepFactor: Float = 1f
+    ): List<Pair<Pair<Float, Float>, Pair<Float, Float>>> {
+        val step = g.width * VERTICAL_SAMPLE_FRACTION * stepFactor
         if (step <= 0f) return emptyList()
         val out = mutableListOf<Pair<Pair<Float, Float>, Pair<Float, Float>>>()
         var x = 0f
         while (x <= g.width) {
-            out.add(clipRay(x, g.horizonY, g.vpLeftX, g.horizonY, g.width, g.height))
-            out.add(clipRay(x, g.horizonY, g.vpRightX, g.horizonY, g.width, g.height))
+            out.add(clipRay(x, g.height, g.vpLeftX, g.horizonY, g.width, g.height))
+            out.add(clipRay(x, g.height, g.vpRightX, g.horizonY, g.width, g.height))
             x += step
         }
         return out
@@ -172,9 +182,12 @@ object PerspectiveGridPolicy {
      * diagonal family is produced by stepping along the page and emitting a line
      * of the fixed slope through each (x, y) anchor until it leaves the rect.
      */
-    fun isometricDiagonals(g: IsometricGeometry): List<Pair<Pair<Float, Float>, Pair<Float, Float>>> {
-        val dx = g.width * ISO_STEP_FRACTION
-        val dy = g.height * ISO_STEP_FRACTION
+    fun isometricDiagonals(
+        g: IsometricGeometry,
+        stepFactor: Float = 1f
+    ): List<Pair<Pair<Float, Float>, Pair<Float, Float>>> {
+        val dx = g.width * ISO_STEP_FRACTION * stepFactor
+        val dy = g.height * ISO_STEP_FRACTION * stepFactor
         if (dx <= 0f || dy <= 0f) return emptyList()
         val out = mutableListOf<Pair<Pair<Float, Float>, Pair<Float, Float>>>()
         val mPos = ISO_SIN / ISO_COS // +tan(30°) slope (down-right)
