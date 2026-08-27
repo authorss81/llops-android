@@ -593,13 +593,13 @@
 > commit on drag-end; outside → new lasso). Also fixed pre-existing Phase 215
 > omissions: `LassoTrailPolicy` FQN qualification in `StrokeSelectionOverlay`
 > (`AnnotationCanvas.kt:3528-3577`) and `selection_count_a11y` string resource.
- > Tests: `StrokeSelectionActionPolicyTest` (41) + `Phase216SelectionWiringTest`
+> Tests: `StrokeSelectionActionPolicyTest` (41) + `Phase216SelectionWiringTest`
 > (24). `assembleDebug` green, no schema change, no new deps.
 
 > **Implemented in phase-226** (2026-08-27, Selection transform — scale + rotate
 > handles for lasso-selected strokes/shapes, see `workspace/phase-226/REPORT.md`):
 > pure-JVM `services/SelectionTransformPolicy.kt` (`Corner` enum + corner signs,
-> `candidateScaleFromDrag`/`clampScales` `MIN/MAX_SELECTION_SIZE_PX` 20/2000,
+> `cornerScaleFromDrag`/`clampScales` `MIN/MAX_SELECTION_SIZE_PX` 20/2000,
 > `scalePoint`/`rotatePoint` (same `CanvasItemRotationMath` matrix),
 > `scaleStroke`/`rotateStroke` with `pdfPage` recompute, `transformSelected`
 > rotate-then-scale only on selected ids, `rotatedBounds`/`scaledBounds` preview
@@ -613,6 +613,12 @@
 > `SelectionTransformPolicyTest` (12) + `paparazzi/SelectionTransformOverlayPaparazziTest`
 > (env-broken on runner; VisDoD via `RenderSelectionTransform.java` Java2D → PNG).
 > `assembleDebug` green, no schema, no new deps.
+> **Review fixes (2026-08-27)**: `SelectionCornerHandle` accepts `canvasRotationDegrees`
+> (thru `StrokeSelectionOverlay` ← `internalRotationDegrees`) and un-rotates the
+> drag delta into world space before `/zoom` so corner-scale stays axis-true under
+> canvas rotation; handle sizes scale down on tiny selections (floored ~0.33×) so
+> they don't overlap/dwarf the selection; the phase-216 blockquote whitespace typo
+> here was fixed and `candidateScaleFromDrag` corrected to `cornerScaleFromDrag`.
 
 > **Implemented in phase-219** (2026-08-26, Templates + Pencil Shade Preset, see
 > `workspace/phase-219/REPORT.md`): template customization via JSON prefs

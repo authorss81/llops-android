@@ -3153,6 +3153,7 @@ fun AnnotationCanvas(
                     zoomScale = internalZoomScale,
                     // Phase 226: transform handles + preview wiring.
                     transformLocked = selectionTransformLocked,
+                    canvasRotationDegrees = internalRotationDegrees,
                     onSelectionScale = currentOnSelectionScale,
                     onSelectionRotate = currentOnSelectionRotate
                 )
@@ -4009,6 +4010,9 @@ internal fun StrokeSelectionOverlay(
     // handles scale; the top handle rotates. Mid-drag preview is a dashed
     // outline only; the single commit call fires on gesture end.
     transformLocked: Boolean = true,
+    // Phase 226 review-fix: canvas world rotation (internalRotationDegrees), so
+    // the scale-handle drags un-rotate screen deltas into world space.
+    canvasRotationDegrees: Float = 0f,
     onSelectionScale: (scaleX: Float, scaleY: Float, centerX: Float, centerY: Float) -> Unit = { _, _, _, _ -> },
     onSelectionRotate: (degrees: Float, centerX: Float, centerY: Float) -> Unit = { _, _, _ -> }
 ) {
@@ -4016,6 +4020,20 @@ internal fun StrokeSelectionOverlay(
     val handlePx = with(density) { com.authorss81.noteflow.services.ResizeHandleVisibilityPolicy.HANDLE_SIZE_DP.dp.toPx() }
     val rotHandlePx = with(density) { com.authorss81.noteflow.services.ResizeHandleVisibilityPolicy.ROTATION_HANDLE_SIZE_DP.dp.toPx() }
     val gapPx = with(density) { 8.dp.toPx() }
+
+    // Phase 226 review-fix (finding #4): at the minimum selection size
+    // (MIN_SELECTION_SIZE_PX=20) the fixed 24-26dp handles (~72px at xxhdpi)
+    // dwarf and mutually overlap a tiny selection. Shrink the handles toward
+    // the selection's smaller dimension (floored at a minimum still-grabbable
+    // size) so a small selection keeps usable, non-overlapping handles while a
+    // large selection keeps the standard embed-sized handles.
+    val minSelectDim = min(selectionBounds.width, selectionBounds.height)
+    val handleScale = if (minSelectDim <= 0f) 1f else {
+        val cap = minSelectDim * 0.5f / handlePx
+        cap.coerceIn(0.33f, 1f)
+    }
+    val selHandlePx = handlePx * handleScale
+    val selRotHandlePx = rotHandlePx * handleScale
 
     // Phase 226: transient transform-preview state (scale and rotation), owned
     // here so mid-drag previews render in this node's draw scope and the main
@@ -4123,10 +4141,11 @@ internal fun StrokeSelectionOverlay(
             com.authorss81.noteflow.services.SelectionTransformPolicy.Corner.entries.forEach { corner ->
                 val (hx, hy) = com.authorss81.noteflow.services.SelectionTransformPolicy.cornerPosition(bounds, corner)
                 SelectionCornerHandle(
-                    modifier = Modifier.offset { IntOffset(hx.roundToInt() - (handlePx / 2f).roundToInt(), hy.roundToInt() - (handlePx / 2f).roundToInt()) },
-                    sizePx = handlePx,
+                    modifier = Modifier.offset { IntOffset(hx.roundToInt() - (selHandlePx / 2f).roundToInt(), hy.roundToInt() - (selHandlePx / 2f).roundToInt()) },
+                    sizePx = selHandlePx,
                     accentColor = accentColor,
                     zoomScale = currentZoom,
+                    canvasRotationDegrees = canvasRotationDegrees,
                     corner = corner,
                     locked = transformLocked,
                     onDragUpdate = { worldDx, worldDy ->
@@ -4161,8 +4180,8 @@ internal fun StrokeSelectionOverlay(
             }
 
             SelectionRotationHandle(
-                modifier = Modifier.offset { IntOffset(cx.roundToInt() - (rotHandlePx / 2f).roundToInt(), (bounds.top - gapPx - rotHandlePx).roundToInt()) },
-                sizePx = rotHandlePx,
+                modifier = Modifier.offset { IntOffset(cx.roundToInt() - (selRotHandlePx / 2f).roundToInt(), (bounds.top - gapPx - selRotHandlePx).roundToInt()) },
+                sizePx = selRotHandlePx,
                 gapPx = gapPx,
                 selectionHalfWidth = bounds.width / 2f,
                 selectionHalfHeight = bounds.height / 2f,
@@ -4204,6 +4223,11 @@ private fun SelectionCornerHandle(
     sizePx: Float,
     accentColor: Color,
     zoomScale: Float,
+    // Phase 226 review-fix: the canvas WORLD rotation (internalRotationDegrees)
+    // applied to the overlay layer. dragAmount arrives in that rotated screen
+    // frame, so we un-rotate by -canvasRotationDegrees before dividing by zoom
+    // to get true world-space deltas (matches the embed drag compensation).
+    canvasRotationDegrees: Float,
     corner: com.authorss81.noteflow.services.SelectionTransformPolicy.Corner,
     locked: Boolean,
     onDragUpdate: (worldDx: Float, worldDy: Float) -> Unit,
@@ -4218,6 +4242,7 @@ private fun SelectionCornerHandle(
     val currentOnEnd by rememberUpdatedState(onDragEnd)
     val currentOnCancel by rememberUpdatedState(onDragCancel)
     val currentZoom by rememberUpdatedState(zoomScale)
+    val currentCanvasRotation by rememberUpdatedState(canvasRotationDegrees)
     val currentLocked by rememberUpdatedState(locked)
     val sizePxDp = with(LocalDensity.current) { sizePx.toDp() }
 
@@ -4235,8 +4260,16 @@ private fun SelectionCornerHandle(
                     },
                     onDrag = { change, dragAmount ->
                         change.consume()
-                        accDx += dragAmount.x / currentZoom.coerceAtLeast(0.01f)
-                        accDy += dragAmount.y / currentZoom.coerceAtLeast(0.01f)
+                        // Phase 226 review-fix: un-rotate the screen delta into
+                        // world space so "drag right → grow right / drag down →
+                        // grow down" holds even when the canvas is rotated.
+                        val rad = Math.toRadians((-currentCanvasRotation).toDouble())
+                        val cosA = cos(rad).toFloat()
+                        val sinA = sin(rad).toFloat()
+                        val worldDx = dragAmount.x * cosA - dragAmount.y * sinA
+                        val worldDy = dragAmount.x * sinA + dragAmount.y * cosA
+                        accDx += worldDx / currentZoom.coerceAtLeast(0.01f)
+                        accDy += worldDy / currentZoom.coerceAtLeast(0.01f)
                         currentOnUpdate(accDx, accDy)
                     },
                     onDragEnd = {

@@ -141,3 +141,22 @@ rotated. Honest caveat (same as phase-213): the Java2D artifact validates the po
     (same env cause).
 - No schema change, no migration, no new dependencies, `.github/workflows/` untouched,
   base-APK-size rule intact.
+
+## Review fixes (2026-08-27)
+Applied after the phase-226 review found 4 items (all minor):
+1. **Doc whitespace** — `docs/ARCHITECTURE.md:596` phase-216 blockquote had a stray leading
+   space (` > Tests:`); fixed to `> Tests:`.
+2. **Doc stale fn name** — `docs/ARCHITECTURE.md` phase-226 note referenced
+   `candidateScaleFromDrag`; corrected to the real `cornerScaleFromDrag`.
+3. **Corner-scale drag ignored canvas rotation** — `SelectionCornerHandle` now takes
+   `canvasRotationDegrees` (thru `StrokeSelectionOverlay` ← `internalRotationDegrees`) and
+   un-rotates the screen drag delta into world space before `/ zoom`
+   (`AnnotationCanvas.kt` SelectionCornerHandle `onDrag`, mirroring the embed drag
+   compensation at `:6927-6928`), so "drag right → grow right" holds even when the canvas
+   is rotated (phase-223).
+4. **Handle size vs tiny selections** — corner/rotation handles now shrink toward the
+   selection's smaller dimension (`handleScale`, floored ~0.33×) so a 20px-min selection
+   doesn't render a pile of overlapping, selection-dwarfing 24-26dp handles; large
+   selections keep the standard size.
+Verification: `gradle :app:compileDebugKotlin` green; `SelectionTransformPolicyTest` +
+`Phase216SelectionWiringTest` + `StrokeSelectionActionPolicyTest` green in isolation.
