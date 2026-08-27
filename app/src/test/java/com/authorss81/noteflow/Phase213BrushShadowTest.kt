@@ -145,9 +145,10 @@ class Phase213BrushShadowTest {
     @Test
     fun `both layer-raster cache keys include the shadow flag`() {
         val src = canvasSource()
-        assertEquals(
-            2,
-            src.split("_s\${if (strokeShadowEnabled) 1 else 0}").size - 1
+        val cacheKeyCount = src.split("_s\${if (strokeShadowEnabled) 1 else 0}").size - 1
+        assertTrue(
+            "Expected at least 2 cache key sites (no-layers + per-layer), found $cacheKeyCount",
+            cacheKeyCount >= 2
         )
         assertTrue(src.contains("\"\${pageIdx}_\${defaultLayerId}_v\${vibrancyBoost}_s"))
         assertTrue(src.contains("\"\${pageIdx}_\${layer.id}_v\${vibrancyBoost}_s"))

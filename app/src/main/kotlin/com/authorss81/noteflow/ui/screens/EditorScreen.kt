@@ -566,6 +566,9 @@ fun EditorScreen(
     var stabilizerModelKey by remember { mutableStateOf(viewModel.settings.strokeStabilizerModelKey) }
     var pressureCurve by remember { mutableStateOf(PressureCurve.fromSettingKey(viewModel.settings.pressureCurveKey)) }
 
+    // Phase 222: tilt shading (stylus angle → width/alpha modulation).
+    var tiltShadingEnabled by remember { mutableStateOf(viewModel.settings.tiltShadingEnabled) }
+
     // Phase 220: pro brush controls — blender strength (SMUDGE) and texture
     // scatter, 0–100%. Both persist via SettingsManager and apply at the
     // NEXT stroke. Defaults: blender 85% (= the pre-220 ToolPreset mixStrength),
@@ -2486,7 +2489,9 @@ fun EditorScreen(
                 },
                 onSelectionTranslate = { dx, dy ->
                     translateSelectedStrokes(dx, dy)
-                }
+                },
+                // Phase 222: tilt shading (stylus angle → width/alpha modulation).
+                tiltShadingEnabled = tiltShadingEnabled
             )
 
             // Voice note failure banner (real recorder/playback errors — no silent fakes)
@@ -2917,6 +2922,11 @@ fun EditorScreen(
                 onPressureCurveSelect = { curve ->
                     pressureCurve = curve
                     viewModel.settings.pressureCurveKey = curve.settingKey
+                },
+                tiltShadingEnabled = tiltShadingEnabled,
+                onTiltShadingToggle = { enabled ->
+                    tiltShadingEnabled = enabled
+                    viewModel.settings.tiltShadingEnabled = enabled
                 },
                 symmetryMode = symmetryMode,
                 onSymmetryModeSelect = { mode ->
@@ -5060,6 +5070,9 @@ private fun CanvasSettingsBottomSheet(
     onScatterAmountChange: (Int) -> Unit = {},
     pressureCurve: PressureCurve = PressureCurve.LINEAR,
     onPressureCurveSelect: (PressureCurve) -> Unit = {},
+    // Phase 222: tilt shading (stylus angle → width/alpha modulation).
+    tiltShadingEnabled: Boolean = false,
+    onTiltShadingToggle: (Boolean) -> Unit = {},
     symmetryMode: SymmetryMode = SymmetryMode.OFF,
     onSymmetryModeSelect: (SymmetryMode) -> Unit = {},
     paperTexturePath: String? = null,
@@ -5991,6 +6004,39 @@ private fun CanvasSettingsBottomSheet(
                         }
                     }
 
+                    // Phase 222: tilt shading toggle — stylus angle modulates width/alpha.
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onTiltShadingToggle(!tiltShadingEnabled) }
+                            .padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Icon(
+                            if (tiltShadingEnabled) Icons.Outlined.Polyline else Icons.Outlined.Polyline,
+                            contentDescription = null,
+                            tint = if (tiltShadingEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "Tilt Shading",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = if (tiltShadingEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                "Stylus angle controls width & opacity",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = tiltShadingEnabled,
+                            onCheckedChange = { onTiltShadingToggle(it) }
+                        )
+                    }
+
                     // Symmetry / mirror mode selector.
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -6363,6 +6409,50 @@ private fun LayersPanelBottomSheet(
                                             contentDescription = "Toggle Lock",
                                             modifier = Modifier.size(18.dp),
                                             tint = if (layer.locked) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+
+                                    // Phase 222: alpha-lock toggle (paint only where ink exists on this layer).
+                                    val layerCtx = androidx.compose.ui.platform.LocalContext.current
+                                    val layerSettings = remember(layer.id) {
+                                        com.authorss81.noteflow.services.SettingsManager(layerCtx)
+                                    }
+                                    var isAlphaLock by remember(layer.id) {
+                                        mutableStateOf(layerSettings.isLayerAlphaLockEnabled(layer.id))
+                                    }
+                                    IconButton(
+                                        onClick = {
+                                            val newState = !isAlphaLock
+                                            layerSettings.setLayerAlphaLockEnabled(layer.id, newState)
+                                            isAlphaLock = newState
+                                        },
+                                        modifier = Modifier.minimumInteractiveComponentSize()
+                                    ) {
+                                        Icon(
+                                            imageVector = if (isAlphaLock) Icons.Outlined.Lock else Icons.Outlined.LockOpen,
+                                            contentDescription = "Toggle Alpha Lock",
+                                            modifier = Modifier.size(18.dp),
+                                            tint = if (isAlphaLock) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+
+                                    // Phase 222: clipping mask toggle (clip to layer below).
+                                    var isClippingMask by remember(layer.id) {
+                                        mutableStateOf(layerSettings.isLayerClippingMaskEnabled(layer.id))
+                                    }
+                                    IconButton(
+                                        onClick = {
+                                            val newState = !isClippingMask
+                                            layerSettings.setLayerClippingMaskEnabled(layer.id, newState)
+                                            isClippingMask = newState
+                                        },
+                                        modifier = Modifier.minimumInteractiveComponentSize()
+                                    ) {
+                                        Icon(
+                                            imageVector = if (isClippingMask) Icons.Outlined.ContentCut else Icons.Outlined.ContentCut,
+                                            contentDescription = "Toggle Clipping Mask",
+                                            modifier = Modifier.size(18.dp),
+                                            tint = if (isClippingMask) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant
                                         )
                                     }
                                 }

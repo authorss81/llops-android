@@ -258,7 +258,12 @@ fun AnnotationCanvas(
     onSelectionChanged: (com.authorss81.noteflow.data.model.StrokeSelection?) -> Unit = {},
     // Phase 216: translate (move) selected strokes by a world-coordinate delta.
     // Called once per drag-end from the selection drag surface.
-    onSelectionTranslate: (dx: Float, dy: Float) -> Unit = { _, _ -> }
+    onSelectionTranslate: (dx: Float, dy: Float) -> Unit = { _, _ -> },
+    // Phase 222: tilt shading (stylus angle → width/alpha modulation).
+    tiltShadingEnabled: Boolean = false,
+    // Phase 222: per-layer alpha-lock + clipping-mask sets.
+    alphaLockLayerIds: Set<String> = emptySet(),
+    clippingMaskLayerIds: Set<String> = emptySet()
 ) {
     val vibrancyBoost = if (vibrancyEnabled) vibrancyBoostLevel.coerceIn(0f, 1f) else 0f
     var internalZoomScale by remember { mutableFloatStateOf(zoomScale) }
@@ -971,8 +976,18 @@ fun AnnotationCanvas(
         velocityModulated = velocityModulated,
         velocityIntensity = velocityIntensity,
         nibAngleDeg = nibAngleDeg,
-        chiselNibAngleDeg = chiselNibAngleDeg
+        chiselNibAngleDeg = chiselNibAngleDeg,
+        tiltShadingEnabled = tiltShadingEnabled
     )
+    // Phase 222: resolve per-layer alpha-lock + clipping-mask from SettingsManager.
+    val resolvedAlphaLockIds = remember(layers) {
+        val settings = com.authorss81.noteflow.services.SettingsManager(context)
+        layers.filter { settings.isLayerAlphaLockEnabled(it.id) }.map { it.id }.toSet()
+    }
+    val resolvedClippingMaskIds = remember(layers) {
+        val settings = com.authorss81.noteflow.services.SettingsManager(context)
+        layers.filter { settings.isLayerClippingMaskEnabled(it.id) }.map { it.id }.toSet()
+    }
     // Per-stroke texture seed — refreshed on drag start so each live stroke owns a
     // fresh grain/bristle phase (the committed copy gets one from its stroke id).
     var currentStrokeSeed by remember { mutableFloatStateOf(0f) }
@@ -2589,7 +2604,9 @@ fun AnnotationCanvas(
                         liveStrokeSeed = currentStrokeSeed,
                         vibrancyBoost = vibrancyBoost,
                         blenderStrengthPercent = blenderStrengthPercent,
-                        scatterAmountPercent = scatterAmountPercent
+                        scatterAmountPercent = scatterAmountPercent,
+                        alphaLockLayerIds = resolvedAlphaLockIds,
+                        clippingMaskLayerIds = resolvedClippingMaskIds
                     )
                 } else if (!divideIntoPages) {
                     // Continuous Infinite Canvas (Seamless, without page division gaps)
@@ -2643,7 +2660,9 @@ fun AnnotationCanvas(
                         liveStrokeSeed = currentStrokeSeed,
                         vibrancyBoost = vibrancyBoost,
                         blenderStrengthPercent = blenderStrengthPercent,
-                        scatterAmountPercent = scatterAmountPercent
+                        scatterAmountPercent = scatterAmountPercent,
+                        alphaLockLayerIds = resolvedAlphaLockIds,
+                        clippingMaskLayerIds = resolvedClippingMaskIds
                     )
                 } else {
                     // Continuous Infinite Canvas with Page Divisions & Page Break Badges
@@ -2790,7 +2809,9 @@ fun AnnotationCanvas(
                             liveStrokeSeed = currentStrokeSeed,
                             vibrancyBoost = vibrancyBoost,
                             blenderStrengthPercent = blenderStrengthPercent,
-                            scatterAmountPercent = scatterAmountPercent
+                            scatterAmountPercent = scatterAmountPercent,
+                            alphaLockLayerIds = resolvedAlphaLockIds,
+                            clippingMaskLayerIds = resolvedClippingMaskIds
                         )
                     }
                 }
@@ -4469,7 +4490,11 @@ private fun DrawScope.drawCompositedLayersStrokes(
     vibrancyBoost: Float = 0f,
     // Phase 220: pro brush controls.
     blenderStrengthPercent: Int = 85,
-    scatterAmountPercent: Int = 0
+    scatterAmountPercent: Int = 0,
+    // Phase 222: per-layer alpha-lock (set of layer ids with alpha-lock on).
+    alphaLockLayerIds: Set<String> = emptySet(),
+    // Phase 222: per-layer clipping mask (set of layer ids with clipping mask on).
+    clippingMaskLayerIds: Set<String> = emptySet()
 ) {
     // capture time (see SymmetryCommitPolicy): a stroke drawn while a mode was
     // active persisted BOTH rows (original + mirrored twin), so re-mirroring
@@ -4594,6 +4619,9 @@ private fun DrawScope.drawCompositedLayersStrokes(
     // is an explicit guard, not a behavior change.)
     var gpuWetCarrierClaimed = false
 
+    // Phase 222: previous layer bitmap for clipping-mask (DST_IN) compositing.
+    var prevLayerBitmap: android.graphics.Bitmap? = null
+
     for (layer in sortedLayers) {
         if (!layer.visible) continue
 
@@ -4700,22 +4728,74 @@ private fun DrawScope.drawCompositedLayersStrokes(
             val paint = cache.paint
             paint.alpha = (layer.opacity * 255f).coerceIn(0f, 255f).toInt()
             paint.applyLayerBlend(layer.blendMode)
-            
-            drawContext.canvas.nativeCanvas.drawBitmap(
-                cache.bitmap.asAndroidBitmap(),
-                0f,
-                pageTopY,
-                paint
-            )
-            
+
+            // Phase 222: clipping-mask — clip layer N to layer N-1 alpha via DST_IN.
+            val layerBmp = cache.bitmap.asAndroidBitmap()
+            val isClippingMask = layer.id in clippingMaskLayerIds && prevLayerBitmap != null
+            if (isClippingMask) {
+                val nativeCanvas = drawContext.canvas.nativeCanvas
+                val bounds = android.graphics.RectF(0f, 0f, size.width, size.height)
+                val clipPaint = android.graphics.Paint().apply {
+                    isAntiAlias = true
+                    alpha = paint.alpha
+                    applyLayerBlend(layer.blendMode)
+                }
+                val clipSaveCount = nativeCanvas.saveLayer(bounds, clipPaint)
+                try {
+                    // Draw current layer content.
+                    nativeCanvas.drawBitmap(layerBmp, 0f, pageTopY, null)
+                    // DST_IN: keep only where previous layer has alpha.
+                    val maskPaint = android.graphics.Paint().apply {
+                        xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.DST_IN)
+                    }
+                    nativeCanvas.drawBitmap(prevLayerBitmap!!, 0f, pageTopY, maskPaint)
+                } finally {
+                    nativeCanvas.restoreToCount(clipSaveCount)
+                }
+            } else {
+                drawContext.canvas.nativeCanvas.drawBitmap(
+                    layerBmp,
+                    0f,
+                    pageTopY,
+                    paint
+                )
+            }
+
+            // Alpha-lock: preview stroke clipped to existing layer content via DST_IN.
             if (isPreviewOnThisLayer && previewStroke != null) {
-                drawLivePreviewWithSymmetry(previewStroke, offsetY, symmetryMode)
+                if (layer.id in alphaLockLayerIds) {
+                    val nativeCanvas = drawContext.canvas.nativeCanvas
+                    val bounds = android.graphics.RectF(0f, 0f, size.width, size.height)
+                    val lockSaveCount = nativeCanvas.saveLayer(bounds, null)
+                    try {
+                        // Draw existing layer content as alpha mask.
+                        nativeCanvas.drawBitmap(layerBmp, 0f, pageTopY, null)
+                        // SRC_IN: draw new stroke only where mask exists.
+                        val lockPaint = android.graphics.Paint().apply {
+                            xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.SRC_IN)
+                        }
+                        val innerSaveCount = nativeCanvas.saveLayer(bounds, lockPaint)
+                        try {
+                            drawLivePreviewWithSymmetry(previewStroke, offsetY, symmetryMode)
+                        } finally {
+                            nativeCanvas.restoreToCount(innerSaveCount)
+                        }
+                    } finally {
+                        nativeCanvas.restoreToCount(lockSaveCount)
+                    }
+                } else {
+                    drawLivePreviewWithSymmetry(previewStroke, offsetY, symmetryMode)
+                }
             }
         } else {
             val isNormal = layer.blendMode.equals("NORMAL", ignoreCase = true)
             val isOpaque = layer.opacity >= 0.99f
-    
-            if (isNormal && isOpaque) {
+
+            val isAlphaLock = layer.id in alphaLockLayerIds
+            val isClippingMask = layer.id in clippingMaskLayerIds && prevLayerBitmap != null
+            val needsSaveLayer = isAlphaLock || isClippingMask || !isNormal || !isOpaque
+
+            if (!needsSaveLayer) {
                 for (stroke in layerStrokes) {
                     drawCommittedStrokeOnce(stroke, offsetY)
                 }
@@ -4724,23 +4804,73 @@ private fun DrawScope.drawCompositedLayersStrokes(
                 }
             } else {
                 val nativeCanvas = drawContext.canvas.nativeCanvas
+                val bounds = android.graphics.RectF(0f, 0f, size.width, size.height)
                 val paint = android.graphics.Paint().apply {
                     isAntiAlias = true
                     alpha = (layer.opacity * 255f).coerceIn(0f, 255f).toInt()
                     applyLayerBlend(layer.blendMode)
                 }
-                val bounds = android.graphics.RectF(0f, 0f, size.width, size.height)
                 val saveCount = nativeCanvas.saveLayer(bounds, paint)
                 try {
-                    for (stroke in layerStrokes) {
-                        drawCommittedStrokeOnce(stroke, offsetY)
+                    // Alpha-lock: draw existing layer content as alpha mask first.
+                    if (isAlphaLock) {
+                        // Retrieve cached bitmap if available, else render strokes into a temp.
+                        val layerBmpTmp = layerBitmapCache?.get(
+                            "${pageIdx}_${layer.id}_v${vibrancyBoost}_s${if (strokeShadowEnabled) 1 else 0}"
+                        )?.bitmap?.asAndroidBitmap()
+                        if (layerBmpTmp != null) {
+                            nativeCanvas.drawBitmap(layerBmpTmp, 0f, pageTopY, null)
+                            val lockPaint = android.graphics.Paint().apply {
+                                xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.SRC_IN)
+                            }
+                            val innerSaveCount = nativeCanvas.saveLayer(bounds, lockPaint)
+                            try {
+                                for (stroke in layerStrokes) {
+                                    drawCommittedStrokeOnce(stroke, offsetY)
+                                }
+                                if (isPreviewOnThisLayer && previewStroke != null) {
+                                    drawLivePreviewWithSymmetry(previewStroke, offsetY, symmetryMode)
+                                }
+                            } finally {
+                                nativeCanvas.restoreToCount(innerSaveCount)
+                            }
+                        } else {
+                            // No bitmap cache available — draw strokes directly (no alpha-lock).
+                            for (stroke in layerStrokes) {
+                                drawCommittedStrokeOnce(stroke, offsetY)
+                            }
+                            if (isPreviewOnThisLayer && previewStroke != null) {
+                                drawLivePreviewWithSymmetry(previewStroke, offsetY, symmetryMode)
+                            }
+                        }
+                    } else {
+                        for (stroke in layerStrokes) {
+                            drawCommittedStrokeOnce(stroke, offsetY)
+                        }
+                        if (isPreviewOnThisLayer && previewStroke != null) {
+                            drawLivePreviewWithSymmetry(previewStroke, offsetY, symmetryMode)
+                        }
                     }
-                    if (isPreviewOnThisLayer && previewStroke != null) {
-                        drawLivePreviewWithSymmetry(previewStroke, offsetY, symmetryMode)
+
+                    // Clipping-mask: DST_IN against previous layer's alpha.
+                    if (isClippingMask) {
+                        val maskPaint = android.graphics.Paint().apply {
+                            xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.DST_IN)
+                        }
+                        nativeCanvas.drawBitmap(prevLayerBitmap!!, 0f, pageTopY, maskPaint)
                     }
                 } finally {
                     nativeCanvas.restoreToCount(saveCount)
                 }
+            }
+        }
+
+        // Phase 222: track previous layer bitmap for clipping-mask compositing.
+        if (layer.id in clippingMaskLayerIds) {
+            prevLayerBitmap = if (layerBitmapCache != null) {
+                layerBitmapCache.get("${pageIdx}_${layer.id}_v${vibrancyBoost}_s${if (strokeShadowEnabled) 1 else 0}")?.bitmap?.asAndroidBitmap()
+            } else {
+                null
             }
         }
     }
@@ -5096,6 +5226,18 @@ private fun DrawScope.drawSingleStroke(
     }
     val strokeWidth = stroke.width
 
+    // Phase 222: tilt shading — average tilt from stroke points → width/alpha factors.
+    val tiltWidthMul: Float
+    val tiltAlphaMul: Float
+    if (renderOpts.tiltShadingEnabled && stroke.points.isNotEmpty()) {
+        val avgTilt = stroke.points.mapNotNull { it.tilt }.average().toFloat()
+        tiltWidthMul = com.authorss81.noteflow.services.TiltShadingPolicy.widthFactor(avgTilt)
+        tiltAlphaMul = com.authorss81.noteflow.services.TiltShadingPolicy.alphaFactor(avgTilt)
+    } else {
+        tiltWidthMul = 1f
+        tiltAlphaMul = 1f
+    }
+
     // Phase 27: multi-color render-time color effects. The per-point color is
     // DERIVED from the stroke's stored colorMode + seed (+ optional gradient end
     // color) via BrushColorModeMath — never stored per point. The derivations
@@ -5136,9 +5278,24 @@ private fun DrawScope.drawSingleStroke(
                     val p1 = pts[i]
                     val p2 = pts[i + 1]
                     val vel = com.authorss81.noteflow.services.BrushStrokeMath.segmentVelocity(p1, p2)
-                    val dynamicWidth = (strokeWidth * com.authorss81.noteflow.services.BrushStrokeMath.velocityWidthFactor(vel, renderOpts.velocityIntensity)).coerceAtLeast(0.75f)
+                    // Phase 222: per-segment tilt shading for width.
+                    val segTiltW = if (renderOpts.tiltShadingEnabled) {
+                        val t1 = p1.tilt ?: 0f
+                        val t2 = p2.tilt ?: 0f
+                        (com.authorss81.noteflow.services.TiltShadingPolicy.widthFactor(t1) +
+                            com.authorss81.noteflow.services.TiltShadingPolicy.widthFactor(t2)) / 2f
+                    } else 1f
+                    val dynamicWidth = (strokeWidth * com.authorss81.noteflow.services.BrushStrokeMath.velocityWidthFactor(vel, renderOpts.velocityIntensity) * segTiltW).coerceAtLeast(0.75f)
+                    // Phase 222: per-segment tilt shading for alpha.
+                    val segTiltA = if (renderOpts.tiltShadingEnabled) {
+                        val t1 = p1.tilt ?: 0f
+                        val t2 = p2.tilt ?: 0f
+                        (com.authorss81.noteflow.services.TiltShadingPolicy.alphaFactor(t1) +
+                            com.authorss81.noteflow.services.TiltShadingPolicy.alphaFactor(t2)) / 2f
+                    } else 1f
+                    val segColor = if (segTiltA < 1f) color.copy(alpha = color.alpha * segTiltA) else color
                     drawLine(
-                        color = if (isMultiColor) derivedColorAtPoint(pts, i + 1) else color,
+                        color = if (isMultiColor) derivedColorAtPoint(pts, i + 1) else segColor,
                         start = Offset(p1.x, p1.y + offsetY),
                         end = Offset(p2.x, p2.y + offsetY),
                         strokeWidth = dynamicWidth,
@@ -5181,14 +5338,17 @@ private fun DrawScope.drawSingleStroke(
                             lineTo(pts.last().x, pts.last().y + offsetY)
                         }
                     }
+                    val tiltStrokeWidth = strokeWidth * tiltWidthMul
+                    val tiltColor = if (tiltAlphaMul < 1f) color.copy(alpha = color.alpha * tiltAlphaMul) else color
                     drawPath(
                         path = path,
-                        color = color,
-                        style = DrawStrokeStyle(width = strokeWidth, cap = StrokeCap.Round, join = StrokeJoin.Round)
+                        color = tiltColor,
+                        style = DrawStrokeStyle(width = tiltStrokeWidth, cap = StrokeCap.Round, join = StrokeJoin.Round)
                     )
                 }
             } else if (stroke.points.size == 1) {
-                drawCircle(if (isMultiColor) derivedColorAt(1f) else color, radius = strokeWidth / 2f, center = Offset(stroke.points.first().x, stroke.points.first().y + offsetY))
+                val dotColor = if (tiltAlphaMul < 1f) color.copy(alpha = color.alpha * tiltAlphaMul) else color
+                drawCircle(if (isMultiColor) derivedColorAt(1f) else dotColor, radius = (strokeWidth * tiltWidthMul) / 2f, center = Offset(stroke.points.first().x, stroke.points.first().y + offsetY))
             }
         }
         StrokeTool.FOUNTAIN_PEN -> {
@@ -5224,13 +5384,13 @@ private fun DrawScope.drawSingleStroke(
             }
         }
         StrokeTool.PENCIL -> {
-            val pencilColor = if (isMultiColor) derivedColorAt(0.5f) else color.copy(alpha = 0.82f)
+            val pencilColor = if (isMultiColor) derivedColorAt(0.5f) else color.copy(alpha = 0.82f * tiltAlphaMul)
             val nativeCanvas = drawContext.canvas.nativeCanvas
             BrushTextureEngine.drawTexturedStrokePath(
                 nativeCanvas = nativeCanvas,
                 points = stroke.points,
                 offsetY = offsetY,
-                strokeWidth = strokeWidth,
+                strokeWidth = strokeWidth * tiltWidthMul,
                 color = pencilColor,
                 textureType = BrushTextureEngine.TextureType.PENCIL_GRAPHITE
             )
@@ -5316,12 +5476,18 @@ private fun DrawScope.drawSingleStroke(
         // honest vector approximations of their AGSL shader styles (see docs/brush-styles.md).
         StrokeTool.CHARCOAL -> {
             val nativeCanvas = drawContext.canvas.nativeCanvas
+            val charcoalColor = if (tiltAlphaMul < 1f) {
+                val c = if (isMultiColor) derivedColorAt(0.5f) else color
+                c.copy(alpha = c.alpha * tiltAlphaMul)
+            } else {
+                if (isMultiColor) derivedColorAt(0.5f) else color
+            }
             BrushTextureEngine.drawCharcoalStroke(
                 nativeCanvas = nativeCanvas,
                 points = stroke.points,
                 offsetY = offsetY,
-                strokeWidth = strokeWidth,
-                color = if (isMultiColor) derivedColorAt(0.5f) else color,
+                strokeWidth = strokeWidth * tiltWidthMul,
+                color = charcoalColor,
                 seed = com.authorss81.noteflow.services.BrushStrokeMath.strokeSeedFromId(stroke.id)
             )
         }
@@ -7168,6 +7334,8 @@ private data class StrokeRenderOpts(
     val velocityModulated: Boolean = false,
     val velocityIntensity: Float = 1f,
     val nibAngleDeg: Float = 45f,
-    val chiselNibAngleDeg: Float = 30f
+    val chiselNibAngleDeg: Float = 30f,
+    // Phase 222: stylus tilt → width/alpha modulation.
+    val tiltShadingEnabled: Boolean = false
 )
 

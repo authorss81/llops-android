@@ -274,6 +274,28 @@ class SettingsManager(context: Context) {
         get() = prefs.getString("symmetry_mode_key", "off") ?: "off"
         set(value) = prefs.edit().putString("symmetry_mode_key", value).apply()
 
+    // Phase 222: tilt-shading gate (stylus angle → width/alpha modulation).
+    var tiltShadingEnabled: Boolean
+        get() = prefs.getBoolean("tilt_shading_enabled", false)
+        set(value) = prefs.edit().putBoolean("tilt_shading_enabled", value).apply()
+
+    // Phase 222: per-layer alpha-lock (paint only where ink already exists).
+    // Settings-key pattern: "layer_<layerId>_alphaLock" — no DB migration.
+    fun isLayerAlphaLockEnabled(layerId: String): Boolean =
+        prefs.getBoolean("layer_${layerId}_alphaLock", false)
+
+    fun setLayerAlphaLockEnabled(layerId: String, enabled: Boolean) {
+        prefs.edit().putBoolean("layer_${layerId}_alphaLock", enabled).apply()
+    }
+
+    // Phase 222: per-layer clipping mask (layer clips to layer below).
+    fun isLayerClippingMaskEnabled(layerId: String): Boolean =
+        prefs.getBoolean("layer_${layerId}_clippingMask", false)
+
+    fun setLayerClippingMaskEnabled(layerId: String, enabled: Boolean) {
+        prefs.edit().putBoolean("layer_${layerId}_clippingMask", enabled).apply()
+    }
+
     // Phase 07: custom paper-texture packs. Stored in a preference keyed by
     // page id (NOT the DB schema) so tiled paper backgrounds persist per page.
     fun paperTexturePathForPage(pageId: String): String? =
