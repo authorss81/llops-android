@@ -1228,59 +1228,82 @@ fun AnnotationCanvas(
                             currentOnSelectionChanged(null)
                         } else if (currentTool == StrokeTool.FILL) {
                             // Phase 221: flood fill — tap fills the contiguous region
-                            // at the tap point on the active layer.
+                            // at the tap point on the active layer. Samples from the
+                            // PDF/image background when available; otherwise renders
+                            // active-layer strokes to a temp bitmap for sampling.
                             if (!isLayerLocked) {
-                                val rawBmp = activeRawBitmapMap[targetPage]
-                                if (rawBmp != null && !rawBmp.isRecycled) {
-                                    val pageTopY = calculatePageYOffset(targetPage)
-                                    val px = com.authorss81.noteflow.services.EyedropperSamplingMath.canvasToPagePixel(
-                                        canvasX = canvasOffset.x,
-                                        canvasY = canvasOffset.y,
-                                        pageTopY = pageTopY,
-                                        pageWidthPx = pageWidthPx,
-                                        pageHeightPx = pageHeightPx,
-                                        bitmapWidth = rawBmp.width,
-                                        bitmapHeight = rawBmp.height
-                                    )
-                                    if (px != null) {
-                                        val fillColor = currentColor.toArgb()
-                                        val filledPoints = com.authorss81.noteflow.services.FloodFillEngine.floodFillBitmap(
-                                            source = rawBmp,
-                                            seedX = px.first,
-                                            seedY = px.second,
-                                            fillColorArgb = fillColor,
-                                            tolerancePercent = com.authorss81.noteflow.services.FloodFillEngine.DEFAULT_TOLERANCE_PERCENT
+                                var sourceBmp: android.graphics.Bitmap? = activeRawBitmapMap[targetPage]
+                                var needsRecycle = false
+                                if (sourceBmp == null || sourceBmp.isRecycled) {
+                                    // Pure-ink note: render active-layer strokes to a temp bitmap.
+                                    val lw = pageWidthPx.toInt().coerceAtLeast(1)
+                                    val lh = pageHeightPx.toInt().coerceAtLeast(1)
+                                    val layerBmp = android.graphics.Bitmap.createBitmap(lw, lh, android.graphics.Bitmap.Config.ARGB_8888)
+                                    val cvs = android.graphics.Canvas(layerBmp)
+                                    val layerStrokes = activeStrokeList.filter {
+                                        it.pdfPage == targetPage &&
+                                        (activeLayerId == null || it.layerId == activeLayerId)
+                                    }
+                                    for (s in layerStrokes) {
+                                        drawSingleStrokeToCanvas(cvs, s, null)
+                                    }
+                                    sourceBmp = layerBmp
+                                    needsRecycle = true
+                                }
+                                if (sourceBmp != null && !sourceBmp.isRecycled) {
+                                    try {
+                                        val pageTopY = calculatePageYOffset(targetPage)
+                                        val px = com.authorss81.noteflow.services.EyedropperSamplingMath.canvasToPagePixel(
+                                            canvasX = canvasOffset.x,
+                                            canvasY = canvasOffset.y,
+                                            pageTopY = pageTopY,
+                                            pageWidthPx = pageWidthPx,
+                                            pageHeightPx = pageHeightPx,
+                                            bitmapWidth = sourceBmp.width,
+                                            bitmapHeight = sourceBmp.height
                                         )
-                                        if (filledPoints.isNotEmpty()) {
-                                            val minX = filledPoints.minOf { it.x } - 0.5f
-                                            val maxX = filledPoints.maxOf { it.x } - 0.5f
-                                            val minY = filledPoints.minOf { it.y } - 0.5f
-                                            val maxY = filledPoints.maxOf { it.y } - 0.5f
-                                            val fillStroke = Stroke(
-                                                id = java.util.UUID.randomUUID().toString(),
-                                                tool = StrokeTool.FILL,
-                                                colorInt = fillColor,
-                                                width = 1f,
-                                                points = filledPoints,
-                                                start = PointF(minX, minY),
-                                                end = PointF(maxX, maxY),
-                                                pdfPage = targetPage,
-                                                layerId = activeLayerId ?: "layer_default",
-                                                colorMode = currentColorMode,
-                                                colorSeed = currentColorSeed,
-                                                gradientToColorInt = currentGradientToColor.toArgb()
+                                        if (px != null) {
+                                            val fillColor = currentColor.toArgb()
+                                            val filledPoints = com.authorss81.noteflow.services.FloodFillEngine.floodFillBitmap(
+                                                source = sourceBmp,
+                                                seedX = px.first,
+                                                seedY = px.second,
+                                                fillColorArgb = fillColor,
+                                                tolerancePercent = com.authorss81.noteflow.services.FloodFillEngine.DEFAULT_TOLERANCE_PERCENT
                                             )
-                                            activeStrokeList.add(fillStroke)
-                                            onStrokesChanged(
-                                                com.authorss81.noteflow.services.CanvasCommitListPolicy.emittedList(
-                                                    currentAll = currentStrokesProvider(),
-                                                    isContinuousMode = isContinuousMode,
-                                                    pageOf = { it.pdfPage },
-                                                    pdfPageFilter = pdfPageFilter,
-                                                    scopedReplacement = activeStrokeList
+                                            if (filledPoints.isNotEmpty()) {
+                                                val minX = filledPoints.minOf { it.x } - 0.5f
+                                                val maxX = filledPoints.maxOf { it.x } - 0.5f
+                                                val minY = filledPoints.minOf { it.y } - 0.5f
+                                                val maxY = filledPoints.maxOf { it.y } - 0.5f
+                                                val fillStroke = Stroke(
+                                                    id = java.util.UUID.randomUUID().toString(),
+                                                    tool = StrokeTool.FILL,
+                                                    colorInt = fillColor,
+                                                    width = 1f,
+                                                    points = filledPoints,
+                                                    start = PointF(minX, minY),
+                                                    end = PointF(maxX, maxY),
+                                                    pdfPage = targetPage,
+                                                    layerId = activeLayerId ?: "layer_default",
+                                                    colorMode = currentColorMode,
+                                                    colorSeed = currentColorSeed,
+                                                    gradientToColorInt = currentGradientToColor.toArgb()
                                                 )
-                                            )
+                                                activeStrokeList.add(fillStroke)
+                                                onStrokesChanged(
+                                                    com.authorss81.noteflow.services.CanvasCommitListPolicy.emittedList(
+                                                        currentAll = currentStrokesProvider(),
+                                                        isContinuousMode = isContinuousMode,
+                                                        pageOf = { it.pdfPage },
+                                                        pdfPageFilter = pdfPageFilter,
+                                                        scopedReplacement = activeStrokeList
+                                                    )
+                                                )
+                                            }
                                         }
+                                    } finally {
+                                        if (needsRecycle) sourceBmp?.recycle()
                                     }
                                 }
                             }
@@ -2862,7 +2885,9 @@ fun AnnotationCanvas(
                     eraserCursorProvider = { eraserCursorCanvas },
                     eraserMode = eraserMode,
                     activeStrokes = activeStrokeList,
-                    scatterAmountPercent = scatterAmountPercent
+                    scatterAmountPercent = scatterAmountPercent,
+                    gradientDragStart = gradientDragStart,
+                    gradientDragCurrent = gradientDragCurrent
                 )
             }
 
@@ -3493,7 +3518,10 @@ private fun LiveStrokePreview(
     eraserMode: com.authorss81.noteflow.services.EraserMode,
     activeStrokes: List<Stroke>,
     // Phase 220: pro brush controls — scatter for bitmap stamps.
-    scatterAmountPercent: Int = 0
+    scatterAmountPercent: Int = 0,
+    // Phase 221 review fix #6: gradient drag live preview state.
+    gradientDragStart: Offset? = null,
+    gradientDragCurrent: Offset? = null
 ) {
     Canvas(modifier = modifier) {
         val hasLiveInk = activePoints.isNotEmpty() || (activeStartProvider() != null && activeEndProvider() != null)
@@ -3545,6 +3573,51 @@ private fun LiveStrokePreview(
                     vibrancy = vibrancyBoost,
                     shadowEnabled = strokeShadowEnabled,
                     scatterAmountPercent = scatterAmountPercent
+                )
+            }
+        }
+
+        // Phase 221 review fix #6: gradient drag live preview — a semi-transparent
+        // arrow showing the gradient direction while the user is dragging.
+        if (currentTool == StrokeTool.GRADIENT && gradientDragStart != null && gradientDragCurrent != null) {
+            val start = gradientDragStart
+            val end = gradientDragCurrent
+            val dx = end.x - start.x
+            val dy = end.y - start.y
+            val len = kotlin.math.sqrt(dx * dx + dy * dy)
+            if (len > 2f) {
+                val previewColor = currentColor.copy(alpha = 0.5f)
+                // Direction line
+                drawLine(
+                    color = previewColor,
+                    start = Offset(start.x, start.y),
+                    end = Offset(end.x, end.y),
+                    strokeWidth = 3f,
+                    cap = StrokeCap.Round
+                )
+                // Arrowhead
+                val angle = kotlin.math.atan2(dy, dx)
+                val headLen = 14f
+                val headAngle = 0.5f
+                drawLine(
+                    color = previewColor,
+                    start = Offset(end.x, end.y),
+                    end = Offset(
+                        end.x - headLen * kotlin.math.cos(angle - headAngle).toFloat(),
+                        end.y - headLen * kotlin.math.sin(angle - headAngle).toFloat()
+                    ),
+                    strokeWidth = 3f,
+                    cap = StrokeCap.Round
+                )
+                drawLine(
+                    color = previewColor,
+                    start = Offset(end.x, end.y),
+                    end = Offset(
+                        end.x - headLen * kotlin.math.cos(angle + headAngle).toFloat(),
+                        end.y - headLen * kotlin.math.sin(angle + headAngle).toFloat()
+                    ),
+                    strokeWidth = 3f,
+                    cap = StrokeCap.Round
                 )
             }
         }
@@ -5774,7 +5847,143 @@ private fun DrawScope.drawSingleStroke(
                 }
             }
         }
+        StrokeTool.FILL -> {
+            if (stroke.points.size >= 3) {
+                val path = Path().apply {
+                    moveTo(stroke.points[0].x, stroke.points[0].y + offsetY)
+                    for (i in 1 until stroke.points.size) {
+                        lineTo(stroke.points[i].x, stroke.points[i].y + offsetY)
+                    }
+                    close()
+                }
+                drawPath(path = path, color = color, style = DrawStrokeStyle(width = 1f))
+            } else if (stroke.points.size == 1) {
+                val pt = stroke.points.first()
+                drawCircle(color, radius = 3f, center = Offset(pt.x, pt.y + offsetY))
+            }
+        }
+        StrokeTool.GRADIENT -> {
+            if (stroke.start != null && stroke.end != null) {
+                val topLeft = Offset(stroke.start.x, stroke.start.y + offsetY)
+                val size = Size(
+                    kotlin.math.abs(stroke.end.x - stroke.start.x),
+                    kotlin.math.abs(stroke.end.y - stroke.start.y)
+                )
+                if (size.width > 0f && size.height > 0f) {
+                    val fromArgb = stroke.colorInt
+                    val toArgb = stroke.gradientToColorInt
+                        ?: com.authorss81.noteflow.services.BrushColorModeMath.complementaryArgb(fromArgb)
+                    val fromColor = Color(fromArgb)
+                    val toColor = Color(toArgb)
+                    val gradientStart: Offset
+                    val gradientEnd: Offset
+                    if (stroke.points.size >= 2) {
+                        val p0 = stroke.points[0]
+                        val p1 = stroke.points[1]
+                        gradientStart = Offset(p0.x, p0.y + offsetY)
+                        gradientEnd = Offset(p1.x, p1.y + offsetY)
+                    } else {
+                        gradientStart = Offset(topLeft.x, topLeft.y)
+                        gradientEnd = Offset(topLeft.x + size.width, topLeft.y)
+                    }
+                    drawRect(
+                        brush = Brush.linearGradient(
+                            colors = listOf(fromColor, toColor),
+                            start = gradientStart,
+                            end = gradientEnd
+                        ),
+                        topLeft = topLeft,
+                        size = size
+                    )
+                }
+            }
+        }
         else -> {}
+    }
+}
+
+/**
+ * Phase 221 review fix #4: minimal stroke renderer for [android.graphics.Canvas]
+ * used by the fill tool to render active-layer strokes into a temp sampling bitmap.
+ * Only handles the subset of tools that produce visible pixels (freehand + shapes).
+ */
+private fun drawSingleStrokeToCanvas(
+    canvas: android.graphics.Canvas,
+    stroke: Stroke,
+    inkRenderer: CanvasStrokeRenderer?
+) {
+    if (stroke.isAdvanced && inkRenderer != null) {
+        try {
+            val inkStroke = convertToInkStroke(stroke)
+            if (inkStroke != null) {
+                inkRenderer.draw(canvas, inkStroke, android.graphics.Matrix())
+                return
+            }
+        } catch (_: Throwable) { }
+    }
+    val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        color = stroke.colorInt
+        strokeWidth = stroke.width.coerceAtLeast(1f)
+        style = android.graphics.Paint.Style.STROKE
+        strokeCap = android.graphics.Paint.Cap.ROUND
+        strokeJoin = android.graphics.Paint.Join.ROUND
+    }
+    when (stroke.tool) {
+        StrokeTool.FILL -> {
+            if (stroke.points.size >= 3) {
+                paint.style = android.graphics.Paint.Style.FILL
+                val path = android.graphics.Path()
+                path.moveTo(stroke.points[0].x, stroke.points[0].y)
+                for (i in 1 until stroke.points.size) path.lineTo(stroke.points[i].x, stroke.points[i].y)
+                path.close()
+                canvas.drawPath(path, paint)
+            }
+        }
+        StrokeTool.GRADIENT -> {
+            if (stroke.start != null && stroke.end != null) {
+                paint.style = android.graphics.Paint.Style.FILL
+                canvas.drawRect(
+                    minOf(stroke.start.x, stroke.end.x),
+                    minOf(stroke.start.y, stroke.end.y),
+                    maxOf(stroke.start.x, stroke.end.x),
+                    maxOf(stroke.start.y, stroke.end.y),
+                    paint
+                )
+            }
+        }
+        StrokeTool.TEXT -> {
+            if (stroke.start != null && stroke.text.isNotEmpty()) {
+                val parsed = CanvasTextStyle.parse(stroke.text)
+                val textPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                    color = stroke.colorInt
+                    textSize = parsed.first.fontSizeSp * 1.5f
+                }
+                canvas.drawText(parsed.second, stroke.start.x, stroke.start.y, textPaint)
+            }
+        }
+        else -> {
+            if (stroke.points.size > 1) {
+                val path = android.graphics.Path()
+                path.moveTo(stroke.points[0].x, stroke.points[0].y)
+                for (i in 1 until stroke.points.size) {
+                    path.lineTo(stroke.points[i].x, stroke.points[i].y)
+                }
+                canvas.drawPath(path, paint)
+            } else if (stroke.points.size == 1) {
+                paint.style = android.graphics.Paint.Style.FILL
+                canvas.drawCircle(stroke.points[0].x, stroke.points[0].y, stroke.width / 2f, paint)
+            }
+            if (stroke.start != null && stroke.end != null && stroke.tool.isShapeTool) {
+                paint.style = android.graphics.Paint.Style.STROKE
+                canvas.drawRect(
+                    minOf(stroke.start.x, stroke.end.x),
+                    minOf(stroke.start.y, stroke.end.y),
+                    maxOf(stroke.start.x, stroke.end.x),
+                    maxOf(stroke.start.y, stroke.end.y),
+                    paint
+                )
+            }
+        }
     }
 }
 

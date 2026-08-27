@@ -2,6 +2,8 @@ package com.authorss81.noteflow.services
 
 import android.graphics.Bitmap
 import com.authorss81.noteflow.data.model.PointF
+import kotlin.math.max
+import kotlin.math.sqrt
 
 /**
  * Phase 221: tolerance-aware 4-way flood fill engine.
@@ -16,14 +18,17 @@ import com.authorss81.noteflow.data.model.PointF
  * The scan uses an iterative stack-based 4-way approach (no recursion, no allocation
  * inside the inner loop). Visited pixels are tracked via a same-size [IntArray] bitmask.
  *
+ * After the fill, the outer contour is extracted and simplified via
+ * Ramer–Douglas–Peucker (epsilon 1.3 px) to keep the stroke model compact.
+ *
  * Constraints satisfied:
  * - At most ONE [Bitmap.copy] per fill (recycled after).
  * - No allocation inside the inner loop — stack and visited array are pre-allocated.
- * - Bounded by [MAX_VISITED_PIXELS] = [StrokeGeometryPolicy.MAX_POINTS_PER_PAGE].
+ * - Bounded by [MAX_FILLED_PIXELS] on the filled region, not the bitmap.
  */
 object FloodFillEngine {
 
-    private const val MAX_VISITED_PIXELS = StrokeGeometryPolicy.MAX_POINTS_PER_PAGE
+    private const val MAX_FILLED_PIXELS = StrokeGeometryPolicy.MAX_POINTS_PER_PAGE
 
     /**
      * Default tolerance for the fill bucket tool (12% in linear RGB).
@@ -32,18 +37,20 @@ object FloodFillEngine {
     const val DEFAULT_TOLERANCE_PERCENT = 12f
 
     /**
+     * Ramer–Douglas–Peucker simplification epsilon in pixel units.
+     * Matches the PROMPT spec.
+     */
+    const val RDP_EPSILON = 1.3f
+
+    /**
      * Core flood fill on raw ARGB pixel data.
      *
-     * @param pixels  mutable flat array of width × height ARGB ints (row-major).
-     * @param width   pixel width of the bitmap.
-     * @param height  pixel height of the bitmap.
-     * @param seedX   seed pixel X (canvas coords → already converted to pixel coords).
-     * @param seedY   seed pixel Y.
-     * @param fillColorArgb  ARGB int to paint matched pixels with.
-     * @param tolerancePercent  tolerance 0..100 in linear RGB (0 = exact match only).
-     * @return list of [PointF] for the filled pixel centers, or empty if seed is out of bounds.
+     * Mutates [pixels] in-place (writes [fillColorArgb] to matched pixels)
+     * and returns the list of filled-pixel indices (row-major flat index).
+     *
+     * @return filled pixel indices, or empty on failure / bounds overflow.
      */
-    fun floodFill(
+    internal fun floodFillIndices(
         pixels: IntArray,
         width: Int,
         height: Int,
@@ -51,29 +58,23 @@ object FloodFillEngine {
         seedY: Int,
         fillColorArgb: Int,
         tolerancePercent: Float = DEFAULT_TOLERANCE_PERCENT
-    ): List<PointF> {
+    ): List<Int> {
         if (width <= 0 || height <= 0) return emptyList()
         if (seedX < 0 || seedX >= width || seedY < 0 || seedY >= height) return emptyList()
 
-        val totalPixels = width * height
-        if (totalPixels > MAX_VISITED_PIXELS) return emptyList()
-
         val seedColor = pixels[seedY * width + seedX]
         val tolerance = tolerancePercent.coerceIn(0f, 100f) / 100f
-        // Pre-compute linear RGB components of the seed color for comparison.
         val seedLinR = srgbChannelToLinear(seedColor shr 16 and 0xFF)
         val seedLinG = srgbChannelToLinear(seedColor shr 8 and 0xFF)
         val seedLinB = srgbChannelToLinear(seedColor and 0xFF)
 
-        // Visited bitmask: 1 = visited, 0 = not yet.
-        val visited = IntArray(totalPixels)
-
-        val result = mutableListOf<PointF>()
+        val visited = IntArray(width * height)
+        val filled = mutableListOf<Int>()
         val stack = ArrayDeque<Int>(256)
         stack.addLast(seedY * width + seedX)
 
         while (stack.isNotEmpty()) {
-            if (result.size >= MAX_VISITED_PIXELS) break
+            if (filled.size >= MAX_FILLED_PIXELS) break
 
             val idx = stack.removeLast()
             if (visited[idx] != 0) continue
@@ -85,51 +86,111 @@ object FloodFillEngine {
             val linG = srgbChannelToLinear(pixel shr 8 and 0xFF)
             val linB = srgbChannelToLinear(pixel and 0xFF)
 
-            val dr = kotlin.math.abs(linR - seedLinR)
-            val dg = kotlin.math.abs(linG - seedLinG)
-            val db = kotlin.math.abs(linB - seedLinB)
-
-            // Color distance: max-channel deviation in linear RGB.
-            val maxDev = maxOf(dr, dg, db)
+            val maxDev = maxOf(
+                kotlin.math.abs(linR - seedLinR),
+                kotlin.math.abs(linG - seedLinG),
+                kotlin.math.abs(linB - seedLinB)
+            )
             if (maxDev > tolerance) continue
 
             visited[idx] = 1
             pixels[idx] = fillColorArgb
-            result.add(PointF(px.toFloat() + 0.5f, py.toFloat() + 0.5f))
+            filled.add(idx)
 
-            // 4-way neighbours: right, left, down, up.
-            if (px + 1 < width) {
-                val right = py * width + (px + 1)
-                if (visited[right] == 0) stack.addLast(right)
-            }
-            if (px - 1 >= 0) {
-                val left = py * width + (px - 1)
-                if (visited[left] == 0) stack.addLast(left)
-            }
-            if (py + 1 < height) {
-                val below = (py + 1) * width + px
-                if (visited[below] == 0) stack.addLast(below)
-            }
-            if (py - 1 >= 0) {
-                val above = (py - 1) * width + px
-                if (visited[above] == 0) stack.addLast(above)
+            if (px + 1 < width) { val r = py * width + (px + 1); if (visited[r] == 0) stack.addLast(r) }
+            if (px - 1 >= 0) { val l = py * width + (px - 1); if (visited[l] == 0) stack.addLast(l) }
+            if (py + 1 < height) { val b = (py + 1) * width + px; if (visited[b] == 0) stack.addLast(b) }
+            if (py - 1 >= 0) { val a = (py - 1) * width + px; if (visited[a] == 0) stack.addLast(a) }
+        }
+
+        return filled
+    }
+
+    /**
+     * Extract the outer contour from a filled bitmap region.
+     *
+     * A filled pixel is a boundary pixel if any of its 4 neighbours is NOT filled.
+     * Boundary pixels are collected and then simplified via Ramer–Douglas–Peucker.
+     *
+     * @param filledIndices  flat row-major indices returned by [floodFillIndices].
+     * @param width          bitmap width.
+     * @param height         bitmap height.
+     * @return simplified outer contour as [PointF] list (pixel centres), ordered
+     *         roughly along the boundary.
+     */
+    fun extractContour(
+        filledIndices: List<Int>,
+        width: Int,
+        height: Int
+    ): List<PointF> {
+        if (filledIndices.isEmpty()) return emptyList()
+
+        val filledSet = HashSet(filledIndices)
+        val boundary = mutableListOf<PointF>()
+
+        for (idx in filledIndices) {
+            val px = idx % width
+            val py = idx / width
+            val isBoundary = (px == 0 || px == width - 1 || py == 0 || py == height - 1) ||
+                (py * width + (px + 1)) !in filledSet ||
+                (py * width + (px - 1)) !in filledSet ||
+                ((py + 1) * width + px) !in filledSet ||
+                ((py - 1) * width + px) !in filledSet
+            if (isBoundary) {
+                boundary.add(PointF(px.toFloat() + 0.5f, py.toFloat() + 0.5f))
             }
         }
 
-        return result
+        if (boundary.size <= 2) return boundary
+
+        // Sort by angle from centroid so the contour follows a coherent polyline
+        // path before RDP simplification.
+        val cx = boundary.map { it.x }.average().toFloat()
+        val cy = boundary.map { it.y }.average().toFloat()
+        boundary.sortBy { kotlin.math.atan2((it.y - cy).toDouble(), (it.x - cx).toDouble()).toFloat() }
+
+        return simplifyRdp(boundary, RDP_EPSILON)
+    }
+
+    /**
+     * Ramer–Douglas–Peucker polyline simplification.
+     */
+    fun simplifyRdp(points: List<PointF>, epsilon: Float): List<PointF> {
+        if (points.size <= 2) return points
+
+        var maxDist = 0f
+        var maxIdx = 0
+        val first = points.first()
+        val last = points.last()
+
+        for (i in 1 until points.size - 1) {
+            val d = perpendicularDistance(points[i], first, last)
+            if (d > maxDist) {
+                maxDist = d
+                maxIdx = i
+            }
+        }
+
+        return if (maxDist > epsilon) {
+            val left = simplifyRdp(points.subList(0, maxIdx + 1), epsilon)
+            val right = simplifyRdp(points.subList(maxIdx, points.size), epsilon)
+            left.dropLast(1) + right
+        } else {
+            listOf(first, last)
+        }
     }
 
     /**
      * Android Bitmap adapter. Copies the source bitmap (one copy, recycled after),
-     * performs the flood fill on the copy's pixels, and returns the filled pixel
-     * centers. The copy is recycled before returning.
+     * performs the flood fill, extracts the outer contour, and returns simplified
+     * boundary points.
      *
-     * @param source     the composited bitmap to sample from.
+     * @param source     the bitmap to sample from.
      * @param seedX      seed X in pixel coordinates.
      * @param seedY      seed Y in pixel coordinates.
      * @param fillColorArgb  ARGB fill color.
      * @param tolerancePercent  tolerance 0..100 in linear RGB.
-     * @return list of [PointF] for the filled region, or empty on failure.
+     * @return simplified outer contour [PointF] list, or empty on failure.
      */
     fun floodFillBitmap(
         source: Bitmap,
@@ -141,23 +202,35 @@ object FloodFillEngine {
         val w = source.width
         val h = source.height
         if (w <= 0 || h <= 0) return emptyList()
-        if (w * h > MAX_VISITED_PIXELS) return emptyList()
 
         val copy = source.copy(Bitmap.Config.ARGB_8888, true) ?: return emptyList()
         try {
             val pixels = IntArray(w * h)
             copy.getPixels(pixels, 0, w, 0, 0, w, h)
-            val result = floodFill(pixels, w, h, seedX, seedY, fillColorArgb, tolerancePercent)
-            return result
+            val filled = floodFillIndices(pixels, w, h, seedX, seedY, fillColorArgb, tolerancePercent)
+            return extractContour(filled, w, h)
         } finally {
             copy.recycle()
         }
     }
 
-    /**
-     * sRGB byte channel (0..255) to linear float (0..1).
-     * Uses the standard piecewise sRGB EOTF matching [WetMixingMath.srgbToLinear].
-     */
+    private fun perpendicularDistance(point: PointF, lineStart: PointF, lineEnd: PointF): Float {
+        val dx = lineEnd.x - lineStart.x
+        val dy = lineEnd.y - lineStart.y
+        val lengthSq = dx * dx + dy * dy
+        if (lengthSq < 1e-6f) {
+            val px = point.x - lineStart.x
+            val py = point.y - lineStart.y
+            return sqrt(px * px + py * py)
+        }
+        val t = ((point.x - lineStart.x) * dx + (point.y - lineStart.y) * dy) / lengthSq
+        val closestX = lineStart.x + t * dx
+        val closestY = lineStart.y + t * dy
+        val ex = point.x - closestX
+        val ey = point.y - closestY
+        return sqrt(ex * ex + ey * ey)
+    }
+
     private fun srgbChannelToLinear(byteValue: Int): Float {
         val c = (byteValue.coerceIn(0, 255) / 255f)
         return if (c <= 0.04045f) c / 12.92f

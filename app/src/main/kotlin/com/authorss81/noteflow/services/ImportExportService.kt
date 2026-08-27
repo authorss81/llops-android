@@ -1170,6 +1170,45 @@ object ImportExportService {
                     }
                 }
             }
+            com.authorss81.noteflow.data.model.StrokeTool.FILL -> {
+                if (stroke.points.size >= 3) {
+                    val paint = android.graphics.Paint(basePaint).apply {
+                        style = android.graphics.Paint.Style.FILL
+                    }
+                    val path = android.graphics.Path()
+                    path.moveTo(stroke.points[0].x, stroke.points[0].y)
+                    for (i in 1 until stroke.points.size) {
+                        path.lineTo(stroke.points[i].x, stroke.points[i].y)
+                    }
+                    path.close()
+                    canvas.drawPath(path, paint)
+                }
+            }
+            com.authorss81.noteflow.data.model.StrokeTool.GRADIENT -> {
+                if (stroke.start != null && stroke.end != null) {
+                    val left = minOf(stroke.start.x, stroke.end.x)
+                    val top = minOf(stroke.start.y, stroke.end.y)
+                    val right = maxOf(stroke.start.x, stroke.end.x)
+                    val bottom = maxOf(stroke.start.y, stroke.end.y)
+                    val fromColor = stroke.colorInt
+                    val toColor = stroke.gradientToColorInt
+                        ?: com.authorss81.noteflow.services.BrushColorModeMath.complementaryArgb(fromColor)
+                    val sx = if (stroke.points.size >= 2) stroke.points[0].x else left
+                    val sy = if (stroke.points.size >= 2) stroke.points[0].y else top
+                    val ex = if (stroke.points.size >= 2) stroke.points[1].x else right
+                    val ey = if (stroke.points.size >= 2) stroke.points[1].y else top
+                    val shader = android.graphics.LinearGradient(
+                        sx, sy, ex, ey,
+                        fromColor, toColor,
+                        android.graphics.Shader.TileMode.CLAMP
+                    )
+                    val paint = android.graphics.Paint().apply {
+                        this.shader = shader
+                        isAntiAlias = true
+                    }
+                    canvas.drawRect(left, top, right, bottom, paint)
+                }
+            }
             else -> {}
         }
     }

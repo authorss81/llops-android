@@ -7,8 +7,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Phase 221: unit tests for FloodFillEngine tolerance boundaries and
- * gradient color interpolation via BrushColorModeMath.gradientColorAt.
+ * Phase 221: unit tests for FloodFillEngine tolerance boundaries,
+ * contour extraction + RDP simplification, and gradient color
+ * interpolation via BrushColorModeMath.gradientColorAt.
  *
  * Pure JVM — no Android framework, no instrumentation.
  */
@@ -32,35 +33,32 @@ class FillToleranceTest {
         val white = argb(255, 255, 255, 255)
         val red = argb(255, 255, 0, 0)
         val pixels = solidBitmap(w, h, white)
-        val result = FloodFillEngine.floodFill(pixels, w, h, 1, 1, red, tolerancePercent = 0f)
+        val result = FloodFillEngine.floodFillIndices(pixels, w, h, 1, 1, red, tolerancePercent = 0f)
         assertEquals("all 9 pixels filled", 9, result.size)
-        // every pixel must now be red
         for (p in pixels) assertEquals("pixel must be red", red, p)
     }
 
     @Test
     fun `zero tolerance rejects one-byte-different neighbour`() {
         val w = 3; val h = 1
-        // [255,255,255] [254,255,255] [255,255,255]  — centre pixel differs by 1/255 ≈ 0.39%
         val pixels = intArrayOf(
             argb(255, 255, 255, 255),
             argb(255, 254, 255, 255),
             argb(255, 255, 255, 255)
         )
-        val result = FloodFillEngine.floodFill(pixels, w, h, 0, 0, argb(255, 0, 0, 0), tolerancePercent = 0f)
+        val result = FloodFillEngine.floodFillIndices(pixels, w, h, 0, 0, argb(255, 0, 0, 0), tolerancePercent = 0f)
         assertEquals("only the seed pixel filled", 1, result.size)
     }
 
     @Test
     fun `12-percent tolerance bridges small color gap`() {
         val w = 3; val h = 1
-        // seed=200, neighbour=190 → Δ=10/255≈3.9% in sRGB; in linear RGB ≈6.3% — under 12%.
         val seed = argb(255, 200, 200, 200)
         val close = argb(255, 190, 190, 190)
         val far = argb(255, 100, 100, 100)
         val pixels = intArrayOf(seed, close, far)
         val fill = argb(255, 0, 0, 0)
-        val result = FloodFillEngine.floodFill(pixels, w, h, 0, 0, fill, tolerancePercent = 12f)
+        val result = FloodFillEngine.floodFillIndices(pixels, w, h, 0, 0, fill, tolerancePercent = 12f)
         assertEquals("seed + close neighbour filled (2)", 2, result.size)
         assertEquals("close pixel painted", fill, pixels[1])
         assertEquals("far pixel untouched", far, pixels[2])
@@ -69,21 +67,17 @@ class FillToleranceTest {
     @Test
     fun `12-percent tolerance stops at large color gap`() {
         val w = 2; val h = 1
-        // seed=200, neighbour=100 → Δ=100/255≈39% — well above 12%.
         val seed = argb(255, 200, 200, 200)
         val far = argb(255, 100, 100, 100)
         val pixels = intArrayOf(seed, far)
         val fill = argb(255, 0, 0, 0)
-        val result = FloodFillEngine.floodFill(pixels, w, h, 0, 0, fill, tolerancePercent = 12f)
+        val result = FloodFillEngine.floodFillIndices(pixels, w, h, 0, 0, fill, tolerancePercent = 12f)
         assertEquals("only seed pixel filled", 1, result.size)
         assertEquals("far pixel untouched", far, pixels[1])
     }
 
     @Test
     fun `fill respects 4-way connectivity (no diagonal leak)`() {
-        // 3×3: seed (1,1) is white, edge neighbours are white, corners are black.
-        // With 0% tolerance, fill should reach only the 4 edge-connected white
-        // pixels, NOT the black corners.
         val w = 3; val h = 3
         val white = argb(255, 255, 255, 255)
         val black = argb(255, 0, 0, 0)
@@ -93,9 +87,8 @@ class FillToleranceTest {
             black, white, black
         )
         val fill = argb(255, 200, 0, 0)
-        val result = FloodFillEngine.floodFill(pixels, w, h, 1, 1, fill, tolerancePercent = 0f)
+        val result = FloodFillEngine.floodFillIndices(pixels, w, h, 1, 1, fill, tolerancePercent = 0f)
         assertEquals("centre + 4 edge neighbours = 5 pixels", 5, result.size)
-        // corners must remain black
         assertEquals("top-left unchanged", black, pixels[0])
         assertEquals("top-right unchanged", black, pixels[2])
         assertEquals("bottom-left unchanged", black, pixels[6])
@@ -105,27 +98,93 @@ class FillToleranceTest {
     @Test
     fun `out-of-bounds seed returns empty`() {
         val pixels = solidBitmap(3, 3, argb(255, 255, 255, 255))
-        val result = FloodFillEngine.floodFill(pixels, 3, 3, -1, 0, argb(255, 0, 0, 0))
+        val result = FloodFillEngine.floodFillIndices(pixels, 3, 3, -1, 0, argb(255, 0, 0, 0))
         assertTrue("negative X seed returns empty", result.isEmpty())
-        val result2 = FloodFillEngine.floodFill(pixels, 3, 3, 5, 0, argb(255, 0, 0, 0))
+        val result2 = FloodFillEngine.floodFillIndices(pixels, 3, 3, 5, 0, argb(255, 0, 0, 0))
         assertTrue("X beyond width returns empty", result2.isEmpty())
     }
 
     @Test
     fun `zero-size bitmap returns empty`() {
-        val result = FloodFillEngine.floodFill(intArrayOf(), 0, 0, 0, 0, argb(255, 0, 0, 0))
+        val result = FloodFillEngine.floodFillIndices(intArrayOf(), 0, 0, 0, 0, argb(255, 0, 0, 0))
         assertTrue("zero-size returns empty", result.isEmpty())
     }
 
     @Test
-    fun `fill clamps to MAX_POINTS_PER_PAGE`() {
+    fun `fill clamps to MAX_FILLED_PIXELS on filled count`() {
         // 142×142 = 20164 < 200000 so this should fill fully.
         val w = 142; val h = 142
         val white = argb(255, 255, 255, 255)
         val red = argb(255, 255, 0, 0)
         val pixels = solidBitmap(w, h, white)
-        val result = FloodFillEngine.floodFill(pixels, w, h, 0, 0, red)
+        val result = FloodFillEngine.floodFillIndices(pixels, w, h, 0, 0, red)
         assertEquals("full fill within budget", w * h, result.size)
+    }
+
+    // ---- Contour extraction tests -----------------------------------------
+
+    @Test
+    fun `contour of solid 3x3 fill simplifies to 4 corners via RDP`() {
+        val w = 3; val h = 3
+        val white = argb(255, 255, 255, 255)
+        val red = argb(255, 255, 0, 0)
+        val pixels = solidBitmap(w, h, white)
+        val filled = FloodFillEngine.floodFillIndices(pixels, w, h, 1, 1, red, tolerancePercent = 0f)
+        assertEquals(9, filled.size)
+        val contour = FloodFillEngine.extractContour(filled, w, h)
+        // 3×3 solid: 8 boundary pixels; RDP (epsilon 1.3) removes edge midpoints
+        // that are within tolerance of the corner-to-corner lines → 4 corners.
+        assertTrue("contour has 4-8 points after RDP", contour.size in 4..8)
+    }
+
+    @Test
+    fun `contour of single pixel is itself`() {
+        val filled = listOf(5) // flat index 5 in a 10-wide bitmap
+        val contour = FloodFillEngine.extractContour(filled, 10, 10)
+        assertEquals(1, contour.size)
+    }
+
+    @Test
+    fun `contour of empty fill is empty`() {
+        val contour = FloodFillEngine.extractContour(emptyList(), 10, 10)
+        assertTrue(contour.isEmpty())
+    }
+
+    // ---- RDP simplification tests -----------------------------------------
+
+    @Test
+    fun `RDP of collinear points reduces to endpoints`() {
+        val pts = listOf(
+            com.authorss81.noteflow.data.model.PointF(0f, 0f),
+            com.authorss81.noteflow.data.model.PointF(1f, 1f),
+            com.authorss81.noteflow.data.model.PointF(2f, 2f),
+            com.authorss81.noteflow.data.model.PointF(3f, 3f)
+        )
+        val simplified = FloodFillEngine.simplifyRdp(pts, 1.0f)
+        assertEquals(2, simplified.size)
+        assertEquals(0f, simplified[0].x, 0.01f)
+        assertEquals(3f, simplified.last().x, 0.01f)
+    }
+
+    @Test
+    fun `RDP of two points returns both`() {
+        val pts = listOf(
+            com.authorss81.noteflow.data.model.PointF(0f, 0f),
+            com.authorss81.noteflow.data.model.PointF(5f, 5f)
+        )
+        val simplified = FloodFillEngine.simplifyRdp(pts, 1.0f)
+        assertEquals(2, simplified.size)
+    }
+
+    @Test
+    fun `RDP preserves a triangle`() {
+        val pts = listOf(
+            com.authorss81.noteflow.data.model.PointF(0f, 0f),
+            com.authorss81.noteflow.data.model.PointF(5f, 0f),
+            com.authorss81.noteflow.data.model.PointF(2.5f, 5f)
+        )
+        val simplified = FloodFillEngine.simplifyRdp(pts, 1.0f)
+        assertTrue("triangle has at least 3 points after RDP", simplified.size >= 3)
     }
 
     // ---- Gradient color interpolation via BrushColorModeMath ----------------
@@ -151,7 +210,6 @@ class FillToleranceTest {
         val red = argb(255, 255, 0, 0)
         val blue = argb(255, 0, 0, 255)
         val at05 = BrushColorModeMath.gradientColorAt(red, blue, 0.5f)
-        // midpoint of (255,0,0) and (0,0,255) = (127 or 128, 0, 127 or 128)
         val r = (at05 shr 16) and 0xFF
         val g = (at05 shr 8) and 0xFF
         val b = at05 and 0xFF

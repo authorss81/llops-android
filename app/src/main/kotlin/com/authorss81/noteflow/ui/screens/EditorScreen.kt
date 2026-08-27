@@ -6084,7 +6084,7 @@ private fun getToolIcon(tool: StrokeTool): ImageVector {
         StrokeTool.GOUACHE -> Icons.Outlined.FormatColorFill
         StrokeTool.DRY_BRUSH -> Icons.Outlined.Grass
         StrokeTool.PALETTE_KNIFE -> Icons.Outlined.ContentCut
-        StrokeTool.FILL -> Icons.Outlined.FormatColorFill
+        StrokeTool.FILL -> Icons.Outlined.AutoFixHigh
         StrokeTool.GRADIENT -> Icons.Outlined.Gradient
     }
 }
