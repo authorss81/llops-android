@@ -52,7 +52,9 @@ object ExportDestinationPolicy {
         /** Layered canvas exported to PSD. */
         LAYERED_PSD,
         /** Current brush settings exported as a `.inkbrush` preset file (phase-155). */
-        BRUSH_PRESET
+        BRUSH_PRESET,
+        /** Phase 224: page timelapse replay exported as MP4 video. */
+        TIMELAPSE_MP4
     }
 
     /** MIME type handed to the SAF `ACTION_CREATE_DOCUMENT` picker. */
@@ -65,6 +67,7 @@ object ExportDestinationPolicy {
         ExportKind.NOTE_HTML -> "text/html"
         ExportKind.LAYERED_PSD -> "image/vnd.adobe.photoshop"
         ExportKind.BRUSH_PRESET -> "application/octet-stream"
+        ExportKind.TIMELAPSE_MP4 -> "video/mp4"
     }
 
     /** True when the export content is readable plaintext (not the encrypted backup). */
@@ -104,6 +107,7 @@ object ExportDestinationPolicy {
         ExportKind.NOTE_HTML -> "note_export.html"
         ExportKind.LAYERED_PSD -> "canvas_export.psd"
         ExportKind.BRUSH_PRESET -> "brush_preset.inkbrush"
+        ExportKind.TIMELAPSE_MP4 -> "timelapse.mp4"
     }
 
     // --- bold pre-export warning (whole-vault plaintext kinds) ------------------

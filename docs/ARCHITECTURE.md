@@ -215,7 +215,7 @@
 | `data/model/` | `Entities.kt`, `StrokeModels.kt` | Room entities (8) + stroke/ink types |
 | `data/db/` | `NoteflowDatabase.kt`, `Daos.kt` | Room DB (schema v9, 8 DAOs), corrupt-DB quarantine |
 | `data/repository/` | `NoteRepository.kt`, `LruBoundedMap.kt` | Encrypted read/write, search corpus, WAL checkpoint, re-key |
-| `services/` | `EncryptionService.kt`, `SecurityService.kt`, `DatabaseSecurityHelper.kt`, `VaultKeyHolder.kt`, `ExportSessionPolicy.kt`, `WetBrushEngine.kt`, `WebDavSyncService.kt`, `ImportExportService.kt`, `ImportArchivePolicy.kt`, `PaletteCatalog.kt`, `ColorModePersistencePolicy.kt`, `ShapeRecognitionHelper.kt`, `SsrfHostPolicy.kt`, `VoiceNoteCrypto.kt`, `DecryptFailurePolicy.kt`, `BrushEdgePolicy.kt`, `PerspectiveGridPolicy.kt`, `CanvasRotationPolicy.kt` | Non-UI: crypto/vault, brush math, sync, import/export, zip-import zip-bomb policy (B1-DB-5), palette, rainbow-mode persistence decision table (phase-122), SSRF blocklist (B1-NET-04), voice-note audio cryptor (B1-DB-3), decrypt-failure render decision (B1-DB-8), brush cap/join roundness policy (phase-121); phase-223 drafting-grid geometry + canvas-rotation math |
+| `services/` | `EncryptionService.kt`, `SecurityService.kt`, `DatabaseSecurityHelper.kt`, `VaultKeyHolder.kt`, `ExportSessionPolicy.kt`, `WetBrushEngine.kt`, `WebDavSyncService.kt`, `ImportExportService.kt`, `ImportArchivePolicy.kt`, `PaletteCatalog.kt`, `ColorModePersistencePolicy.kt`, `ShapeRecognitionHelper.kt`, `SsrfHostPolicy.kt`, `VoiceNoteCrypto.kt`, `DecryptFailurePolicy.kt`, `BrushEdgePolicy.kt`, `PerspectiveGridPolicy.kt`, `CanvasRotationPolicy.kt`, `TimelapsePolicy.kt`, `TimelapseExporter.kt` | Non-UI: crypto/vault, brush math, sync, import/export, zip-import zip-bomb policy (B1-DB-5), palette, rainbow-mode persistence decision table (phase-122), SSRF blocklist (B1-NET-04), voice-note audio cryptor (B1-DB-3), decrypt-failure render decision (B1-DB-8), brush cap/join roundness policy (phase-121); phase-223 drafting-grid geometry + canvas-rotation math; phase-224 timelapse timing model + MediaCodec/MediaMuxer MP4 export |
 | `services/localsend/` | `LocalSendProtocol.kt`, `LocalSendSender.kt`, `LocalSendPairing.kt`, `SettingsLocalSendPairedDeviceStore.kt`, `LocalSendDiscoveryPolicy.kt`, `FileTransferSender.kt`, `LocalSendSenderFactory.kt` | Pure-JVM LocalSend v2.2 + real network sender + TOFU pairing gate (B1-NET-02) + discovery/sweep gate (B1-NET-06) + FileTransfer seam/factory (phase-173) |
 | `plugins/` | `NoteflowPlugin.kt`, `PluginRegistry.kt`, `PluginManager.kt`, `PluginDiagnostics.kt`, `PluginLifecycle.kt` | Compile-time plugin framework + typed serving interfaces + capability routes |
 | `plugins/runtime/` | `RuntimePluginLoader.kt`, `SignatureVerifiedPluginRuntime.kt`, `ArtifactSignatureVerifier.kt`, `PinnedCertHash.kt`, `PinnedTlsConnector.kt`, `PluginManifestFetcher.kt`, `HttpsPluginDownloadTransport.kt`, `PluginDownloader.kt`, `PluginUpdateEngine.kt`, `CompileTimePluginPinStore.kt`, `PluginFrameworkClassLoader.kt`, `ArtifactStaticScan.kt` | Downloadable-plugin runtime: pinned-cert verify (manifest + artifact transports, no redirects), DexClassLoader (scoped `plugins.*`-only parent), verify-time static content scan (B1-AUTH-01), updates |
@@ -637,6 +637,28 @@
 > `ShapeRecognitionHelper.rulerLineEligible` (min 15px) blocks zero-length ruler LINES; `sanitize`
 > clamps ±360 without the 359.5→0 mid-gesture snap. `Phase223PerspectiveGridPolicyTest` now 20 tests.
 
+> **Implemented in phase-224** (2026-08-27, timelapse replay + MP4 export of a page's
+> timestamped strokes, see `workspace/phase-224/REPORT.md`): replays a page's strokes in
+> timestamp order at 30× real-time as an H.264 MP4 (platform `MediaCodec`+`MediaMuxer` only —
+> no ffmpeg/native deps, base-APK rule intact). Pure-JVM `services/TimelapsePolicy.kt` owns the
+> timing model (`videoElapsedMs = (real − t0) / SPEED_FACTOR` with `SPEED_FACTOR = 30f`;
+> `frameForElapsedMs` FPS quantization; `effectiveElapsedMs` COMPRESSES long timelines into
+> `MAX_TOTAL_FRAMES = 1800` so the last emitted frame still shows all strokes — never silent
+> truncation; `capped` limits to `MAX_STROKES = 2000` oldest-first). `services/TimelapseExporter.kt`
+> renders each frame with a minimal `android.graphics` rasterizer (`worldBounds`/`fitTransform`
+>→720p fit; `drawPrefix`/`drawStroke` mirror `AnnotationCanvas.drawSingleStrokeToCanvas`: freehand
+> polylines, dots, shape boxes, TEXT, FILL polygons, GRADIENT rects; wet/AGSL multi-pass brushes
+> fall back to flat polylines) and encodes via buffer-input MediaCodec (YUV420 planar/semi-planar
+> selected from codec capabilities, custom ARGB→YUV420 `fillYuv420`) + MediaMuxer into
+> `video/mp4`. `ui/components/TimelapsePlayer.kt` = preview player (bitmap via
+> `TimelapseExporter.drawPrefix`, scrub Slider `0..strokes.size`, Play/Pause with bounded per-stroke
+> `delay`, Export MP4 + hoisted `isExporting`/`exportProgress`). Wired into
+> `EditorScreen`'s ⋮ overflow menu ("Timelapse Replay…" after "Export Layers as PSD"); export goes
+> SAF-only through the new `ExportDestinationPolicy.ExportKind.TIMELAPSE_MP4`. Tests:
+> `services/TimelapseExporterTest` (10 pure-JVM); `paparazzi/TimelapsePlayerPaparazziTest` (light/
+> dark frame PNG — blocked in the local sandbox by the pre-existing broken Paparazzi layoutlib
+> infra, passes in lockstep with the committed `PaparazziSmokeTest` where the SDK is present).
+> No schema change, no new deps, `.github/workflows/` untouched.
 
 > **Implemented in phase-196** (2026-08-24, stylus motion prediction — PERF 1.1, see
 > `workspace/phase-196/REPORT.md`): the ink canvas now records every raw `MotionEvent`

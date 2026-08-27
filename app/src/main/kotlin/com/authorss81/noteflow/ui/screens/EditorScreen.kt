@@ -106,6 +106,7 @@ import com.authorss81.noteflow.ui.components.OcrResultDialog
 import com.authorss81.noteflow.ui.components.PromptNameDialog
 import com.authorss81.noteflow.ui.components.overflowMenuScrollModifier
 import com.authorss81.noteflow.ui.components.overflowMenuScrollState
+import com.authorss81.noteflow.ui.components.TimelapsePlayer
 import com.authorss81.noteflow.ui.viewmodel.NoteflowViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
@@ -257,6 +258,11 @@ fun EditorScreen(
     var showRenameDialog by remember { mutableStateOf(false) }
     var showBacklinks by remember { mutableStateOf(false) }
     var showClearCanvasWarning by remember { mutableStateOf(false) }
+
+    // Phase 224: timelapse replay + MP4 export dialog state.
+    var showTimelapseDialog by remember { mutableStateOf(false) }
+    var timelapseExporting by remember { mutableStateOf(false) }
+    var timelapseProgress by remember { mutableStateOf(0f) }
 
     // Phase 12: OCR target — set when the user taps "Extract text (OCR)" on an
     // attached photo; drives the OcrResultDialog rendered at the Scaffold level.
@@ -2203,6 +2209,14 @@ fun EditorScreen(
                             }
                         )
                         DropdownMenuItem(
+                            text = { Text("Timelapse Replay…") },
+                            leadingIcon = { Icon(Icons.Outlined.Movie, contentDescription = null) },
+                            onClick = {
+                                showOverflowMenu = false
+                                showTimelapseDialog = true
+                            }
+                        )
+                        DropdownMenuItem(
                             text = { Text("Export Section Vault (ZIP)") },
                             leadingIcon = { Icon(Icons.Outlined.FolderZip, contentDescription = null) },
                             onClick = {
@@ -3151,6 +3165,58 @@ fun EditorScreen(
                 onOpenPage(targetPage)
             },
             onDismiss = { showBacklinks = false }
+        )
+    }
+
+    if (showTimelapseDialog) {
+        AlertDialog(
+            onDismissRequest = {
+                if (!timelapseExporting) showTimelapseDialog = false
+            },
+            title = { Text("Timelapse Replay") },
+            text = {
+                TimelapsePlayer(
+                    strokes = strokes,
+                    isExporting = timelapseExporting,
+                    exportProgress = timelapseProgress,
+                    onExport = {
+                        if (timelapseExporting) return@TimelapsePlayer
+                        timelapseExporting = true
+                        timelapseProgress = 0f
+                        scope.launch {
+                            val file = com.authorss81.noteflow.services.TimelapseExporter.export(
+                                context = context,
+                                title = page.title,
+                                strokes = strokes,
+                                onProgress = { timelapseProgress = it }
+                            )
+                            timelapseExporting = false
+                            if (file != null) {
+                                exporter.export(
+                                    ExportDestinationPolicy.ExportKind.TIMELAPSE_MP4,
+                                    file
+                                ) { result ->
+                                    when (result) {
+                                        SaFExportResult.SAVED -> viewModel.showSnackbar("Timelapse MP4 saved to your chosen location")
+                                        SaFExportResult.CANCELLED -> viewModel.showSnackbar("Export cancelled")
+                                        SaFExportResult.FAILED -> viewModel.showSnackbar("Export to the chosen destination failed")
+                                    }
+                                }
+                            } else {
+                                viewModel.showSnackbar("Timelapse export failed")
+                            }
+                        }
+                    }
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = { if (!timelapseExporting) showTimelapseDialog = false },
+                    enabled = !timelapseExporting
+                ) {
+                    Text("Close")
+                }
+            }
         )
     }
 
