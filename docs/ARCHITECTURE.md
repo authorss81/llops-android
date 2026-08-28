@@ -2258,18 +2258,26 @@
     `Phase231NestedScrollGuardTest` (3).
   - **Implemented in phase-232** (compile-time source-scan guard, see `workspace/phase-232/REPORT.md`):
     the Detekt-rule equivalent (Detekt is not configured) is `Phase232NestedScrollSourceScanTest`
-    (17 tests) — a pure-JVM scan over every `app/src/main/kotlin` `.kt` file asserting (1) no
-    `verticalScroll` chain places a height bound (`heightIn`/`fillMaxHeight`/`fillMaxSize`/`weight`)
-    AFTER the scroll, and (2) no `LazyColumn` nests within a 10-line window of an unbounded
-    `verticalScroll` parent. Engine `NestedScrollSourceScan` (char-level lexer `CodeState`,
-    chain walk-back, `isInsideBoundProvider` with trailing-lambda tracking for
-    `AlertDialog`/`Dialog`/`ModalBottomSheet`/`BoxWithConstraints`) treats dialog/sheet/
-    `BoxWithConstraints`-bound chains and `LazyRow`/`horizontalScroll` as the documented
-    known-safe exceptions. The only bound-after-scroll in the tree is `BrushStudioDialog.kt:63-65`
-    (AlertDialog text slot — parent-bounded), pinned by a dedicated test; both whole-tree scans
-    are non-vacuity-guarded (≥20 real `verticalScroll` sites, ≥5 real `LazyColumn` sites).
-    A compile-stage fix: `LazyColumn` is matched as a bare identifier (`\bLazyColumn\b`), since
-    the composable is normally invoked with a trailing lambda (`LazyColumn { … }`).
+    (28 tests) — a pure-JVM scan over every `app/src/main/kotlin` `.kt` file asserting (1) no
+    `verticalScroll` chain places a height bound (`heightIn`/`fillMaxHeight`/`fillMaxSize`/`weight`
+    `/height`/`requiredHeight`) AFTER the scroll, (2) no `LazyColumn` nests inside an unbounded
+    `verticalScroll` parent, and (3) no height-bound-less `verticalScroll` chain nests inside another
+    scrollable (the "nested scrollable without any bound" crash form). Engine `NestedScrollSourceScan`
+    (char-level lexer `CodeState` including NESTED block comments, chain walk-back,
+    `braceDepthMap`/`nestedUnder` LEXICAL-containment nesting (replaces a fixed 10-line window:
+    no sibling-block false positives, no >10-line false negatives), `isInsideBoundProvider` with
+    brace-lambda-only shielding for `AlertDialog`/`BasicAlertDialog`/`Dialog`/`ModalBottomSheet`/
+    `BoxWithConstraints`) treats dialog/sheet/`BoxWithConstraints`-bound chains and
+    `LazyRow`/`horizontalScroll` as the documented known-safe exceptions. The only
+    bound-after-scroll in the tree is `BrushStudioDialog.kt:63-65` (AlertDialog text slot —
+    parent-bounded), pinned by a dedicated test; all three whole-tree scans are non-vacuity-guarded
+    (≥20 real `verticalScroll` sites, ≥5 real `LazyColumn` sites). Compile-stage fixes during the
+    phase: `LazyColumn` matched as a bare identifier (`\bLazyColumn\b`); during the review-fix round:
+    fixed-height bound vocabulary, brace-depth containment (first attempt used `<=` for the
+    closed-scope check and wrongly rejected every parent — corrected to `<`), the unbounded-nested
+    canary, single shared whole-tree pass with per-kind failure messages, `val`/`var` lines excluded
+    from chain-head candidacy, and hook-lambda shielding documented as deliberately over-broad
+    (the runtime phase-231 guard still fires).
 - **ViewModel/nav**: `ui/viewmodel/NoteflowViewModel.kt:105` (builds SecurityService/NoteRepository/PluginRegistry
   :121/PluginManager :131/PluginRuntime :170/PluginStoreController :196; ~60 capability suspend fns);
   `MainActivity.kt:73` (single activity, **`mutableStateOf` nav** — NOT Navigation Compose).

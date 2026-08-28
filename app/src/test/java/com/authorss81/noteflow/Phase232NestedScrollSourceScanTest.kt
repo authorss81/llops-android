@@ -23,14 +23,35 @@ import org.junit.Test
  *
  * This suite walks every `app/src/main/kotlin` file and asserts:
  *   1. No modifier chain places a height bound AFTER its verticalScroll element —
- *      except inside a finite bound-provider (AlertDialog / Dialog / ModalBottomSheet
- *      / BoxWithConstraints), where the parent already bounds the measure.
+ *      except inside a finite bound-provider call (AlertDialog / BasicAlertDialog /
+ *      Dialog / ModalBottomSheet / BoxWithConstraints), where a brace-lambda/sheet
+ *      parent already bounds the measure.
  *   2. No LazyColumn appears directly nested inside an unbounded verticalScroll
- *      parent (10-line window heuristic). LazyRow / horizontalScroll are excluded
- *      (horizontal containers are never the vertical-Infinity concern).
+ *      parent. "Directly nested" is decided with BRACE-DEPTH lexical containment
+ *      (not a fixed line window): a scrollable ancestor is only the parent when its
+ *      enclosing `{` block is still open at the child site. LazyRow /
+ *      horizontalScroll are excluded (horizontal containers are never the
+ *      vertical-Infinity concern).
+ *   3. No height-bound-less verticalScroll chain is nested (same brace-depth rule)
+ *      inside another scrollable (verticalScroll or LazyColumn) outside a
+ *      bound-provider — the phase-229 "nested scrollable without any bound" crash
+ *      form.
  *
- * The scan is deliberately shallow (regex + line heuristics, like a Detekt rule) —
- * it is a regression canary, not a layout engine.
+ * The scan is deliberately shallow (char lexer + line heuristics, like a Detekt
+ * rule) — it is a regression canary, not a layout engine. Known simplifications:
+ * the brace-depth parenter is purely lexical, so it cannot model runtime windowing
+ * (dialog call sites lexically inside a root scroll are exempted via the
+ * bound-provider check, and matches rely on the runtime phase-231 guard); the bound
+ * vocabulary below is the fixed set the ordering rule cares about; and a chain head
+ * is still inferred by Modifier-mention heuristics.
+ *
+ * Phase-232 review fixes (2026-08-28): the bound vocabulary now also covers the
+ * fixed exact-height modifiers `height`/`requiredHeight` (same too-late ordering
+ * applies); the lazy/canary nesting checks use brace-depth lexical containment
+ * instead of a positional 10-line window (sibling blocks no longer false-positive,
+ * deep nesting no longer false-negatives); `isInsideBoundProvider` now requires a
+ * brace lambda (a plain parenthesised argument is not a bounded layout surface);
+ * and the lexer understands nested block comments.
  */
 class Phase232NestedScrollSourceScanTest {
 
@@ -40,9 +61,14 @@ class Phase232NestedScrollSourceScanTest {
 
     internal object NestedScrollSourceScan {
 
-        /** Height bounds that, applied too late, fail to bound the scroll's measure. */
+        /**
+         * Height bounds that, applied too late, fail to bound the scroll's measure.
+         * Includes the fixed exact-height modifiers: a `height(300.dp)` AFTER the
+         * scroll is just as ineffective as `heightIn` (it only clamps what the scroll
+         * already measured with Infinity).
+         */
         internal val BOUND_ELEMENTS: Set<String> =
-            setOf("heightIn", "fillMaxHeight", "fillMaxSize", "weight")
+            setOf("heightIn", "fillMaxHeight", "fillMaxSize", "weight", "height", "requiredHeight")
 
         /** Call sites whose own constraint system already bounds a scrollable child. */
         internal val BOUND_PROVIDERS: Set<String> =
@@ -69,6 +95,7 @@ class Phase232NestedScrollSourceScanTest {
                     val n = text.length
                     val state = ByteArray(n)
                     var mode = CODE
+                    var blockDepth = 0
                     var i = 0
                     while (i < n) {
                         val c = text[i]
@@ -80,7 +107,7 @@ class Phase232NestedScrollSourceScanTest {
                                 c == '"' -> { state[i] = STRING; mode = STRING; i++ }
                                 c == '\'' -> { state[i] = CHAR; mode = CHAR; i++ }
                                 c == '/' && i + 1 < n && text[i + 1] == '/' -> { state[i] = LINE_COMMENT; mode = LINE_COMMENT; i++ }
-                                c == '/' && i + 1 < n && text[i + 1] == '*' -> { state[i] = BLOCK_COMMENT; mode = BLOCK_COMMENT; i++ }
+                                c == '/' && i + 1 < n && text[i + 1] == '*' -> { state[i] = BLOCK_COMMENT; mode = BLOCK_COMMENT; blockDepth = 1; i++ }
                                 else -> i++
                             }
                             STRING -> {
@@ -115,7 +142,21 @@ class Phase232NestedScrollSourceScanTest {
                             }
                             BLOCK_COMMENT -> {
                                 state[i] = BLOCK_COMMENT
-                                if (c == '*' && i + 1 < n && text[i + 1] == '/') { state[i + 1] = BLOCK_COMMENT; i += 2; mode = CODE; continue }
+                                // Kotlin block comments nest. An inner `/*` re-enters a
+                                // comment level; only the matching outer `*/` exits to CODE.
+                                if (c == '/' && i + 1 < n && text[i + 1] == '*') {
+                                    state[i + 1] = BLOCK_COMMENT
+                                    blockDepth++
+                                    i += 2
+                                    continue
+                                }
+                                if (c == '*' && i + 1 < n && text[i + 1] == '/') {
+                                    state[i + 1] = BLOCK_COMMENT
+                                    blockDepth--
+                                    i += 2
+                                    if (blockDepth == 0) mode = CODE
+                                    continue
+                                }
                                 i++
                             }
                         }
@@ -141,7 +182,9 @@ class Phase232NestedScrollSourceScanTest {
          * Line range head..end of the modifier chain containing scrollLineIndex.
          * Walk-back: continuation lines start with `.`; a line mentioning `Modifier`
          * (i.e. `modifier = Modifier...`, `Modifier...`, `modifier.<elem>...`) is the
-         * chain head. Comment lines are transparent in both directions.
+         * chain head. Comment lines are transparent in both directions. A line that
+         * starts `val ` / `var ` is a standalone modifier alias, never the head —
+         * walking up past it would swallow a DIFFERENT chain's bound tokens.
          */
         internal fun chainLineRange(lines: List<String>, scrollLineIndex: Int): IntRange {
             val n = lines.size
@@ -151,6 +194,7 @@ class Phase232NestedScrollSourceScanTest {
                 val trimmed = lines[i].trim()
                 if (isCommentOnlyLine(trimmed)) { i--; continue }
                 if (trimmed.startsWith(".")) { head = i; i--; continue }
+                if (trimmed.startsWith("val ") || trimmed.startsWith("var ")) break
                 if (trimmed.contains("Modifier") || trimmed.startsWith("modifier")) { head = i; break }
                 break
             }
@@ -255,17 +299,93 @@ class Phase232NestedScrollSourceScanTest {
             return -1
         }
 
+        /** Brace-only depth at every code index; used for lexical containment checks. */
+        internal fun braceDepthMap(text: String, state: CodeState): IntArray {
+            val out = IntArray(text.length)
+            var d = 0
+            for (i in text.indices) {
+                if (state.isCode(i)) {
+                    when (text[i]) {
+                        '{' -> d++
+                        '}' -> if (d > 0) d--
+                        else -> {}
+                    }
+                }
+                out[i] = d
+            }
+            return out
+        }
+
         /**
-         * Whether [pos] lies inside the body (argument parens OR trailing lambda) of a
-         * bound-provider call — such a parent already bounds the scroll's measure.
+         * Whether [childPos] is lexically contained in [parentPos]'s open `{` block:
+         * the depth at the child is strictly deeper than at the parent, and the
+         * parent's depth is never dropped BELOW in between (an off-by-one would be
+         * wrong here: the region from the parent up to the child's own opening `{` is
+         * naturally at the parent's depth). Put plainly — the leaf is nested in the
+         * parent's subtree iff the parent's enclosing block stays open until the
+         * child, i.e. no close brace ever takes the depth below the parent's depth.
+         * Sibling blocks and already-closed calls (which do dip below) are never
+         * parents.
+         */
+        internal fun nestedUnder(depth: IntArray, parentPos: Int, childPos: Int): Boolean {
+            if (childPos <= parentPos) return false
+            val parentDepth = depth[parentPos]
+            if (depth[childPos] <= parentDepth) return false
+            var i = parentPos + 1
+            while (i < childPos) {
+                if (depth[i] < parentDepth) return false
+                i++
+            }
+            return true
+        }
+
+        private fun matchingBrace(text: String, state: CodeState, open: Int, limit: Int): Int? {
+            var depth = 0
+            var i = open
+            while (i < limit) {
+                if (state.isCode(i)) {
+                    when (text[i]) {
+                        '{' -> depth++
+                        '}' -> {
+                            depth--
+                            if (depth == 0) return i
+                        }
+                    }
+                }
+                i++
+            }
+            return null
+        }
+
+        /**
+         * Whether [pos] lies inside a BRACE LAMBDA of a bound-provider call (the
+         * `text = { … }` slot of an AlertDialog, the trailing lambda of a
+         * ModalBottomSheet, the content lambda of a Dialog, …) — such a slot is
+         * parent-bounded, so a height-bound-after-scroll (or a chain with no bound at
+         * all) inside it is safe. Positions directly inside the call's plain argument
+         * parens (not inside any lambda) are NOT shielded: a plain parenthesised
+         * argument is not a bounded layout surface. Hook lambdas
+         * (`onDismissRequest = {}`, `confirmButton = {}`) are shielded too — a
+         * deliberate over-broad simplification (they are `() -> Unit` hooks, but a
+         * scrollable there is pathological; the runtime phase-231 guard still fires).
          */
         internal fun isInsideBoundProvider(text: String, state: CodeState, pos: Int): Boolean {
             for ((_, re) in BOUND_PROVIDER_NAMES) {
                 for (m in re.findAll(text)) {
                     if (m.range.first >= pos) break
                     if (!state.isCode(m.range.first)) continue
-                    val end = callBodyEnd(text, state, m.range.last)
-                    if (end != null && pos <= end) return true
+                    val end = callBodyEnd(text, state, m.range.last) ?: continue
+                    if (pos > end) continue
+                    var i = m.range.last + 1
+                    while (i < end) {
+                        if (state.isCode(i) && text[i] == '{') {
+                            val close = matchingBrace(text, state, i, end)
+                            if (close != null) {
+                                if (pos <= close) return true
+                                i = close + 1
+                            } else return false
+                        } else i++
+                    }
                 }
             }
             return false
@@ -285,35 +405,111 @@ class Phase232NestedScrollSourceScanTest {
                 val lineNo = lineIndexOf(lineStart, m.range.first) + 1
                 out += "$rel:$lineNo verticalScroll() has height bound '$after' AFTER it in the same " +
                     "Modifier chain; a bound that late does not cap the scroll's measure " +
-                    "(put heightIn/fillMaxHeight/fillMaxSize/weight BEFORE verticalScroll)."
+                    "(put heightIn/fillMaxHeight/fillMaxSize/weight/height BEFORE verticalScroll)."
             }
             return out
         }
 
-        /** Nested-scroll violations: a LazyColumn directly under an unbounded verticalScroll parent. */
-        private fun lazyNestedViolations(text: String, state: CodeState, rel: String): List<String> {
+        /**
+         * The nearest scrollable site (verticalScroll, optionally LazyColumn) that
+         * lexically contains [pos] via the brace-depth rule. Null when [pos] is at the
+         * same depth as every candidate (or no candidate precedes it) — i.e. it is a
+         * root-level / sibling scrollable, not a nested one.
+         */
+        private fun nearestAncestorScrollable(
+            text: String,
+            state: CodeState,
+            depth: IntArray,
+            pos: Int,
+            includeLazy: Boolean
+        ): Int? {
+            val candidates = mutableListOf<Int>()
+            for (m in VERTICAL_SCROLL.findAll(text)) {
+                if (m.range.first < pos && state.isCode(m.range.first)) candidates += m.range.first
+            }
+            if (includeLazy) {
+                for (m in LAZY_COLUMN.findAll(text)) {
+                    if (m.range.first < pos && state.isCode(m.range.first)) candidates += m.range.first
+                }
+            }
+            candidates.sort()
+            for (i in candidates.indices.reversed()) {
+                if (nestedUnder(depth, candidates[i], pos)) return candidates[i]
+            }
+            return null
+        }
+
+        /** Nested-scroll violations: a LazyColumn lexically contained in an unbounded verticalScroll parent. */
+        private fun lazyNestedViolations(text: String, state: CodeState, rel: String, depth: IntArray): List<String> {
             val lines = text.split("\n")
             val lineStart = lineStartOffsets(lines)
             val out = mutableListOf<String>()
             for (m in LAZY_COLUMN.findAll(text)) {
                 if (!state.isCode(m.range.first)) continue
-                val lazyLine = lineIndexOf(lineStart, m.range.first)
-                val windowStart = maxOf(0, lazyLine - 10)
-                var scrollLine = -1
-                for (li in windowStart until lazyLine) {
-                    if (lineHasCodeToken(lines[li], lineStart[li], state, "verticalScroll")) { scrollLine = li; break }
-                }
-                if (scrollLine < 0) continue
-                val range = chainLineRange(lines, scrollLine)
+                val lazyPos = m.range.first
+                val parentScroll = nearestAncestorScrollable(text, state, depth, lazyPos, includeLazy = false)
+                    ?: continue
+                val range = chainLineRange(lines, lineIndexOf(lineStart, parentScroll))
                 val parentBounded = range.any { li -> lineHasBound(lines[li], lineStart[li], state) }
                 if (parentBounded) continue
-                val lineNo = lazyLine + 1
+                val lineNo = lineIndexOf(lineStart, lazyPos) + 1
                 out += "$rel:$lineNo LazyColumn appears directly nested inside an unbounded verticalScroll " +
-                    "parent (10-line window) with no height bound on the scroll chain; bound the parent " +
-                    "(heightIn/weight/fillMaxHeight/fillMaxSize BEFORE verticalScroll) or remove the nesting."
+                    "parent with no height bound on the scroll chain; bound the parent " +
+                    "(heightIn/fillMaxHeight/fillMaxSize/weight START the chain BEFORE verticalScroll) " +
+                    "or remove the nesting."
             }
             return out
         }
+
+        /**
+         * The phase-229 "nested scrollable without any bound" crash form: a
+         * verticalScroll chain with no height bound anywhere that is lexically nested
+         * inside another scrollable (verticalScroll or LazyColumn). Chains inside a
+         * bound-provider (dialog/sheet window bounds) are exempt — they measure
+         * against the window, not the lexical ancestor.
+         */
+        private fun unboundedNestedViolations(text: String, state: CodeState, rel: String, depth: IntArray): List<String> {
+            val lines = text.split("\n")
+            val lineStart = lineStartOffsets(lines)
+            val out = mutableListOf<String>()
+            for (m in VERTICAL_SCROLL.findAll(text)) {
+                if (!state.isCode(m.range.first)) continue
+                val pos = m.range.first
+                if (isInsideBoundProvider(text, state, pos)) continue
+                val elems = chainElements(text, state, pos)
+                if (elems.contains("horizontalScroll")) continue
+                if (elems.any { it in BOUND_ELEMENTS }) continue
+                val lineNo = lineIndexOf(lineStart, pos) + 1
+                val parentScroll = nearestAncestorScrollable(text, state, depth, pos, includeLazy = true)
+                    ?: continue
+                out += "$rel:$lineNo verticalScroll() has no height bound anywhere on its modifier chain " +
+                    "yet is nested inside another scrollable (verticalScroll/LazyColumn); an inner " +
+                    "scrollable is measured with Infinity — put heightIn/fillMaxHeight/fillMaxSize/weight " +
+                    "/height BEFORE the verticalScroll, or remove the nesting."
+            }
+            return out
+        }
+
+        internal class ScanKinds(
+            val ordering: List<String>,
+            val lazy: List<String>,
+            val unboundedNested: List<String>
+        ) {
+            fun all(): List<String> = ordering + lazy + unboundedNested
+        }
+
+        internal fun scanKinds(text: String, rel: String): ScanKinds {
+            val state = CodeState.build(text)
+            val depth = braceDepthMap(text, state)
+            return ScanKinds(
+                orderingViolations(text, state, rel),
+                lazyNestedViolations(text, state, rel, depth),
+                unboundedNestedViolations(text, state, rel, depth)
+            )
+        }
+
+        /** Full scan of one source file. rel = path relative to app/src/main/kotlin. */
+        fun scan(text: String, rel: String): List<String> = scanKinds(text, rel).all()
 
         /** Number of verticalScroll call sites that are in real code (not strings/comments). */
         internal fun codeVerticalScrollCount(text: String): Int {
@@ -325,12 +521,6 @@ class Phase232NestedScrollSourceScanTest {
         internal fun codeLazyColumnCount(text: String): Int {
             val state = CodeState.build(text)
             return LAZY_COLUMN.findAll(text).count { state.isCode(it.range.first) }
-        }
-
-        /** Full scan of one source file. rel = path relative to app/src/main/kotlin. */
-        fun scan(text: String, rel: String): List<String> {
-            val state = CodeState.build(text)
-            return orderingViolations(text, state, rel) + lazyNestedViolations(text, state, rel)
         }
     }
 
@@ -347,18 +537,6 @@ class Phase232NestedScrollSourceScanTest {
             dir = dir.parentFile
         }
         throw AssertionError("could not locate app/src/main/kotlin from ${start.path}")
-    }
-
-    private fun scanSourceTree(): List<String> {
-        val root = mainSourcesRoot()
-        return root.walkTopDown()
-            .filter { it.isFile && it.extension == "kt" }
-            .sortedBy { it.path }
-            .flatMap { file ->
-                val rel = root.toPath().relativize(file.toPath()).toString()
-                NestedScrollSourceScan.scan(file.readText(), rel)
-            }
-            .toList()
     }
 
     private fun fakeSource(body: String): String = body.trimIndent()
@@ -443,6 +621,48 @@ class Phase232NestedScrollSourceScanTest {
     }
 
     @Test
+    fun `matcher flags fixed-height bound placed after verticalScroll too`() {
+        val src = fakeSource(
+            """
+            Column(modifier = Modifier.verticalScroll(rememberScrollState()).height(300.dp)) {
+                Text("x")
+            }
+            """
+        )
+        val elems = NestedScrollSourceScan.chainElements(
+            src,
+            NestedScrollSourceScan.CodeState.build(src),
+            src.indexOf("verticalScroll(")
+        )
+        assertEquals("height", NestedScrollSourceScan.boundElementAfterScroll(elems))
+        assertTrue(
+            "fixed height() after scroll is the same too-late ordering",
+            NestedScrollSourceScan.scan(src, "fake/fixed.kt").any { it.contains("'height'") }
+        )
+
+        val req = fakeSource(
+            """
+            Column(modifier = Modifier.requiredHeight(300.dp).verticalScroll(rememberScrollState())) {
+                Text("x")
+            }
+            """
+        )
+        val reqElems = NestedScrollSourceScan.chainElements(
+            req,
+            NestedScrollSourceScan.CodeState.build(req),
+            req.indexOf("verticalScroll(")
+        )
+        assertNull(
+            "requiredHeight BEFORE scroll is the safe ordering",
+            NestedScrollSourceScan.boundElementAfterScroll(reqElems)
+        )
+        assertTrue(
+            "requiredHeight before scroll must yield no violations",
+            NestedScrollSourceScan.scan(req, "fake/req.kt").isEmpty()
+        )
+    }
+
+    @Test
     fun `matcher excludes single-line horizontalScroll chains`() {
         val src = fakeSource(
             """
@@ -480,6 +700,49 @@ class Phase232NestedScrollSourceScanTest {
         assertTrue(
             "string/comment mentions must not create violations",
             NestedScrollSourceScan.scan(src, "fake/doc.kt").isEmpty()
+        )
+    }
+
+    @Test
+    fun `lexer keeps nested block comments from leaking code tokens`() {
+        val src = fakeSource(
+            """
+            /* phase-232 review fix: /* inner */ verticalScroll(rememberScrollState()) is still outer-comment text */
+            @Composable
+            fun Clean() {
+                Column(modifier = Modifier.heightIn(max = 300.dp).verticalScroll(rememberScrollState())) {
+                    Text("safe")
+                }
+            }
+            """
+        )
+        val state = NestedScrollSourceScan.CodeState.build(src)
+        val commented = src.indexOf("verticalScroll", src.indexOf("/* phase-232"))
+        val real = src.indexOf("verticalScroll", src.indexOf("heightIn"))
+        assertTrue("the commented mention must be masked by the still-open outer comment", !state.isCode(commented))
+        assertTrue("the real call site must be code", state.isCode(real))
+        assertEquals(
+            "exactly one real verticalScroll call site",
+            1,
+            NestedScrollSourceScan.codeVerticalScrollCount(src)
+        )
+        assertTrue(
+            "the safe chain must yield no violations",
+            NestedScrollSourceScan.scan(src, "fake/nestedcmt.kt").isEmpty()
+        )
+    }
+
+    @Test
+    fun `lineHasBound counts fixed-height bounds with word boundaries`() {
+        val plain = "Box(Modifier.height(300.dp).fillMaxWidth())"
+        assertTrue(
+            "height() must count as a height bound",
+            NestedScrollSourceScan.lineHasBound(plain, 0, NestedScrollSourceScan.CodeState.build(plain))
+        )
+        val unrelated = "Text(style = MaterialTheme.typography.bodyMedium)"
+        assertFalse(
+            "unrelated tokens must not fire the height bound",
+            NestedScrollSourceScan.lineHasBound(unrelated, 0, NestedScrollSourceScan.CodeState.build(unrelated))
         )
     }
 
@@ -578,6 +841,38 @@ class Phase232NestedScrollSourceScanTest {
     }
 
     @Test
+    fun `brace-depth finds nesting that a fixed 10-line window would have missed`() {
+        val src = fakeSource(
+            """
+            @Composable
+            fun DeepNest(items: List<String>) {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    Text("a")
+                    Text("b")
+                    Text("c")
+                    Text("d")
+                    Text("e")
+                    Text("f")
+                    Text("g")
+                    Text("h")
+                    Text("i")
+                    Text("j")
+                    Text("k")
+                    Text("l")
+                    Text("m")
+                    Text("n")
+                    LazyColumn { items(items) { Text(it) } }
+                }
+            }
+            """
+        )
+        assertTrue(
+            "the LazyColumn is >10 lines below its scroll parent yet lexically nested",
+            NestedScrollSourceScan.scan(src, "fake/deep.kt").any { it.contains("LazyColumn") }
+        )
+    }
+
+    @Test
     fun `matcher never flags LazyRow (horizontal-only, never the infinity concern)`() {
         val src = fakeSource(
             """
@@ -592,6 +887,135 @@ class Phase232NestedScrollSourceScanTest {
         assertTrue(
             "LazyRow is horizontal-only and must be excluded",
             NestedScrollSourceScan.scan(src, "fake/row.kt").isEmpty()
+        )
+    }
+
+    @Test
+    fun `canary detects a height-bound-less verticalScroll nested under another scroll`() {
+        val src = fakeSource(
+            """
+            @Composable
+            fun NestedScrolls(list: List<String>) {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    Text("outer header")
+                    Column(Modifier.nestedScrollGuard().verticalScroll(rememberScrollState())) {
+                        Text("inner")
+                    }
+                }
+            }
+            """
+        )
+        assertTrue(
+            "an unbound inner scroll nested under a scroll is the crash signature",
+            NestedScrollSourceScan.scan(src, "fake/nestedscrolls.kt").any { it.contains("no height bound") }
+        )
+    }
+
+    @Test
+    fun `canary flags an unbound inner scroll even when the outer scroll is bounded`() {
+        val src = fakeSource(
+            """
+            @Composable
+            fun BoundedOuterUnboundInner() {
+                Column(
+                    modifier = Modifier
+                        .heightIn(max = 400.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    Column(Modifier.nestedScrollGuard().verticalScroll(rememberScrollState())) {
+                        Text("inner")
+                    }
+                }
+            }
+            """
+        )
+        assertTrue(
+            "a scrollable measures its content with Infinity regardless of its own bound, " +
+                "so an unbound 2nd-level scroll is still the crash",
+            NestedScrollSourceScan.scan(src, "fake/boui.kt").any { it.contains("no height bound") }
+        )
+    }
+
+    @Test
+    fun `canary does not flag a top-level unbound scroll with no scrollable ancestor`() {
+        val src = fakeSource(
+            """
+            @Composable
+            fun Standalone(content: String) {
+                Column(Modifier.fillMaxWidth().nestedScrollGuard().verticalScroll(rememberScrollState())) {
+                    Text(content)
+                }
+            }
+            """
+        )
+        assertTrue(
+            "a lone unbound scroll in a bounded parent is a dead-scroll risk, not a crash",
+            NestedScrollSourceScan.scan(src, "fake/standalone.kt").isEmpty()
+        )
+    }
+
+    @Test
+    fun `canary exempts a bound-provider chain even when its call site is lexically under a scroll`() {
+        val src = fakeSource(
+            """
+            @Composable
+            fun DialogUnderScroll() {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    AlertDialog(
+                        onDismissRequest = {},
+                        text = {
+                            Column(Modifier.nestedScrollGuard().verticalScroll(rememberScrollState())) {
+                                Text("dialog content is window-bounded, not scroll-bounded")
+                            }
+                        },
+                        confirmButton = {}
+                    )
+                }
+            }
+            """
+        )
+        assertTrue(
+            "a dialog-text scroll is bounded by the dialog window even when the call sits in a root scroll",
+            NestedScrollSourceScan.scan(src, "fake/dialunder.kt").isEmpty()
+        )
+    }
+
+    @Test
+    fun `canary treats a LazyColumn ancestor as a scrollable parent`() {
+        val src = fakeSource(
+            """
+            @Composable
+            fun ScrollInLazy(items: List<String>) {
+                LazyColumn {
+                    items(items) { it ->
+                        Column(Modifier.nestedScrollGuard().verticalScroll(rememberScrollState())) {
+                            Text(it)
+                        }
+                    }
+                }
+            }
+            """
+        )
+        assertTrue(
+            "a LazyColumn measures items with unbounded height — an unbound scroll item must be flagged",
+            NestedScrollSourceScan.scan(src, "fake/lazyitem.kt").any { it.contains("no height bound") }
+        )
+    }
+
+    @Test
+    fun `brace-depth ignores a scroll in a sibling block at the same depth`() {
+        val src = fakeSource(
+            """
+            @Composable
+            fun Siblings() {
+                Box { Column(Modifier.verticalScroll(rememberScrollState())) { Text("a") } }
+                Box { Column(Modifier.nestedScrollGuard().verticalScroll(rememberScrollState())) { Text("b") } }
+            }
+            """
+        )
+        assertTrue(
+            "a closed sibling scope can never be the parent (the old 10-line window would misfire here)",
+            NestedScrollSourceScan.scan(src, "fake/sibling.kt").isEmpty()
         )
     }
 
@@ -623,33 +1047,48 @@ class Phase232NestedScrollSourceScanTest {
     // Whole-tree scan (the actual guard)
     // ------------------------------------------------------------------
 
+    private fun scanAllFiles(): List<Pair<String, NestedScrollSourceScan.ScanKinds>> {
+        val root = mainSourcesRoot()
+        return root.walkTopDown()
+            .filter { it.isFile && it.extension == "kt" }
+            .sortedBy { it.path }
+            .map { file ->
+                val rel = root.toPath().relativize(file.toPath()).toString()
+                rel to NestedScrollSourceScan.scanKinds(file.readText(), rel)
+            }
+            .toList()
+    }
+
     @Test
     fun `whole tree has no bound-after-scroll ordering violations`() {
-        val violations = scanSourceTree()
+        val ordering = scanAllFiles()
+            .flatMap { (rel, kinds) -> kinds.ordering.map { "$rel -> $it" } }
         assertTrue(
             "found verticalScroll() chains whose height bound appears AFTER the scroll:\n" +
-                violations.joinToString("\n"),
-            violations.isEmpty()
+                ordering.joinToString("\n"),
+            ordering.isEmpty()
         )
     }
 
     @Test
     fun `whole tree has no LazyColumn nested inside an unbounded verticalScroll`() {
-        val root = mainSourcesRoot()
-        val lazyViolations = root.walkTopDown()
-            .filter { it.isFile && it.extension == "kt" }
-            .sortedBy { it.path }
-            .flatMap { file ->
-                val rel = root.toPath().relativize(file.toPath()).toString()
-                val text = file.readText()
-                val state = NestedScrollSourceScan.CodeState.build(text)
-                NestedScrollSourceScan.scan(text, rel).filter { it.contains("LazyColumn") }.map { "$rel -> $it" }
-            }
-            .toList()
+        val lazy = scanAllFiles()
+            .flatMap { (rel, kinds) -> kinds.lazy.map { "$rel -> $it" } }
         assertTrue(
             "found LazyColumn nested inside an unbounded verticalScroll parent:\n" +
-                lazyViolations.joinToString("\n"),
-            lazyViolations.isEmpty()
+                lazy.joinToString("\n"),
+            lazy.isEmpty()
+        )
+    }
+
+    @Test
+    fun `whole tree has no height-bound-less verticalScroll nested inside another scrollable`() {
+        val nested = scanAllFiles()
+            .flatMap { (rel, kinds) -> kinds.unboundedNested.map { "$rel -> $it" } }
+        assertTrue(
+            "found verticalScroll() chains with no height bound nested inside another scrollable:\n" +
+                nested.joinToString("\n"),
+            nested.isEmpty()
         )
     }
 
@@ -668,7 +1107,7 @@ class Phase232NestedScrollSourceScanTest {
     @Test
     fun `whole-tree scan also visits the LazyColumn sites`() {
         // The LazyColumn guard must not be vacuous either — the tree really uses
-        // LazyColumn (e.g. note lists), so the 10-line window has something to check.
+        // LazyColumn (e.g. note lists), so the nesting check has something to examine.
         val root = mainSourcesRoot()
         val total = root.walkTopDown()
             .filter { it.isFile && it.extension == "kt" }
