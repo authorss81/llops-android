@@ -1957,12 +1957,18 @@ fun AnnotationCanvas(
                                         )
                                     }
                                     // Vector Stroke Smoothing & Touch jitter filtering: add point if distance > 1.5px
+                                    // Fix 2026-08-27: throttle only wet tools — freehand pen/pencil was dropping points at 6px/16ms (looked like "some points shown")
+                                    val isWet = BrushStrokeMath.isWetRenderedTool(currentTool)
+                                    if (isWet) {
+                                        val lastWet = activePoints.lastOrNull()
+                                        val lastTime = if (activePoints.size >= 2) System.currentTimeMillis() - 16L else System.currentTimeMillis() - 100L
+                                        val curTime = System.currentTimeMillis()
+                                        if (!wetBrushEngine.shouldProcessPoint(lastWet?.let { Offset(it.x, it.y) }, Offset(drawPoint.x, drawPoint.y), lastTime, curTime)) {
+                                            return true
+                                        }
+                                    }
                                     val last = activePoints.lastOrNull()
-                                    val lastTime = if (activePoints.size >= 2) System.currentTimeMillis() - 16L else System.currentTimeMillis() - 100L
-                                    val curTime = System.currentTimeMillis()
-
-                                    if (wetBrushEngine.shouldProcessPoint(last?.let { Offset(it.x, it.y) }, Offset(drawPoint.x, drawPoint.y), lastTime, curTime)) {
-                                        if (last != null && BrushStrokeMath.isWetRenderedTool(currentTool)) {
+                                    if (isWet && last != null) {
                                             val interpolated = wetBrushEngine.interpolateSegment(
                                                 prev = Offset(last.x, last.y),
                                                 cur = Offset(drawPoint.x, drawPoint.y),
@@ -1985,7 +1991,6 @@ fun AnnotationCanvas(
                                             activePoints.add(drawPoint)
                                             activeEnd = drawPoint
                                         }
-                                    }
                                 } else {
                                     activeEnd = currentPoint
                                 }
