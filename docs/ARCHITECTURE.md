@@ -2232,6 +2232,18 @@
     Also fixed a phase-127 **pre-existing build blocker**: `PluginStoreDescriptionBlock.kt:12-13/:72-74`
     used non-existent `Icons.AutoMirrored.Outlined.KeyboardArrowUp/Down` → `Icons.Outlined.*`
     (as `UnifiedSidebar.kt:296`). No schema change, no new deps.
+  - **Implemented in phase-230** (defensive nested-scroll hardening, see `workspace/phase-230/REPORT.md`):
+    the tutorial's demo panels (`TutorialDemos.kt`) previously had an UNBOUNDED
+    `verticalScroll` inside the `InteractiveTutorial` Card — with no height bound the
+    Column measured at intrinsic content height and the scrollState never activated
+    (dead scroll). The layer demo panel now declares
+    `.fillMaxWidth().heightIn(max = 420.dp).verticalScroll(...)` — **bound BEFORE
+    scroll** (`TutorialDemos.kt:292-297`, `heightIn` import `:16`), matching the
+    bounded sibling at `InteractiveTutorial.kt:170`. The `EditorScreen.kt:4489-4494`
+    ColorPicker inner Column was verified already correct
+    (`heightIn(max = 430.dp)` before `verticalScroll`, the `c972b23` crash fix).
+    Rule for ALL nested-scroll sites: height bound MUST precede `verticalScroll`.
+    Regression guard: `Phase230NestedScrollFixTest` (2 source-pinning tests).
 - **ViewModel/nav**: `ui/viewmodel/NoteflowViewModel.kt:105` (builds SecurityService/NoteRepository/PluginRegistry
   :121/PluginManager :131/PluginRuntime :170/PluginStoreController :196; ~60 capability suspend fns);
   `MainActivity.kt:73` (single activity, **`mutableStateOf` nav** — NOT Navigation Compose).
