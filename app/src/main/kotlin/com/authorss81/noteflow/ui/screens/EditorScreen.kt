@@ -4489,8 +4489,8 @@ private fun ColorPickerBottomSheet(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .verticalScroll(rememberScrollState())
                     .heightIn(max = 430.dp)
+                    .verticalScroll(rememberScrollState())
             ) {
                 if (advancedBrushesEnabled) {
                     // Initialize HSV from currentColor using safe android.graphics API
