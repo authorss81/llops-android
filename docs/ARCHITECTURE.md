@@ -2830,6 +2830,17 @@ androidx.biometric 1.1.0 · coroutines 1.9.0.
 11. **Round-2 security audit** (phase-116, 2026-08-17): full source re-audit on the post-fix tree — 43 findings
      (0 CRITICAL · 0 HIGH · 12 MEDIUM · 26 LOW · 5 INFO) live in `docs/security-report-round2.md`; phase-118
      appends dynamic/APK findings to the same file. Audit-only, no code changed; fixes are phase-119's job.
+12. **Paparazzi + the phase-231 runtime `NestedScrollGuard` are incompatible under layoutlib** (implemented in
+     phase-233, 2026-08-28, see `workspace/phase-233/REPORT.md`): the guard's measure-phase depth ThreadLocal
+     FALSE-POSITIVES when a screen is rendered by Paparazzi's layoutlib JVM renderer — a single
+     `verticalScroll` whose layoutlib measure re-enters the guarded node across passes without a balanced
+     guard exit throws `check(newDepth <= 1)` at `NestedScrollGuard.kt:83`. This is a test-env artifact, not a
+     real nested-scroll crash (with the flag suspended the same screens render correct, non-blank goldens).
+     Any Paparazzi golden that renders a guarded scrollable MUST suspend the DEBUG-only diagnostic around the
+     snapshot (`NestedScrollGuardConfig.enabled = false` in try/finally — see
+     `paparazzi/Phase233ScrollableGoldenTest.kt#snapshot`). The real guards stay: phase-230 bound-before-scroll
+     ordering + phase-232 static source scan. Golden PNGs are NOT committed (matches the existing 5 Paparazzi
+     tests); they're emitted under `app/build/reports/paparazzi/debug/`.
 
 Implemented in phase-161 (2026-08-19): Kali round-2 triage → generated the next
 pipeline phases starting at **phase-170** (max existing was 169). The Kali
