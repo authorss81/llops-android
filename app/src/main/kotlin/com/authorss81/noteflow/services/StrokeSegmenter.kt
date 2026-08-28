@@ -146,6 +146,14 @@ object StrokeSegmenter {
             return SegmentResult(listOf(stroke), affected = false)
         }
 
+        // Fix 2026-08-27: wet pigments are translucent (alpha 0.3-0.6) + Beer-Lambert blend
+        // Splitting into 0..n translucent fragments draws overlapping round caps twice → darker common part.
+        // Keep PARTIAL for pen/pencil (opaque) but make wet behave as whole-stroke (no fragments, no dark seam).
+        // True mask-based partial (single raster + Clear punch) is deferred to keep no-schema guarantee.
+        if (com.authorss81.noteflow.services.BrushStrokeMath.isWetRenderedTool(stroke.tool)) {
+            return SegmentResult(surviving = emptyList(), affected = true)
+        }
+
         val survivors = mutableListOf<Stroke>()
         val run = mutableListOf<PointF>()
 
