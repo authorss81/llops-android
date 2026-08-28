@@ -175,8 +175,9 @@ class HistoryBatchTest {
         )
         // Window -> box-local mapping happens at consumption time (same space
         // transform the phase-196 predicted tail uses).
-        assertTrue(src.contains("sample.x - canvasBoxWindowOffset.x"))
-        assertTrue(src.contains("sample.y - canvasBoxWindowOffset.y"))
+        // Fix 2026-08-27: pointerInteropFilter coords are already box-local — don't subtract window offset (was shifting points off-screen → dots)
+        assertTrue(src.contains("boxLocalX = sample.x,"))
+        assertTrue(src.contains("boxLocalY = sample.y,"))
         // Monotonic gate guards every ingested sample.
         assertTrue(src.contains("StrokeBatchPolicy.isStale(sample.timestampMs, lastIngestedInputTimestampMs)"))
         // Review-fix: the gate stamp advances ONLY when the sample was actually
