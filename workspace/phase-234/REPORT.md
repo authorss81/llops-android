@@ -30,9 +30,10 @@ Appended notes to the Core-subsystem UI section documenting the whole nested-scr
   changed.
 
 ### 3. `docs/ROADMAP.md` / COMPATIBILITY
-- `docs/ROADMAP.md` does not exist in this repo (checked via glob — no such file). There is
-  therefore no "nested scrollable" known-issue note to mark resolved there; the fix is fully
-  reflected in `docs/ARCHITECTURE.md` + `docs/phase-status.md`.
+- `docs/ROADMAP.md` has never existed in this repo (confirmed via glob + `git log --all --
+  docs/ROADMAP.md`); the app's feature roadmap is the root `ROADMAP.md`, which has no separately-tracked
+  "nested scrollable" known-issue entry. There is therefore no known-issue note to mark resolved; the
+  fix is fully reflected in `docs/ARCHITECTURE.md` + `docs/phase-status.md`.
 
 ## DoD
 - [x] `docs/ARCHITECTURE.md` updated (phase-229/233/234 notes + consolidated summary) — no code.

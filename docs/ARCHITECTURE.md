@@ -2251,8 +2251,8 @@
     Column measured at intrinsic content height and the scrollState never activated
     (dead scroll). The layer demo panel now declares
     `.fillMaxWidth().heightIn(max = 420.dp).verticalScroll(...)` — **bound BEFORE
-    scroll** (`TutorialDemos.kt:292-297`, `heightIn` import `:16`), matching the
-    bounded sibling at `InteractiveTutorial.kt:170`. The `EditorScreen.kt:4489-4494`
+    scroll** (`TutorialDemos.kt:294-298`, `heightIn` import `:15`), matching the
+    bounded sibling at `InteractiveTutorial.kt:170`. The `EditorScreen.kt:4495-4497`
     ColorPicker inner Column was verified already correct
     (`heightIn(max = 430.dp)` before `verticalScroll`, the `c972b23` crash fix).
     Rule for ALL nested-scroll sites: height bound MUST precede `verticalScroll`.
@@ -2263,7 +2263,7 @@
     guidance message. `utils/NestedScrollGuard.kt` exposes `Modifier.nestedScrollGuard()`
     (a transparent layout-neutering modifier) + `NestedScrollGuardProvider` (wired inside
     `NoteflowTheme` in `MainActivity.kt`). The modifier is applied to **every**
-    `verticalScroll(...)` call site (25 sites / 16 files); each brackets its measure with a
+    `verticalScroll(...)` call site (28 sites / 16 files); each brackets its measure with a
     ThreadLocal depth counter and throws when depth > 1 (genuine nesting). `enabled` =
     `BuildConfig.DEBUG` and is a **runtime no-op in release** (NOT compile-time DCE — it is a
     mutable `var` so the pure-JVM test can toggle debug/release). Because phase-229 proved all
@@ -2306,8 +2306,8 @@
     `CheckScrollableContainerConstraints` crash class (a vertically scrollable measured with
     `Constraints(maxHeight = Infinity)`) is defended by a layered strategy: **(1) research** —
     `workspace/phase-229/INVENTORY.md` (48 sites, 0 CONFIRMED CRASH left) + `FIX_STRATEGY.md`
-    modifier-ordering rule; **(2) fix** — `TutorialDemos.kt:292-297`
-    `.fillMaxWidth().heightIn(max = 420.dp).verticalScroll(...)` + `EditorScreen.kt:4489-4494`
+    modifier-ordering rule; **(2) fix** — `TutorialDemos.kt:294-298`
+    `.fillMaxWidth().heightIn(max = 420.dp).verticalScroll(...)` + `EditorScreen.kt:4495-4497`
     (`heightIn(430.dp)` before `verticalScroll`, pinned), guarded by `Phase230NestedScrollFixTest`;
     **(3) runtime canary** — `NestedScrollGuard.kt` (DEBUG-only `enabled = BuildConfig.DEBUG`,
     `Modifier.nestedScrollGuard()` on every `verticalScroll` site, measure-depth ThreadLocal,
