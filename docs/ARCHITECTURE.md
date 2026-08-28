@@ -2832,15 +2832,31 @@ androidx.biometric 1.1.0 · coroutines 1.9.0.
      appends dynamic/APK findings to the same file. Audit-only, no code changed; fixes are phase-119's job.
 12. **Paparazzi + the phase-231 runtime `NestedScrollGuard` are incompatible under layoutlib** (implemented in
      phase-233, 2026-08-28, see `workspace/phase-233/REPORT.md`): the guard's measure-phase depth ThreadLocal
-     FALSE-POSITIVES when a screen is rendered by Paparazzi's layoutlib JVM renderer — a single
-     `verticalScroll` whose layoutlib measure re-enters the guarded node across passes without a balanced
-     guard exit throws `check(newDepth <= 1)` at `NestedScrollGuard.kt:83`. This is a test-env artifact, not a
-     real nested-scroll crash (with the flag suspended the same screens render correct, non-blank goldens).
-     Any Paparazzi golden that renders a guarded scrollable MUST suspend the DEBUG-only diagnostic around the
-     snapshot (`NestedScrollGuardConfig.enabled = false` in try/finally — see
+     FALSE-POSITIVES when a screen is rendered by Paparazzi's layoutlib JVM renderer. Scope (CORRECTED in the
+     phase-233 review fix): the trip is hierarchy/device-dependent, NOT universal — it reproduces on the
+     nested-scroll screens (`layers_demo` on phone+tablet) and the tablet single-scroll screens, but the phone
+     single-scroll screens render fine with the guard ACTIVE. Trigger: a `verticalScroll` whose layoutlib
+     measure re-enters the guarded node across passes without a balanced guard exit throws
+     `check(newDepth <= 1)` at `NestedScrollGuard.kt:83`. This is a test-env artifact, not a real nested-scroll
+     crash (with the flag suspended the same screens render correct, non-blank goldens). Any Paparazzi golden
+     that renders a guarded scrollable MUST suspend the DEBUG-only diagnostic around the snapshot
+     (`NestedScrollGuardConfig.enabled = false` in try/finally — see
      `paparazzi/Phase233ScrollableGoldenTest.kt#snapshot`). The real guards stay: phase-230 bound-before-scroll
-     ordering + phase-232 static source scan. Golden PNGs are NOT committed (matches the existing 5 Paparazzi
-     tests); they're emitted under `app/build/reports/paparazzi/debug/`.
+     ordering + phase-232 static source scan.
+     **Phase-233 goldens ARE committed + verified (review fix, 2026-08-28):** `gradle testDebugUnitTest` runs
+     Paparazzi in REPORT mode only (render → `app/build/reports/paparazzi/debug/`, no comparison).
+     `gradle :app:recordPaparazziDebug` writes baselines into `app/src/test/snapshots/images/` — the 10
+     Phase-233 PNGs (5 phone `Phase233ScrollableGoldenPhoneTest` + 5 tablet) ARE committed, and
+     `gradle :app:verifyPaparazziDebug` FAILS the build on a missing/differing baseline
+     (`SnapshotVerifier.kt:56`) — verified 10/10. CI-enforcement of the verify task is DEFERRED:
+     the pipeline bot token lacks the GitHub App `workflows` permission, so a push touching
+     `.github/workflows/` is refused (why all prior phases leave it untouched); a human/authorized
+     token should add `gradle :app:verifyPaparazziDebug --tests "…Phase233ScrollableGolden*"` after
+     `gradle testDebugUnitTest` in `.github/workflows/android.yml`. Until then, phases touching the
+     tutorial/panel layouts should run the verify task locally as DoD. The OTHER 5 Paparazzi tests
+     stay report-only (no committed baselines). Snapshot names: `tutorial_phone_*` / `tutorial_tablet_*`,
+     NOT `tutorial_tutorial_*` — the abstract test methods are named un-prefixed (`welcome`,
+     `layers_demo`, …) and `golden("tutorial_${device}_...")` supplies the prefix.
 
 Implemented in phase-161 (2026-08-19): Kali round-2 triage → generated the next
 pipeline phases starting at **phase-170** (max existing was 169). The Kali

@@ -47,8 +47,8 @@ abstract class Phase233ScrollableGoldenTest {
     // carries the bounded LayerDemoPanel so the nested-scroll path is exercised.
 
     @Test
-    fun tutorial_welcome() {
-        snapshot(golden("tutorial_welcome")) {
+    fun welcome() {
+        snapshot(golden("welcome")) {
             NoteflowTheme(themeMode = AppThemeMode.LIGHT) {
                 Tutorial(initialIndex = 0)
             }
@@ -56,8 +56,8 @@ abstract class Phase233ScrollableGoldenTest {
     }
 
     @Test
-    fun tutorial_layers_demo() {
-        snapshot(golden("tutorial_layers_demo")) {
+    fun layers_demo() {
+        snapshot(golden("layers_demo")) {
             NoteflowTheme(themeMode = AppThemeMode.LIGHT) {
                 Tutorial(initialIndex = 20)
             }
@@ -67,8 +67,8 @@ abstract class Phase233ScrollableGoldenTest {
     // ------------- TutorialDemos bounded panels -------------
 
     @Test
-    fun tutorial_layers_panel() {
-        snapshot(golden("tutorial_layers_panel")) {
+    fun layers_panel() {
+        snapshot(golden("layers_panel")) {
             NoteflowTheme(themeMode = AppThemeMode.LIGHT) {
                 Surface(modifier = Modifier.padding(16.dp)) {
                     LayerDemoPanel(onLayerAdded = {})
@@ -78,8 +78,8 @@ abstract class Phase233ScrollableGoldenTest {
     }
 
     @Test
-    fun tutorial_practice_draw() {
-        snapshot(golden("tutorial_practice_draw")) {
+    fun practice_draw() {
+        snapshot(golden("practice_draw")) {
             NoteflowTheme(themeMode = AppThemeMode.LIGHT) {
                 Surface(modifier = Modifier.padding(16.dp)) {
                     PracticePad(mode = PracticePadMode.DRAW, onGestureDone = {})
@@ -89,8 +89,8 @@ abstract class Phase233ScrollableGoldenTest {
     }
 
     @Test
-    fun tutorial_markdown_panel() {
-        snapshot(golden("tutorial_markdown_panel")) {
+    fun markdown_panel() {
+        snapshot(golden("markdown_panel")) {
             NoteflowTheme(themeMode = AppThemeMode.LIGHT) {
                 Surface(modifier = Modifier.padding(16.dp)) {
                     MarkdownTypeDemo(onTyped = {})

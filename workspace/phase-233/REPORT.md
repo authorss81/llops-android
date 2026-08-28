@@ -1,12 +1,14 @@
 # Phase 233 — Paparazzi tablet + phone golden regression tests for fixed scrollable screens
 
 ## Status
-IMPLEMENTED (2026-08-28).
+IMPLEMENTED (2026-08-28) + REVIEW-FIX ROUND (2026-08-28): goldens are now committed baselines
+(`app/src/test/snapshots/`) verified by `verifyPaparazziDebug` in CI; verification-mode and
+guard-scope claims corrected from the initial report.
 
 ## Goal
 Add Paparazzi golden-screenshot tests covering the fixed scrollable screens on BOTH tablet and
-phone configs, proving **zero mobile regression** while tablets render correctly (no nested-scroll
-crash — `CheckScrollableContainerConstraints`).
+phone configs, proving **zero mobile regression** (pin the phone layout to a committed baseline)
+while tablets render correctly (no nested-scroll crash — `CheckScrollableContainerConstraints`).
 
 ## What was delivered
 
@@ -52,13 +54,26 @@ All 10 images are generated into the Paparazzi report
 - All render **without throwing** — no nested-scroll crash on either size.
 
 ### Key finding — the phase-231 runtime `NestedScrollGuard` false-positives under Paparazzi/layoutlib
-An important discovery during implementation: with the phase-231 DEBUG-only `NestedScrollGuard`
-active (default in unit tests, `BuildConfig.DEBUG`), the golden render **threw**
-`check(newDepth <= 1)` at `NestedScrollGuard.kt:83` on EVERY scrollable screen — **even
-`tutorial_welcome` (slide 0), which contains a single `verticalScroll`**. The guard's measure-phase
-depth ThreadLocal is confounded by layoutlib: a single `verticalScroll` node's measure can re-enter
-the guarded node across measure passes without a balanced guard exit, so depth reads > 1 → the
-guard reports a (false) nested-scroll violation.
+An important discovery during implementation (CORRECTED in the review-fix round): with the phase-231
+DEBUG-only `NestedScrollGuard` active (default in unit tests, `BuildConfig.DEBUG`), golden renders
+**threw** `check(newDepth <= 1)` at `NestedScrollGuard.kt:83` on the SCREENS THAT TRIP IT — but NOT
+universally. The false positive is **hierarchy- and device-dependent**, not "every scrollable":
+- reproduced on the nested-scroll path (`tutorial_layers_demo`, on both phone and tablet) — the
+  bounded `LayerDemoPanel` scroll measured while the tutorial's own scroll was mid-measure, and the
+  guard cannot distinguish "bounded nested scroll" (safe, phase-230) from "unbounded nested scroll"
+  (crash) — it throws on ANY depth > 1;
+- reproduced on the TABLET single-scroll screens (welcome / panels) whose layoutlib measure can
+  re-enter the guarded node across passes without a balanced exit;
+- **NOT reproduced on the PHONE single-scroll screens** — `tutorial_welcome` (slide 0, one
+  `verticalScroll`) and `tutorial_layers_panel` render fine with the guard ACTIVE on the 360×800dp
+  phone config (verified with a scratch probe during review).
+
+Because SOME screens do trip it, the snapshot helper still suspends the DEBUG-only diagnostic for
+the duration of the golden render and restores it in `finally`. This is a test-env artifact, not a
+real nested-scroll crash — with the flag suspended the same screens render correct, non-blank goldens,
+and a GENUINE unbounded nested scroll still fails the render (the Compose framework
+`CheckScrollableContainerConstraints` check runs in layoutlib; verified during review with a scratch
+probe that nested two `verticalScroll`s with no bound → the render throws and the test fails).
 
 This is a **test-environment artifact, not a real crash**: with the diagnostic suspended, the same
 screens render correct, non-blank goldens. The REAL regression guards remain:
@@ -79,18 +94,45 @@ finally { NestedScrollGuardConfig.enabled = prior }
 This is documented in the test KDoc, in `docs/ARCHITECTURE.md` gotcha #12, and in this report so a
 future golden test never re-hits the confusing false-positive.
 
-### Golden images are NOT committed
-The repo does not commit golden PNGs — the 5 pre-existing Paparazzi tests
-(`PaparazziSmokeTest`, `Phase223DraftingGridSnapshotTest`, etc.) commit none either. Goldens are
-emitted under the Paparazzi build report (`app/build/reports/paparazzi/debug/`) at test time and the
-tests pass against them (Paparazzi default record mode). This phase follows the established pattern.
+### Golden baselines ARE committed and verified (review-fix round)
+CORRECTION to the pre-review text: the tests do NOT run in "Paparazzi default record mode", and the
+goldens are now REAL pinned baselines. Paparazzi 2.0.0-alpha01 behaviour:
+
+- `gradle :app:testDebugUnitTest` runs Paparazzi in **report mode** — every snapshot renders and is
+  shown in the HTML report (`app/build/reports/paparazzi/debug/`), but NO golden file is written and
+  nothing is compared. That mode alone can only smoke-test "renders without throwing".
+- `gradle :app:recordPaparazziDebug` flips the recorder: each snapshot is ALSO written to
+  `app/src/test/snapshots/images/` as a golden baseline. These 10 PNGs (5 phone + 5 tablet) ARE
+  committed to the repo for Phase 233.
+- `gradle :app:verifyPaparazziDebug` flips the verifier (`paparazzi.test.verify=true` ⇒
+  `SnapshotVerifier`): it FAILS the build if a baseline golden is missing
+  (`AssertionError` at `SnapshotVerifier.kt:56`) or differs beyond `maxPercentDifference`. Verified
+  three ways in the review-fix round: (1) `verifyPaparazziDebug --tests Phase233*` BUILD SUCCESSFUL
+  on the 10 committed baselines; (2) removing one baseline makes the phone class FAIL
+  ("Missing snapshot"); (3) the genuine nested-scroll crash probe fails even in report mode.
+- CI-enforcement is DEFERRED (review-fix round, push constraint discovered): a push that touches
+  `.github/workflows/android.yml` is REFUSED by GitHub ("refusing to allow a GitHub App to create or
+  update workflow … without `workflows` permission") — this bot token lacks the GitHub App
+  `workflows` permission, which is also why every prior phase reports `.github/workflows/`
+  untouched. The intended CI step is just:
+  `gradle :app:verifyPaparazziDebug --tests "com.authorss81.noteflow.paparazzi.Phase233ScrollableGolden*"`
+  (after `testDebugUnitTest`) — a human (or a token with `workflows` write) should add it to
+  `.github/workflows/android.yml` under the "Verify Paparazzi goldens" name. Until then, each phase
+  that renders the tutorial/panels should run the verify task as part of its local DoD (the
+  baselines, being committed, fail the build as soon as the task runs).
+
+The OTHER 5 pre-existing Paparazzi tests (`PaparazziSmokeTest`, `Phase223DraftingGridSnapshotTest`,
+etc.) still run report-only with NO committed baselines — the pinned-baseline convention starts with
+Phase 233; extending it to the other tests is out of scope (their gif/multi-frame and future-refactor
+surface isn't pinned yet).
 
 ## Verification
-- `gradle :app:testDebugUnitTest` — **BUILD SUCCESSFUL**. Full suite:
-  **3467 tests / 0 failures / 0 errors** (incl. the previously-intermittent
-  `Phase148UiFailureTextScrubTest` UNC-path case, which passed in this run — untouched).
-  - `Phase233ScrollableGoldenPhoneTest` — 5/5 green.
-  - `Phase233ScrollableGoldenTabletTest` — 5/5 green.
+- `gradle :app:testDebugUnitTest` — **BUILD SUCCESSFUL** (report-mode Paparazzi + full JVM suite,
+  verify NOT implied here — see "Golden baselines ARE committed and verified" above).
+- `gradle :app:verifyPaparazziDebug --tests "com.authorss81.noteflow.paparazzi.Phase233ScrollableGolden*"`
+  — **BUILD SUCCESSFUL** (10/10 baselines match). Negative check: deleting one baseline makes the
+  phone class fail with `AssertionError` ("Missing snapshot", `SnapshotVerifier.kt:56`), so the
+  guard genuinely fails closed.
 - `gradle assembleDebug` — **BUILD SUCCESSFUL**.
 
 The Paparazzi goldens are JVM unit tests; they did not break any other test.
@@ -102,14 +144,22 @@ The Paparazzi goldens are JVM unit tests; they did not break any other test.
       AND the TutorialDemos bounded panels (`LayerDemoPanel`, `PracticePad`, `MarkdownTypeDemo`).
 - [x] Guards drawn: NO intentional error golden — all 10 goldens encode correct layouts (verified
       distinct, non-blank, correct aspect ratios; no solid/error frames).
+- [x] **Baseline pinning (review-fix round):** the 10 goldens are committed under
+      `app/src/test/snapshots/images/` and `verifyPaparazziDebug` passes 10/10 — a phone/tablet
+      layout regression that changes a golden now fails the build the moment the verify task runs.
+      (CI enforcement of the verify task is DEFERRED — the bot token cannot push `.github/workflows/`
+      edits; see "Golden baselines ARE committed and verified" above.)
 - [x] `gradle testDebugUnitTest` green (3467 / 0 failures / 0 errors).
 - [x] `workspace/phase-233/REPORT.md` written.
 - [x] docs updated (`docs/phase-status.md` phase-233 row + `docs/ARCHITECTURE.md` gotcha #12).
 
 ## Notes / constraints honored
 - No schema change, no migration, no new dependencies.
-- `.github/workflows/` untouched.
-- Base-APK-size rule intact (test-only code; Paparazzi is already a unit-test-only lib).
+- `.github/workflows/` untouched — the bot token lacks the GitHub App `workflows` permission, so any
+  push that edits a workflow file is refused. The "Verify Paparazzi goldens" CI step is documented
+  as a follow-up for a human/authorized token (see "Golden baselines ARE committed and verified").
+- Base-APK-size rule intact (test-only code; Paparazzi is already a unit-test-only lib; the golden
+  PNGs are test fixtures, not shipped artifacts).
 - AGSL-compose-native-renderer screens (the real canvas) are correctly EXCLUDED from Paparazzi
   goldens — those are covered by the phase-232 source-scan (and the on-device runtime guard)
   instead, matching the phase's content-scope note.
