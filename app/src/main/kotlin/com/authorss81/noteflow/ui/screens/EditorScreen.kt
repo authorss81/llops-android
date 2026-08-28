@@ -109,6 +109,7 @@ import com.authorss81.noteflow.ui.components.overflowMenuScrollModifier
 import com.authorss81.noteflow.ui.components.overflowMenuScrollState
 import com.authorss81.noteflow.ui.components.TimelapsePlayer
 import com.authorss81.noteflow.ui.viewmodel.NoteflowViewModel
+import com.authorss81.noteflow.utils.nestedScrollGuard
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -3590,6 +3591,7 @@ private fun FloatingToolDock(
                     Column(
                         modifier = Modifier
                             .width(56.dp)
+                            .nestedScrollGuard()
                             .verticalScroll(rememberScrollState()),
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(6.dp)
@@ -4409,6 +4411,7 @@ private fun ColorPickerBottomSheet(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 20.dp, vertical = 8.dp)
+                .nestedScrollGuard()
                 .verticalScroll(rememberScrollState())
         ) {
             Row(
@@ -4490,6 +4493,7 @@ private fun ColorPickerBottomSheet(
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(max = 430.dp)
+                    .nestedScrollGuard()
                     .verticalScroll(rememberScrollState())
             ) {
                 if (advancedBrushesEnabled) {
@@ -5015,6 +5019,7 @@ private fun WidthPickerBottomSheet(
                 .fillMaxWidth()
                 .padding(horizontal = 20.dp, vertical = 8.dp)
                 .navigationBarsPadding()
+                .nestedScrollGuard()
                 .verticalScroll(rememberScrollState())
         ) {
             Text(
@@ -5381,6 +5386,7 @@ private fun CanvasSettingsBottomSheet(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 20.dp, vertical = 8.dp)
+                .nestedScrollGuard()
                 // Phase 194: every option in this very tall sheet (Canvas Mode →
                 // Paper Template chip rows → custom bg → paper color → page mgmt →
                 // minimap → GPU brushes → the second template row Cornell/Meeting/

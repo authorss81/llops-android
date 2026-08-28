@@ -225,7 +225,7 @@
 | `ui/screens/` | `EditorScreen.kt` (6181), `MarkdownPreviewScreen.kt`, `HomeScreen.kt`, `KnowledgeGraphScreen.kt`, `LockScreen.kt` | Top-level screens |
 | `ui/viewmodel/` | `NoteflowViewModel.kt` (~1500) | God-ViewModel: DB, security, plugins, all state flows |
 | `theme/` | `Theme.kt`, `GlassSurfaces.kt`, `GlassThemeMath.kt`, `Motion.kt`, `Type.kt`, `Color.kt` | Material3 + frosted-glass design system |
-| `utils/` | `ConstantTime.kt`, `BitmapPool.kt`, `DeviceCompatibilityManager.kt`, `WikiLinkParser.kt` (dup, see notes) | Pure helpers |
+| `utils/` | `ConstantTime.kt`, `BitmapPool.kt`, `DeviceCompatibilityManager.kt`, `NestedScrollGuard.kt` (phase-231 debug nested-scroll canary), `WikiLinkParser.kt` (dup, see notes) | Pure helpers |
 
 > **Implemented in phase-188** (2026-08-20, GalleryView robustness, see
 > `workspace/phase-188/REPORT.md`): the user visual-review "exploration" set of 4
@@ -2244,6 +2244,18 @@
     (`heightIn(max = 430.dp)` before `verticalScroll`, the `c972b23` crash fix).
     Rule for ALL nested-scroll sites: height bound MUST precede `verticalScroll`.
     Regression guard: `Phase230NestedScrollFixTest` (2 source-pinning tests).
+  - **Implemented in phase-231** (runtime nested-scroll guard, see `workspace/phase-231/REPORT.md`):
+    a DEBUG-ONLY runtime canary so a future nested `verticalScroll`-inside-`verticalScroll`
+    regression (the `CheckScrollableContainerConstraints` crash) is caught early with a
+    guidance message. `utils/NestedScrollGuard.kt` exposes `Modifier.nestedScrollGuard()`
+    (a transparent layout-neutering modifier) + `NestedScrollGuardProvider` (wired inside
+    `NoteflowTheme` in `MainActivity.kt`). The modifier is applied to **every**
+    `verticalScroll(...)` call site (25 sites / 16 files); each brackets its measure with a
+    ThreadLocal depth counter and throws when depth > 1 (genuine nesting). `enabled` =
+    `BuildConfig.DEBUG` and is a **runtime no-op in release** (NOT compile-time DCE — it is a
+    mutable `var` so the pure-JVM test can toggle debug/release). Because phase-229 proved all
+    current sites single-level-bounded, depth stays ≤ 1 today (silent canary). Test:
+    `Phase231NestedScrollGuardTest` (3).
 - **ViewModel/nav**: `ui/viewmodel/NoteflowViewModel.kt:105` (builds SecurityService/NoteRepository/PluginRegistry
   :121/PluginManager :131/PluginRuntime :170/PluginStoreController :196; ~60 capability suspend fns);
   `MainActivity.kt:73` (single activity, **`mutableStateOf` nav** — NOT Navigation Compose).

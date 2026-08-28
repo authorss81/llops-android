@@ -54,6 +54,7 @@ import com.authorss81.noteflow.services.UpdateApkDecisionPolicy
 import com.authorss81.noteflow.services.WidgetLaunchPolicy
 import com.authorss81.noteflow.theme.NoteflowTheme
 import com.authorss81.noteflow.utils.NestedScrollGuardProvider
+import com.authorss81.noteflow.utils.nestedScrollGuard
 import com.authorss81.noteflow.ui.screens.EditorScreen
 import com.authorss81.noteflow.ui.screens.HomeScreen
 import com.authorss81.noteflow.ui.screens.KnowledgeGraphScreen
@@ -1389,6 +1390,7 @@ private fun RestoreBlockedScreen(viewModel: NoteflowViewModel) {
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .nestedScrollGuard()
             .verticalScroll(rememberScrollState())
             .padding(24.dp)
             // Phase 167: these recovery screens render edge-to-edge WITHOUT a
@@ -1470,6 +1472,7 @@ private fun CorruptionRecoveryScreen(viewModel: NoteflowViewModel) {
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .nestedScrollGuard()
             .verticalScroll(rememberScrollState())
             .padding(24.dp)
             // Phase 167: these recovery screens render edge-to-edge WITHOUT a
@@ -1596,6 +1599,7 @@ private fun KeystoreKeyLostScreen(viewModel: NoteflowViewModel) {
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .nestedScrollGuard()
             .verticalScroll(rememberScrollState())
             .padding(24.dp)
             // Phase 167: these recovery screens render edge-to-edge WITHOUT a

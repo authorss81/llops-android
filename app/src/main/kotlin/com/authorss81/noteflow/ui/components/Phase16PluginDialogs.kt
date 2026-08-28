@@ -40,6 +40,7 @@ import com.authorss81.noteflow.plugins.TranslationLanguage
 import com.authorss81.noteflow.plugins.TranslationModelStatus
 import com.authorss81.noteflow.plugins.TranslationOutcome
 import com.authorss81.noteflow.ui.viewmodel.NoteflowViewModel
+import com.authorss81.noteflow.utils.nestedScrollGuard
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
@@ -152,6 +153,7 @@ fun DictationDialog(
             Column(
                 modifier = Modifier
                     .heightIn(max = 360.dp)
+                    .nestedScrollGuard()
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
@@ -398,6 +400,7 @@ fun TranslationDialog(
             Column(
                 modifier = Modifier
                     .heightIn(max = 380.dp)
+                    .nestedScrollGuard()
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {

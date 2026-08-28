@@ -57,6 +57,7 @@ import com.authorss81.noteflow.services.CalloutType
 import com.authorss81.noteflow.services.MarkdownBlockTokenizer
 import com.authorss81.noteflow.services.MarkdownInlineMath
 import com.authorss81.noteflow.services.WikiLinkParser
+import com.authorss81.noteflow.utils.nestedScrollGuard
 import com.authorss81.noteflow.theme.serifBodyStyle
 import org.commonmark.ext.gfm.tables.TableBlock
 import org.commonmark.ext.gfm.tables.TableBody
@@ -167,6 +168,7 @@ internal fun MarkdownDocument(
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .nestedScrollGuard()
             .verticalScroll(rememberScrollState())
             .padding(vertical = 4.dp)
     ) {

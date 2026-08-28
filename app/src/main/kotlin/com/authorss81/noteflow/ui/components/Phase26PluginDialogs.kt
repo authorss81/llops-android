@@ -47,6 +47,7 @@ import com.authorss81.noteflow.plugins.weather.WeatherSnapshotFormatter
 import com.authorss81.noteflow.plugins.weather.WeatherPluginImpl
 import com.authorss81.noteflow.plugins.weather.WeatherDefaults
 import com.authorss81.noteflow.ui.viewmodel.NoteflowViewModel
+import com.authorss81.noteflow.utils.nestedScrollGuard
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -550,6 +551,7 @@ fun OutlineGeneratorDialog(
                         s.text,
                         modifier = Modifier
                             .fillMaxWidth()
+                            .nestedScrollGuard()
                             .verticalScroll(rememberScrollState()),
                         style = MaterialTheme.typography.bodyMedium
                     )

@@ -33,6 +33,7 @@ import com.authorss81.noteflow.plugins.OcrOutcome
 import com.authorss81.noteflow.plugins.PluginResult
 import com.authorss81.noteflow.services.ClipboardGuard
 import com.authorss81.noteflow.ui.viewmodel.NoteflowViewModel
+import com.authorss81.noteflow.utils.nestedScrollGuard
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -126,6 +127,7 @@ fun OcrResultDialog(
                                 text = s.text,
                                 style = MaterialTheme.typography.bodyMedium,
                                 modifier = Modifier
+                                    .nestedScrollGuard()
                                     .verticalScroll(rememberScrollState())
                                     .padding(vertical = 4.dp)
                             )

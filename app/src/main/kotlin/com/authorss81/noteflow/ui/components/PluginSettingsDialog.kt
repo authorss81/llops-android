@@ -18,6 +18,7 @@ import com.authorss81.noteflow.plugins.PluginStateInfo
 import com.authorss81.noteflow.services.PluginDiagnosticsRowPolicy
 import com.authorss81.noteflow.services.PluginInvocationJournal
 import com.authorss81.noteflow.ui.viewmodel.NoteflowViewModel
+import com.authorss81.noteflow.utils.nestedScrollGuard
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 
@@ -80,7 +81,7 @@ fun PluginSettingsDialog(
         },
         text = {
             Column(
-                modifier = Modifier.verticalScroll(rememberScrollState()),
+                modifier = Modifier.nestedScrollGuard().verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Text(

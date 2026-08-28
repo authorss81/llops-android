@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.sp
 import com.authorss81.noteflow.services.MarkdownBlock
 import com.authorss81.noteflow.services.MarkdownBlockTokenizer
 import com.authorss81.noteflow.services.MarkdownBlockType
+import com.authorss81.noteflow.utils.nestedScrollGuard
 import com.authorss81.noteflow.theme.serifBodyStyle
 import java.io.File
 
@@ -107,6 +108,7 @@ fun HybridMarkdownEditor(
     Column(
         modifier = modifier
             .fillMaxSize()
+            .nestedScrollGuard()
             .verticalScroll(rememberScrollState())
             .padding(vertical = 2.dp)
             .padding(horizontal = 4.dp)

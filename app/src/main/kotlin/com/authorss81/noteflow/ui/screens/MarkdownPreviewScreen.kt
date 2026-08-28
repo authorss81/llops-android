@@ -88,6 +88,7 @@ import com.authorss81.noteflow.ui.components.WikiLinkPickerDialog
 import com.authorss81.noteflow.ui.components.markdown.HybridMarkdownEditor
 import com.authorss81.noteflow.ui.components.markdown.CodeBlockTextView
 import com.authorss81.noteflow.ui.viewmodel.NoteflowViewModel
+import com.authorss81.noteflow.utils.nestedScrollGuard
 import java.io.File
 import kotlinx.coroutines.flow.debounce
 import androidx.compose.ui.layout.LayoutCoordinates
@@ -298,6 +299,7 @@ private fun ReaderOutlineRail(
                 Column(
                     modifier = Modifier
                         .heightIn(max = 300.dp)
+                        .nestedScrollGuard()
                         .verticalScroll(rememberScrollState())
                 ) {
                     index.labels().forEach { label ->
@@ -1457,6 +1459,7 @@ private fun MarkdownRenderedContent(
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
+                        .nestedScrollGuard()
                         .verticalScroll(scroll)
                         .widthIn(max = ReaderModePolicy.MAX_COLUMN_WIDTH_DP.dp)
                         .padding(vertical = 4.dp)
@@ -1485,6 +1488,7 @@ private fun MarkdownRenderedContent(
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .nestedScrollGuard()
                 .verticalScroll(scroll)
                 .padding(vertical = 4.dp)
         ) {

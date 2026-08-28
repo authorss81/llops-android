@@ -18,10 +18,17 @@ import org.junit.Test
  * parent (the "Vertically scrollable component was measured with infinity
  * maximum height constraints" / CheckScrollableContainerConstraints crash).
  *
- * Because [NestedScrollGuardConfig.enabled] is a `var` (initialised from
+ * Because [NestedScrollGuardConfig.enabled] is a mutable flag (initialised from
  * `BuildConfig.DEBUG`), the pure-JVM test can toggle it to simulate a release
  * build (`false` → no-op) and a debug build (`true` → throws on nesting),
  * without needing Robolectric or a different BuildConfig.
+ *
+ * NOTE (review fix): the guard contracts under test are:
+ *   - disabled (release) → enter/exit are no-ops that never track depth;
+ *   - enabled, genuinely nested (enter while already inside) → throws with the
+ *     guidance message;
+ *   - a single balanced enter/exit returns to depth 0, and exiting an empty
+ *     stack is clamped to 0 (never negative).
  */
 class Phase231NestedScrollGuardTest {
 
@@ -46,12 +53,11 @@ class Phase231NestedScrollGuardTest {
 
     @Test
     fun `release build is a no-op`() {
-        // Simulate release: the static-final BuildConfig.DEBUG=false would make
-        // the whole body dead code; here we exercise the same branch by
-        // disabling the guard flag.
+        // Simulate release: BuildConfig.DEBUG=false makes the guarded branch
+        // always false, so enter/exit must not track depth nor throw.
         NestedScrollGuardConfig.enabled = false
 
-        // Enters/exits must not increment the counter nor throw.
+        // Enters/exits must not increment the counter nor throw, even many times.
         NestedScrollReporter.enterUnboundedScroll()
         NestedScrollReporter.enterUnboundedScroll()
         NestedScrollReporter.enterUnboundedScroll()
@@ -78,13 +84,15 @@ class Phase231NestedScrollGuardTest {
     fun `balanced enter and exit resets depth to zero`() {
         NestedScrollGuardConfig.enabled = true
 
+        // A single guarded scrollable measures and leaves.
         NestedScrollReporter.enterUnboundedScroll()
-        NestedScrollReporter.enterUnboundedScroll()
-        assertEquals(2, NestedScrollReporter.currentDepth())
-
-        NestedScrollReporter.exitUnboundedScroll()
         assertEquals(1, NestedScrollReporter.currentDepth())
 
+        NestedScrollReporter.exitUnboundedScroll()
+        assertEquals(0, NestedScrollReporter.currentDepth())
+
+        // Re-entering after a clean exit is allowed (new frame, single level).
+        NestedScrollReporter.enterUnboundedScroll()
         NestedScrollReporter.exitUnboundedScroll()
         assertEquals(0, NestedScrollReporter.currentDepth())
 

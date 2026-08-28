@@ -23,6 +23,7 @@ import com.authorss81.noteflow.plugins.AssistantOutcome
 import com.authorss81.noteflow.plugins.AssistantPlugin
 import com.authorss81.noteflow.plugins.PluginResult
 import com.authorss81.noteflow.ui.viewmodel.NoteflowViewModel
+import com.authorss81.noteflow.utils.nestedScrollGuard
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
@@ -218,6 +219,7 @@ fun OnDeviceSmartAssistantBottomSheet(
                         modifier = Modifier
                             .fillMaxWidth()
                             .heightIn(min = 200.dp, max = 340.dp)
+                            .nestedScrollGuard()
                             .verticalScroll(rememberScrollState())
                     ) {
                         when (activeTab) {

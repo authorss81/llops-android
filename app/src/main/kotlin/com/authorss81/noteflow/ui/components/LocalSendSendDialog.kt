@@ -35,6 +35,7 @@ import com.authorss81.noteflow.services.localsend.LocalSendPairingRequest
 import com.authorss81.noteflow.services.localsend.LocalSendSender
 import com.authorss81.noteflow.services.localsend.SettingsLocalSendPairedDeviceStore
 import com.authorss81.noteflow.ui.viewmodel.NoteflowViewModel
+import com.authorss81.noteflow.utils.nestedScrollGuard
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -323,6 +324,7 @@ fun LocalSendSendDialog(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .nestedScrollGuard()
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {

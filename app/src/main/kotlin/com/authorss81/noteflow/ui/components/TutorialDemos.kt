@@ -51,6 +51,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.authorss81.noteflow.utils.nestedScrollGuard
 import kotlin.math.PI
 import kotlin.math.sin
 
@@ -293,6 +294,7 @@ fun LayerDemoPanel(
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(max = 420.dp)
+                .nestedScrollGuard()
                 .verticalScroll(rememberScrollState())
                 .padding(12.dp)
         ) {
@@ -401,6 +403,7 @@ fun ColourModeDemo(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             modifier = Modifier
                 .fillMaxWidth()
+                .nestedScrollGuard()
                 .verticalScroll(rememberScrollState())
         ) {
             modes.forEach { mode ->

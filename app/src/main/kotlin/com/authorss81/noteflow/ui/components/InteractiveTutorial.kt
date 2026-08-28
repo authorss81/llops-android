@@ -26,6 +26,7 @@ import com.authorss81.noteflow.services.TutorialAction
 import com.authorss81.noteflow.services.TutorialCurriculum
 import com.authorss81.noteflow.services.TutorialSession
 import com.authorss81.noteflow.services.TutorialSlide
+import com.authorss81.noteflow.utils.nestedScrollGuard
 
 /**
  * Compose-observable glue over the pure-JVM [TutorialSession]. Every mutation
@@ -167,6 +168,7 @@ fun InteractiveTutorial(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .nestedScrollGuard()
                     .verticalScroll(rememberScrollState())
                     .padding(24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally

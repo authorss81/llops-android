@@ -24,6 +24,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.authorss81.noteflow.services.BrushStudioParams
 import com.authorss81.noteflow.services.WetCanvasEngine
+import com.authorss81.noteflow.utils.nestedScrollGuard
 
 @Composable
 fun BrushStudioDialog(
@@ -58,6 +59,7 @@ fun BrushStudioDialog(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .nestedScrollGuard()
                     .verticalScroll(rememberScrollState())
                     .padding(vertical = 4.dp)
                     .heightIn(max = 640.dp)

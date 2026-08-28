@@ -36,6 +36,7 @@ import com.authorss81.noteflow.plugins.PluginResult
 import com.authorss81.noteflow.plugins.WebSearchOutcome
 import com.authorss81.noteflow.plugins.WebSearchResult
 import com.authorss81.noteflow.ui.viewmodel.NoteflowViewModel
+import com.authorss81.noteflow.utils.nestedScrollGuard
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -111,7 +112,7 @@ fun WebSearchDialog(
         title = { Text("Search the web") },
         text = {
             Column(
-                modifier = Modifier.verticalScroll(rememberScrollState()),
+                modifier = Modifier.nestedScrollGuard().verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -194,6 +195,7 @@ private fun SearchResultsList(
     Column(
         modifier = Modifier
             .heightIn(max = 360.dp)
+            .nestedScrollGuard()
             .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(2.dp)
     ) {
