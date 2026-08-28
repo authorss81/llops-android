@@ -2232,6 +2232,19 @@
     Also fixed a phase-127 **pre-existing build blocker**: `PluginStoreDescriptionBlock.kt:12-13/:72-74`
     used non-existent `Icons.AutoMirrored.Outlined.KeyboardArrowUp/Down` → `Icons.Outlined.*`
     (as `UnifiedSidebar.kt:296`). No schema change, no new deps.
+  - **Implemented in phase-229** (research, see `workspace/phase-229/INVENTORY.md` +
+    `FIX_STRATEGY.md`): an exhaustive inventory of all 48 scrollable sites across the tree
+    (EditorScreen, HomeScreen, MarkdownPreviewScreen, MainActivity + 24 dialogs/components)
+    for the `CheckScrollableContainerConstraints` crash class
+    (*"Vertically scrollable component was measured with infinity maximum height constraints"*).
+    Result: 47 SAFE (bounded by `weight`/`heightIn`/`fillMaxSize`/dialog/sheet/fixed height),
+    1 RISK (a dead unbounded scroll in `TutorialDemos.kt:293` — measured at intrinsic content
+    height so its scrollState never activated), 0 CONFIRMED CRASH (the only real crash — the
+    nested `verticalScroll` in `EditorScreen.kt:4493` ColorPicker — was already fixed in
+    `c972b23`). The authoritative reference for the protocol is `FIX_STRATEGY.md`, notably the
+    **modifier-ordering invariant**: a height bound (`heightIn(max)` / `fillMaxHeight` /
+    `weight(1f)`) MUST appear BEFORE `verticalScroll()` in the chain, because Compose measures
+    `scroll` children with `Constraints(maxHeight = Infinite)`.
   - **Implemented in phase-230** (defensive nested-scroll hardening, see `workspace/phase-230/REPORT.md`):
     the tutorial's demo panels (`TutorialDemos.kt`) previously had an UNBOUNDED
     `verticalScroll` inside the `InteractiveTutorial` Card — with no height bound the
@@ -2278,6 +2291,34 @@
     canary, single shared whole-tree pass with per-kind failure messages, `val`/`var` lines excluded
     from chain-head candidacy, and hook-lambda shielding documented as deliberately over-broad
     (the runtime phase-231 guard still fires).
+  - **Implemented in phase-233** (Paparazzi tablet+phone goldens, see `workspace/phase-233/REPORT.md`):
+    `Phase233ScrollableGoldenTest` (abstract base + `Phase233ScrollableGoldenPhoneTest` 360×800dp
+    portrait + `Phase233ScrollableGoldenTabletTest` 1280×800dp landscape, each with its own
+    `@get:Rule Paparazzi`) renders 10 AGSL-free scrollable screens (InteractiveTutorial slide 0 +
+    the `layers_demo` action slide which embeds the bounded `LayerDemoPanel` nested-scroll path, plus
+    the `TutorialDemos.kt` bounded panels `LayerDemoPanel`/`PracticePad(DRAW)`/`MarkdownTypeDemo`).
+    All 10 render without throwing (no nested-scroll crash) on both sizes with distinct non-blank
+    frames. The 10 baselines are committed under `app/src/test/snapshots/images/` and
+    `gradle :app:verifyPaparazziDebug` FAILS CLOSED on a missing/differing golden (verified 10/10;
+    CI enforcement deferred — see gotcha 12).
+  - **Implemented in phases 229–234** (2026-08-28, nested-scrollable fix — consolidated; no app code
+    beyond the phase-230 `TutorialDemos.kt` fix + phase-231 `NestedScrollGuard.kt`): the
+    `CheckScrollableContainerConstraints` crash class (a vertically scrollable measured with
+    `Constraints(maxHeight = Infinity)`) is defended by a layered strategy: **(1) research** —
+    `workspace/phase-229/INVENTORY.md` (48 sites, 0 CONFIRMED CRASH left) + `FIX_STRATEGY.md`
+    modifier-ordering rule; **(2) fix** — `TutorialDemos.kt:292-297`
+    `.fillMaxWidth().heightIn(max = 420.dp).verticalScroll(...)` + `EditorScreen.kt:4489-4494`
+    (`heightIn(430.dp)` before `verticalScroll`, pinned), guarded by `Phase230NestedScrollFixTest`;
+    **(3) runtime canary** — `NestedScrollGuard.kt` (DEBUG-only `enabled = BuildConfig.DEBUG`,
+    `Modifier.nestedScrollGuard()` on every `verticalScroll` site, measure-depth ThreadLocal,
+    `Phase231NestedScrollGuardTest`); **(4) compile-time source scan** —
+    `Phase232NestedScrollSourceScanTest` (pure-JVM lexer + chain parser asserting the
+    bound-before-scroll invariant + no unbounded/lazy nesting, 28 tests); **(5) layout goldens** —
+    `Phase233ScrollableGoldenTest` (10 phone/tablet baselines, `verifyPaparazziDebug` fail-closed).
+    **The invariant for every scrollable in this codebase: a height bound (`heightIn` /
+    `fillMaxHeight` / `weight` / `requiredHeight`) MUST precede `verticalScroll` in the modifier
+    chain.** Authoritative references: `workspace/phase-229/INVENTORY.md` +
+    `workspace/phase-229/FIX_STRATEGY.md`.
 - **ViewModel/nav**: `ui/viewmodel/NoteflowViewModel.kt:105` (builds SecurityService/NoteRepository/PluginRegistry
   :121/PluginManager :131/PluginRuntime :170/PluginStoreController :196; ~60 capability suspend fns);
   `MainActivity.kt:73` (single activity, **`mutableStateOf` nav** — NOT Navigation Compose).
