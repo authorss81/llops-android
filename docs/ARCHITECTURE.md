@@ -1499,6 +1499,26 @@
     hits `stroke.end` (`AnnotationCanvas.kt:3753`) so shape-stroke tips erase. Undo covers both
     modes (every erase change flows through `EditorScreen.handleStrokesChange` pre-state capture,
     `EditorScreen.kt:588`). Tests: `Phase124EraserTest` (17) + existing `StrokeSegmenterTest` (16).
+  - **Implemented in phase-228 (wet partial-erase mask overhaul, commits
+    `1e54820`/`8a2032d` + 2026-08-27 review fixes)**: freehand sample throttling
+    is now WET-ONLY — non-wet tools add every live sample (the old 6px/16ms
+    gate only drops points on `BrushStrokeMath.isWetRenderedTool` tools, and
+    those interpolate the gap via `WetBrushEngine.interpolateSegment`). Wet
+    partial erases keep the WHOLE stroke as one raster + a persisted
+    `Stroke.eraseMask` (`StrokeModels.kt`, list of `EraseMask(x,y,radius)`,
+    so no Beer-Lambert fragment seaming); the mask is Clear-punched: on-screen
+    inside a BOUNDED per-stroke `saveLayer` (`AnnotationCanvas.kt:5956`,
+    bounds = stroke points + start/end + mask extents + width/2 pad
+    ∩ canvas rect; empty bounds → no layer, no punch), in
+    `ImportExportService.renderLayersAndStrokesToCanvas` (once-per-stroke,
+    full-canvas layer fine, `ImportExportService.kt:856`), in
+    `TimelapseExporter.drawStroke` (masks transformed through the
+    `FrameTransform` so they ride zoom/pan), and in the fill-tool sampling
+    raster via `punchEraseMasks`. `StrokeSegmenter.kt` (wet branch) prunes
+    redundant stamps (`maskStillCarves`/`pointClearedBy`) so `eraseSamples`
+    (the SHARED drag path) never grows `eraseMask` unbounded into the
+    encrypted `pointsJson` B2-DOS-01 budget; 5 new wet cases pin the
+    semantics in `StrokeSegmenterTest`.
   - **Implemented in phase-123**: colour/layer/tool selections are effective for the VERY NEXT stroke.
     `AnnotationCanvas.kt:634` — `activeLayerId` + `layers` were missing from the drawing `pointerInput`
     restart-key list, so a layer switch (unlocked→unlocked) left the stroke-commit closure

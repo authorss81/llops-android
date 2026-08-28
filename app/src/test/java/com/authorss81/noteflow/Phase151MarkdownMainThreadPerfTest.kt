@@ -332,6 +332,16 @@ class Phase151MarkdownMainThreadPerfTest {
             MarkdownBlockTokenizer.blocks(replaced)
             MarkdownBlockTokenizer.checkboxCandidates(replaced)
         }
+        // The 1.5× BAND (not 1.0×): the absolute bound above already guards the
+        // real regression worst case; this relative check is the tiebreaker that
+        // catches a path quietly becoming the SAME cost as the old full
+        // re-tokenize. A tight <1.0× margin would be flaky — CI JIT/timer
+        // resolution can put the incremental path microseconds ahead of the old
+        // full pipeline's allocation noise, and the phase-151 flake history
+        // (WikiLinkParserCacheUnitTest-class timing jitter) shows why a little
+        // headroom is the right trade. If the real cost crosses the absolute
+        // 200ms bound, the incremental path is already broken regardless of
+        // this band.
         assertTrue(
             "incremental (${"%.2f".format(t)}ms) must not be slower than the old full re-tokenize (${"%.2f".format(tOld)}ms)",
             t < tOld * 1.5

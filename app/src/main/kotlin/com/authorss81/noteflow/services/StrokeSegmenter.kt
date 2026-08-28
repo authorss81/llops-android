@@ -153,12 +153,22 @@ object StrokeSegmenter {
             if (allCovered) {
                 return SegmentResult(surviving = emptyList(), affected = true)
             }
-            val masks = eraseSamples.map { e ->
-                val r = coverageRadiusFor(stroke, e, extraRadius).coerceAtLeast(1f)
-                com.authorss81.noteflow.data.model.EraseMask(e.x, e.y, r)
-            }
             val existing = stroke.eraseMask ?: emptyList()
-            val masked = stroke.copy(eraseMask = existing + masks)
+            // Phase 228 review-fix: only append stamps that actually carve ink a
+            // prior stamp did not clear. `eraseSamples` is the whole accumulated
+            // drag path SHARED across every touched stroke, so without this check
+            // each partial-erase pass appended every sample (including reaches that
+            // missed this stroke) and a long session grew `stroke.eraseMask`
+            // without bound — inflating the persisted pointsJson toward the
+            // B2-DOS-01 budget and forcing an N-circle Clear punch per frame.
+            val newMasks = mutableListOf<com.authorss81.noteflow.data.model.EraseMask>()
+            for (e in eraseSamples) {
+                val r = coverageRadiusFor(stroke, e, extraRadius).coerceAtLeast(1f)
+                if (maskStillCarves(stroke.points, e.x, e.y, r, existing, newMasks)) {
+                    newMasks.add(com.authorss81.noteflow.data.model.EraseMask(e.x, e.y, r))
+                }
+            }
+            val masked = if (newMasks.isEmpty()) stroke else stroke.copy(eraseMask = existing + newMasks)
             return SegmentResult(surviving = listOf(masked), affected = true)
         }
 
@@ -226,4 +236,40 @@ object StrokeSegmenter {
             isAdvanced = stroke.isAdvanced,
             layerId = stroke.layerId
         )
+
+    /**
+     * Whether a round mask stamp at `(cx, cy)` with radius [r] clears any of
+     * [points] that is not already cleared by an existing or queued mask. Used by
+     * the wet partial-erase path to keep `stroke.eraseMask` minimal (unbounded
+     * accumulation would bloat the encrypted pointsJson toward the B2-DOS-01
+     * budget). Pure JVM, allocation-free on the hot loop.
+     */
+    private fun maskStillCarves(
+        points: List<PointF>,
+        cx: Float,
+        cy: Float,
+        r: Float,
+        existing: List<com.authorss81.noteflow.data.model.EraseMask>,
+        queued: List<com.authorss81.noteflow.data.model.EraseMask>
+    ): Boolean {
+        val r2 = r * r
+        for (p in points) {
+            val dx = p.x - cx
+            val dy = p.y - cy
+            if (dx * dx + dy * dy <= r2) {
+                if (pointClearedBy(p, existing) || pointClearedBy(p, queued)) continue
+                return true
+            }
+        }
+        return false
+    }
+
+    private fun pointClearedBy(p: PointF, masks: List<com.authorss81.noteflow.data.model.EraseMask>): Boolean {
+        for (m in masks) {
+            val dx = p.x - m.x
+            val dy = p.y - m.y
+            if (dx * dx + dy * dy <= m.radius * m.radius) return true
+        }
+        return false
+    }
 }

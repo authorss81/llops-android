@@ -1863,9 +1863,13 @@ fun AnnotationCanvas(
                             }
 
                             // Phase 214: one ingestion path for EVERY pointer sample,
-                            // live or coalesced-historical. Coordinates arrive in the
-                            // modifier's BOX-LOCAL space (raw window coords are mapped
-                            // by subtracting the box origin BEFORE the pan/zoom transform).
+                            // live or coalesced-historical. The passive bridge stores
+                            // RAW WINDOW coords (see :1249); this function receives
+                            // CANVAS-BOX-LOCAL offsets — the caller subtracted the
+                            // canvas box origin (`canvasBoxWindowOffset` from
+                            // `positionInWindow`) just before calling, so only the
+                            // pan/zoom transform below remains. Raw window coords never
+                            // reach this function.
                             // Returns TRUE iff the sample was actually ingested; the
                             // page-bounds rejection returns FALSE so the monotonic
                             // batch-gate stamp never advances past a REJECTED sample
@@ -1956,8 +1960,15 @@ fun AnnotationCanvas(
                                             sampleTimestampMs
                                         )
                                     }
-                                    // Vector Stroke Smoothing & Touch jitter filtering: add point if distance > 1.5px
-                                    // Fix 2026-08-27: throttle only wet tools — freehand pen/pencil was dropping points at 6px/16ms (looked like "some points shown")
+                                    // Vector Stroke Smoothing & Touch jitter filtering —
+                                    // the sample gate is WET-ONLY (phase-228): wet tools
+                                    // throttle via WetBrushEngine.shouldProcessPoint (≥6px
+                                    // moved OR ≥16ms elapsed) so translucent layers deposit
+                                    // full stamps, then interpolate the gap; NON-wet tools
+                                    // (pen/pencil/…) add EVERY live sample with no distance
+                                    // gate, so nothing is dropped (the old ">1.5px" gate and
+                                    // the 6px/16ms freehand throttle both dropped points and
+                                    // were removed 2026-08-27 — see workspace/phase-228/REPORT.md).
                                     val isWet = BrushStrokeMath.isWetRenderedTool(currentTool)
                                     if (isWet) {
                                         val lastWet = activePoints.lastOrNull()
@@ -5949,8 +5960,52 @@ private fun DrawScope.drawSingleStroke(
     // Mask-based true partial for wet (single raster + Clear punch, no fragments)
     val wetMask = stroke.eraseMask
     val hasWetMask = !wetMask.isNullOrEmpty() && com.authorss81.noteflow.services.BrushStrokeMath.isWetRenderedTool(stroke.tool)
+    // Phase 228 review-fix: use a layer bounded to the stroke ink + its punch
+    // circles instead of a full-page layer. Per-frame saveLayer is proportional
+    // to the masked stroke, not the canvas (BlendMode.Clear is confined to it).
+    var maskedStrokeLayer = false
     if (hasWetMask) {
-        drawContext.canvas.saveLayer(androidx.compose.ui.geometry.Rect(Offset.Zero, size).toRect(), androidx.compose.ui.graphics.Paint())
+        var left = Float.MAX_VALUE
+        var top = Float.MAX_VALUE
+        var right = -Float.MAX_VALUE
+        var bottom = -Float.MAX_VALUE
+        for (p in stroke.points) {
+            if (p.x < left) left = p.x
+            if (p.y + offsetY < top) top = p.y + offsetY
+            if (p.x > right) right = p.x
+            if (p.y + offsetY > bottom) bottom = p.y + offsetY
+        }
+        stroke.start?.let {
+            left = minOf(left, it.x)
+            right = maxOf(right, it.x)
+            top = minOf(top, it.y + offsetY)
+            bottom = maxOf(bottom, it.y + offsetY)
+        }
+        stroke.end?.let {
+            left = minOf(left, it.x)
+            right = maxOf(right, it.x)
+            top = minOf(top, it.y + offsetY)
+            bottom = maxOf(bottom, it.y + offsetY)
+        }
+        // Include every punch circle's full extent (centers can lie up to a mask
+        // radius beyond the centerline — see StrokeSegmenter.coverageRadiusFor).
+        for (m in wetMask!!) {
+            val cx = m.x
+            val cy = m.y + offsetY
+            left = minOf(left, cx - m.radius)
+            right = maxOf(right, cx + m.radius)
+            top = minOf(top, cy - m.radius)
+            bottom = maxOf(bottom, cy + m.radius)
+        }
+        // Ink nibs extend stroke.width/2 beyond the centerline.
+        val pad = stroke.width / 2f
+        val bounded = androidx.compose.ui.geometry.Rect(
+            left - pad, top - pad, right + pad, bottom + pad
+        ).intersect(androidx.compose.ui.geometry.Rect(Offset.Zero, size))
+        if (!bounded.isEmpty) {
+            maskedStrokeLayer = true
+            drawContext.canvas.saveLayer(bounded, androidx.compose.ui.graphics.Paint())
+        }
     }
     if (stroke.isAdvanced && inkRenderer != null) {
         try {
@@ -5962,7 +6017,7 @@ private fun DrawScope.drawSingleStroke(
                     matrix.postTranslate(0f, offsetY)
                 }
                 inkRenderer.draw(nativeCanvas, inkStroke, matrix)
-                if (hasWetMask) {
+                if (hasWetMask && maskedStrokeLayer) {
                     for (m in wetMask!!) {
                         drawCircle(
                             color = androidx.compose.ui.graphics.Color.Transparent,
@@ -6851,7 +6906,7 @@ private fun DrawScope.drawSingleStroke(
         }
         else -> {}
     }
-    if (hasWetMask) {
+    if (hasWetMask && maskedStrokeLayer) {
         for (m in wetMask!!) {
             drawCircle(
                 color = androidx.compose.ui.graphics.Color.Transparent,
@@ -6879,6 +6934,7 @@ private fun drawSingleStrokeToCanvas(
             val inkStroke = convertToInkStroke(stroke)
             if (inkStroke != null) {
                 inkRenderer.draw(canvas, inkStroke, android.graphics.Matrix())
+                punchEraseMasks(canvas, stroke)
                 return
             }
         } catch (_: Throwable) { }
@@ -6945,8 +7001,28 @@ private fun drawSingleStrokeToCanvas(
                     paint
                 )
             }
+            punchEraseMasks(canvas, stroke)
         }
     }
+}
+
+/**
+ * Phase 228 review-fix: applies a wet stroke's recorded [Stroke.eraseMask] as
+ * CLEAR punches on an android graphics canvas, so the fill tool's temp sampling
+ * bitmap matches the on-screen end-state (an erased wet stroke must not feed
+ * visible color into the flood-fill region scan). No-op for non-wet tools and
+ * strokes without masks. CLEAR punches fully return the sampled pixels to
+ * transparent, mirroring the on-screen BlendMode.Clear punch.
+ */
+private fun punchEraseMasks(canvas: android.graphics.Canvas, stroke: Stroke) {
+    val masks = stroke.eraseMask
+    if (masks.isNullOrEmpty() || stroke.points.size <= 1) return
+    if (!com.authorss81.noteflow.services.BrushStrokeMath.isWetRenderedTool(stroke.tool)) return
+    val punch = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.TRANSPARENT
+        xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.CLEAR)
+    }
+    for (m in masks) canvas.drawCircle(m.x, m.y, m.radius, punch)
 }
 
 private fun strokeContainsPoint(stroke: Stroke, point: Offset): Boolean {

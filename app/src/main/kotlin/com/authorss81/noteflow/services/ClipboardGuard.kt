@@ -53,14 +53,23 @@ object ClipboardGuard {
     }
 
     /**
-     * B2-UI-2 source-pin helper: the ONLY production path that writes note
-     * content to the system clipboard is this one (plus [clearPrimaryClip]).
-     * It writes the primary clip so the lock-time scrub can clear it. Keeping
-     * every raw `setPrimaryClip` inside this file is what allows the
-     * source-level pin to prove no note-content surface can bypass the
-     * lock-time scrub. Callers are responsible for stamping [recordCopy] first
+     * B2-UI-2 source-pin helper: the guard's literal system-clipboard writer,
+     * used whenever a [Context] is at hand (the editor's stroke-copy path via
+     * [com.authorss81.noteflow.ui.screens.EditorScreen]). It writes the primary
+     * clip so the lock-time scrub can clear it.
+     *
+     * NOTE — this is NOT the only production writer of note content. Compose
+     * surfaces write through `LocalClipboardManager.setText` (OCR result dialog,
+     * media-copy button, markdown code blocks) and platform-native selection
+     * Copy is unobservable — all of those are covered at lock time by the
+     * unconditional [scrubUnconditionally] wipe, and every `setText` call site
+     * is source-pinned by `B2Ui2ClipboardScrubTest` to stamp [recordCopy] first.
+     * What the pin DOES require is that no production file outside this one
+     * calls the raw system `setPrimaryClip`/`clearPrimaryClip` — that invariant
+     * holds, and it is what keeps every Compose write provably stamped.
+     * Callers are responsible for stamping [recordCopy] first
      * (the Phase 216 `copySelectedStrokes` source-pin requires the literal call
-     * in the editor), so a clipboard write is always t=tracked as an app copy.
+     * in the editor), so a clipboard write is always tracked as an app copy.
      * Best-effort: a platform failure is swallowed.
      */
     fun writePlainText(context: Context, label: String, text: String) {

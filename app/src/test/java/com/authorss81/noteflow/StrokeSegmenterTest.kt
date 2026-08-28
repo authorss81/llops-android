@@ -216,4 +216,65 @@ class StrokeSegmenterTest {
         assertEquals(EraserMode.STROKE, EraserMode.fromSettingKey("garbage"))
         assertEquals(EraserMode.STROKE, EraserMode.fromSettingKey(null))
     }
+
+    // ---- wet mask-based partial (phase-228) ---------------------------------
+
+    private fun wetStroke(vararg xs: Float, width: Float = 10f): Stroke =
+        Stroke(
+            id = "wet-${xs.joinToString("_")}",
+            tool = StrokeTool.WATERCOLOR,
+            colorInt = 0xFF123456.toInt(),
+            width = width,
+            points = xs.map { PointF(it, 0f) },
+            start = PointF(xs.first(), 0f),
+            end = PointF(xs.last(), 0f),
+            isAdvanced = true
+        )
+
+    @Test
+    fun `wet stroke stays whole with a mask instead of fragmenting`() {
+        val stroke = wetStroke(0f, 50f, 100f, 150f, 200f)
+        // Erase stamp radius 25 at y=0 covers the middle points (width 10 => coverage 25+5=30).
+        val r = segment(stroke, listOf(100f to 0f, 101f to 0f), extraRadius = 0f)
+        assertTrue("must be affected", r.affected)
+        assertEquals("single surviving masked stroke, not a fragment split", 1, r.surviving.size)
+        assertEquals("keeps the full point list", stroke.points.size, r.surviving[0].points.size)
+        val masks = r.surviving[0].eraseMask
+        assertTrue("masks must be recorded", !masks.isNullOrEmpty())
+        // Phase 228 review-fix: the second stamp (101,0) is fully inside the
+        // first (100,0) circle and clears nothing new — it must NOT be appended.
+        assertEquals("redundant stamps are pruned", 1, masks!!.size)
+    }
+
+    @Test
+    fun `wet stroke whose every point is covered is removed whole`() {
+        val stroke = wetStroke(0f, 10f, 20f)
+        val r = segment(stroke, listOf(10f to 0f), extraRadius = 0f)
+        assertTrue(r.affected)
+        assertTrue("fully covered wet stroke is dropped", r.surviving.isEmpty())
+    }
+
+    @Test
+    fun `re-erasing the same wet spot appends nothing new`() {
+        val stroke = wetStroke(0f, 50f, 100f, 150f, 200f)
+        val first = segment(stroke, listOf(100f to 0f), extraRadius = 0f).surviving[0]
+        assertEquals(1, first.eraseMask!!.size)
+        // The mask is persisted on the stroke; a later identical gesture must not grow it.
+        val second = StrokeSegmenter.segment(
+            stroke = first,
+            eraseSamples = listOf(StrokeSegmenter.ErasePoint(100f, 0f)),
+            extraRadius = 0f
+        )
+        assertEquals("identical re-erase appends nothing", 1, second.surviving[0].eraseMask!!.size)
+        assertEquals(1, second.surviving[0].eraseMask!!.size)
+    }
+
+    @Test
+    fun `distant erase samples on the shared drag path are not stamped on an untouched wet stroke part`() {
+        val stroke = wetStroke(0f, 50f, 100f, 150f, 200f)
+        // The accumulated eraser path runs the whole drag INCLUDING far reaches;
+        // only the stamp near the ink may be appended.
+        val r = segment(stroke, listOf(100f to 0f, 900f to 900f), extraRadius = 0f)
+        assertEquals("far reach never becomes a mask", 1, r.surviving[0].eraseMask!!.size)
+    }
 }

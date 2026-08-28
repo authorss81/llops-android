@@ -333,6 +333,20 @@ object TimelapseExporter {
     }
 
     private fun drawStroke(canvas: Canvas, stroke: Stroke, t: FrameTransform) {
+        // Phase 228 wet partial-erase masks: same CLEAR-punch rule as the
+        // canvas/export raster — a partially-erased wet stroke must not come
+        // back in full in the replay. Centers are world coords; the frame
+        // transform maps world->frame, so punches scale with the frame too.
+        val masks = stroke.eraseMask
+        val hasEraseMasks = !masks.isNullOrEmpty() &&
+            com.authorss81.noteflow.services.BrushStrokeMath.isWetRenderedTool(stroke.tool)
+        var layerSaveCount = -1
+        val punchPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.CLEAR)
+        }
+        if (hasEraseMasks) {
+            layerSaveCount = canvas.saveLayer(null, android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG))
+        }
         when (stroke.tool) {
             StrokeTool.FILL -> {
                 if (stroke.points.size >= 3) {
@@ -390,6 +404,12 @@ object TimelapseExporter {
                     )
                 }
             }
+        }
+        if (hasEraseMasks) {
+            for (m in masks!!) {
+                canvas.drawCircle(t.x(m.x), t.y(m.y), (m.radius * t.scale).coerceAtLeast(1f), punchPaint)
+            }
+            canvas.restoreToCount(layerSaveCount)
         }
     }
 

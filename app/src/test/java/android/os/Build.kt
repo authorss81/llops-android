@@ -3,6 +3,18 @@ package android.os
 /**
  * TEST-ONLY shadow of android.os.Build.
  *
+ * ⚠ FOOT-GUN: this file shadows `android.os.Build` for the ENTIRE unit test
+ * source set. ANY test that reads a real Build field (SDK_INT, VERSION_RELEASE,
+ * MANUFACTURER, …) in production-code branches gets these baked-in values
+ * instead — e.g. SDK_INT is pinned to 36 here, so a fallback branch guarded by
+ * `Build.VERSION.SDK_INT < TIRAMISU` is never exercised. Do NOT add fields for
+ * mere convenience and never let production logic decisions be tested against
+ * this fake as if it were the real device. If a new SDK release adds a field
+ * that must be present for a compile or a test, mirror it here AND on
+ * `_Original_Build`'s matching shape (see below) — keeping the two in sync is
+ * the whole contract of this file. Prefer asserting on observable outcomes
+ * instead of reading Build.
+ *
  * Paparazzi 2.0.0-alpha01's Renderer.configureBuildProperties() reflects over
  * the test classpath's `android.os.Build` and requires (a) every nested class
  * of Build to ALSO exist on layoutlib's `_Original_Build` (a `.single{}` lookup

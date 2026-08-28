@@ -853,15 +853,56 @@ object ImportExportService {
         }
     }
 
+    // Phase 228 mask-based wet partial erase: the on-canvas renderer (and
+    // therefore the COMMITTED stroke row) keeps wet strokes whole and hides
+    // erased regions via a list of EraseMask circles punched with a CLEAR
+    // xfermode from a per-stroke layer. Exporters must apply the SAME punch,
+    // or a partially-erased wet stroke would come back in full in the
+    // exported PNG/PDF/PSD/flattened bitmap. Non-wet strokes are never masked
+    // (they are split into run fragments by StrokeSegmenter instead).
+    // Lazy: android.graphics.Paint is a native-backed class — instantiating it
+    // during OBJECT INIT would break every pure-JVM unit test that merely
+    // touches ImportExportService (UnsatisfiedLinkError on the JVM). Both are
+    // only needed on the export-draw hot path, which is never exercised on the
+    // unit-test JVM, so lazy keeps class loading safe while staying
+    // one-allocation-per-process on device.
+    private val eraseLayerPaint: android.graphics.Paint by lazy {
+        android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+    }
+    private val erasePunchPaint: android.graphics.Paint by lazy {
+        android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.CLEAR)
+        }
+    }
+
     private fun drawSingleStrokeToCanvas(
         canvas: android.graphics.Canvas,
         stroke: com.authorss81.noteflow.data.model.Stroke,
         inkRenderer: androidx.ink.rendering.android.canvas.CanvasStrokeRenderer?
     ) {
+        val masks = stroke.eraseMask
+        val hasEraseMasks = !masks.isNullOrEmpty() &&
+            com.authorss81.noteflow.services.BrushStrokeMath.isWetRenderedTool(stroke.tool)
+        var layerSaveCount = -1
+        if (hasEraseMasks) {
+            // Full-canvas layer is fine here: exports rasterize once per stroke
+            // (not per frame), and the CLEAR punch must be able to reach every
+            // mask circle while confined to this stroke's own alpha layer.
+            layerSaveCount = canvas.saveLayer(null, eraseLayerPaint)
+        }
+        fun punchEraseMasks() {
+            if (!hasEraseMasks) return
+            for (m in masks!!) {
+                canvas.drawCircle(m.x, m.y, m.radius, erasePunchPaint)
+            }
+        }
+
         if (stroke.isAdvanced && inkRenderer != null) {
             val inkStroke = convertToInkStroke(stroke)
             if (inkStroke != null) {
                 inkRenderer.draw(canvas, inkStroke, android.graphics.Matrix())
+                punchEraseMasks()
+                if (layerSaveCount >= 0) canvas.restoreToCount(layerSaveCount)
                 return
             }
         }
@@ -1241,6 +1282,10 @@ object ImportExportService {
             }
             else -> {}
         }
+        // Phase 228: apply the wet partial-erase punch (CLEAR) inside this
+        // stroke's layer, then restore so later strokes composite normally.
+        punchEraseMasks()
+        if (layerSaveCount >= 0) canvas.restoreToCount(layerSaveCount)
     }
 
     fun getUriFileName(context: Context, uri: Uri): String {
