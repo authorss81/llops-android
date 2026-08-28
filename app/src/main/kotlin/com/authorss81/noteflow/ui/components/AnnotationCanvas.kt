@@ -2008,10 +2008,9 @@ fun AnnotationCanvas(
                             if (drainedCount > 1 && currentTool.isFreehandTool) {
                                 for (sample in batchDrainScratch) {
                                     if (StrokeBatchPolicy.isStale(sample.timestampMs, lastIngestedInputTimestampMs)) continue
-                                    // Fix 2026-08-27: pointerInteropFilter coords are already box-local — don't subtract window offset (was shifting points off-screen → dots)
                                     val accepted = ingestPointerSample(
-                                        boxLocalX = sample.x,
-                                        boxLocalY = sample.y,
+                                        boxLocalX = sample.x - canvasBoxWindowOffset.x,
+                                        boxLocalY = sample.y - canvasBoxWindowOffset.y,
                                         rawPressure = sample.pressure,
                                         tiltDegrees = if (sample.tiltRad != 0f) Math.toDegrees(sample.tiltRad.toDouble()).toFloat() else 0f,
                                         sampleTimestampMs = sample.timestampMs
@@ -2022,8 +2021,8 @@ fun AnnotationCanvas(
                                 val newest = batchDrainScratch.last()
                                 if (!StrokeBatchPolicy.isStale(newest.timestampMs, lastIngestedInputTimestampMs)) {
                                     val accepted = ingestPointerSample(
-                                        boxLocalX = newest.x,
-                                        boxLocalY = newest.y,
+                                        boxLocalX = newest.x - canvasBoxWindowOffset.x,
+                                        boxLocalY = newest.y - canvasBoxWindowOffset.y,
                                         rawPressure = newest.pressure,
                                         tiltDegrees = if (newest.tiltRad != 0f) Math.toDegrees(newest.tiltRad.toDouble()).toFloat() else 0f,
                                         sampleTimestampMs = newest.timestampMs
