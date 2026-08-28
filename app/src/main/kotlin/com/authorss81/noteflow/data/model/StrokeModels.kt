@@ -113,6 +113,12 @@ data class PointF(
     }
 }
 
+data class EraseMask(
+    val x: Float,
+    val y: Float,
+    val radius: Float
+)
+
 /**
  * Phase 27: render-time color effect modes for strokes. The per-point color of a
  * non-SOLID stroke is DERIVED at render time from the stroke's stored mode + seed
@@ -159,7 +165,9 @@ data class Stroke(
     // every pre-phase-27 stroke (and every call site that does not opt in) identical.
     val colorMode: StrokeColorMode = StrokeColorMode.SOLID,
     val colorSeed: Int = 0,
-    val gradientToColorInt: Int? = null
+    val gradientToColorInt: Int? = null,
+    // Mask-based partial erase for wet translucent pigments (single raster + Clear punch, no fragments)
+    val eraseMask: List<EraseMask>? = null
 ) {
     val color: Color
         get() = Color(colorInt)

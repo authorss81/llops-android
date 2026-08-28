@@ -5946,6 +5946,12 @@ private fun DrawScope.drawSingleStroke(
             isDarkPaper = isDarkPaper
         )
     }
+    // Mask-based true partial for wet (single raster + Clear punch, no fragments)
+    val wetMask = stroke.eraseMask
+    val hasWetMask = !wetMask.isNullOrEmpty() && com.authorss81.noteflow.services.BrushStrokeMath.isWetRenderedTool(stroke.tool)
+    if (hasWetMask) {
+        drawContext.canvas.saveLayer(androidx.compose.ui.geometry.Rect(Offset.Zero, size).toRect(), androidx.compose.ui.graphics.Paint())
+    }
     if (stroke.isAdvanced && inkRenderer != null) {
         try {
             val inkStroke = convertToInkStroke(stroke, vibrancy = vibrancy)
@@ -5956,6 +5962,17 @@ private fun DrawScope.drawSingleStroke(
                     matrix.postTranslate(0f, offsetY)
                 }
                 inkRenderer.draw(nativeCanvas, inkStroke, matrix)
+                if (hasWetMask) {
+                    for (m in wetMask!!) {
+                        drawCircle(
+                            color = androidx.compose.ui.graphics.Color.Transparent,
+                            radius = m.radius,
+                            center = Offset(m.x, m.y + offsetY),
+                            blendMode = androidx.compose.ui.graphics.BlendMode.Clear
+                        )
+                    }
+                    drawContext.canvas.restore()
+                }
                 return
             }
         } catch (e: Throwable) {
@@ -6833,6 +6850,17 @@ private fun DrawScope.drawSingleStroke(
             }
         }
         else -> {}
+    }
+    if (hasWetMask) {
+        for (m in wetMask!!) {
+            drawCircle(
+                color = androidx.compose.ui.graphics.Color.Transparent,
+                radius = m.radius,
+                center = Offset(m.x, m.y + offsetY),
+                blendMode = androidx.compose.ui.graphics.BlendMode.Clear
+            )
+        }
+        drawContext.canvas.restore()
     }
 }
 
