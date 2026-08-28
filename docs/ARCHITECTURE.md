@@ -2725,6 +2725,18 @@ UNTRUSTED files before any staging); `ui/components/Dialogs.kt` `AppUpdateDialog
   package + exact `plugins.runtime.{PluginContext,PluginEntry,PluginVersion}`); every Gson-reflective source must
   keep a fullMode rule (exhaustive discovery test); adding any of these plugins REQUIRES lockfile entries
   (phase-199 shipped without them and EVERY gradle invocation failed verification until the review fix).
+  **Second review-fix pass (2026-08-28):** (a) the producer module's OWN resolutions are now locked too
+  (`:baselineprofile:nonMinifiedRelease{Compile,Runtime}Classpath` — benchmark/test/tracing/annotation
+  `.module`+`.aar`+pom sha256 pins missing at first pass, since only configure-time markers had been pinned);
+  (b) the consumer is now really wired to the producer:
+  `baselineProfile { from(project(":baselineprofile")) }` in `app/build.gradle.kts`, so
+  `:app:generateBaselineProfile --dry-run` plans `connectedNonMinifiedReleaseAndroidTest` →
+  `collectNonMinifiedReleaseBaselineProfile` → `mergeReleaseBaselineProfile` → `copyReleaseBaselineProfileIntoSrc`;
+  (c) CI caveat corrected — `.github/workflows/android.yml` SKIPS llops-bot commits, so no signed
+  `assembleRelease` under fullMode+shrinkResources has run on CI; (d) REPORT anchors refreshed. Caveat: run the
+  producer/`generateBaselineProfile` chain with `--no-configuration-cache` (AGP `CheckAarMetadataTask`/
+  `checkTestedAppObfuscation` fields aren't gradle-config-cache-serializable; repo sets
+  `org.gradle.configuration-cache=true`).
 - **Implemented in phase-211** (release hygiene, see `workspace/phase-211/REPORT.md`): (1) the blanket
   `-keep class androidx.ink.** { *; }` + stale `-keep com.google.protobuf.** { *; }` are GONE from
   `app/proguard-rules.pro` — ink's own AARs declare shrink-safety ("Intentionally empty proguard rules"),

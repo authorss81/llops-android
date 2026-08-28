@@ -207,15 +207,34 @@ android {
     }
 }
 
-// Phase 199 review fix (review finding 2): GUARDED restoration of the AGP
-// 8.7.3 compileArtProfile stopgap. The phase-199 commit deleted the old
-// unconditional disable on the assumption that wiring the baseline-profile
+// Phase 199 review fix (review finding 2): wire the CONSUMER to the PRODUCER.
+// Without this `:app:generateBaselineProfile` was a marker task (the plugin's
+// GenerateBaselineProfileTask has no @TaskAction); the real work happens in
+// `:baselineprofile:collectNonMinifiedReleaseBaselineProfile` (device test →
+// profile collection), which then feeds merge/copy into src/main/baselineProfiles
+// via `:app:mergeReleaseBaselineProfile` + `:app:copyReleaseBaselineProfileIntoSrc`.
+// This block links the app's release baseline profile to the producer module, so
+// `gradle :app:generateBaselineProfile --no-configuration-cache` (see REPORT for
+// the AGP config-cache caveat) plans the producer tasks:
+// :baselineprofile:connectedNonMinifiedReleaseAndroidTest →
+// :baselineprofile:collectNonMinifiedReleaseBaselineProfile → app merge/copy.
+baselineProfile {
+    from(project(":baselineprofile"))
+}
+
+// Phase 199 review fix (review finding 2, first round): GUARDED restoration
+// of the AGP 8.7.3 compileArtProfile stopgap. The phase-199 commit deleted the
+// old unconditional disable on the assumption that wiring the baseline-profile
 // toolchain also fixed the underlying crash ("String index out of range: 62"
 // when compiling an art profile on the GitHub Actions runner) — but nothing
-// ever proved that, and `.github/workflows/android.yml` runs assembleRelease
-// on every push. Right now NO baseline profile is committed in-tree (none was
-// generated — needs a connected device), so profile compilation would run on
-// exactly the kind of empty/degenerate input that used to crash.
+// ever proved that. Note `.github/workflows/android.yml` SKIPS llops-bot
+// pushes (`if: github.actor != 'llops-bot'`, line 28), so the automated
+// phase pipeline never exercises a signed `assembleRelease` under
+// fullMode+shrinkResources; as of review time no run of
+// `minifyReleaseWithR8`+`assembleRelease` with the phase-199 flags has
+// produced a signed APK. Right now NO baseline profile is committed in-tree
+// (none was generated — needs a connected device), so profile compilation
+// would run on exactly the kind of empty/degenerate input that used to crash.
 //
 // The disable is therefore CONDITIONAL: it lifts automatically as soon as a
 // real committed profile exists, so once a maintainer lands one via

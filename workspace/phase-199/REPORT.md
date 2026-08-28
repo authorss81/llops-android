@@ -17,10 +17,11 @@ what exists and what does not.
    `StartupProfileGenerator`; `NoteOpenAndStrokeBaselineProfile` quick-capture →
    editor → first stroke). Scenario constants mirror the host contract
    (verified: `WidgetLaunchPolicy.EXTRA_QUICK_CAPTURE`
-   = `WidgetLaunchPolicy.kt:19`; consumed at `MainActivity.kt:1015/:474-477`;
-   uiautomator wait target `"Stroke Width"` is a real contentDescription,
-   `EditorScreen.kt:3189`). Benchmark/uiautomator/ext-junit deps live ONLY in
-   this module — never in any APK.
+   = `WidgetLaunchPolicy.kt:19`; consumed at `MainActivity.kt:499-502`
+   (LaunchedEffect gate) + `:1060` (`quickCaptureRequested = true`); uiautomator
+   wait target `"Stroke Width"` is a real contentDescription,
+   `EditorScreen.kt:3799` (and its mirror at `:3958`)). Benchmark/uiautomator/ext-junit
+   deps live ONLY in this module — never in any APK.
 2. **Consumer side**: `androidx.baselineprofile` Gradle plugin on `:app`;
    `profileinstaller` 1.4.1 explicitly pinned (~tens of KB; base-APK rule
    intact); stable-line pins documented in `gradle/libs.versions.toml`.
@@ -43,8 +44,9 @@ Findings from the phase review, all addressed:
   (`src/main/baseline-prof.txt` or `src/main/baselineProfiles/*.txt`), and lift
   automatically the moment one is committed. Rationale: the original crash
   ("String index out of range: 62", AGP 8.7.3, GH Actions runner) was never
-  proven fixed, CI runs `assembleRelease` on every push, and today's tree has
-  no profile — i.e. exactly the degenerate input that used to crash.
+  proven fixed, `.github/workflows/android.yml` SKIPS llops-bot pushes
+  (`if: github.actor != 'llops-bot'`), and today's tree has no profile — i.e.
+  exactly the degenerate input that used to crash.
 - **F3 (MEDIUM)** — plugin-sdk consumer rules were app-global, not jar-scoped:
   `-keep class com.authorss81.noteflow.plugins.** { *; }` also pinned the HOST
   app's own plugins.* subpackages (runtime internals + weather/dictionary/
@@ -78,6 +80,49 @@ Findings from the phase review, all addressed:
   benchmark trust line. `gradle help`, `testDebugUnitTest` and `assembleDebug`
   now resolve clean.
 
+## Second review pass (2026-08-28, this commit)
+
+Second round of REVIEW FINDINGS on the same phase-199 scope, all addressed:
+
+- **F1 (HIGH)** — `gradle :baselineprofile:collectNonMinifiedReleaseBaselineProfile`
+  still failed dependency verification for the producer module's OWN resolutions
+  (`:baselineprofile:nonMinifiedReleaseCompileClasspath` + `RuntimeClasspath`):
+  15 metadata files + 10 `.aar` binaries were unverified (benchmark-macro-junit4/
+  -macro/-common 1.3.4, annotation 1.7.0 + 1.7.0-beta01 + annotation-jvm 1.7.0,
+  test core 1.6.1 / monitor 1.7.1 / ext-junit 1.2.1 / services-storage 1.5.0 /
+  uiautomator 2.3.0, tracing-perfetto{,-binary,-handshake} 1.0.0 from Google,
+  kotlinx-coroutines-core 1.3.4 pom from MavenRepo). The 04d9901 review fix had
+  only pinned the plugin jar/marker/pom entries actually needed to CONFIGURE the
+  graph; the producer's compile+runtime classpaths resolve real artifacts and
+  were never exercised. Fixed in `gradle/verification-metadata.xml`: sha256 pins
+  computed from the artifacts Gradle itself cached (checksum-neutral, no flag
+  weakened); the phase-added unverifiable pgp-only pin for the coroutines 1.3.4
+  pom was replaced with its sha256. `:baselineprofile:collectNonMinifiedRelease
+  BaselineProfile --dry-run` now resolves clean.
+- **F2 (MEDIUM)** — `:app:generateBaselineProfile` was NOT connected to
+  `:baselineprofile` (no `baselineProfile { from(project(":baselineprofile")) }`),
+  so it was a marker task whose real work never ran. Fixed in `app/build.gradle.kts`.
+  `:app:generateBaselineProfile --dry-run` now plans `:baselineprofile:
+  connectedNonMinifiedReleaseAndroidTest` + `:baselineprofile:
+  collectNonMinifiedReleaseBaselineProfile` → `:app:mergeReleaseBaselineProfile`
+  → `:app:copyReleaseBaselineProfileIntoSrc`.
+- **F3 (LOW)** — corrected the stale "CI runs assembleRelease on every push"
+  rationale in both `app/build.gradle.kts` and this REPORT: `.github/workflows/
+  android.yml` actually SKIPS llops-bot pushes, so no verified signed
+  `assembleRelease` under fullMode+shrinkResources has ever run on CI.
+- **F4 (LOW)** — REPORT's file:line anchors refreshed:
+  `MainActivity.kt:1015/:474-477` → `:499-502/:1060`;
+  `EditorScreen.kt:3189` → `:3799` (+ mirror `:3958`).
+- **F5 (INFO)** — shrinkResources/`getIdentifier()`/font-refs/R8-fullMode safety
+  already verified in the first pass; no additional code change needed.
+
+Known AGP caveat (NOT introduced by this commit): with the repo's global
+`org.gradle.configuration-cache=true`, a `:baselineprofile`-involving invocation
+errors while serializing `CheckAarMetadataTask.disallowedAsarArtifacts`/
+`checkTestedAppObfuscation.mappingFile` (`ResolutionBackedFileCollection`/
+`DefaultArtifactCollection` — an AGP-vs-config-cache limitation). Run profile
+generation with `--no-configuration-cache`, as `docs/ARCHITECTURE.md` notes.
+
 ## Verification performed
 
 - `gradle :app:testDebugUnitTest :app:assembleDebug` — **2643 tests, 3
@@ -87,14 +132,17 @@ Findings from the phase review, all addressed:
 - `Phase199ReleaseShrinkTest` 7/7 green.
 - `gradle :baselineprofile:tasks` — producer module configures; Baseline
   Profile tasks registered (`collectNonMinifiedReleaseBaselineProfile`, …).
+- `:baselineprofile:collectNonMinifiedReleaseBaselineProfile --dry-run` +
+  `:app:generateBaselineProfile --dry-run` — **green** (dependencies resolve
+  against the completed lockfile; F2 wiring plans the producer chain).
 - Dependency verification: plain (non-write-mode) configuration of root +
   `:app` unit-test/debug paths green end-to-end.
 
 ## Deferred (requires device/emulator — same class as phase-196/198 gfxinfo)
 
-- `gradle :app:generateBaselineProfile` run + committing the generated profile
-  (then the guarded stopgap lifts automatically; run one more release build so
-  the profile compiles in).
+- `gradle :app:generateBaselineProfile --no-configuration-cache` run on a
+  device + committing the generated profile (then the guarded stopgap lifts
+  automatically; run one more release build so the profile compiles in).
 - `StartupTimingMetric` before/after cold-start numbers.
 - APK size before/after (shrinkResources delta).
 
