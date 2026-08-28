@@ -53,6 +53,7 @@ import com.authorss81.noteflow.services.ShareCaptureMode
 import com.authorss81.noteflow.services.UpdateApkDecisionPolicy
 import com.authorss81.noteflow.services.WidgetLaunchPolicy
 import com.authorss81.noteflow.theme.NoteflowTheme
+import com.authorss81.noteflow.utils.NestedScrollGuardProvider
 import com.authorss81.noteflow.ui.screens.EditorScreen
 import com.authorss81.noteflow.ui.screens.HomeScreen
 import com.authorss81.noteflow.ui.screens.KnowledgeGraphScreen
@@ -521,6 +522,7 @@ class MainActivity : FragmentActivity() {
                 }
             }
 
+            NestedScrollGuardProvider {
             NoteflowTheme(themeMode = themeMode) {
                 Surface(
                     modifier = Modifier
@@ -1028,10 +1030,11 @@ class MainActivity : FragmentActivity() {
                             }
                         )
                     }
+                    }
                 }
             }
+            }
         }
-    }
 
     // 22.5: ACTION_SEND / ACTION_SEND_MULTIPLE from the system share sheet.
     override fun onNewIntent(intent: Intent) {
