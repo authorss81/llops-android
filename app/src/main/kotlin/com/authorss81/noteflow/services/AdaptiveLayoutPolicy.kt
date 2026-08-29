@@ -71,14 +71,20 @@ object AdaptiveLayoutPolicy {
     /**
      * Device preferences gate: when the user prefers the UNIFIED sidebar layout,
      * it wins on any side-rail shape. When they prefer the classic dual-panel
-     * (notebook + section) stack, it may only render where it fits — a >=840dp
-     * window; on medium windows the dual stack previously crushed the content
-     * column (the floating-window regression).
+     * (notebook + section) stack, it may only render where the stack genuinely
+     * fits the CONTENT FLOOR — an >=840dp window with [railFits] holding for the
+     * full 260+240dp (a >=840dp window always satisfies it; the check is so a
+     * future width/panel change cannot silently re-introduce the hair-line
+     * content the floating-window regression produced). On medium windows the
+     * classic preference is deliberately overridden by the unified rail (see
+     * [useUnifiedSidebarRail]) — that override is documented and intended, since
+     * 600-839dp windows cannot host both panels AND a usable content column.
      */
     fun useDualSidePanels(widthDp: Int, heightDp: Int, sidebarLayoutPreferred: Boolean): Boolean =
         useSideRail(widthDp, heightDp) &&
             !sidebarLayoutPreferred &&
-            isExpandedWidth(widthDp)
+            isExpandedWidth(widthDp) &&
+            railFits(widthDp, NOTEBOOK_PANEL_WIDTH_DP + SECTION_PANEL_WIDTH_DP)
 
     /** The UNIFIED sidebar renders on the rail when it fits (medium+ width, tall enough). */
     fun useUnifiedSidebarRail(widthDp: Int, heightDp: Int, sidebarLayoutPreferred: Boolean): Boolean =
@@ -140,24 +146,11 @@ object AdaptiveLayoutPolicy {
     const val MIN_CONTENT_WIDTH_DP = 300
 
     /**
-     * Guaranteed content width once a [railWidthDp] side rail / panel is shown:
-     * the rail is allowed to take width only while at least [MIN_CONTENT_WIDTH_DP]
-     * stays with the content. Negative windows (degenerate) fall back to the floor.
+     * A side rail is worth its pixels only if content keeps its minimum width.
+     * This is the ONLY gate that decides whether a fixed-width rail may render:
+     * `useDualSidePanels` checks [NOTEBOOK_PANEL_WIDTH_DP] + [SECTION_PANEL_WIDTH_DP]
+     * against it; the unified rail never needs it because it shrinks to fit.
      */
-    fun effectiveContentWidthDp(windowWidthDp: Int, railWidthDp: Int): Int =
-        (windowWidthDp - railWidthDp).coerceAtLeast(MIN_CONTENT_WIDTH_DP)
-
-    /**
-     * Below this content width the Editor / Markdown top chrome folds its
-     * action row into a single overflow menu (the reported vertical-stack break)
-     * instead of trying to lay every icon out on one line.
-     */
-    const val TOOLBAR_OVERFLOW_MAX_CONTENT_WIDTH_DP = 560
-
-    fun chromeFoldsToOverflow(availableContentWidthDp: Int): Boolean =
-        availableContentWidthDp < TOOLBAR_OVERFLOW_MAX_CONTENT_WIDTH_DP
-
-    /** A side rail is worth its pixels only if content keeps its minimum width. */
     fun railFits(windowWidthDp: Int, railWidthDp: Int): Boolean =
         windowWidthDp - railWidthDp >= MIN_CONTENT_WIDTH_DP
 
@@ -174,11 +167,21 @@ object AdaptiveLayoutPolicy {
     fun splitModeUsable(widthDp: Int): Boolean = widthDp >= SPLIT_MODE_MIN_WIDTH_DP
 
     /**
-     * A Left/Right split can host BOTH panes at [MIN_CONTENT_WIDTH_DP] each
-     * (plus the divider) only when the window is this wide; below it the split
-     * is forced Top/Bottom regardless of the user's HORIZONTAL selection — the
+     * Spacing the split pane Row actually consumes besides the two weighted
+     * panes: the `Arrangement.spacedBy(8.dp)` gap on each side of the
+     * `VerticalDivider` (~1dp) — 8 + 1 + 8 = 17dp.
+     */
+    const val SPLIT_PANE_HORIZONTAL_CHROME_DP = 17
+
+    /**
+     * A Left/Right split can host BOTH weighted panes at no less than
+     * [MIN_CONTENT_WIDTH_DP] each (accounting for the [SPLIT_PANE_HORIZONTAL_CHROME_DP]
+     * spacer/divider) only when the window is this wide; below it the split is
+     * forced Top/Bottom regardless of the user's HORIZONTAL selection — the
      * panes may be short but never crushed.
      */
+    const val SPLIT_SIDE_BY_SIDE_MIN_WIDTH_DP = SPLIT_PANE_HORIZONTAL_CHROME_DP + 2 * MIN_CONTENT_WIDTH_DP
+
     fun splitPanesFitSideBySide(widthDp: Int): Boolean =
-        widthDp >= 2 * MIN_CONTENT_WIDTH_DP
+        widthDp >= SPLIT_SIDE_BY_SIDE_MIN_WIDTH_DP
 }

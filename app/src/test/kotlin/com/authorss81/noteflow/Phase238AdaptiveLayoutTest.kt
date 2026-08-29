@@ -140,9 +140,28 @@ class Phase238AdaptiveLayoutTest {
 
     @Test
     fun `side-by-side split forces stacked panes under the two-pane floor`() {
-        assertFalse("under 600dp both panes cannot keep MIN_CONTENT_WIDTH_DP",
-            AdaptiveLayoutPolicy.splitPanesFitSideBySide(599))
-        assertTrue(AdaptiveLayoutPolicy.splitPanesFitSideBySide(600))
+        // F4 review-fix: the split Row consumes 8dp gap + ~1dp divider + 8dp gap
+        // = 17dp of chrome, so the side-by-side floor is 17 + 2*300 = 617dp.
+        assertEquals(617, AdaptiveLayoutPolicy.SPLIT_SIDE_BY_SIDE_MIN_WIDTH_DP)
+        assertEquals(17, AdaptiveLayoutPolicy.SPLIT_PANE_HORIZONTAL_CHROME_DP)
+        assertFalse("600dp cannot keep both weighted panes at MIN_CONTENT_WIDTH_DP",
+            AdaptiveLayoutPolicy.splitPanesFitSideBySide(600))
+        assertFalse("one dp under the floor still coerces stacked",
+            AdaptiveLayoutPolicy.splitPanesFitSideBySide(616))
+        assertTrue(AdaptiveLayoutPolicy.splitPanesFitSideBySide(617))
         assertTrue(AdaptiveLayoutPolicy.splitPanesFitSideBySide(1280))
+    }
+
+    // ---- dual-panel rail floor (F1/F7 review-fixes) ----
+
+    @Test
+    fun `dual panels need both the 840dp class floor and the content floor`() {
+        // On a >=840dp window the stack fits, but a future width/panel change must
+        // still not starve content: the rail floor (window - 260 - 240 >= 300)
+        // gates dual panels on top of the expanded class.
+        assertTrue(AdaptiveLayoutPolicy.useDualSidePanels(840, 800, sidebarLayoutPreferred = false))
+        assertTrue(AdaptiveLayoutPolicy.useDualSidePanels(1280, 800, sidebarLayoutPreferred = false))
+        assertFalse("classic preference is overridden (documented) on medium windows",
+            AdaptiveLayoutPolicy.useDualSidePanels(700, 800, sidebarLayoutPreferred = false))
     }
 }

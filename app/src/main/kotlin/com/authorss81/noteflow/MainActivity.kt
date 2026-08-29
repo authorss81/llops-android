@@ -65,6 +65,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.math.roundToInt
 import java.io.File
 import androidx.lifecycle.lifecycleScope
 import com.authorss81.noteflow.utils.AppStartupLogger
@@ -279,20 +280,18 @@ class MainActivity : FragmentActivity() {
                 )
             }
 
-            // Phase 238: the OFFICIAL window-size class (width + height) replaces the
-            // homegrown width-only enum. It is a @Composable call so it tracks the
-            // current density/flags-current-window-metrics (split-screen and freeform
-            // resize) and every screen reads it via LocalWindowSizeClass.
-            @OptIn(ExperimentalMaterial3WindowSizeClassApi::class)
-            val windowSizeClass = calculateWindowSizeClass(activity = this@MainActivity)
-
             // Phase 238: freeform / split-window mirror. Drag-resizing a floating
-            // window does NOT recreate the activity, so we re-read the system flag on
-            // each resume and let the responsive screens settle on real constraints.
+            // window does NOT recreate the activity, so we re-read the system flag
+            // AND bump a refresh key on each resume — a freeform drag that crosses
+            // a size-class boundary without a config change only settles on resume,
+            // and key(sizeClassRefreshKey) below re-derives the window-size class so
+            // the root single/double-column posture never stays stuck mid-resize.
             var inMultiWindowMode by remember { mutableStateOf(this@MainActivity.isInMultiWindowMode) }
+            var sizeClassRefreshKey by remember { mutableStateOf(0) }
             val multiWindowLifecycleObserver = androidx.lifecycle.LifecycleEventObserver { _, event ->
                 if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
                     inMultiWindowMode = this@MainActivity.isInMultiWindowMode
+                    sizeClassRefreshKey++
                 }
             }
             DisposableEffect(Unit) {
@@ -336,22 +335,19 @@ class MainActivity : FragmentActivity() {
                 if (!authenticated) showPluginStoreDeepLink = false
             }
 
-            // Phase 238: ONE-TIME, non-alarming notice when the app first settles
-            // into a floating/split window posture (AGENTS.md hardware rule — the
-            // layout adapts automatically, so this is an information-only message;
-            // nothing is degraded and nothing needs to be re-enabled).
-            LaunchedEffect(authenticated, inMultiWindowMode) {
-                if (authenticated && inMultiWindowMode) {
-                    val settingsManager = com.authorss81.noteflow.services.SettingsManager(this@MainActivity)
-                    if (com.authorss81.noteflow.services.FloatingWindowPolicy.noticeDue(settingsManager.floatingWindowNoticeShown)) {
-                        settingsManager.floatingWindowNoticeShown = true
-                        snackbarHostState.showSnackbar(
-                            message = this@MainActivity.getString(com.authorss81.noteflow.R.string.floating_window_notice),
-                            duration = SnackbarDuration.Short
-                        )
-                    }
-                }
-            }
+            // Phase 238: ONE-TIME, non-alarming notice when the app first settles into a
+            // floating/split window posture (AGENTS.md hardware rule — the layout
+            // adapts automatically, so this is an information-only message; nothing
+            // is degraded and nothing needs to be re-enabled). The shape check is
+            // FloatingWindowPolicy.isLikelyFloatingWindow on the REAL measured window
+            // (BoxWithConstraints) — plain multi-window mode alone (e.g. a usable
+            // 700x1000 tablet split pane, or a phone portrait split) never fires it.
+            FloatingWindowNoticeLauncher(
+                authenticated = authenticated,
+                inMultiWindowMode = inMultiWindowMode,
+                settingsManager = com.authorss81.noteflow.services.SettingsManager(this@MainActivity),
+                snackbarHostState = snackbarHostState
+            )
 
             val pages by viewModel.pages.collectAsState()
             // Phase 133: the global all-active-pages flow is a SECOND fallback for
@@ -643,6 +639,21 @@ class MainActivity : FragmentActivity() {
                         } else if (restoreBlocked) {
                             RestoreBlockedScreen(viewModel = viewModel)
                         } else {
+                            // Phase 238: the OFFICIAL window-size class (width + height)
+                            // replaces the homegrown width-only enum. It is a @Composable
+                            // call so it tracks density/flags-current-window-metrics
+                            // (split-screen and freeform resize), and every screen reads
+                            // it via LocalWindowSizeClass. key(sizeClassRefreshKey) makes
+                            // the class re-derive on EVERY resume: freeform drag-resize
+                            // does not recreate the activity, so an onResume re-read —
+                            // not just a config change — is what lets a drag that crossed
+                            // a size-class boundary settle the root single/double-column
+                            // posture instead of staying stuck mid-resize.
+                            @OptIn(ExperimentalMaterial3WindowSizeClassApi::class)
+                            val windowSizeClass = key(sizeClassRefreshKey) {
+                                calculateWindowSizeClass(activity = this@MainActivity)
+                            }
+
                             // Phase 238: responsive layout. Provide the official
                             // WindowSizeClass to every child screen (HomeScreen,
                             // EditorScreen, MarkdownPreviewScreen, KnowledgeGraphScreen)
@@ -1332,6 +1343,48 @@ class MainActivity : FragmentActivity() {
     override fun onLowMemory() {
         super.onLowMemory()
         com.authorss81.noteflow.utils.BitmapPool.clear()
+    }
+
+    /**
+     * Phase 238 review-fix (F2): the ONE-TIME floating-window notice.
+     * [com.authorss81.noteflow.services.FloatingWindowPolicy] classifies the WINDOW
+     * SHAPE from the real constraints this composable measures (BoxWithConstraints) —
+     * plain multi-window mode alone never fires it, so a usable tablet split pane or
+     * a phone portrait split stays silent and only a square-ish, short window
+     * (typical freeform surface) triggers the notice. Nothing is degraded and nothing
+     * needs re-enabling; the message is informational, fired once per install.
+     */
+    @Composable
+    private fun FloatingWindowNoticeLauncher(
+        authenticated: Boolean,
+        inMultiWindowMode: Boolean,
+        settingsManager: com.authorss81.noteflow.services.SettingsManager,
+        snackbarHostState: androidx.compose.material3.SnackbarHostState
+    ) {
+        if (!authenticated || !inMultiWindowMode) return
+        BoxWithConstraints {
+            val windowWidthDp = maxWidth.value.roundToInt()
+            val windowHeightDp = maxHeight.value.roundToInt()
+            if (com.authorss81.noteflow.services.FloatingWindowPolicy.isLikelyFloatingWindow(
+                    windowWidthDp,
+                    windowHeightDp,
+                    inMultiWindowMode
+                )
+            ) {
+                LaunchedEffect(Unit) {
+                    if (com.authorss81.noteflow.services.FloatingWindowPolicy.noticeDue(
+                            settingsManager.floatingWindowNoticeShown
+                        )
+                    ) {
+                        settingsManager.floatingWindowNoticeShown = true
+                        snackbarHostState.showSnackbar(
+                            message = getString(com.authorss81.noteflow.R.string.floating_window_notice),
+                            duration = androidx.compose.material3.SnackbarDuration.Short
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 

@@ -343,37 +343,39 @@ private fun SidebarNotebookRow(
                     modifier = Modifier.size(16.dp)
                 )
             }
+        }
 
-            // Dropdown options
-            Box {
-                IconButton(
-                    onClick = { menuExpanded = true },
-                    modifier = Modifier.size(30.dp)
-                ) {
-                    Icon(
-                        Icons.Outlined.MoreVert,
-                        contentDescription = "Notebook options",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(16.dp)
-                    )
-                }
-                DropdownMenu(
-                    expanded = menuExpanded,
-                    onDismissRequest = { menuExpanded = false },
-                    scrollState = overflowMenuScrollState(),
-                    modifier = overflowMenuScrollModifier()
-                ) {
-                    DropdownMenuItem(
-                        text = { Text("Rename") },
-                        leadingIcon = { Icon(Icons.Outlined.Edit, contentDescription = null) },
-                        onClick = { menuExpanded = false; onRename() }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Delete") },
-                        leadingIcon = { Icon(Icons.Outlined.Delete, contentDescription = null) },
-                        onClick = { menuExpanded = false; onDelete() }
-                    )
-                }
+        // Dropdown options — the escape hatch (rename/delete) is NEVER dropped,
+        // not even on a compact rail: a row that hides its menu hides every way
+        // to act on the notebook (Phase 238 review-fix F3).
+        Box {
+            IconButton(
+                onClick = { menuExpanded = true },
+                modifier = Modifier.size(30.dp)
+            ) {
+                Icon(
+                    Icons.Outlined.MoreVert,
+                    contentDescription = "Notebook options",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+            DropdownMenu(
+                expanded = menuExpanded,
+                onDismissRequest = { menuExpanded = false },
+                scrollState = overflowMenuScrollState(),
+                modifier = overflowMenuScrollModifier()
+            ) {
+                DropdownMenuItem(
+                    text = { Text("Rename") },
+                    leadingIcon = { Icon(Icons.Outlined.Edit, contentDescription = null) },
+                    onClick = { menuExpanded = false; onRename() }
+                )
+                DropdownMenuItem(
+                    text = { Text("Delete") },
+                    leadingIcon = { Icon(Icons.Outlined.Delete, contentDescription = null) },
+                    onClick = { menuExpanded = false; onDelete() }
+                )
             }
         }
     }
@@ -442,37 +444,38 @@ private fun SidebarSectionRow(
                     modifier = Modifier.size(16.dp)
                 )
             }
+        }
 
-            // Options dropdown
-            Box {
-                IconButton(
-                    onClick = { menuExpanded = true },
-                    modifier = Modifier.size(28.dp)
-                ) {
-                    Icon(
-                        Icons.Outlined.MoreVert,
-                        contentDescription = "Section options",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(16.dp)
-                    )
-                }
-                DropdownMenu(
-                    expanded = menuExpanded,
-                    onDismissRequest = { menuExpanded = false },
-                    scrollState = overflowMenuScrollState(),
-                    modifier = overflowMenuScrollModifier()
-                ) {
-                    DropdownMenuItem(
-                        text = { Text("Rename") },
-                        leadingIcon = { Icon(Icons.Outlined.Edit, contentDescription = null) },
-                        onClick = { menuExpanded = false; onRename() }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Delete") },
-                        leadingIcon = { Icon(Icons.Outlined.Delete, contentDescription = null) },
-                        onClick = { menuExpanded = false; onDelete() }
-                    )
-                }
+        // Options dropdown — the escape hatch (rename/delete) is NEVER dropped,
+        // not even on a compact rail (Phase 238 review-fix F3).
+        Box {
+            IconButton(
+                onClick = { menuExpanded = true },
+                modifier = Modifier.size(28.dp)
+            ) {
+                Icon(
+                    Icons.Outlined.MoreVert,
+                    contentDescription = "Section options",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+            DropdownMenu(
+                expanded = menuExpanded,
+                onDismissRequest = { menuExpanded = false },
+                scrollState = overflowMenuScrollState(),
+                modifier = overflowMenuScrollModifier()
+            ) {
+                DropdownMenuItem(
+                    text = { Text("Rename") },
+                    leadingIcon = { Icon(Icons.Outlined.Edit, contentDescription = null) },
+                    onClick = { menuExpanded = false; onRename() }
+                )
+                DropdownMenuItem(
+                    text = { Text("Delete") },
+                    leadingIcon = { Icon(Icons.Outlined.Delete, contentDescription = null) },
+                    onClick = { menuExpanded = false; onDelete() }
+                )
             }
         }
     }
@@ -516,42 +519,41 @@ private fun SidebarPageRow(
             color = MaterialTheme.colorScheme.onSurface
         )
 
-        if (!compact) {
-            // Dropdown options
-            Box {
-                IconButton(
-                    onClick = { menuExpanded = true },
-                    modifier = Modifier.size(26.dp)
-                ) {
-                    Icon(
-                        Icons.Outlined.MoreVert,
-                        contentDescription = "Page options",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(14.dp)
-                    )
-                }
-                DropdownMenu(
-                    expanded = menuExpanded,
-                    onDismissRequest = { menuExpanded = false },
-                    scrollState = overflowMenuScrollState(),
-                    modifier = overflowMenuScrollModifier()
-                ) {
-                    DropdownMenuItem(
-                        text = { Text(if (page.pinned) "Unpin" else "Pin") },
-                        leadingIcon = { Icon(if (page.pinned) Icons.Outlined.StarOutline else Icons.Outlined.Star, contentDescription = null) },
-                        onClick = { menuExpanded = false; onTogglePinPage(page) }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Rename") },
-                        leadingIcon = { Icon(Icons.Outlined.Edit, contentDescription = null) },
-                        onClick = { menuExpanded = false; onRenamePage(page) }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Delete") },
-                        leadingIcon = { Icon(Icons.Outlined.Delete, contentDescription = null) },
-                        onClick = { menuExpanded = false; onDeletePage(page) }
-                    )
-                }
+        // Dropdown options — the escape hatch (pin/rename/delete) is NEVER
+        // dropped, not even on a compact rail (Phase 238 review-fix F3).
+        Box {
+            IconButton(
+                onClick = { menuExpanded = true },
+                modifier = Modifier.size(26.dp)
+            ) {
+                Icon(
+                    Icons.Outlined.MoreVert,
+                    contentDescription = "Page options",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(14.dp)
+                )
+            }
+            DropdownMenu(
+                expanded = menuExpanded,
+                onDismissRequest = { menuExpanded = false },
+                scrollState = overflowMenuScrollState(),
+                modifier = overflowMenuScrollModifier()
+            ) {
+                DropdownMenuItem(
+                    text = { Text(if (page.pinned) "Unpin" else "Pin") },
+                    leadingIcon = { Icon(if (page.pinned) Icons.Outlined.StarOutline else Icons.Outlined.Star, contentDescription = null) },
+                    onClick = { menuExpanded = false; onTogglePinPage(page) }
+                )
+                DropdownMenuItem(
+                    text = { Text("Rename") },
+                    leadingIcon = { Icon(Icons.Outlined.Edit, contentDescription = null) },
+                    onClick = { menuExpanded = false; onRenamePage(page) }
+                )
+                DropdownMenuItem(
+                    text = { Text("Delete") },
+                    leadingIcon = { Icon(Icons.Outlined.Delete, contentDescription = null) },
+                    onClick = { menuExpanded = false; onDeletePage(page) }
+                )
             }
         }
     }

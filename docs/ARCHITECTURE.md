@@ -2355,6 +2355,27 @@
     width-capped to the current window (`ui/components/OverflowMenuSupport.kt`
     `overflowMenuWidthModifier()`); one-time non-alarming floating-window snackbar via
     new `services/FloatingWindowPolicy.kt` + `SettingsManager.floatingWindowNoticeShown`.
+    - **Review-fixes (2026-08-29, commit `llops: phase-238 review fixes` — see
+      `workspace/phase-238/REPORT.md` "Review-fixes"):** F2 — the floating-window
+      notice is now fired from a class-member `FloatingWindowNoticeLauncher`
+      composable (`MainActivity.kt`, after `onLowMemory`) that measures the REAL
+      window via `BoxWithConstraints` and runs the pure-JVM
+      `FloatingWindowPolicy.isLikelyFloatingWindow(width, height, inMultiWindow)` —
+      a usable tablet split pane or phone-portrait split never fires it (pinned by
+      `app/src/test/.../FloatingWindowPolicyTest.kt`). F6 — `windowSizeClass` is
+      re-derived under `key(sizeClassRefreshKey)`, and the resume observer bumps
+      that key, so a freeform drag that crosses a size-class boundary settles the
+      root posture on the next resume instead of staying stuck. F1/F4/F7 — dead
+      `chromeFoldsToOverflow`/`effectiveContentWidthDp` removed; `useDualSidePanels`
+      also requires `railFits(window, 260+240)` (content floor); split chrome =
+      17dp, so `SPLIT_SIDE_BY_SIDE_MIN_WIDTH_DP = 617`; the medium-window
+      classic-dual override is now documented on the KDoc. F3 — the MoreVert
+      escape hatch (rename/delete/pin) on `UnifiedSidebar.kt` notebook/section/page
+      rows is no longer dropped in compact/narrow mode (only the Add prime action
+      stays non-compact). F5 (deferred, documented) — `overflowMenuWidthModifier()`
+      still reads stale `LocalConfiguration.screenWidthDp`; a soft cap, mitigated by
+      the F6 resume re-derivation, tracked for a measured-width pass. F8 —
+      Paparazzi goldens remain deferred with the rationale restated honestly.
 - **ViewModel/nav**: `ui/viewmodel/NoteflowViewModel.kt:105` (builds SecurityService/NoteRepository/PluginRegistry
   :121/PluginManager :131/PluginRuntime :170/PluginStoreController :196; ~60 capability suspend fns);
   `MainActivity.kt:73` (single activity, **`mutableStateOf` nav** — NOT Navigation Compose).
