@@ -1250,8 +1250,16 @@ fun AnnotationCanvas(
                 // sample — FIFO order preserved for the drag handler that
                 // drains before smoothing. historySize == 0 (non-batching
                 // devices) offers exactly ONE sample per event: pre-214
-                // behaviour, pinned by HistoryBatchTest. Coordinates stay in
-                // RAW window space; world mapping happens at drain time.
+                // behaviour, pinned by HistoryBatchTest. The bridge delivers
+                // (and the predictor records) MotionEvents already offset into
+                // this box's NODE-LOCAL space (Compose's toMotionEventScope
+                // applies offsetLocation(-localToRoot)), so these samples are
+                // node-local — NOT raw window coords. World mapping (pan/zoom)
+                // happens at drain time via ingestPointerSample; no window-offset
+                // subtraction is applied anywhere (Phase 240 Bug 2). This is only
+                // valid because the pointerInteropFilter and the drag handlers sit
+                // on the SAME canvas Box (same localToRoot) — if they ever move to
+                // different nodes with different root offsets, this parity breaks.
                 if (motionEvent.actionMasked == android.view.MotionEvent.ACTION_MOVE) {
                     val historySize = StrokeBatchPolicy.historicalCount(motionEvent.historySize)
                     for (h in 0 until historySize) {

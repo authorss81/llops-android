@@ -715,7 +715,18 @@
 > (11) + `HistoryBatchTest` drain pins updated to the node-local contract (with
 > negative anti-regression pins). `gradle testDebugUnitTest` **3556 / 0 / 0**,
 > `assembleDebug` green, `lintDebug` 0 errors. No schema, no deps,
-> `.github/workflows/` untouched.
+> `.github/workflows/` untouched. **Review fixes (2026-08-29, commit `llops:
+> phase-240 review fixes`):** (1) corrected the stale coalesced-history comment
+> at `AnnotationCanvas.kt:1254` that still claimed samples were "RAW window
+> space; world mapping happens at drain time" — the opposite of the fix; now
+> states they are NODE-LOCAL and documents the SAME-NODE precondition (the
+> node-local parity with `change.position` holds only while the
+> `pointerInteropFilter` and the drag handlers share the canvas Box's
+> `localToRoot`). (2) `StrokeInputBatcher.kt` KDoc gained the same precondition
+> paragraph. (3) the slow-twist trade-off (a <2°/event twist never accumulates)
+> reviewed and DELIBERATELY kept (a time-windowed accumulator would re-expose
+> original Bug 1's jitter drift), documented in the `ROTATION_DEAD_ZONE_DEGREES`
+> KDoc. Comments/docs only — no logic change.
 
 > **Implemented in phase-224** (2026-08-27, timelapse replay + MP4 export of a page's
 > timestamped strokes, see `workspace/phase-224/REPORT.md`): replays a page's strokes in

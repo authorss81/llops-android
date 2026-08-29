@@ -30,6 +30,13 @@ package com.authorss81.noteflow.services
  * (same transform all ingestion paths use), never at capture time; no
  * window-offset subtraction is applied anywhere (Phase 240 Bug 2).
  *
+ * Precondition: this node-local frame is only interchangeable with the live
+ * drag handlers' `change.position` WHILE the pointerInteropFilter and the
+ * drag/modifier chain sit on the SAME canvas Box (identical `localToRoot` of
+ * the filter node). If they are ever separated onto nodes with different root
+ * offsets, the batch samples and live samples would diverge by that offset and
+ * a window-offset subtraction would have to be re-introduced at drain time.
+ *
  * Thread-safety: SPSC ring with @Volatile indices. TODAY BOTH SIDES RUN ON THE
  * UI THREAD, and that is the supported contract: the overflow path in [offer]
  * advances `head` from the PRODUCER side, so a genuinely concurrent

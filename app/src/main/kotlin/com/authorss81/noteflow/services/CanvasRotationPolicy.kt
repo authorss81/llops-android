@@ -26,8 +26,17 @@ object CanvasRotationPolicy {
      * returns the angular change between the PREVIOUS and CURRENT event in DEGREES,
      * so a pure pinch (fingers spread radially, angle to centroid ~constant) yields
      * sub-threshold deltas across many frames that previously ACCUMULATED into a
-     * slowly-rotating page. A deliberate twist clears the dead-zone within one or
-     * two events.
+     * slowly-rotating page. A deliberate (reasonably brisk) twist clears the
+     * dead-zone within one or two events.
+     *
+     * Known trade-off (documented, deliberate): because the dead-zone gates each
+     * per-event delta in isolation, an extremely slow twist producing <2° per
+     * pointer event never accumulates and therefore never rotates the page. It is
+     * kept this way on purpose — a time-windowed accumulator for sub-threshold
+     * deltas would re-expose the original Bug 1, where random-walk jitter under a
+     * stationary two-finger hold drifted the page. The zoom-dominance and
+     * pan-dominance gates below are the reliable pinch/pan discriminators; the
+     * dead-zone is the deliberate cost of not re-introducing that drift.
      */
     const val ROTATION_DEAD_ZONE_DEGREES = 2f
 

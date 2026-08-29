@@ -107,3 +107,46 @@ transform (correct 2-finger-gesture territory).
 
 No schema change, no migration, no new/removed dependencies, `.github/workflows/`
 untouched, base-APK-size rule intact.
+
+## Review fixes (2026-08-29, commit `llops: phase-240 review fixes`)
+
+Review findings from the phase audit were applied:
+
+1. **Stale comment corrected** — `AnnotationCanvas.kt:1254` (coalesced-history
+   ingestor) still read *"Coordinates stay in RAW window space; world mapping
+   happens at drain time."* — the exact opposite of the phase-240 fix, which
+   removed the window-offset subtraction because the bridge already delivers
+   node-local samples. Rewritten to state the samples are NODE-LOCAL (not raw
+   window coords), that parent data drains via `ingestPointerSample` (no
+   window-offset subtraction anywhere), and to document the SAME-NODE
+   precondition (see Finding 6). `StrokeInputBatcher.kt` KDoc gained the same
+   explicit precondition paragraph.
+
+2. **Same-node precondition documented (Finding 6)** — the node-local parity
+   between the `pointerInteropFilter` MotionEvent and the drag handlers'
+   `change.position` holds only while they sit on the SAME canvas Box (same
+   `localToRoot` of the filter node). Both the `AnnotationCanvas.kt` drain
+   comment and the `StrokeInputBatcher.kt` class doc now call this out, so if a
+   future refactor ever moves them onto nodes with different root offsets, the
+   re-introduced window-offset subtraction requirement is not silently lost.
+
+3. **Slow-twist trade-off (Finding 2) — documented, logic deliberately kept.**
+   The review flagged that the 2° per-event dead-zone means a very slow twist
+   (<2°/event) never accumulates and thus never rotates. We decided NOT to
+   change the gating logic: a time-windowed accumulator for sub-threshold
+   deltas would re-expose the ORIGINAL Bug 1 (random-walk jitter under a
+   stationary two-finger hold drifting the page), which this phase exists to
+   fix. The trade-off is documented in the `ROTATION_DEAD_ZONE_DEGREES` KDoc in
+   `services/CanvasRotationPolicy.kt`. No test/behavior change.
+
+Net behavior unchanged from the phase-240 fix; only comments/docs updated.
+Re-verified below.
+
+## Verification (review-fix round)
+
+- `gradle :app:testDebugUnitTest --tests "*Phase240RotationGateTest"` — GREEN.
+- `gradle testDebugUnitTest` — full suite green (3556 / 0 failures / 0 errors).
+- `gradle assembleDebug` — BUILD SUCCESSFUL.
+- `gradle lintDebug` — 0 errors.
+
+No logic change, no schema, no deps, `.github/workflows/` untouched.
