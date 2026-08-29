@@ -414,16 +414,24 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
 
-    // Phase 235: critical-path INSTRUMENTED Compose tests (app/src/androidTest/).
-    // ui-test-junit4 + ui-test-manifest come from the existing composeBom
-    // (2024.12.01) — no new version pins, nothing added to the base APK (androidTest
-    // + debug configurations only). `debugImplementation(ui-test-manifest)` provides
-    // the empty ComponentActivity entry that createAndroidComposeRule needs.
-    androidTestImplementation(platform(libs.androidx.compose.bom))
-    androidTestImplementation(libs.androidx.compose.ui.test.junit4)
-    androidTestImplementation(libs.androidx.test.ext.junit)
-    debugImplementation(libs.androidx.compose.ui.test.manifest)
+    // Phase 239: phase-235's INSTRUMENTED Compose tests (androidTest) were
+    // removed — they are impossible on this pipeline. (1) `connectedAndroidTest`
+    // needs an AVD/kernel with HW acceleration, which GitHub runners lack, and
+    // (2) resolving `espresso` (a `ui-test-junit4` transitive) for the
+    // `debugAndroidTestRuntimeClasspath` failed dependency verification
+    // (`com.squareup:javawriter` + 13 more) on every run. The same critical-path
+    // coverage instead lives in `app/src/test/.../Phase239*` as PURE-JVM tests of
+    // the backing logic classes (WetCanvasEngine / LassoPolicy / PaletteMath /
+    // SymmetryCommitPolicy / WikiLinkParser / SelectionTransformPolicy), which
+    // run in `gradle testDebugUnitTest` on the JVM — no emulator, no new verified
+    // dependency (just the existing junit), no Robolectric (the project keeps
+    // `isReturnDefaultValues = true` specifically to avoid pulling it in).
+    //
+    // No androidTestImplementation / debugImplementation(ui-test-manifest) here:
+    // `createComposeRule` cannot run on the plain JVM, so keeping those configs
+    // would be dead weight that re-broken the verification classpath.
 }
+
 
 // --- Downloadable-LLM-plugin seed ------------------------------------------
 //

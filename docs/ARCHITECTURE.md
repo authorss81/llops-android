@@ -2787,6 +2787,17 @@ UNTRUSTED files before any staging); `ui/components/Dialogs.kt` `AppUpdateDialog
     (`ui/components/GalleryView.kt:174`), `toolSelectorButton` + `colorSwatchButton`
     (`ui/screens/EditorScreen.kt` both ink bars), `markdownBody` (`HybridMarkdownEditor.kt:272`),
     `pluginStoreSearch` (`PluginStoreDialog.kt:247`) — no new dependency, no workflow edit.
+  - **Implemented in phase-239** (2026-08-29, dropped the dead instrumented-test path, see
+    `workspace/phase-239/REPORT.md`): there is NO `app/src/androidTest/` and NEVER will be — `connectedAndroidTest`
+    can't run on CI (no emulator/KVM) and Compose `createComposeRule()` UI tests can't run on the plain JVM in
+    `testDebugUnitTest` (they need instrumentation or Robolectric, and `isReturnDefaultValues=true` deliberately
+    keeps Robolectric out). Phase-235's added androidTest deps were reverted (`app/build.gradle.kts`) so the
+    `:app:debugAndroidTestRuntimeClasspath` verification failure is gone. The critical-path UI surfaces are instead
+    pinned by **pure-JVM tests over the real backing logic classes** — 52 methods in 5 `Phase239*Test.kt` files
+    (canvas draw `WetCanvasEngine`/`BrushStrokeMath`/`EraserGeometryPolicy`, color picker `ColorHarmonyHelper`/
+    `PaletteMath`, lasso `LassoPolicy`/`StrokeSelectionActionPolicy`/`SelectionTransformPolicy`, markdown
+    `WikiSuggestionPolicy`/`WikiLinkParser`/`MarkdownBlockTokenizer`, wet-shade `WetMixingMath`). `testDebugUnitTest`
+    3545 green (baseline 3493 + 52); no new verified deps, no schema, `.github/workflows/` untouched.
   - **Implemented in phase-147** (R2-b2b2-DEP-01, `workspace/phase-147/REPORT.md` + `docs/CI_PINNING.md`):
     NOT-APPROVED path — all 19 `uses:` tags in `release.yml`/`android.yml`/`llops.yml` are mapped to full
     commit SHAs (GitHub-API resolved 2026-08-18) and `.github/dependabot.yml` (github-actions, weekly, grouped)
