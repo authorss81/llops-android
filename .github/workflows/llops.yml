@@ -22,15 +22,10 @@ on:
     # cancel-in-progress: true would risk losing phase work that is in-flight
     # in scripts/phase_runner.sh between its 300s checkpoint_wip() pushes.
     # With false, a new tick is blocked while a long phase runs but no work
-    # is ever cancelled mid-flight.
+    # is ever cancelled mid-flight. Manual workflow_dispatch remains available
+    # for cases where the cron is throttled for >1 hour.
     - cron: "*/10 * * * *"
     - cron: "*/30 * * * *"
-  # repository_dispatch is used by llops-dispatcher.yml to chain the pipeline.
-  # The default GITHUB_TOKEN has contents: write but NOT workflow scope, so
-  # gh workflow run returns 403 — repository_dispatch works with the default
-  # token. The dispatcher only fires this event when there's pending work.
-  repository_dispatch:
-    types: [phase-pipeline]
 
 
 permissions:
