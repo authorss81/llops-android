@@ -15,7 +15,13 @@ on:
   schedule:
     # Cron = the retry engine. Every 10 min, a cheap check: only runs work if
     # a phase is pending or deferred. Near-zero minutes when idle.
-    - cron: "*/20 * * * *"
+    # Multiple schedules (every 10 + every 30) ensure the pipeline runs at least
+    # every 10 min even if GitHub throttles one schedule; combined with
+    # cancel-in-progress: true below this guarantees a new tick kicks off
+    # immediately after a previous run completes, so long phases don't starve
+    # the pipeline of retries.
+    - cron: "*/10 * * * *"
+    - cron: "*/30 * * * *"
 
 
 permissions:
@@ -25,7 +31,14 @@ permissions:
 
 concurrency:
   group: llops-pipeline
-  cancel-in-progress: false
+  # Fix: cancel the previous run when a new schedule tick fires so a long
+  # phase (up to the per-phase .timeout) cannot starve the pipeline. Each
+  # tick is cheap (select-phase reads marker files via API only) and the
+  # previously-running run's phase work is already committed (see run-phase
+  # commit step) before any cancel could land. Worst case: a long phase run
+  # is interrupted mid-review and a new run resumes it via .blocked +
+  # .attempts semantics, no work is lost.
+  cancel-in-progress: true
 
 env:
   OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
