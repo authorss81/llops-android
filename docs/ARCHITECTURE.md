@@ -210,6 +210,20 @@
 > `CanvasCommitListPolicyTest` (5), `Phase205CanvasCommitIntegrityTest` (8 pins). No schema change,
 > no new deps.
 
+> **Implemented in phase-241** (2026-08-29, backup/import/reopen audit + production round-trip pin,
+> see `workspace/phase-241/REPORT.md`): verified the user-reported backup-fails / import-fails /
+> crash-on-reopen symptoms are all closed by the cumulative hardening — `exportBackup`
+> (`ImportExportService.kt:1692`) checkpoint→HMAC-re-stamp→verified-copy→streamed v3 write, restore
+> `importBackup` (`:2422`) file-to-file decrypt + transactional re-key + RestoreFailSafe reopen, and
+> the post-restore DEK/reopen path (B2-CRYPTO-04/09, B1-CRYPTO-05/07, phases 137/138/145/149/150/169/
+> 189/202). Added `Phase241BackupImportRoundTripTest` (3) closing a real coverage gap: the pre-existing
+> crypto tests built the v3 test file with the one-shot `encryptBackupPayload` that production no longer
+> calls — the new suite mirrors the REAL `exportBackup` write (`BackupExportPolicy.encryptStreamGcm` fed
+> by `SequenceInputStream(part2, stagingZip)`, header written by `encryptStreamGcm`) and round-trips it
+> through the REAL restore read (`tryParseBackupV2File`/`validateBackupPasswordFile`): same password
+> validates, wrong/corrupt rejected, DEK unwraps, inner zip (with `noteflow.sqlite`/`imports/`/
+> `voice_notes/`) recovered at `offsetBytes=16`, and the archive passes the BackupBudgetPolicy pack gate.
+
 | Subpackage | Key files | Purpose |
 |---|---|---|
 | `data/model/` | `Entities.kt`, `StrokeModels.kt` | Room entities (8) + stroke/ink types |
