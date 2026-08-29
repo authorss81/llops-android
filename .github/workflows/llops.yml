@@ -25,6 +25,12 @@ on:
     # is ever cancelled mid-flight.
     - cron: "*/10 * * * *"
     - cron: "*/30 * * * *"
+  # repository_dispatch is used by llops-dispatcher.yml to chain the pipeline.
+  # The default GITHUB_TOKEN has contents: write but NOT workflow scope, so
+  # gh workflow run returns 403 — repository_dispatch works with the default
+  # token. The dispatcher only fires this event when there's pending work.
+  repository_dispatch:
+    types: [phase-pipeline]
 
 
 permissions:
