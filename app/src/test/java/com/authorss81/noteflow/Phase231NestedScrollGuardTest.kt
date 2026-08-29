@@ -10,22 +10,30 @@ import org.junit.Before
 import org.junit.Test
 
 /**
- * Phase 231 (2026-08-28): runtime nested-scroll guard.
+ * Phase 231 (2026-08-28) + Phase 237 (2026-08-29): runtime nested-scroll guard.
  *
- * The guard is a DEBUG-ONLY diagnostic: it detects a vertically scrollable
- * being composed while already inside an unbounded-height vertical scroll
- * parent (the "Vertically scrollable component was measured with infinity
- * maximum height constraints" / CheckScrollableContainerConstraints crash).
+ * The guard detects a vertically scrollable being measured while already inside
+ * another guarded vertical scroll parent (the "Vertically scrollable component
+ * was measured with infinity maximum height constraints" /
+ * CheckScrollableContainerConstraints crash) so the inner scrollable can be
+ * handed a bounded height and the crash can be PREVENTED.
  *
- * Because [NestedScrollGuardConfig.enabled] is a mutable flag (initialised from
- * `BuildConfig.DEBUG`), the pure-JVM test can toggle it to simulate a release
- * build (`false` → no-op) and a debug build (`true` → throws on nesting),
- * without needing Robolectric or a different BuildConfig.
+ * Phase 237 changed the guard's semantics: [NestedScrollGuardConfig.enabled]
+ * now defaults `true` (it was `BuildConfig.DEBUG`, i.e. a release no-op), and
+ * nesting is no longer diagnosed by throwing in
+ * [NestedScrollReporter.enterUnboundedScroll] — it is detected via
+ * [NestedScrollReporter.isInsideScrollable] and neutralised by constraining the
+ * nested scrollable's height (see [Modifier.nestedScrollGuard]).
+ *
+ * Because [NestedScrollGuardConfig.enabled] is a mutable flag, the pure-JVM test
+ * can toggle it to simulate a disabled build without needing Robolectric or a
+ * different BuildConfig.
  *
  * NOTE (review fix): the guard contracts under test are:
  *   - disabled (release) → enter/exit are no-ops that never track depth;
- *   - enabled, genuinely nested (enter while already inside) → throws with the
- *     guidance message;
+ *   - enabled, genuinely nested (enter while already inside) → reports nested
+ *     via [NestedScrollReporter.isInsideScrollable] (it no longer throws — the
+ *     crash is prevented, not diagnosed);
  *   - a single balanced enter/exit returns to depth 0, and exiting an empty
  *     stack is clamped to 0 (never negative).
  */
