@@ -1727,10 +1727,13 @@ fun EditorScreen(
     }
 
     BackHandler {
-        saveJob?.cancel()
         if (isInitialLoadComplete) {
-            // B2-UI-1 (phase-49): lock-safe gated flush (persist now / defer until unlock).
-            viewModel.flushEditorPageSave(page.id, strokes, stickyNotes, mediaEmbeds, layers)
+            // Phase 242: cancel+AWAIT any pending debounced autosave, then flush
+            // the newest snapshot — a page closed inside the 1s window never loses
+            // committed strokes and no stale snapshot lands after this flush.
+            // B2-UI-1 (phase-49): still routed through the lock-safe gate.
+            viewModel.flushPendingSaves(page.id, strokes, stickyNotes, mediaEmbeds, layers, saveJob)
+            saveJob = null
         }
         onBack()
     }
@@ -1754,10 +1757,12 @@ fun EditorScreen(
                     // Navigation Back Button
                     IconButton(
                         onClick = {
-                            saveJob?.cancel()
                             if (isInitialLoadComplete) {
+                                // Phase 242: cancel+AWAIT the pending debounce then
+                                // flush newest — never a stale snapshot landing last.
                                 // B2-UI-1 (phase-49): lock-safe gated flush.
-                                viewModel.flushEditorPageSave(page.id, strokes, stickyNotes, mediaEmbeds, layers)
+                                viewModel.flushPendingSaves(page.id, strokes, stickyNotes, mediaEmbeds, layers, saveJob)
+                                saveJob = null
                             }
                             onBack()
                         },

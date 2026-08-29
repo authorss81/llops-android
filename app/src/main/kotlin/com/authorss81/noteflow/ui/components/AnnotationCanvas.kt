@@ -1212,6 +1212,97 @@ fun AnnotationCanvas(
             layerBitmapCache.clear()
         }
     }
+
+    // Phase 242: commit an IN-PROGRESS stroke if the canvas leaves composition
+    // mid-gesture (navigate away / close the page while the pointer is still
+    // down, before `detectDragGestures.onDragEnd` ever runs — e.g. a swipe that
+    // is classified as a navigation and triggers pointer-cancel). Without this
+    // the partial ink lives only in the ephemeral `activePoints` list and is
+    // dropped: it never reaches `strokes`, so the editor's dispose flush —
+    // which persists the COMMITTED list — has nothing to save, and on reopen
+    // the page the dots the user watched themselves draw are gone.
+    //
+    // Committing here reproduces exactly what was on screen: `activePoints` are
+    // already the smoothed live samples in world coordinates (Z-order = draw
+    // order), so no re-simplify/snap pass is applied. All brush parameters are
+    // read through [rememberUpdatedState] wrappers so the dispose reads the
+    // CURRENT tool/colour/width — a plain parameter capture here would hold the
+    // FIRST-composition value after a mid-session tool change. Ordering is safe
+    // because Compose disposes CHILD effects before the parent's, so this runs
+    // BEFORE the editor's `DisposableEffect(page.id)` flush — the emitted list
+    // reaches `onStrokesChanged` → `handleStrokesChange` → `strokes = newStrokes`
+    // and the editor's owning dispose-flush then persists the updated list.
+    // `ink.isNotEmpty()` doubles as the duplicate guard: `onDragEnd` clears
+    // `activePoints`, so a gesture that already committed its stroke leaves an
+    // empty list and no second stroke is emitted here.
+    val disposeToolState = androidx.compose.runtime.rememberUpdatedState(currentTool)
+    val disposeColorState = androidx.compose.runtime.rememberUpdatedState(currentColor.toArgb())
+    val disposeWidthState = androidx.compose.runtime.rememberUpdatedState(currentWidth)
+    val disposeColorModeState = androidx.compose.runtime.rememberUpdatedState(currentColorMode)
+    val disposeColorSeedState = androidx.compose.runtime.rememberUpdatedState(currentColorSeed)
+    val disposeGradientToState = androidx.compose.runtime.rememberUpdatedState(currentGradientToColor.toArgb())
+    val disposeLayerIdState = androidx.compose.runtime.rememberUpdatedState(activeLayerId)
+    val disposeAdvBrushesState = androidx.compose.runtime.rememberUpdatedState(advancedBrushesEnabled)
+    val disposeSymmetryModeState = androidx.compose.runtime.rememberUpdatedState(symmetryMode)
+    val disposeContinuousState = androidx.compose.runtime.rememberUpdatedState(isContinuousMode)
+    val disposePdfPageFilterState = androidx.compose.runtime.rememberUpdatedState(pdfPageFilter)
+    DisposableEffect(Unit) {
+        onDispose {
+            val tool = disposeToolState.value
+            val ink = activePoints.toList()
+            if (ink.isNotEmpty() && activeTargetPage >= 0 &&
+                tool.isFreehandTool && tool != StrokeTool.LASER
+            ) {
+                val startPoint = activeStart
+                val endPoint = activeEnd
+                val bakeMirrorTwin = com.authorss81.noteflow.services.SymmetryCommitPolicy.shouldBakeMirror(disposeSymmetryModeState.value, tool)
+                val newStroke = Stroke(
+                    id = java.util.UUID.randomUUID().toString(),
+                    tool = tool,
+                    colorInt = disposeColorState.value,
+                    width = disposeWidthState.value,
+                    points = ink,
+                    start = startPoint,
+                    end = endPoint ?: ink.lastOrNull(),
+                    pdfPage = activeTargetPage,
+                    timestampMs = null,
+                    isAdvanced = disposeAdvBrushesState.value,
+                    layerId = disposeLayerIdState.value ?: "layer_default",
+                    colorMode = disposeColorModeState.value,
+                    colorSeed = disposeColorSeedState.value,
+                    gradientToColorInt = disposeGradientToState.value
+                )
+                val twin = if (bakeMirrorTwin) {
+                    // screen width approximated by the page design width — the
+                    // twin's axis is secondary; the PRIMARY ink is never lost.
+                    val c = symmetryCenterFor(pageWidthPx, calculatePageYOffset(activeTargetPage))
+                    com.authorss81.noteflow.services.SymmetryCommitPolicy.bakedTwin(
+                        stroke = newStroke,
+                        mode = disposeSymmetryModeState.value,
+                        centerX = c.x,
+                        centerY = c.y
+                    )
+                } else null
+                // Avoid duplicating the stroke if onDragEnd already committed it
+                // during this same teardown (activeStrokeList would contain it).
+                if (activeStrokeList.none { it.id == newStroke.id }) {
+                    activeStrokeList.add(newStroke)
+                    if (twin != null && activeStrokeList.none { it.id == twin.id }) {
+                        activeStrokeList.add(twin)
+                    }
+                    onStrokesChanged(
+                        com.authorss81.noteflow.services.CanvasCommitListPolicy.emittedList(
+                            currentAll = currentStrokesProvider(),
+                            isContinuousMode = disposeContinuousState.value,
+                            pageOf = { it.pdfPage },
+                            pdfPageFilter = disposePdfPageFilterState.value,
+                            scopedReplacement = activeStrokeList
+                        )
+                    )
+                }
+            }
+        }
+    }
     var showBrushStudio by remember { mutableStateOf(false) }
     val canvasDrawScope = remember { androidx.compose.ui.graphics.drawscope.CanvasDrawScope() }
     val density = androidx.compose.ui.platform.LocalDensity.current

@@ -228,6 +228,19 @@
 > encryption/parse parity, not the full `exportBackup` orchestration (checkpoint/HMAC/snapshot/prune)
 > or the full `importBackup` transactional DB swap (still covered by pre-existing per-component suites).
 
+> **Implemented in phase-242** (2026-08-29, dots-disappear-on-reopen — committed-stroke persistence,
+> see `workspace/phase-242/REPORT.md`): closed the two navigate-away paths that DROPPED freshly-drawn
+> ink before the DB write. (1) an in-progress (uncommitted) stroke left only in `activePoints` vanished:
+> dispose-driven `DisposableEffect(Unit)` in `AnnotationCanvas.kt:1249-1305` now commits live ink to the
+> DB through the SAME `onStrokesChanged` → `CanvasCommitListPolicy.emittedList` channel as the drag-end
+> commit (each brush param read via `rememberUpdatedState` wrappers `:1238-1248`; `ink.isNotEmpty()`
+> doubles as the duplicate guard; LASER excluded). (2) the back paths (`BackHandler` + top-bar back in
+> `EditorScreen.kt`) now route through `NoteflowViewModel.flushPendingSaves` (`:4022`, cancel+await the
+> pending 1s debounce then persist newest; `disposeEditorPageFlush` delegates to it), replacing the old
+> non-awaited `cancel + flush` that could let a stale write land last. Load path unchanged/correct
+> (`getStrokesForPage` materialises every row; `getStrokesForPageBounded` filters only on the B2-DOS-01
+> stored-size cap). Tests: `Phase242StrokeDisposePersistenceTest` (7).
+
 | Subpackage | Key files | Purpose |
 |---|---|---|
 | `data/model/` | `Entities.kt`, `StrokeModels.kt` | Room entities (8) + stroke/ink types |

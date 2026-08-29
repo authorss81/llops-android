@@ -4005,6 +4005,32 @@ fun updatePageTags(id: String, tags: String) {
         layers: List<LayerEntity>,
         pendingDebounce: Job?
     ) {
+        flushPendingSaves(pageId, strokes, stickyNotes, embeds, layers, pendingDebounce)
+    }
+
+    /**
+     * Phase 242: force-flush the editor's CURRENT page snapshot immediately,
+     * routing it through the lock-safe gate (persist now / defer until unlock —
+     * never a plaintext row). Cancels and AWAITS any still-pending 1s debounced
+     * autosave BEFORE the flush, so a stale snapshot can never land after this
+     * one and the newest state always wins.
+     *
+     * This is the single navigate-away flush: every path that leaves the editor
+     * (system back, top-bar back, composition dispose) uses it, so a page closed
+     * within the 1s debounce window — or mid-gesture, when the canvas has just
+     * committed the in-progress stroke — never loses committed strokes. Runs in
+     * [viewModelScope] (which survives the editor leaving composition), so the
+     * asynchronous write is guaranteed to complete even though the editor's
+     * own scope is being torn down.
+     */
+    fun flushPendingSaves(
+        pageId: String,
+        strokes: List<Stroke>,
+        stickyNotes: List<CanvasStickyNote>,
+        embeds: List<CanvasMediaEmbed>,
+        layers: List<LayerEntity>,
+        pendingDebounce: Job?
+    ) {
         viewModelScope.launch {
             pendingDebounce?.cancel()
             // B2-UI-3 (phase-73): await settlement. The cancelled debounce either
