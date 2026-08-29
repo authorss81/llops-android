@@ -16,12 +16,23 @@ on:
     # Cron = the retry engine. Every 10 min, a cheap check: only runs work if
     # a phase is pending or deferred. Near-zero minutes when idle.
     # Multiple schedules (every 10 + every 30) ensure the pipeline runs at least
-    # every 10 min even if GitHub throttles one schedule; combined with
-    # cancel-in-progress: true below this guarantees a new tick kicks off
-    # immediately after a previous run completes, so long phases don't starve
-    # the pipeline of retries.
+    # every 10 min even if GitHub throttles one schedule. We keep
+    # cancel-in-progress: false (not true) because cancel-in-progress: true
+    # would risk losing phase work that is in-flight in scripts/phase_runner.sh
+    # between its 300s checkpoint_wip() pushes. With false, the new tick is
+    # blocked while a long phase runs but no work is ever cancelled mid-flight.
     - cron: "*/10 * * * *"
     - cron: "*/30 * * * *"
+  # Self-perpetuating chain: as soon as a previous llops run completes, fire a
+  # new one. This way the pipeline keeps advancing without waiting for the next
+  # cron tick. The select-phase job is cheap (API-only) and the cron above
+  # provides the fallback when no prior run has completed recently (e.g. after
+  # the repo goes quiet for a while). The workflow_run trigger is a
+  # `requested` event, not a `completed` event, which fires as soon as the prior
+  # run enters its post-job completion phase, not just on success.
+  workflow_run:
+    workflows: ["llops"]
+    types: [requested, completed]
 
 
 permissions:
@@ -31,14 +42,16 @@ permissions:
 
 concurrency:
   group: llops-pipeline
-  # Fix: cancel the previous run when a new schedule tick fires so a long
-  # phase (up to the per-phase .timeout) cannot starve the pipeline. Each
-  # tick is cheap (select-phase reads marker files via API only) and the
-  # previously-running run's phase work is already committed (see run-phase
-  # commit step) before any cancel could land. Worst case: a long phase run
-  # is interrupted mid-review and a new run resumes it via .blocked +
-  # .attempts semantics, no work is lost.
-  cancel-in-progress: true
+  # Keep cancel-in-progress: false deliberately. The 300s checkpoint_wip() loop
+  # in scripts/phase_runner.sh pushes in-progress work to llops-wip/<phase>, but
+  # any work done between two checkpoints (~5 min window) is in the working tree
+  # only — if cancel-in-progress: true were set, a new tick would land during
+  # that window, kill the runner before the commit step, and lose that work.
+  # With false, a new tick is queued and only starts after the prior run
+  # completes (the prior run's commit step runs, preserving all work). The
+  # added cost is that the pipeline may sit idle for the remainder of a long
+  # run; the */10 + */30 cron schedules above bound that idle time.
+  cancel-in-progress: false
 
 env:
   OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
