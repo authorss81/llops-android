@@ -225,7 +225,7 @@
 | `ui/screens/` | `EditorScreen.kt` (6181), `MarkdownPreviewScreen.kt`, `HomeScreen.kt`, `KnowledgeGraphScreen.kt`, `LockScreen.kt` | Top-level screens |
 | `ui/viewmodel/` | `NoteflowViewModel.kt` (~1500) | God-ViewModel: DB, security, plugins, all state flows |
 | `theme/` | `Theme.kt`, `GlassSurfaces.kt`, `GlassThemeMath.kt`, `Motion.kt`, `Type.kt`, `Color.kt` | Material3 + frosted-glass design system |
-| `utils/` | `ConstantTime.kt`, `BitmapPool.kt`, `DeviceCompatibilityManager.kt`, `NestedScrollGuard.kt` (phase-231 debug nested-scroll canary), `WikiLinkParser.kt` (dup, see notes) | Pure helpers |
+| `utils/` | `ConstantTime.kt`, `BitmapPool.kt`, `DeviceCompatibilityManager.kt`, `NestedScrollGuard.kt` (nested-scroll crash prevention, active in debug+release since phase-237; phase-231 debug canary), `WikiLinkParser.kt` (dup, see notes) | Pure helpers |
 
 > **Implemented in phase-188** (2026-08-20, GalleryView robustness, see
 > `workspace/phase-188/REPORT.md`): the user visual-review "exploration" set of 4
@@ -2319,6 +2319,22 @@
     `fillMaxHeight` / `weight` / `requiredHeight`) MUST precede `verticalScroll` in the modifier
     chain.** Authoritative references: `workspace/phase-229/INVENTORY.md` +
     `workspace/phase-229/FIX_STRATEGY.md`.
+  - **Implemented in phase-237** (2026-08-29, `NestedScrollGuard.kt` now PREVENTS the crash in
+    both debug and release — see `workspace/phase-237/REPORT.md`): phase-231's guard was a
+    post-hoc, DEBUG-only diagnostic that (a) defaulted `NestedScrollGuardConfig.enabled` to
+    `BuildConfig.DEBUG` (false in release, the exact builds Test Lab runs) and (b) threw only
+    AFTER the inner scrollable had already been measured with `maxHeight = Infinity`. Phase-237
+    makes the guard active by default (`enabled = true`, `NestedScrollGuard.kt:60`) and **bounds
+    the nested inner scrollable's height BEFORE it measures** (`Modifier.nestedScrollGuard()` at
+    `:166-199`): it checks the new `NestedScrollReporter.isInsideScrollable()` (`:118`) first
+    (`:169`), then hands the inner scrollable a finite max height — `constraints.copy(minHeight=0,
+    maxHeight=maxHeight-1)` for a bounded parent (`:170-173`) or a bounded `Constraints(maxHeight=4096)`
+    fallback for an unbounded/Infinity parent (`:174-184`) — so Compose's own
+    `CheckScrollableContainerConstraints` never fires. The old `check(newDepth <= 1)` throw is
+    removed from `enterUnboundedScroll()` (`:94-103`) as redundant. Non-nested scrollables pass
+    constraints through unchanged (`:185-186`), so the guard stays layout-transparent (zero
+    regression). Note: the phase-233 gotcha-12 description of the guard throwing at
+    `NestedScrollGuard.kt:83` is now historical — phase-237 removed that throw.
 - **ViewModel/nav**: `ui/viewmodel/NoteflowViewModel.kt:105` (builds SecurityService/NoteRepository/PluginRegistry
   :121/PluginManager :131/PluginRuntime :170/PluginStoreController :196; ~60 capability suspend fns);
   `MainActivity.kt:73` (single activity, **`mutableStateOf` nav** — NOT Navigation Compose).

@@ -6,7 +6,6 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
-import org.junit.Assert.assertThrows
 import org.junit.Before
 import org.junit.Test
 
@@ -67,17 +66,28 @@ class Phase231NestedScrollGuardTest {
     }
 
     @Test
-    fun `debug guard throws when nesting exceeds depth 1`() {
+    fun `enabled guard reports nested while another scrollable is mid-measure`() {
         NestedScrollGuardConfig.enabled = true
 
+        // First guarded scrollable starts measuring -> not yet nested, it is the
+        // top-level scrollable of this measure pass.
+        assertFalse(NestedScrollReporter.isInsideScrollable())
         NestedScrollReporter.enterUnboundedScroll()
         assertEquals(1, NestedScrollReporter.currentDepth())
+        assertTrue("a guarded scrollable is nested while its ancestor measures", NestedScrollReporter.isInsideScrollable())
 
-        // A second nested unbounded scroller must fail loudly with guidance.
-        val ex = assertThrows(IllegalStateException::class.java) {
-            NestedScrollReporter.enterUnboundedScroll()
-        }
-        assertTrue("exception must carry the guard guidance message", ex.message!!.contains("NestedScrollGuard"))
+        // The nested inner scrollable detects nesting (isInsideScrollable) but no
+        // longer throws — the guard constrains its height instead (phase-237).
+        assertTrue(NestedScrollReporter.isInsideScrollable())
+        NestedScrollReporter.enterUnboundedScroll()
+        assertEquals(2, NestedScrollReporter.currentDepth())
+        assertTrue(NestedScrollReporter.isInsideScrollable())
+
+        // Exit all levels back to a clean baseline.
+        NestedScrollReporter.exitUnboundedScroll()
+        NestedScrollReporter.exitUnboundedScroll()
+        assertEquals(0, NestedScrollReporter.currentDepth())
+        assertFalse(NestedScrollReporter.isInsideScrollable())
     }
 
     @Test
