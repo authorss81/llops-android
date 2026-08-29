@@ -68,8 +68,18 @@ with the restore reader (`tryParseBackupV2File`, which re-reads the header from 
 
 ### New test: `app/src/test/java/com/authorss81/noteflow/Phase241BackupImportRoundTripTest.kt` (3 tests)
 
-Reproduces the ENTIRE production v3 export write byte-for-byte and feeds it through the ENTIRE
-production restore read:
+Reproduces the production v3 **wire-layout write** byte-for-byte (the split wrap-key header + the
+`SequenceInputStream(part2, zip)` + `encryptStreamGcm` stream) and feeds it through the ENTIRE
+production restore **parse/read**:
+
+> Coverage boundary (honest): the suite re-implements the export WRITE in the test and calls the
+> production parse helpers (`tryParseBackupV2File` / `validateBackupPasswordFile`) directly. The full
+> `exportBackup` orchestration (WAL checkpoint, HMAC re-stamp, verified DB snapshot, staged prune,
+> budget-gated packing) and the full `importBackup` (transactional DB swap, re-key, field re-encrypt,
+> RestoreFailSafe reopen) are NOT invoked here — those are JVM/Android-runtime coupled and remain
+> covered by the pre-existing per-component suites. What this suite pins is the exact on-disk
+> encryption/parse parity that the user-visible "backup creates a file but restore fails" symptom
+> lives in.
 
 1. `production v3 backup round-trips - same password validates, unwraps DEK, recovers zip` —
    writes the exact production layout (split wrap key, real `BACKUP_DEK_WRAP_AAD`, real
@@ -85,9 +95,11 @@ production restore read:
 3. `validateBackupPasswordFile rejects the wrong password for a production v3 file` — the pre-restore
    wrong-password gate rejects loudly before any DB change.
 
-These 3 tests directly pin the phase DoD items "backup creates a valid .zip with the correct
-password" and "restore works with the same password" at the integration level, using the real
-streaming production code paths.
+These 3 tests pin the phase DoD items "backup creates a valid archive with the correct password"
+and "restore validates/rejects the same password" at the **wire-format parity** level (the streaming
+write layout ↔ the streaming restore read), using the real production crypto primitives. They do NOT
+assert the full end-to-end `exportBackup`→`importBackup` DB round-trip (see the coverage boundary
+note above).
 
 ## Verification
 

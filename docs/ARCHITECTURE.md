@@ -223,6 +223,10 @@
 > through the REAL restore read (`tryParseBackupV2File`/`validateBackupPasswordFile`): same password
 > validates, wrong/corrupt rejected, DEK unwraps, inner zip (with `noteflow.sqlite`/`imports/`/
 > `voice_notes/`) recovered at `offsetBytes=16`, and the archive passes the BackupBudgetPolicy pack gate.
+> Coverage boundary: the suite mirrors the export WRITE in-test and calls the production PARSE helpers
+> (`tryParseBackupV2File`/`validateBackupPasswordFile`) directly — it pins the on-disk wire-format
+> encryption/parse parity, not the full `exportBackup` orchestration (checkpoint/HMAC/snapshot/prune)
+> or the full `importBackup` transactional DB swap (still covered by pre-existing per-component suites).
 
 | Subpackage | Key files | Purpose |
 |---|---|---|

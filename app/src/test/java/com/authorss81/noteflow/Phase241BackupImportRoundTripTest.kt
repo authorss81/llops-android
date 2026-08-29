@@ -48,6 +48,16 @@ class Phase241BackupImportRoundTripTest {
     private companion object {
         const val PASSWORD = "Sup3r-S3cret-Passphrase-2026"
         val DEK = ByteArray(32) { (0x50 + it).toByte() }
+
+        // The vault archive entries written into the inner zip. These single
+        // sources keep the written bytes and the budget-pin sizes in lock-step
+        // (never hand-sprayed lengths).
+        val ENTRY_DB_NAME = "noteflow.sqlite"
+        val ENTRY_DB_BYTES = "restored-vault-db-bytes".toByteArray(Charsets.UTF_8)
+        val ENTRY_IMPORTS_NAME = "imports/photo.jpg"
+        val ENTRY_IMPORTS_BYTES = "imported-image".toByteArray(Charsets.UTF_8)
+        val ENTRY_VOICE_NAME = "voice_notes/note1.m4a.enc"
+        val ENTRY_VOICE_BYTES = "encrypted-voice-blob".toByteArray(Charsets.UTF_8)
     }
 
     private fun newTempDir(tag: String): File {
@@ -56,23 +66,31 @@ class Phase241BackupImportRoundTripTest {
         return dir
     }
 
+    /** Returns the actual (uncompressed) source length of each vault entry just
+     *  packed, so the restore-side budget gate pin uses the real sizes. */
+    private fun entrySizes(): LinkedHashMap<String, Long> = linkedMapOf(
+        ENTRY_DB_NAME to ENTRY_DB_BYTES.size.toLong(),
+        ENTRY_IMPORTS_NAME to ENTRY_IMPORTS_BYTES.size.toLong(),
+        ENTRY_VOICE_NAME to ENTRY_VOICE_BYTES.size.toLong()
+    )
+
     /** Mirrors [ImportExportService.exportBackup]'s v3 (NFLB3) write exactly:
      *  split wrap key, real DEK-wrap AAD, and the production STREAMED
      *  `SequenceInputStream([part2], zip)` + [BackupExportPolicy.encryptStreamGcm]. */
-    private fun writeProductionV3Backup(backupFile: File): Triple<ByteArray, ByteArray, ByteArray> {
+    private fun writeProductionV3Backup(backupFile: File) {
         val salt = EncryptionService.generateSalt()
         val kek = EncryptionService.deriveKey(PASSWORD, salt)
         // Build the inner zip the SAME way exportBackup does (zipVaultEntriesToStream).
         val stagingZip = File(newTempDir("staging"), "staging.zip")
         BackupExportPolicy.zipVaultEntriesToStream(FileOutputStream(stagingZip)) { zos ->
-            zos.putNextEntry(ZipEntry("noteflow.sqlite"))
-            zos.write("restored-vault-db-bytes".toByteArray(Charsets.UTF_8))
+            zos.putNextEntry(ZipEntry(ENTRY_DB_NAME))
+            zos.write(ENTRY_DB_BYTES)
             zos.closeEntry()
-            zos.putNextEntry(ZipEntry("imports/photo.jpg"))
-            zos.write("imported-image".toByteArray(Charsets.UTF_8))
+            zos.putNextEntry(ZipEntry(ENTRY_IMPORTS_NAME))
+            zos.write(ENTRY_IMPORTS_BYTES)
             zos.closeEntry()
-            zos.putNextEntry(ZipEntry("voice_notes/note1.m4a.enc"))
-            zos.write("encrypted-voice-blob".toByteArray(Charsets.UTF_8))
+            zos.putNextEntry(ZipEntry(ENTRY_VOICE_NAME))
+            zos.write(ENTRY_VOICE_BYTES)
             zos.closeEntry()
         }
         try {
@@ -97,7 +115,6 @@ class Phase241BackupImportRoundTripTest {
             } finally {
                 wrapKey.fill(0.toByte()); part1.fill(0.toByte()); part2.fill(0.toByte())
             }
-            return Triple(header, wrappedDek, kek)
         } finally {
             kek.fill(0.toByte())
             stagingZip.delete()
@@ -129,18 +146,17 @@ class Phase241BackupImportRoundTripTest {
         }
         assertEquals(
             "restore packer entry names must match the extractor's readers",
-            listOf("noteflow.sqlite", "imports/photo.jpg", "voice_notes/note1.m4a.enc"),
+            listOf(ENTRY_DB_NAME, ENTRY_IMPORTS_NAME, ENTRY_VOICE_NAME),
             names
         )
         assertArrayEquals("the wrapped backup DEK unwraps to the original", DEK, p.dek)
         assertNotNull("the derived KEK is handed to importBackup for zeroization", p.kek)
 
-        // The produced archive must pass the restore-side budget gate (exportable == restorable).
+        // The produced archive must pass the restore-side budget gate (exportable ==
+        // restorable), using the REAL source sizes of the entries that were packed.
         val packAccounting = BackupBudgetPolicy.Accounting()
-        BackupBudgetPolicy.claimPackFile(packAccounting, "noteflow.sqlite", 23L)
-        BackupBudgetPolicy.claimPackFile(packAccounting, "imports/photo.jpg", 13L)
-        BackupBudgetPolicy.claimPackFile(packAccounting, "voice_notes/note1.m4a.enc", 20L)
-        // No exception thrown = within every cap.
+        entrySizes().forEach { (name, size) -> BackupBudgetPolicy.claimPackFile(packAccounting, name, size) }
+        // No exception thrown = within every cap (exact lengths, not spray values).
 
         p.kek?.fill(0.toByte())
         p.dek?.fill(0.toByte())
