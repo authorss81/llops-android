@@ -33,6 +33,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.Hyphens
 import androidx.compose.ui.text.style.TextOverflow
@@ -168,6 +169,9 @@ private fun GalleryCardItem(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = minCardHeight)
+            // Phase 236: stable Robo tap target — Compose testTag surfaces as a
+            // resource-id in the a11y tree so gcloud Robo can VIEW_CLICKED it.
+            .testTag("noteCard")
             // Phase 208 fix #4: tap opens (or toggles selection while a
             // selection is active); LONG-PRESS enters selection mode.
             .combinedClickable(

@@ -1,0 +1,96 @@
+{
+  "resourcePackage": "com.aistudio.inkflow.app.bkxjrz",
+  "actions": [
+    {
+      "eventType": "LAUNCH",
+      "packageName": "com.aistudio.inkflow.app.bkxjrz"
+    },
+    {
+      "eventType": "WAIT",
+      "timeout": 2000
+    },
+    {
+      "eventType": "VIEW_CLICKED",
+      "resourceName": "noteCard",
+      "optional": true
+    },
+    {
+      "eventType": "WAIT",
+      "timeout": 1500
+    },
+    {
+      "eventType": "SCREENSHOT",
+      "keyFrame": true
+    },
+    {
+      "eventType": "VIEW_CLICKED",
+      "resourceName": "toolSelectorButton",
+      "optional": true
+    },
+    {
+      "eventType": "WAIT",
+      "timeout": 800
+    },
+    {
+      "eventType": "VIEW_CLICKED",
+      "text": "Pencil & Charcoal",
+      "optional": true
+    },
+    {
+      "eventType": "WAIT",
+      "timeout": 600
+    },
+    {
+      "eventType": "SCREENSHOT",
+      "keyFrame": true
+    },
+    {
+      "eventType": "VIEW_CLICKED",
+      "resourceName": "toolSelectorButton",
+      "optional": true
+    },
+    {
+      "eventType": "WAIT",
+      "timeout": 800
+    },
+    {
+      "eventType": "VIEW_CLICKED",
+      "text": "Eraser",
+      "optional": true
+    },
+    {
+      "eventType": "WAIT",
+      "timeout": 600
+    },
+    {
+      "eventType": "SCREENSHOT",
+      "keyFrame": true
+    },
+    {
+      "eventType": "VIEW_CLICKED",
+      "resourceName": "toolSelectorButton",
+      "optional": true
+    },
+    {
+      "eventType": "WAIT",
+      "timeout": 800
+    },
+    {
+      "eventType": "VIEW_CLICKED",
+      "text": "Real Watercolor (Wet)",
+      "optional": true
+    },
+    {
+      "eventType": "WAIT",
+      "timeout": 600
+    },
+    {
+      "eventType": "SCREENSHOT",
+      "keyFrame": true
+    },
+    {
+      "eventType": "KEYCODE",
+      "keyCode": 4
+    }
+  ]
+}

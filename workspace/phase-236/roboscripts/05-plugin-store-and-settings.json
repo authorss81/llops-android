@@ -1,0 +1,74 @@
+{
+  "resourcePackage": "com.aistudio.inkflow.app.bkxjrz",
+  "actions": [
+    {
+      "eventType": "LAUNCH",
+      "packageName": "com.aistudio.inkflow.app.bkxjrz"
+    },
+    {
+      "eventType": "WAIT",
+      "timeout": 2000
+    },
+    {
+      "eventType": "VIEW_CLICKED",
+      "text": "Settings & More",
+      "optional": true
+    },
+    {
+      "eventType": "WAIT",
+      "timeout": 800
+    },
+    {
+      "eventType": "VIEW_CLICKED",
+      "text": "Plugin Store",
+      "optional": true
+    },
+    {
+      "eventType": "WAIT",
+      "timeout": 1000
+    },
+    {
+      "eventType": "SCREENSHOT",
+      "keyFrame": true
+    },
+    {
+      "eventType": "TEXT_INPUT",
+      "resourceName": "pluginStoreSearch",
+      "text": "ocr",
+      "optional": true
+    },
+    {
+      "eventType": "WAIT",
+      "timeout": 600
+    },
+    {
+      "eventType": "SCREENSHOT",
+      "keyFrame": true
+    },
+    {
+      "eventType": "KEYCODE",
+      "keyCode": 4
+    },
+    {
+      "eventType": "WAIT",
+      "timeout": 600
+    },
+    {
+      "eventType": "VIEW_CLICKED",
+      "text": "Settings & More",
+      "optional": true
+    },
+    {
+      "eventType": "WAIT",
+      "timeout": 800
+    },
+    {
+      "eventType": "SCREENSHOT",
+      "keyFrame": true
+    },
+    {
+      "eventType": "KEYCODE",
+      "keyCode": 4
+    }
+  ]
+}

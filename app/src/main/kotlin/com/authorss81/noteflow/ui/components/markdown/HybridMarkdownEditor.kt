@@ -27,6 +27,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
@@ -268,7 +269,7 @@ private fun RawBlockEditor(
                 OutlinedTextField(
                     value = value,
                     onValueChange = onValueChange,
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp),
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp).testTag("markdownBody"),
                     textStyle = MaterialTheme.typography.bodyMedium.copy(
                         fontFamily = FontFamily.Monospace,
                         fontSize = 13.sp

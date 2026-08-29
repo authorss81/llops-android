@@ -1,0 +1,63 @@
+{
+  "resourcePackage": "com.aistudio.inkflow.app.bkxjrz",
+  "actions": [
+    {
+      "eventType": "LAUNCH",
+      "packageName": "com.aistudio.inkflow.app.bkxjrz"
+    },
+    {
+      "eventType": "WAIT",
+      "timeout": 2000
+    },
+    {
+      "eventType": "VIEW_CLICKED",
+      "resourceName": "noteCard",
+      "optional": true
+    },
+    {
+      "eventType": "WAIT",
+      "timeout": 1500
+    },
+    {
+      "eventType": "VIEW_CLICKED",
+      "text": "Edit ",
+      "optional": true
+    },
+    {
+      "eventType": "WAIT",
+      "timeout": 700
+    },
+    {
+      "eventType": "TEXT_INPUT",
+      "resourceName": "markdownBody",
+      "text": "Hello [[Note",
+      "optional": true
+    },
+    {
+      "eventType": "WAIT",
+      "timeout": 600
+    },
+    {
+      "eventType": "SCREENSHOT",
+      "keyFrame": true
+    },
+    {
+      "eventType": "TEXT_INPUT",
+      "resourceName": "markdownBody",
+      "text": " test",
+      "optional": true
+    },
+    {
+      "eventType": "SCREENSHOT",
+      "keyFrame": true
+    },
+    {
+      "eventType": "KEYCODE",
+      "keyCode": 66
+    },
+    {
+      "eventType": "SCREENSHOT",
+      "keyFrame": true
+    }
+  ]
+}

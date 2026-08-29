@@ -64,6 +64,7 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -3719,7 +3720,7 @@ private fun InkBarPortraitBar(
             onClick = onToolClick,
             shape = RoundedCornerShape(20.dp),
             color = if (toolbarState == FloatingToolbarState.TOOL_PICKER) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
-            modifier = Modifier.minimumInteractiveComponentSize()
+            modifier = Modifier.minimumInteractiveComponentSize().testTag("toolSelectorButton")
         ) {
             Row(
                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
@@ -3771,7 +3772,7 @@ private fun InkBarPortraitBar(
             onClick = onColorClick,
             shape = CircleShape,
             color = if (toolbarState == FloatingToolbarState.COLOR_PICKER) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
-            modifier = Modifier.size(40.dp)
+            modifier = Modifier.size(40.dp).testTag("colorSwatchButton")
         ) {
             Box(contentAlignment = Alignment.Center) {
                 Box(
@@ -3900,7 +3901,7 @@ private fun InkBarLandscapeBar(
             onClick = onToolClick,
             shape = RoundedCornerShape(20.dp),
             color = if (toolbarState == FloatingToolbarState.TOOL_PICKER) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
-            modifier = Modifier.minimumInteractiveComponentSize()
+            modifier = Modifier.minimumInteractiveComponentSize().testTag("toolSelectorButton")
         ) {
             Box(modifier = Modifier.padding(8.dp), contentAlignment = Alignment.Center) {
                 Icon(
@@ -3934,7 +3935,7 @@ private fun InkBarLandscapeBar(
             onClick = onColorClick,
             shape = CircleShape,
             color = if (toolbarState == FloatingToolbarState.COLOR_PICKER) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
-            modifier = Modifier.size(40.dp)
+            modifier = Modifier.size(40.dp).testTag("colorSwatchButton")
         ) {
             Box(contentAlignment = Alignment.Center) {
                 Box(

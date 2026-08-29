@@ -2722,6 +2722,14 @@ UNTRUSTED files before any staging); `ui/components/Dialogs.kt` `AppUpdateDialog
   pinning every workflow action to a commit SHA (R2-b2b2-DEP-01) are **PENDING USER APPROVAL** (workflow edits gate):
   the ready-to-apply mapping lives in `docs/CI_PINNING.md` and `.github/dependabot.yml` is committed. Tests: `gradle testDebugUnitTest`; build: `gradle assembleDebug`
   / `assembleRelease`. Runs in GitHub Actions (gradle 8.13, Temurin JDK 21).
+  - **Implemented in phase-236** (Firebase Test Lab Robo, see `workspace/phase-236/REPORT.md` + `RUN.md`):
+    real-device smoke/regression coverage is provided by hand-written `actions.json` Robo scripts under
+    `workspace/phase-236/roboscripts/` (5 scripts, `gcloud firebase test android run --robo-script …`;
+    free tier = 5 Robo/day). Robo finds Compose nodes by `resource-id` (= `Modifier.testTag`) or
+    text/`content-desc`, so stable `testTag`s were added at 5 key tap targets: `noteCard`
+    (`ui/components/GalleryView.kt:174`), `toolSelectorButton` + `colorSwatchButton`
+    (`ui/screens/EditorScreen.kt` both ink bars), `markdownBody` (`HybridMarkdownEditor.kt:272`),
+    `pluginStoreSearch` (`PluginStoreDialog.kt:247`) — no new dependency, no workflow edit.
   - **Implemented in phase-147** (R2-b2b2-DEP-01, `workspace/phase-147/REPORT.md` + `docs/CI_PINNING.md`):
     NOT-APPROVED path — all 19 `uses:` tags in `release.yml`/`android.yml`/`llops.yml` are mapped to full
     commit SHAs (GitHub-API resolved 2026-08-18) and `.github/dependabot.yml` (github-actions, weekly, grouped)

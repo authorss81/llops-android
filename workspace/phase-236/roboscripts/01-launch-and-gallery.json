@@ -1,0 +1,50 @@
+{
+  "resourcePackage": "com.aistudio.inkflow.app.bkxjrz",
+  "actions": [
+    {
+      "eventType": "LAUNCH",
+      "packageName": "com.aistudio.inkflow.app.bkxjrz"
+    },
+    {
+      "eventType": "WAIT",
+      "timeout": 2000
+    },
+    {
+      "eventType": "SCREENSHOT",
+      "keyFrame": true
+    },
+    {
+      "eventType": "SCROLL",
+      "direction": "DOWN",
+      "resourceName": "noteCard",
+      "optional": true
+    },
+    {
+      "eventType": "SCREENSHOT",
+      "keyFrame": true
+    },
+    {
+      "eventType": "SCROLL",
+      "direction": "UP",
+      "resourceName": "noteCard",
+      "optional": true
+    },
+    {
+      "eventType": "SCREENSHOT",
+      "keyFrame": true
+    },
+    {
+      "eventType": "VIEW_CLICKED",
+      "resourceName": "noteCard",
+      "optional": true
+    },
+    {
+      "eventType": "WAIT",
+      "timeout": 1200
+    },
+    {
+      "eventType": "SCREENSHOT",
+      "keyFrame": true
+    }
+  ]
+}
