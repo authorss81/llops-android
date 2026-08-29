@@ -33,6 +33,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewModelScope
+import kotlin.math.roundToInt
 import com.authorss81.noteflow.data.model.NotePageEntity
 import com.authorss81.noteflow.data.model.NotebookEntity
 import com.authorss81.noteflow.data.model.SectionEntity
@@ -177,7 +178,15 @@ fun HomeScreen(
         multiSelectedIds = emptySet()
     }
 
-    val isWide = BoxWithConstraintsScope_isWide()
+    // Phase 238: the sidebar lives in a modal DRAWER only on genuinely compact
+    // surfaces (narrow width OR short height — a landscape phone or a small
+    // floating window). Medium/Expanded width with a usable height gets a side
+    // rail; the old binary `isWide` (LocalConfiguration >= 600) treated a
+    // 1000x360 landscape window as "wide" and forced the crushing fixed panels.
+    val outerWindowSizeClass = com.authorss81.noteflow.ui.LocalWindowSizeClass.current
+    val outerDrawerMode =
+        outerWindowSizeClass.widthSizeClass == androidx.compose.material3.windowsizeclass.WindowWidthSizeClass.Compact ||
+            outerWindowSizeClass.heightSizeClass == androidx.compose.material3.windowsizeclass.WindowHeightSizeClass.Compact
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
 
     var promptDialogType by remember { mutableStateOf<String?>(null) } // "add_nb", "add_sec", "rename_nb", "rename_sec", "rename_page"
@@ -729,9 +738,9 @@ fun HomeScreen(
 
     ModalNavigationDrawer(
         drawerState = drawerState,
-        gesturesEnabled = useSidebarLayout && !isWide,
+        gesturesEnabled = useSidebarLayout && outerDrawerMode,
         drawerContent = {
-            if (useSidebarLayout && !isWide) {
+            if (useSidebarLayout && outerDrawerMode) {
                 ModalDrawerSheet(
                     modifier = Modifier.width(300.dp)
                 ) {
@@ -807,13 +816,26 @@ fun HomeScreen(
             }
         }
     ) {
-        Box(modifier = Modifier.fillMaxSize()) {
+        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+            // Phase 238: render from the REAL pane constraints — a freeform or
+            // split-window drag-resize does NOT reliably update
+            // LocalConfiguration.screenWidthDp — so sizes are measured live here
+            // (BoxWithConstraints) and translated through AdaptiveLayoutPolicy.
+            // windowSizeClass at the activity root decides the coarse
+            // single/double-column split; THIS scope decides the sidebar posture
+            // inside it (rail vs drawer vs dual fixed panels).
+            val widthDp = maxWidth.value.roundToInt()
+            val heightDp = maxHeight.value.roundToInt()
+            val drawerMode = com.authorss81.noteflow.services.AdaptiveLayoutPolicy.sidebarIsDrawer(widthDp, heightDp)
+            val dualPanels = com.authorss81.noteflow.services.AdaptiveLayoutPolicy.useDualSidePanels(widthDp, heightDp, useSidebarLayout)
+            val unifiedRail = com.authorss81.noteflow.services.AdaptiveLayoutPolicy.useUnifiedSidebarRail(widthDp, heightDp, useSidebarLayout)
+            val unifiedRailWidth = com.authorss81.noteflow.services.AdaptiveLayoutPolicy.unifiedRailWidthDp(widthDp, heightDp)
             Scaffold(
                 topBar = {
                     TopAppBar(
                         title = { Text("InkFlow") },
                         navigationIcon = {
-                            if (useSidebarLayout && !isWide) {
+                            if (useSidebarLayout && outerDrawerMode) {
                                 IconButton(onClick = {
                                     scope.launch {
                                         drawerState.open()
@@ -963,12 +985,10 @@ fun HomeScreen(
                     .fillMaxSize()
                     .padding(padding)
             ) {
-                // Wide Screen Notebook & Section Sidebar or Mobile layout
-                val isWide = BoxWithConstraintsScope_isWide()
-
-                if (isWide) {
-                    if (useSidebarLayout) {
-                        UnifiedSidebar(
+                // Phase 238: sidebar posture from the REAL measured pane (see the
+                // BoxWithConstraints above) — never the orientation-or-width flag.
+                if (unifiedRail) {
+                    UnifiedSidebar(
                             notebooks = notebooks,
                             allSections = allSections,
                             allActivePages = allActivePages,
@@ -1032,12 +1052,12 @@ fun HomeScreen(
                                 }
                             },
                             modifier = Modifier
-                                .width(280.dp)
-                                .fillMaxHeight()
-                        )
-                        VerticalDivider()
-                    } else {
-                        NotebookPanel(
+                            .width(unifiedRailWidth.dp)
+                            .fillMaxHeight()
+                    )
+                    VerticalDivider()
+                } else if (dualPanels) {
+                    NotebookPanel(
                             notebooks = notebooks,
                             selectedNotebook = selectedNotebook,
                             onSelectNotebook = { viewModel.selectNotebook(it) },
@@ -1134,7 +1154,6 @@ fun HomeScreen(
 
                         VerticalDivider()
                     }
-                }
 
                 // Main Content Panel (Pages)
                 Column(
@@ -1168,7 +1187,7 @@ fun HomeScreen(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
-                    } else if (!isWide) {
+                    } else if (drawerMode) {
                         NotebookAndSectionSelectorBar(
                             notebooks = notebooks,
                             selectedNotebook = selectedNotebook,
@@ -2479,12 +2498,6 @@ fun HomeScreen(
             }
         }
     }
-}
-
-@Composable
-private fun BoxWithConstraintsScope_isWide(): Boolean {
-    val configuration = androidx.compose.ui.platform.LocalConfiguration.current
-    return configuration.screenWidthDp >= 600
 }
 
 @Composable

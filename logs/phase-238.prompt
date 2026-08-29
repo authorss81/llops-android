@@ -1,0 +1,157 @@
+# PIPELINE CONTEXT (injected by phase_runner.sh — do not delete)
+
+## Hard rules (AGENTS.md)
+## Hard rules
+- **MAJOR ARCHITECTURAL CHANGE → ASK THE USER FIRST.** Any change that restructures packages, replaces the navigation model (e.g., migrating away from `mutableStateOf` navigation to Navigation Compose), adds a new DB schema/migration, introduces SQLCipher, adds new dependencies with broad impact, or rewrites a subsystem (canvas renderer, encryption layer) MUST be proposed to the user and get explicit approval BEFORE writing code. Tell the user what's changing, why, and the risk. Do not silently refactor architecture.
+  - **USER APPROVED (2026-08-14): hybrid downloadable-plugin architecture** — the plugin model change (base-APK-size constraint, downloadable signature-verified plugins for heavy native features, compile-time for lightweight plugins, user-approved dynamic updates) was proposed to the user with risks and explicitly approved (commit `9292978`). Implementation proceeds per phases 22–26; the approved design doc is `docs/plugin-architecture.md`.
+- **Android hardware reality**: this is a native Kotlin app targeting API 26+. Every feature must ship with a fallback for older/lower-end devices (API 33- for AGSL, API 31- for dynamic color, low-RAM behavior for 2-core devices). Never silent degradation — one-time non-alarming message + settings re-enable. See ROADMAP Phase 33 + `docs/COMPATIBILITY.md` (to be created).
+- **Kali Linux pentest findings → write to a FILE immediately, not just the agent reply.** Security/pentest agents (running in opencode on the Kali VM) MUST append findings incrementally to `docs/pentest-findings-<YYYY-MM-DD>.md` as they work (one block per finding: severity, evidence, file/line or command output, reproducer), and commit/push after each agent batch. This prevents detail loss when a report grows long or context is truncated. The pentest plan lives in `docs/pentest-plan.md`; the summary report goes to `docs/pentest-report.md`.
+- `allowBackup="false"` + `data_extraction_rules.xml` — never re-enable backup.
+- **Base-APK size is a hard constraint.** Heavy/native features (ML Kit OCR, ML Kit
+  barcode/QR, the MediaPipe `tasks-genai` LLM) MUST NOT be baked into the base APK.
+  They ship as **downloadable, signature-verified plugins** (Phase 23 runtime:
+  HTTPS download → pinned-cert-hash verify → `DexClassLoader` load → capability
+  facade, never direct DB/keystore handles). Lightweight pure-JVM plugins stay
+  compile-time. Do NOT add large native deps to the base app; use a separate
+  plugin module instead. Plan: Phase 22 = architecture skeleton, Phase 23 =
+  downloadable runtime, Phase 24 = user-approved updates, Phase 25 = ink→shape,
+  Phase 26 = lightweight ecosystem, Phase 29 = move the LLM out of the base APK
+  into a downloadable plugin.
+- PBKDF2WithHmacSHA256 600k iterations, AES-256-GCM (12-byte IV, 128-bit tag), AndroidKeyStore-wrapped DEK, in-memory zeroization on lock (`NoteRepository.kt`, `EncryptionService.kt`, `SecurityService.kt`).
+- Never log keys, passwords, or decrypted note content. Never add `INTERNET` usage without a real feature.
+- Known broken things (do NOT trust ROADMAP [x] claims — see ROADMAP.md "POST-AUDIT TRUTH TABLE" @ commit ac781de):
+  - ~~Checksum hashes `noteflow.db`~~ — FIXED: `DatabaseSecurityHelper` HMACs the real `noteflow.sqlite` (`DatabaseSecurityHelper.kt:26`) and the result is surfaced as the `databaseTampered` banner in MainActivity (`NoteflowViewModel.kt:35-55`). This stale claim was corrected in Phase 09.
+  - `pointsJson` (stroke geometry) is FIELD-ENCRYPTED at rest now — title/extractedText/textContent/pointsJson are all encrypted fields (`saveStrokesForPage`, NoteRepository.kt); the Phase 02 restore re-key gap is closed.
+  - "Sync" = WebDAV upload/download of ENCRYPTED backup archives to/from the user's own server (`WebDavSyncService.kt`, HTTPS enforced, HTTP only with explicit opt-in for local-network hosts), reachable from HomeScreen's ⋮ menu via `WebDavSyncDialog` — Phase 14 FIXED the previously-dead menu trigger; AGSL wet-mixing is WIRED through `WetBrushEngine` in `AnnotationCanvas` (gated by `ShaderCapabilityHelper.isAgslSupported` + the `gpuWetBrushesEnabled` setting, verified in the Phase 14 audit); pressure/tilt/timestamp are captured via the official raw-MotionEvent bridge (`pointerInteropFilter`, no reflection); FLAG_SECURE is applied in non-debug builds; R8 minify is ON in release; baseline-profile TOOLCHAIN is WIRED since phase-199 (`:baselineprofile` producer + consumer plugin + pinned profileinstaller + R8 fullMode + shrinkResources) but no profile is generated/committed yet — the guarded `compileArtProfile` stopgap stays active until a real profile lands (see `workspace/phase-199/REPORT.md`; the old dead `baseline-prof.txt` was deleted in the Phase 03 honesty audit). Phase-199 second review-fix round (2026-08-28) completed the producer's lockfile entries and wired `app/build.gradle.kts` `baselineProfile { from(project(":baselineprofile")) }` so `gradle :app:generateBaselineProfile` plans the real producer chain — run it (and any `:baselineprofile:*` producer task) with `--no-configuration-cache`, since the repo sets `org.gradle.configuration-cache=true` and AGP's `CheckAarMetadataTask`/`checkTestedAppObfuscation` fields aren't config-cache-serializable.
+  - WAL checkpoint DOES execute — `checkpointWal()` fully steps the cursor (`NoteRepository.kt:136-144`).
+  - **Phase 14 (2026-08-13) production readiness + LocalSend**: full per-phase audit lives in `workspace/phase-14/AUDIT_REPORT.md`. LocalSend sender (Protocol v2.2, sender-only, local-network only, no new permissions) is implemented in `services/localsend/` (`LocalSendProtocol.kt` pure-JVM + `LocalSendSender.kt` network) and reachable from HomeScreen's ⋮ menu → "Send to Nearby Device (LocalSend)". It sends a single note as HTML, the encrypted vault backup, or the Obsidian/HTML vault archives; the receiving device must human-accept before bytes move. Unit tests: `LocalSendProtocolTest` (18 tests, no network). **Release signing (updated 2026-08-17, phase-57/B1-PLAT-1): the release build FAILS CLOSED when `RELEASE_KEYSTORE_B64` (or `KEYSTORE_FILE`) is unset — the old debug-keystore fallback is gone; see `docs/RELEASE.md` + `B1Plat01ReleaseSigningTest`.**
+  - **Phase 21 (2026-08-14) added the Plugin Store + verified the execution path** (see `docs/PLUGINS.md` "Plugin Store — install/uninstall lifecycle"): `PluginStoreCatalog` (bundled catalog, no network) + `PluginStoreController` (pure-JVM download/delete) + `PluginRegistry.installPlugin/uninstallPlugin` (install-aware registry; `compiledPlugins` = full shipped set, `allPlugins` = installed set) + `SettingsPluginInstallStore`/`SettingsManager.plugin_uninstalled_<id>` (default installed = backward compatible). Delete wipes opt-in + ever-enabled + all `plugins.<id>.*` settings and deletes downloaded assets (`NoteflowPlugin.deleteDownloadedAssets`); Disable keeps data. `CaseChangePlugin` is the store's OPTIONAL plugin (not in `defaultPlugins()`). UI: `PluginStoreDialog` reachable from HomeScreen ⋮ menu → "Plugin Store". Tests: `PluginStoreLifecycleTest` (8), `PluginExecutionSimulationTest` (4). Also fixed a pre-existing `PaletteCatalog.familyFor` hue-band bug (curated swatches misclassified) — `PaletteCatalogTest` is green again.
+  - **Phase 10 (2026-08-13) added a REAL plugin framework** (`app/src/main/kotlin/com/authorss81/noteflow/plugins/`): `NoteflowPlugin` + `PluginCapability` sealed type (`TextTransform`, `OCR`, `WebSearch`, `FileTransfer`, `Assistant`, `Export`), compile-time `PluginRegistry` (no dynamic APK loading), `PluginManager` routing that fails loudly via `PluginResult.Failure`, per-plugin opt-in persisted in `SettingsManager` (`plugin_enabled_<id>`, off by default), a Settings → Plugins dialog (`PluginSettingsDialog`, reachable from HomeScreen's ⋮ menu), and `Rot13TransformPlugin` served through the `TextTransformPlugin` interface and wired into the Markdown editor's Plugins menu (`MarkdownPreviewScreen`). Covered by `PluginFrameworkTest` (10 tests). **Phase 12 made OCR + Web Search real**: `OnDeviceOcrPlugin` (ML Kit text-recognition, offline, no API key) and `DuckDuckGoWebSearchPlugin` (HTTPS, keyless) are registered (`PluginRegistry.kt`) and wired into `EditorScreen` (OCR result dialog) and `MarkdownPreviewScreen` (web-search dialog). The still-unserved capabilities are `FileTransfer`, `Assistant`, `Export` — requests for those fail loudly with `NO_PLUGIN_INSTALLED`. See `docs/PLUGINS.md`.
+  - **Phase 09 (2026-08-13) fixed the two Phase-02 data-loss defects that were still live** (see workspace/phase-09/REPORT.md): (1) H2 — a corrupt/wrong-key DB open no longer DELETES the vault files; `SafeSupportSQLiteOpenHelper` now quarantines them as `*.corrupt-<timestamp>` (bytes preserved), sets a persistent corruption flag, and MainActivity shows `CorruptionRecoveryScreen` (restore-from-backup or explicit start-fresh) before any normal vault UI (`NoteflowDatabase.kt` `quarantineCorruptDatabase`, `DatabaseSecurityHelper.kt` corruption flags, `MainActivity.kt` `CorruptionRecoveryScreen`). (2) H1 — a failed restore no longer bricks the app: the backup password is validated BEFORE `closeDatabase()` (`ImportExportService.validateBackupPassword` now called from `HomeScreen.performRestore` and `NoteflowViewModel.attemptRecoveryFromBackup`), and on any post-close failure the Room instance is reopened (`NoteflowDatabase.dispose()` + `NoteRepository.reopenDatabase`) and the process restarts via the existing restart dialog. (3) C1 — `reencryptPlaintextFields` now also re-encrypts `note_versions.{title,extractedText}`, matching the cross-device migrate map.
+  - **Phase 03 (2026-08-13) removed these dead/fake features**: the LibMyPaint C++ stub + whole engine-selector stack (`mypaint_jni.cpp`/`CMakeLists.txt`, `LibMyPaintJni`, `BrushEngine`/`BrushEngineFactory`, `HardwareProfiler`/`RenderingEngineTier`, `BrushEngineSettingsDialog`, `SettingsManager.renderingEngineOverride` — all deleted; the canvas renders via `WetBrushEngine`); `HandwritingRecognitionService` + `HandwritingToTextDialog` (dictionary-hash stub, unreachable — deleted); `FtsSearchEngine` (misnamed in-memory loop — deleted; vault search now uses a cached decrypted corpus in `NoteRepository`). Shape auto-snap is now WIRED (`ShapeRecognitionHelper.trySnapShape` runs on freehand draw-end in `AnnotationCanvas`, gated by the `shapeAutoSnapEnabled` setting; wet tools, LASER, DOTTED and NEON are excluded, and the RECT/ARROW/LINE detectors require real geometry fits so plain handwriting isn't snapped).
+
+## Roadmap state (August 2026)
+
+## Orientation (read these files yourself — do NOT rely on memory)
+- docs/ARCHITECTURE.md = living architecture map (package layout, core
+  subsystem file:line anchors, build/CI essentials, gotchas). READ IT.
+- docs/phase-status.md = phase status truth table. READ IT, then UPDATE
+  your phase's row when you finish.
+- workspace/PHASES.md = full phase table.
+- workspace/SECURITY_FIX_PLAN.md + docs/security-report*.md = security
+  findings status (only if your phase touches security).
+
+## Your task
+Execute the phase described in workspace/phase-238/PROMPT.md. Read that file now and
+complete it fully. The context above is orientation only.
+
+# Phase 238 — Responsive Layout (Tablet + Landscape + Floating Window) [BUG]
+
+## Goal
+Fix the broken tablet / floating-window / landscape layout — app assumes phone portrait, breaks when window is narrow, stretched, or in landscape. Add `WindowSizeClass` adaptive layout (Compact/Medium/Expanded), minimum content width, and landscape/floating-window safe area.
+
+## Context — Verified Root Cause (User Screenshots)
+User shared screenshots from `redfin-30-en_US-portrait_video.mp4` showing the app in **floating-window mode** on a tablet. The app has NO responsive layout:
+1. **Middle "Sections" column** is a **narrow vertical strip** (only shows minus icon) — `UnifiedSidebar.kt:115` is rendered without `BoxWithConstraints` or `WindowSizeClass` checking, so on narrow width it just clips to nothing
+2. **EditorScreen with `Markdown Editor`** — toolbar icons stack vertically in a narrow right column, `Live Preview` is empty/huge gap
+3. **"Welcome to InkFlow" dialog** appears on top, also broken
+
+**The app assumes phone-portrait layout only**:
+- `HomeScreen.kt` sidebar (`UnifiedSidebar.kt:115`) — fixed `width(240-260.dp)`, overflows on narrow window
+- `EditorScreen.kt` — toolbar `LazyRow` with many items + `Live Preview` — doesn't adapt
+- `MarkdownPreviewScreen.kt` reader mode split pane — doesn't have tablet branch
+- `EditorScreen.kt:2715` only uses `LocalConfiguration.orientation` (binary portrait/landscape), not `WindowSizeClass`
+- `DockPosturePolicy.kt:23-46` switches toolbar orientation but canvas size assumes portrait
+
+**No `WindowSizeClass` (`androidx.compose.material3.windowsizeclass`) used anywhere in the codebase** (grep 0 hits).
+
+**Current orientation handling is incomplete:**
+- `EditorScreen.kt:2715` `isLandscape = ORIENTATION_LANDSCAPE` — binary check, doesn't catch landscape-phone with narrow height
+- `DockPosturePolicy.kt:23` portrait → HORIZONTAL pill, landscape → VERTICAL side column — but canvas geometry (`1528+64dp` page stride) is portrait-fixed
+- `OverflowMenuPolicy.kt:29-31` "landscape / small screens" cap calculation — partial handling
+- `Phase166LayoutOverflowTest.kt:24` "On a 360dp portrait screen (the narrowest supported width) a fixed-width Row" — current 360dp portrait baseline
+
+**What's missing:**
+- No `WindowSizeClass.calculateFromActivity()` provider
+- No `BoxWithConstraints` for canvas + side panels
+- No `if (orientation == LANDSCAPE && widthSizeClass == Compact)` branch (landscape phone)
+- No `if (orientation == LANDSCAPE && widthSizeClass >= Medium)` branch (landscape tablet, two-pane)
+- No floating window detection
+
+## Files to Fix
+
+### 1. Add `WindowSizeClass` dependency
+- `gradle/libs.versions.toml` add: `androidx-compose-material3-window-size-class = { group = "androidx.compose.material3", name = "material3-window-size-class" }`
+- `app/build.gradle.kts` add: `implementation(libs.androidx.compose.material3.window.size.class)`
+- This is already part of `composeBom 2024.12.01` (`gradle/libs.versions.toml:88`), so just a `implementation` declaration needed
+
+### 2. Create `MainActivity.kt` WindowSizeClass provider
+- `MainActivity.kt:1380-1610` (3 `nestedScrollGuard` sites around 1393, 1475, 1602) — add `WindowSizeClass.calculateFromActivity(this)` in the root composable
+- Provide `LocalWindowSizeClass` to the entire app
+- Also provide `LocalConfiguration.orientation` for landscape detection
+
+### 3. Fix `HomeScreen.kt:1783, 1830` LazyColumn in sidebar
+- Add `BoxWithConstraints` to `HomeScreen.kt` to detect narrow width
+- If `maxWidth < 600.dp`: collapse sidebar to drawer/bottom sheet, use single-pane layout
+- If `maxWidth >= 600.dp`: use current two-pane layout
+- **Landscape handling**: if `maxHeight < 480.dp` (landscape phone), collapse sidebar to drawer; if `maxWidth >= 840.dp` and `maxHeight >= 480.dp` (landscape tablet), use two-pane
+
+### 4. Fix `EditorScreen.kt` for narrow window AND landscape
+- `EditorScreen.kt:4414, 4496, 5022, 5389` (5 `nestedScrollGuard` sites) — wrap content in `BoxWithConstraints`
+- Logic:
+  - If `maxWidth < 600.dp` (compact): stack toolbar vertically, canvas full screen
+  - If `maxWidth >= 600.dp` AND `maxHeight < 480.dp` (landscape phone): horizontal toolbar top, canvas split (editor + live preview side-by-side)
+  - If `maxWidth >= 840.dp` AND `maxHeight >= 480.dp` (tablet landscape): two-pane with sidebar
+  - If `maxWidth >= 600.dp` AND `maxHeight >= 600.dp` (tablet portrait): two-pane with sidebar on left
+- Replace `EditorScreen.kt:2715` `LocalConfiguration.orientation` with `WindowSizeClass` + `BoxWithConstraints`
+
+### 5. Fix `MarkdownPreviewScreen.kt:301, 1462, 1491`
+- Same pattern: `BoxWithConstraints` to detect width AND height
+- If narrow (portrait phone): keep vertical scroll (current)
+- If wide (landscape phone, tablet portrait): side-by-side editor + preview (split pane)
+- If very wide (tablet landscape): three-pane (sidebar + editor + preview)
+
+### 6. Fix `UnifiedSidebar.kt:115`
+- Add `widthIn(max = 240.dp, min = 80.dp)` so it doesn't overflow
+- If width too small, hide sidebar or move to drawer
+- Hide sidebar entirely on landscape phone (`widthSizeClass == Compact` + landscape)
+
+### 7. Fix `MainActivity.kt` for floating window mode AND landscape
+- Detect if app is in floating window (`WindowInsets.systemBars` bigger than expected)
+- Apply appropriate padding for system bars
+- For floating window, use `WindowInsetsCompat.Type.systemGestures()` insets
+- For landscape, ensure nav bar positioning is on bottom (not side) and status bar is at top (not hidden)
+- Add `WindowInsetsControllerCompat.isAppearanceLightStatusBars = true` for proper status bar theming
+
+### 8. Update existing landscape detection
+- `DockPosturePolicy.kt:23-46` already switches toolbar orientation — make sure it still works with new adaptive layout
+- `OverflowMenuPolicy.kt:29-31` cap calculation — update to consider `widthSizeClass` not just `screenHeightDp`
+
+### 9. Add tests
+- `@Preview(device = Devices.PHONE, uiMode = UI_MODE_TYPE_NORMAL)` — phone portrait baseline
+- `@Preview(device = Devices.PHONE_LANDSCAPE, uiMode = UI_MODE_TYPE_NORMAL)` — phone landscape
+- `@Preview(device = Devices.TABLET, uiMode = UI_MODE_TYPE_NORMAL)` — tablet portrait
+- `@Preview(device = Devices.TABLET_LANDSCAPE, uiMode = UI_MODE_TYPE_NORMAL)` — tablet landscape
+- `@Preview(device = Devices.TABLET, uiMode = UI_MODE_TYPE_NORMAL, fontScale = 1.3f)` — large font
+- Capture Paparazzi goldens for each
+
+## Constraints
+- **No schema change** — pure Compose layout fixes
+- **No `.github/workflows/` edits** — manual fix
+- **Mobile portrait MUST stay pixel-identical** — `@Preview(device = Devices.PHONE)` must produce same screenshot as before
+- **No new dep** — `material3-window-size-class` is already in `composeBom 2024.12.01`
+
+## DoD
+- `gradle :app:assembleDebug` + `assembleRelease` green
+- `gradle :app:lintDebug` 0 errors
+- `gradle :app:testDebugUnitTest` 3420/0 green
+- Phone portrait `@Preview` golden screenshot unchanged
+- Phone landscape `@Preview` golden screenshot shows usable layout
+- Tablet portrait `@Preview(Devices.TABLET)` golden screenshot shows usable layout
+- Tablet landscape `@Preview(Devices.TABLET_LANDSCAPE)` golden screenshot shows usable layout
+- Floating-window test on `redfin-30` shows usable layout
+- `workspace/phase-238/REPORT.md` with before/after Paparazzi goldens (5 viewports: phone portrait, phone landscape, tablet portrait, tablet landscape, floating)
+- All `nestedScrollGuard()` sites in floating-window-safe AND landscape-safe paths
+
+## Timeout
+240 minutes (touches 7+ files including MainActivity + landscape + floating window)

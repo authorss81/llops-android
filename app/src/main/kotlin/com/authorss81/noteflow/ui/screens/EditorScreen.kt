@@ -108,6 +108,7 @@ import com.authorss81.noteflow.ui.components.OcrResultDialog
 import com.authorss81.noteflow.ui.components.PromptNameDialog
 import com.authorss81.noteflow.ui.components.overflowMenuScrollModifier
 import com.authorss81.noteflow.ui.components.overflowMenuScrollState
+import com.authorss81.noteflow.ui.components.overflowMenuWidthModifier
 import com.authorss81.noteflow.ui.components.TimelapsePlayer
 import com.authorss81.noteflow.ui.viewmodel.NoteflowViewModel
 import com.authorss81.noteflow.utils.nestedScrollGuard
@@ -1851,7 +1852,7 @@ fun EditorScreen(
                         expanded = showEmbedMenu,
                         onDismissRequest = { showEmbedMenu = false },
                         scrollState = overflowMenuScrollState(),
-                        modifier = overflowMenuScrollModifier()
+                        modifier = overflowMenuScrollModifier().then(overflowMenuWidthModifier())
                     ) {
                         DropdownMenuItem(
                             text = { Text("Sticky Note") },
@@ -1920,7 +1921,7 @@ fun EditorScreen(
                         expanded = showOverflowMenu,
                         onDismissRequest = { showOverflowMenu = false },
                         scrollState = overflowMenuScrollState(),
-                        modifier = overflowMenuScrollModifier()
+                        modifier = overflowMenuScrollModifier().then(overflowMenuWidthModifier())
                     ) {
                         DropdownMenuItem(
                             text = { Text("Knowledge Graph & Backlinks") },
@@ -2713,19 +2714,25 @@ fun EditorScreen(
 
             // Floating Tool Dock (Phase 35) — pill that snaps to any screen edge
             // with a spring and auto-tucks while a stroke is being drawn.
-            val isLandscape = androidx.compose.ui.platform.LocalConfiguration.current.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+            // Phase 238: the slide direction follows the REAL window box
+            // (a freeform drag-resize does not update Configuration.orientation).
+            BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+            val shapeLandscape = com.authorss81.noteflow.services.AdaptiveLayoutPolicy.inkBarIsLandscape(
+                maxWidth.value.roundToInt(),
+                maxHeight.value.roundToInt()
+            )
 
             AnimatedVisibility(
                 visible = toolbarState != FloatingToolbarState.HIDDEN_DRAWING,
                 enter = com.authorss81.noteflow.theme.MotionSystem.enter(
-                    if (isLandscape) {
+                    if (shapeLandscape) {
                         fadeIn() + androidx.compose.animation.slideInHorizontally { it }
                     } else {
                         fadeIn() + slideInVertically { it }
                     }
                 ),
                 exit = com.authorss81.noteflow.theme.MotionSystem.exit(
-                    if (isLandscape) {
+                    if (shapeLandscape) {
                         fadeOut() + androidx.compose.animation.slideOutHorizontally { it }
                     } else {
                         fadeOut() + slideOutVertically { it }
@@ -2739,7 +2746,7 @@ fun EditorScreen(
                     currentColor = currentColor,
                     currentWidth = currentWidth,
                     toolbarState = toolbarState,
-                    isLandscape = isLandscape,
+                    isLandscape = shapeLandscape,
                     draggable = inkBarDraggable,
                     snapToEdgeEnabled = inkBarSnapToEdgeEnabled,
                     dockPersistEnabled = inkBarDockPersistEnabled,
@@ -2786,6 +2793,7 @@ fun EditorScreen(
                     }
                 )
             }
+            } // Phase 238: BoxWithConstraints (dock posture shape probe)
 
             // Phase 12: on-device OCR — result dialog + insert the extracted text
             // into the note as a sticky note placed just below the source image.
@@ -3418,7 +3426,10 @@ private fun FloatingToolDock(
     currentColor: Color,
     currentWidth: Float,
     toolbarState: FloatingToolbarState,
-    isLandscape: Boolean,
+    // Phase 238: decorative (enter/exit slide direction only) — the dock POSTURE
+    // is decided from the real window box inside; this is kept for the caller's
+    // AnimatedVisibility animation.
+    @Suppress("UNUSED_PARAMETER") isLandscape: Boolean,
     draggable: Boolean,
     snapToEdgeEnabled: Boolean,
     dockPersistEnabled: Boolean,
@@ -3459,10 +3470,14 @@ private fun FloatingToolDock(
         val bottomMarginPx = with(density) { 20.dp.toPx() }
         val endMarginPx = with(density) { 20.dp.toPx() }
 
-        // Phase 129: posture is orientation-only. A bar mid-screen no longer
-        // morphs into a vertical dock (phase-35 behaviour) — the portrait pill
-        // stays horizontal wherever it is dragged.
-        val horizontalPosture = DockPosturePolicy.isHorizontal(isLandscape)
+        // Phase 238: posture follows the WINDOW SHAPE measured here, not the
+        // binary orientation flag — Configuration.orientation stays PORTRAIT on a
+        // near-square freeform window and even updates late (or never) during a
+        // drag-resize. Square/short windows keep the horizontal pill.
+        val horizontalPosture = DockPosturePolicy.isHorizontalForSize(
+            maxWidth.value.roundToInt(),
+            maxHeight.value.roundToInt()
+        )
         val defaultAnchor = if (horizontalPosture) {
             DockPosturePolicy.horizontalDefaultAnchor(screenW, screenH, dockW, dockH, bottomMarginPx)
         } else {
@@ -6950,7 +6965,7 @@ private fun LayersPanelBottomSheet(
                                             expanded = showBlendMenu,
                                             onDismissRequest = { showBlendMenu = false },
                                             scrollState = overflowMenuScrollState(),
-                                            modifier = overflowMenuScrollModifier()
+                                            modifier = overflowMenuScrollModifier().then(overflowMenuWidthModifier())
                                         ) {
                                             val blendModes = com.authorss81.noteflow.services.LayerBlendPresetPolicy.RENDERER_SUPPORTED_MODES
                                             blendModes.forEach { mode ->

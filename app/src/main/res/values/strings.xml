@@ -27,4 +27,5 @@
     <string name="canvas_scatter_zero_helper">0%% = tight stamps · 100%% = wide scattered droplets</string>
     <string name="canvas_blender_affects_smudge">Affects SMUDGE tool blending intensity</string>
     <string name="selection_count_a11y">%1$d strokes selected</string>
+    <string name="floating_window_notice">Floating or split-screen window — InkFlow compacted its layout to fit.</string>
 </resources>

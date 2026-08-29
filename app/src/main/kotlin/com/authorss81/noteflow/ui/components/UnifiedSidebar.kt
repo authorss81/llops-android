@@ -73,42 +73,50 @@ fun UnifiedSidebar(
         shape = RoundedCornerShape(0.dp),
         modifier = modifier.fillMaxHeight()
     ) {
-        Column(modifier = Modifier.fillMaxSize()) {
-            // Header
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        Icons.Outlined.FolderCopy,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(24.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "InkFlow Notebooks",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                }
-                IconButton(
-                    onClick = onAddNotebook,
-                    modifier = Modifier.size(36.dp)
+        // Phase 238: a floating-window/freeform rail can be narrower than the
+        // classic 280dp — measure the REAL width and collapse affordances that
+        // would otherwise overflow into the invisible "minus icon" strip the
+        // phase logged (only the collapse chevron survived at ~200dp).
+        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+            val narrow = maxWidth < 260.dp || maxHeight < 480.dp
+            Column(modifier = Modifier.fillMaxSize()) {
+                // Header
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = if (narrow) 4.dp else 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Icon(
-                        Icons.Outlined.CreateNewFolder,
-                        contentDescription = "New Notebook",
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(20.dp)
-                    )
+                    if (!narrow) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                Icons.Outlined.FolderCopy,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "InkFlow Notebooks",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
+                    IconButton(
+                        onClick = onAddNotebook,
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Icon(
+                            Icons.Outlined.CreateNewFolder,
+                            contentDescription = "New Notebook",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
                 }
-            }
 
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 
@@ -137,6 +145,7 @@ fun UnifiedSidebar(
                             page = page,
                             indentation = 16.dp,
                             isPinnedSection = true,
+                            compact = narrow,
                             onSelectPage = onSelectPage,
                             onRenamePage = onRenamePage,
                             onDeletePage = onDeletePage,
@@ -190,6 +199,7 @@ fun UnifiedSidebar(
                             notebook = notebook,
                             isExpanded = isNotebookExpanded,
                             isSelected = isSelectedNotebook,
+                            compact = narrow,
                             onToggleExpand = {
                                 expandedNotebooks[notebook.id] = !isNotebookExpanded
                                 onSelectNotebook(notebook)
@@ -223,6 +233,7 @@ fun UnifiedSidebar(
                                     section = section,
                                     isExpanded = isSectionExpanded,
                                     isSelected = isSelectedSection,
+                                    compact = narrow,
                                     onToggleExpand = {
                                         expandedSections[section.id] = !isSectionExpanded
                                         onSelectSection(section)
@@ -251,6 +262,7 @@ fun UnifiedSidebar(
                                             page = page,
                                             indentation = 44.dp,
                                             isPinnedSection = false,
+                                            compact = narrow,
                                             onSelectPage = onSelectPage,
                                             onRenamePage = onRenamePage,
                                             onDeletePage = onDeletePage,
@@ -263,6 +275,7 @@ fun UnifiedSidebar(
                     }
                 }
             }
+            } // Phase 238: BoxWithConstraints (narrow-rail collapse)
         }
     }
 }
@@ -272,6 +285,7 @@ private fun SidebarNotebookRow(
     notebook: NotebookEntity,
     isExpanded: Boolean,
     isSelected: Boolean,
+    compact: Boolean = false,
     onToggleExpand: () -> Unit,
     onAddSection: () -> Unit,
     onRename: () -> Unit,
@@ -282,14 +296,14 @@ private fun SidebarNotebookRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 2.dp)
+            .padding(horizontal = if (compact) 2.dp else 8.dp, vertical = 2.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(
                 if (isSelected) MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.3f)
                 else Color.Transparent
             )
             .clickable { onToggleExpand() }
-            .padding(vertical = 6.dp, horizontal = 8.dp),
+            .padding(vertical = 6.dp, horizontal = if (compact) 2.dp else 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Icon(
@@ -305,7 +319,7 @@ private fun SidebarNotebookRow(
             tint = MaterialTheme.colorScheme.primary,
             modifier = Modifier.size(20.dp)
         )
-        Spacer(modifier = Modifier.width(8.dp))
+        Spacer(modifier = Modifier.width(if (compact) 2.dp else 8.dp))
         Text(
             text = notebook.name,
             style = MaterialTheme.typography.bodyMedium,
@@ -316,48 +330,50 @@ private fun SidebarNotebookRow(
             color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
         )
 
-        // Add section button
-        IconButton(
-            onClick = { onAddSection() },
-            modifier = Modifier.size(30.dp)
-        ) {
-            Icon(
-                Icons.Outlined.Add,
-                contentDescription = "Add Section",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(16.dp)
-            )
-        }
-
-        // Dropdown options
-        Box {
+        if (!compact) {
+            // Add section button
             IconButton(
-                onClick = { menuExpanded = true },
+                onClick = { onAddSection() },
                 modifier = Modifier.size(30.dp)
             ) {
                 Icon(
-                    Icons.Outlined.MoreVert,
-                    contentDescription = "Notebook options",
+                    Icons.Outlined.Add,
+                    contentDescription = "Add Section",
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(16.dp)
                 )
             }
-            DropdownMenu(
-                expanded = menuExpanded,
-                onDismissRequest = { menuExpanded = false },
-                scrollState = overflowMenuScrollState(),
-                modifier = overflowMenuScrollModifier()
-            ) {
-                DropdownMenuItem(
-                    text = { Text("Rename") },
-                    leadingIcon = { Icon(Icons.Outlined.Edit, contentDescription = null) },
-                    onClick = { menuExpanded = false; onRename() }
-                )
-                DropdownMenuItem(
-                    text = { Text("Delete") },
-                    leadingIcon = { Icon(Icons.Outlined.Delete, contentDescription = null) },
-                    onClick = { menuExpanded = false; onDelete() }
-                )
+
+            // Dropdown options
+            Box {
+                IconButton(
+                    onClick = { menuExpanded = true },
+                    modifier = Modifier.size(30.dp)
+                ) {
+                    Icon(
+                        Icons.Outlined.MoreVert,
+                        contentDescription = "Notebook options",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+                DropdownMenu(
+                    expanded = menuExpanded,
+                    onDismissRequest = { menuExpanded = false },
+                    scrollState = overflowMenuScrollState(),
+                    modifier = overflowMenuScrollModifier()
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("Rename") },
+                        leadingIcon = { Icon(Icons.Outlined.Edit, contentDescription = null) },
+                        onClick = { menuExpanded = false; onRename() }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Delete") },
+                        leadingIcon = { Icon(Icons.Outlined.Delete, contentDescription = null) },
+                        onClick = { menuExpanded = false; onDelete() }
+                    )
+                }
             }
         }
     }
@@ -368,6 +384,7 @@ private fun SidebarSectionRow(
     section: SectionEntity,
     isExpanded: Boolean,
     isSelected: Boolean,
+    compact: Boolean = false,
     onToggleExpand: () -> Unit,
     onAddPage: () -> Unit,
     onRename: () -> Unit,
@@ -378,14 +395,14 @@ private fun SidebarSectionRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = 24.dp, end = 8.dp, top = 2.dp, bottom = 2.dp)
+            .padding(start = if (compact) 8.dp else 24.dp, end = if (compact) 2.dp else 8.dp, top = 2.dp, bottom = 2.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(
                 if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
                 else Color.Transparent
             )
             .clickable { onToggleExpand() }
-            .padding(vertical = 5.dp, horizontal = 8.dp),
+            .padding(vertical = 5.dp, horizontal = if (compact) 2.dp else 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Icon(
@@ -401,7 +418,7 @@ private fun SidebarSectionRow(
             tint = MaterialTheme.colorScheme.secondary,
             modifier = Modifier.size(18.dp)
         )
-        Spacer(modifier = Modifier.width(8.dp))
+        Spacer(modifier = Modifier.width(if (compact) 2.dp else 8.dp))
         Text(
             text = section.name,
             style = MaterialTheme.typography.bodyMedium,
@@ -412,48 +429,50 @@ private fun SidebarSectionRow(
             color = if (isSelected) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurface
         )
 
-        // Add page button
-        IconButton(
-            onClick = { onAddPage() },
-            modifier = Modifier.size(28.dp)
-        ) {
-            Icon(
-                Icons.Outlined.NoteAdd,
-                contentDescription = "New Page",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(16.dp)
-            )
-        }
-
-        // Options dropdown
-        Box {
+        if (!compact) {
+            // Add page button
             IconButton(
-                onClick = { menuExpanded = true },
+                onClick = { onAddPage() },
                 modifier = Modifier.size(28.dp)
             ) {
                 Icon(
-                    Icons.Outlined.MoreVert,
-                    contentDescription = "Section options",
+                    Icons.Outlined.NoteAdd,
+                    contentDescription = "New Page",
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(16.dp)
                 )
             }
-            DropdownMenu(
-                expanded = menuExpanded,
-                onDismissRequest = { menuExpanded = false },
-                scrollState = overflowMenuScrollState(),
-                modifier = overflowMenuScrollModifier()
-            ) {
-                DropdownMenuItem(
-                    text = { Text("Rename") },
-                    leadingIcon = { Icon(Icons.Outlined.Edit, contentDescription = null) },
-                    onClick = { menuExpanded = false; onRename() }
-                )
-                DropdownMenuItem(
-                    text = { Text("Delete") },
-                    leadingIcon = { Icon(Icons.Outlined.Delete, contentDescription = null) },
-                    onClick = { menuExpanded = false; onDelete() }
-                )
+
+            // Options dropdown
+            Box {
+                IconButton(
+                    onClick = { menuExpanded = true },
+                    modifier = Modifier.size(28.dp)
+                ) {
+                    Icon(
+                        Icons.Outlined.MoreVert,
+                        contentDescription = "Section options",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+                DropdownMenu(
+                    expanded = menuExpanded,
+                    onDismissRequest = { menuExpanded = false },
+                    scrollState = overflowMenuScrollState(),
+                    modifier = overflowMenuScrollModifier()
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("Rename") },
+                        leadingIcon = { Icon(Icons.Outlined.Edit, contentDescription = null) },
+                        onClick = { menuExpanded = false; onRename() }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Delete") },
+                        leadingIcon = { Icon(Icons.Outlined.Delete, contentDescription = null) },
+                        onClick = { menuExpanded = false; onDelete() }
+                    )
+                }
             }
         }
     }
@@ -464,6 +483,7 @@ private fun SidebarPageRow(
     page: NotePageEntity,
     indentation: androidx.compose.ui.unit.Dp,
     isPinnedSection: Boolean,
+    compact: Boolean = false,
     onSelectPage: (NotePageEntity) -> Unit,
     onRenamePage: (NotePageEntity) -> Unit,
     onDeletePage: (NotePageEntity) -> Unit,
@@ -474,10 +494,10 @@ private fun SidebarPageRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = indentation, end = 8.dp, top = 2.dp, bottom = 2.dp)
+            .padding(start = if (compact) 4.dp else indentation, end = if (compact) 2.dp else 8.dp, top = 2.dp, bottom = 2.dp)
             .clip(RoundedCornerShape(8.dp))
             .clickable { onSelectPage(page) }
-            .padding(vertical = 4.dp, horizontal = 8.dp),
+            .padding(vertical = 4.dp, horizontal = if (compact) 2.dp else 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Icon(
@@ -486,7 +506,7 @@ private fun SidebarPageRow(
             tint = if (page.pinned) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.size(16.dp)
         )
-        Spacer(modifier = Modifier.width(8.dp))
+        Spacer(modifier = Modifier.width(if (compact) 2.dp else 8.dp))
         Text(
             text = if (page.title.isBlank()) "Untitled" else page.title,
             style = MaterialTheme.typography.bodyMedium,
@@ -496,40 +516,42 @@ private fun SidebarPageRow(
             color = MaterialTheme.colorScheme.onSurface
         )
 
-        // Dropdown options
-        Box {
-            IconButton(
-                onClick = { menuExpanded = true },
-                modifier = Modifier.size(26.dp)
-            ) {
-                Icon(
-                    Icons.Outlined.MoreVert,
-                    contentDescription = "Page options",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(14.dp)
-                )
-            }
-            DropdownMenu(
-                expanded = menuExpanded,
-                onDismissRequest = { menuExpanded = false },
-                scrollState = overflowMenuScrollState(),
-                modifier = overflowMenuScrollModifier()
-            ) {
-                DropdownMenuItem(
-                    text = { Text(if (page.pinned) "Unpin" else "Pin") },
-                    leadingIcon = { Icon(if (page.pinned) Icons.Outlined.StarOutline else Icons.Outlined.Star, contentDescription = null) },
-                    onClick = { menuExpanded = false; onTogglePinPage(page) }
-                )
-                DropdownMenuItem(
-                    text = { Text("Rename") },
-                    leadingIcon = { Icon(Icons.Outlined.Edit, contentDescription = null) },
-                    onClick = { menuExpanded = false; onRenamePage(page) }
-                )
-                DropdownMenuItem(
-                    text = { Text("Delete") },
-                    leadingIcon = { Icon(Icons.Outlined.Delete, contentDescription = null) },
-                    onClick = { menuExpanded = false; onDeletePage(page) }
-                )
+        if (!compact) {
+            // Dropdown options
+            Box {
+                IconButton(
+                    onClick = { menuExpanded = true },
+                    modifier = Modifier.size(26.dp)
+                ) {
+                    Icon(
+                        Icons.Outlined.MoreVert,
+                        contentDescription = "Page options",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(14.dp)
+                    )
+                }
+                DropdownMenu(
+                    expanded = menuExpanded,
+                    onDismissRequest = { menuExpanded = false },
+                    scrollState = overflowMenuScrollState(),
+                    modifier = overflowMenuScrollModifier()
+                ) {
+                    DropdownMenuItem(
+                        text = { Text(if (page.pinned) "Unpin" else "Pin") },
+                        leadingIcon = { Icon(if (page.pinned) Icons.Outlined.StarOutline else Icons.Outlined.Star, contentDescription = null) },
+                        onClick = { menuExpanded = false; onTogglePinPage(page) }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Rename") },
+                        leadingIcon = { Icon(Icons.Outlined.Edit, contentDescription = null) },
+                        onClick = { menuExpanded = false; onRenamePage(page) }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Delete") },
+                        leadingIcon = { Icon(Icons.Outlined.Delete, contentDescription = null) },
+                        onClick = { menuExpanded = false; onDeletePage(page) }
+                    )
+                }
             }
         }
     }

@@ -82,9 +82,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 
-enum class WindowSizeCategory {
-    COMPACT, MEDIUM, EXPANDED
-}
+// Phase 238: official window-size class (replaces the homegrown
+// WindowSizeCategory enum that only knew WIDTH and hid landscape phones).
+import androidx.compose.material3.windowsizeclass.ExperimentalMaterial3WindowSizeClassApi
+import androidx.compose.material3.windowsizeclass.WindowHeightSizeClass
+import androidx.compose.material3.windowsizeclass.WindowSizeClass
+import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
+import androidx.compose.material3.windowsizeclass.calculateWindowSizeClass
+import com.authorss81.noteflow.ui.LocalWindowSizeClass
 
 /** Phase 158 review-fix: saved-state key for the pending quick-capture flag. */
 private const val STATE_KEY_QUICK_CAPTURE_REQUESTED = "quick_capture_requested"
@@ -274,6 +279,27 @@ class MainActivity : FragmentActivity() {
                 )
             }
 
+            // Phase 238: the OFFICIAL window-size class (width + height) replaces the
+            // homegrown width-only enum. It is a @Composable call so it tracks the
+            // current density/flags-current-window-metrics (split-screen and freeform
+            // resize) and every screen reads it via LocalWindowSizeClass.
+            @OptIn(ExperimentalMaterial3WindowSizeClassApi::class)
+            val windowSizeClass = calculateWindowSizeClass(activity = this@MainActivity)
+
+            // Phase 238: freeform / split-window mirror. Drag-resizing a floating
+            // window does NOT recreate the activity, so we re-read the system flag on
+            // each resume and let the responsive screens settle on real constraints.
+            var inMultiWindowMode by remember { mutableStateOf(this@MainActivity.isInMultiWindowMode) }
+            val multiWindowLifecycleObserver = androidx.lifecycle.LifecycleEventObserver { _, event ->
+                if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                    inMultiWindowMode = this@MainActivity.isInMultiWindowMode
+                }
+            }
+            DisposableEffect(Unit) {
+                lifecycle.addObserver(multiWindowLifecycleObserver)
+                onDispose { lifecycle.removeObserver(multiWindowLifecycleObserver) }
+            }
+
             // 22.9: root SnackbarHost — visibility-critical feedback is Snackbars,
             // not transient Toasts (scratchable, and visible to TalkBack).
             val snackbarHostState = remember { SnackbarHostState() }
@@ -308,6 +334,23 @@ class MainActivity : FragmentActivity() {
 
             LaunchedEffect(authenticated) {
                 if (!authenticated) showPluginStoreDeepLink = false
+            }
+
+            // Phase 238: ONE-TIME, non-alarming notice when the app first settles
+            // into a floating/split window posture (AGENTS.md hardware rule — the
+            // layout adapts automatically, so this is an information-only message;
+            // nothing is degraded and nothing needs to be re-enabled).
+            LaunchedEffect(authenticated, inMultiWindowMode) {
+                if (authenticated && inMultiWindowMode) {
+                    val settingsManager = com.authorss81.noteflow.services.SettingsManager(this@MainActivity)
+                    if (com.authorss81.noteflow.services.FloatingWindowPolicy.noticeDue(settingsManager.floatingWindowNoticeShown)) {
+                        settingsManager.floatingWindowNoticeShown = true
+                        snackbarHostState.showSnackbar(
+                            message = this@MainActivity.getString(com.authorss81.noteflow.R.string.floating_window_notice),
+                            duration = SnackbarDuration.Short
+                        )
+                    }
+                }
             }
 
             val pages by viewModel.pages.collectAsState()
@@ -600,15 +643,24 @@ class MainActivity : FragmentActivity() {
                         } else if (restoreBlocked) {
                             RestoreBlockedScreen(viewModel = viewModel)
                         } else {
-                            val configuration = androidx.compose.ui.platform.LocalConfiguration.current
-                            val widthDp = configuration.screenWidthDp
-                            val sizeClass = when {
-                                widthDp < 600 -> WindowSizeCategory.COMPACT
-                                widthDp < 840 -> WindowSizeCategory.MEDIUM
-                                else -> WindowSizeCategory.EXPANDED
-                            }
+                            // Phase 238: responsive layout. Provide the official
+                            // WindowSizeClass to every child screen (HomeScreen,
+                            // EditorScreen, MarkdownPreviewScreen, KnowledgeGraphScreen)
+                            // so they adapt their own panes/rails/overflow.
+                            androidx.compose.runtime.CompositionLocalProvider(
+                                LocalWindowSizeClass provides windowSizeClass
+                            ) {
+                            val widthClass = windowSizeClass.widthSizeClass
+                            val heightClass = windowSizeClass.heightSizeClass
+                            val expandedWidth = widthClass == WindowWidthSizeClass.Expanded
+                            // Compact width OR compact height collapses to a single
+                            // pane: a phone in landscape (a wide-but-short window) and
+                            // a small floating window are NEVER double-column.
+                            val compactSinglePane =
+                                widthClass == WindowWidthSizeClass.Compact ||
+                                heightClass == WindowHeightSizeClass.Compact
 
-                            if (sizeClass == WindowSizeCategory.COMPACT) {
+                            if (compactSinglePane) {
                                 if (showGraphView) {
                                     KnowledgeGraphScreen(
                                         viewModel = viewModel,
@@ -692,7 +744,7 @@ class MainActivity : FragmentActivity() {
                             } else {
                                 // MEDIUM or EXPANDED Layout
                                 androidx.compose.foundation.layout.Row(modifier = Modifier.fillMaxSize()) {
-                                    if (sizeClass == WindowSizeCategory.EXPANDED) {
+                                    if (expandedWidth) {
                                         NavigationRail(
                                             containerColor = MaterialTheme.colorScheme.surfaceContainerLow
                                         ) {
@@ -713,7 +765,7 @@ class MainActivity : FragmentActivity() {
 
                                     // Content Area
                                     Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
-                                        if (showGraphView && sizeClass == WindowSizeCategory.EXPANDED) {
+                                        if (showGraphView && expandedWidth) {
                                             KnowledgeGraphScreen(
                                                 viewModel = viewModel,
                                                 onOpenPage = { pageToOpen ->
@@ -826,6 +878,7 @@ class MainActivity : FragmentActivity() {
                                     }
                                 }
                             }
+                            } // Phase 238: CompositionLocalProvider (LocalWindowSizeClass)
                         }
                         }
                         // Phase 167: this host lives at the ROOT Box, outside any

@@ -2335,6 +2335,26 @@
     constraints through unchanged (`:185-186`), so the guard stays layout-transparent (zero
     regression). Note: the phase-233 gotcha-12 description of the guard throwing at
     `NestedScrollGuard.kt:83` is now historical — phase-237 removed that throw.
+  - **Implemented in phase-238** (2026-08-29, shape-aware adaptive layout for
+    floating / split-screen / landscape windows — see `workspace/phase-238/REPORT.md`):
+    the app answers "is this a phone / tablet / landscape window" from the OFFICIAL
+    `androidx.compose.material3:material3-window-size-class:1.3.1` (re-added after
+    phase-211 removed it as unused) — `MainActivity.kt` calls
+    `calculateWindowSizeClass(activity)` once per config and provides it via a custom
+    `staticCompositionLocalOf` (`ui/WindowSizeClassProvider.kt`), because that artifact
+    ships NO `LocalWindowSizeClass` and its constructor is private. All branching
+    thresholds are pure-JVM in `services/AdaptiveLayoutPolicy.kt` (`MIN_CONTENT_WIDTH_DP=300`,
+    `inkBarIsLandscape` = strictly wider-than-tall, unified rail absorbs medium, dual
+    panels only ≥840dp, `splitModeUsable`/`splitPanesFitSideBySide` floors). Screens that
+    must track freeform drag-resize measure the REAL box via `BoxWithConstraints`
+    (`HomeScreen.kt`, `UnifiedSidebar.kt` narrow-rail mode,
+    `EditorScreen.kt`→`DockPosturePolicy.isHorizontalForSize`,
+    `MarkdownPreviewScreen.kt` splits: AUTO=Top/Bottom when taller, Left/Right forced
+    stacked under 600dp, split coerced to the single editor under 320dp — never
+    `LocalConfiguration`, which is a stale snapshot during re-size). Overflow menus are
+    width-capped to the current window (`ui/components/OverflowMenuSupport.kt`
+    `overflowMenuWidthModifier()`); one-time non-alarming floating-window snackbar via
+    new `services/FloatingWindowPolicy.kt` + `SettingsManager.floatingWindowNoticeShown`.
 - **ViewModel/nav**: `ui/viewmodel/NoteflowViewModel.kt:105` (builds SecurityService/NoteRepository/PluginRegistry
   :121/PluginManager :131/PluginRuntime :170/PluginStoreController :196; ~60 capability suspend fns);
   `MainActivity.kt:73` (single activity, **`mutableStateOf` nav** — NOT Navigation Compose).

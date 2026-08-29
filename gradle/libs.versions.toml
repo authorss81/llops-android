@@ -88,6 +88,10 @@ androidx-compose-ui = { group = "androidx.compose.ui", name = "ui" }
 androidx-compose-ui-graphics = { group = "androidx.compose.ui", name = "ui-graphics" }
 androidx-compose-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
 androidx-compose-material3 = { group = "androidx.compose.material3", name = "material3" }
+# Phase 238: adaptive layout — the SAME composeBom 2024.12.01 that pins `material3`
+# also pins material3-window-size-class; this is a catalogue row only, no new
+# version ref (phase-211 removed the row with the dep; phase-238 restores it).
+androidx-compose-material3-window-size = { group = "androidx.compose.material3", name = "material3-window-size-class" }
 androidx-compose-material-icons = { group = "androidx.compose.material", name = "material-icons-extended" }
 # Phase 235: critical-path instrumented Compose tests. Both artifacts come from the
 # SAME composeBom (2024.12.01) — no new version pin, no new production dependency.

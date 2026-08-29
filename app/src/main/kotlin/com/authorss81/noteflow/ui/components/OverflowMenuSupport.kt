@@ -2,12 +2,14 @@ package com.authorss81.noteflow.ui.components
 
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.authorss81.noteflow.services.AdaptiveLayoutPolicy
 import com.authorss81.noteflow.services.OverflowMenuPolicy
 
 /**
@@ -44,4 +46,19 @@ fun overflowMenuScrollState(): ScrollState = rememberScrollState()
 fun overflowMenuScrollModifier(): Modifier {
     val screenHeightDp = LocalConfiguration.current.screenHeightDp
     return Modifier.heightIn(max = OverflowMenuPolicy.maxMenuHeightDp(screenHeightDp).dp)
+}
+
+/**
+ * Width bound (Phase 238): a DropdownMenu never out-spans the current window.
+ * Material 3 lets a menu run up to the natural content width, which on a narrow
+ * floating window / landscape phone clips off-screen entries. The cap derives
+ * from the current screen width (see [AdaptiveLayoutPolicy.maxMenuWidthDp]) and
+ * only bites where the window is actually narrow — roomy windows get Material 3's
+ * default spread. Compose with [overflowMenuScrollModifier]:
+ * `overflowMenuScrollModifier().then(overflowMenuWidthModifier())`.
+ */
+@Composable
+fun overflowMenuWidthModifier(): Modifier {
+    val screenWidthDp = LocalConfiguration.current.screenWidthDp
+    return Modifier.widthIn(max = AdaptiveLayoutPolicy.maxMenuWidthDp(screenWidthDp).dp)
 }

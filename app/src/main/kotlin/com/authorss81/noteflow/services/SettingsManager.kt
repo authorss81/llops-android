@@ -673,6 +673,13 @@ class SettingsManager(context: Context) {
         get() = prefs.getBoolean("low_end_warning_shown", false)
         set(value) = prefs.edit().putBoolean("low_end_warning_shown", value).apply()
 
+    // Phase 238: ONE-TIME, non-alarming notice that the adaptive layout switched
+    // to its floating/split-window posture (AGENTS.md hardware rule — layout
+    // adapts automatically, no degradation, so there is nothing to re-enable).
+    var floatingWindowNoticeShown: Boolean
+        get() = prefs.getBoolean(com.authorss81.noteflow.services.FloatingWindowPolicy.NOTICE_SHOWN_KEY, false)
+        set(value) = prefs.edit().putBoolean(com.authorss81.noteflow.services.FloatingWindowPolicy.NOTICE_SHOWN_KEY, value).apply()
+
     var useSidebarLayout: Boolean
         get() = prefs.getBoolean("use_sidebar_layout", false)
         set(value) = prefs.edit().putBoolean("use_sidebar_layout", value).apply()

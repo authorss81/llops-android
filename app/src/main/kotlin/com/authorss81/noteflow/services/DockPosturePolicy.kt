@@ -24,6 +24,15 @@ object DockPosturePolicy {
     fun isHorizontal(isLandscape: Boolean): Boolean = postureFor(isLandscape) == InkBarPosture.HORIZONTAL
 
     /**
+     * Phase 238: shape-aware posture. A freeform/floating window can be near-
+     * square while [android.content.res.Configuration.orientation] still reads
+     * PORTRAIT — the posture must follow the WINDOW SHAPE, not the flag. This
+     * is the documented default the callers with real constraints should use.
+     */
+    fun isHorizontalForSize(widthDp: Int, heightDp: Int): Boolean =
+        !AdaptiveLayoutPolicy.inkBarIsLandscape(widthDp, heightDp)
+
+    /**
      * Default portrait anchor: horizontally centred, [bottomMarginPx] above the
      * bottom edge — content top-left.
      */

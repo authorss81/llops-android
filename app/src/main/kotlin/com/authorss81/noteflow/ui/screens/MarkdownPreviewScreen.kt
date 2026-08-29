@@ -61,6 +61,7 @@ import com.authorss81.noteflow.ui.components.CitationFormatterDialog
 import com.authorss81.noteflow.ui.components.secureDialogProperties
 import com.authorss81.noteflow.ui.components.overflowMenuScrollModifier
 import com.authorss81.noteflow.ui.components.overflowMenuScrollState
+import com.authorss81.noteflow.ui.components.overflowMenuWidthModifier
 import kotlinx.coroutines.launch
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -78,6 +79,7 @@ import com.authorss81.noteflow.services.GalleryTitleDisplayPolicy
 import com.authorss81.noteflow.services.HeadingScrollIndex
 import com.authorss81.noteflow.services.NoteStatsFormatPolicy
 import com.authorss81.noteflow.services.PluginStoreDiscoveryPolicy
+import com.authorss81.noteflow.services.AdaptiveLayoutPolicy
 import com.authorss81.noteflow.services.ReaderModePolicy
 import com.authorss81.noteflow.services.WikiLinkParser
 import com.authorss81.noteflow.services.WikiSuggestionPolicy
@@ -94,6 +96,7 @@ import kotlinx.coroutines.flow.debounce
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
+import kotlin.math.roundToInt
 import org.commonmark.ext.gfm.tables.TableBlock
 import org.commonmark.ext.gfm.tables.TableBody
 import org.commonmark.ext.gfm.tables.TableCell
@@ -447,13 +450,6 @@ fun MarkdownPreviewScreen(
     var showCitation by remember { mutableStateOf(false) }
 
     val primaryColor = MaterialTheme.colorScheme.primary
-    val configuration = androidx.compose.ui.platform.LocalConfiguration.current
-    val isPortrait = configuration.screenHeightDp > configuration.screenWidthDp
-    val isTopBottomSplit = when (splitOrientation) {
-        SplitOrientation.VERTICAL -> true
-        SplitOrientation.HORIZONTAL -> false
-        SplitOrientation.AUTO -> isPortrait
-    }
 
     // ---- Phase 174 (Feature 1): note-stats footer --------------------------
     // Debounced off the document length; recomputes only when the length changed
@@ -606,7 +602,7 @@ fun MarkdownPreviewScreen(
                             expanded = showPluginMenu,
                             onDismissRequest = { showPluginMenu = false },
                             scrollState = overflowMenuScrollState(),
-                            modifier = overflowMenuScrollModifier()
+                            modifier = overflowMenuScrollModifier().then(overflowMenuWidthModifier())
                         ) {
                             val transformPlugins = viewModel.pluginRegistry.pluginsForCapability(PluginCapability.TextTransform)
                             if (transformPlugins.isEmpty()) {
@@ -855,11 +851,26 @@ fun MarkdownPreviewScreen(
             )
         }
     ) { padding ->
-        Box(
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
         ) {
+            // Phase 238: split orientation and pane usability decide from the REAL
+            // measured window shape (BoxWithConstraints), never LocalConfiguration —
+            // a square floating window reports PORTRAIT yet cannot host a two-pane
+            // side-by-side split without crushing each pane below MIN_CONTENT_WIDTH_DP.
+            val widthDp = maxWidth.value.roundToInt()
+            val heightDp = maxHeight.value.roundToInt()
+            val isPortrait = heightDp > widthDp
+            val isTopBottomSplit = when (splitOrientation) {
+                SplitOrientation.VERTICAL -> true
+                SplitOrientation.HORIZONTAL -> false
+                SplitOrientation.AUTO -> isPortrait
+            }
+            val forceTopBottomSplit = !AdaptiveLayoutPolicy.splitPanesFitSideBySide(widthDp)
+            val effectiveTopBottom = forceTopBottomSplit || isTopBottomSplit
+            val usableSplit = AdaptiveLayoutPolicy.splitModeUsable(widthDp)
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -933,7 +944,7 @@ fun MarkdownPreviewScreen(
                                 },
                                 leadingIcon = {
                                     Icon(
-                                        if (isTopBottomSplit) Icons.Outlined.TableRows else Icons.Outlined.ViewColumn,
+                                        if (effectiveTopBottom) Icons.Outlined.TableRows else Icons.Outlined.ViewColumn,
                                         contentDescription = "Toggle Split Orientation",
                                         modifier = Modifier.size(14.dp)
                                     )
@@ -957,7 +968,7 @@ fun MarkdownPreviewScreen(
                             serif = serifReadingMode,
                             readerMode = true
                         )
-                    } else when (viewMode) {
+                    } else when (if (usableSplit) viewMode else MarkdownViewMode.EDIT) {
                         MarkdownViewMode.EDIT -> {
                             Column(modifier = Modifier.fillMaxSize()) {
                                 Row(
@@ -998,7 +1009,7 @@ fun MarkdownPreviewScreen(
                         }
         
                         MarkdownViewMode.SPLIT -> {
-                            if (isTopBottomSplit) {
+                            if (effectiveTopBottom) {
                                 Column(
                                     modifier = Modifier.fillMaxSize(),
                                     verticalArrangement = Arrangement.spacedBy(8.dp)

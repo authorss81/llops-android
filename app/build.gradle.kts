@@ -333,9 +333,15 @@ dependencies {
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
-    // Phase 211: material3-window-size-class REMOVED — the app rolls its own
-    // `WindowSizeCategory` enum (MainActivity.kt) and never imported
-    // androidx.compose.material3.windowsizeclass (grep-verified).
+    // Phase 238: responsive layout (tablet / floating-window / landscape). The
+    // window-size-class artifact is pinned by the SAME composeBom 2024.12.01 as
+    // `material3` above — a tiny (~10 KB) pure-Kotlin row, no new version. It
+    // replaces the phase-211 belt-and-braces story where the app rolled its own
+    // width-only `WindowSizeCategory` enum in MainActivity (that enum is deleted
+    // in phase-238; the official class also carries the HEIGHT size class the
+    // homegrown one lacked, which the landscape-phone and floating-window fixes
+    // need).
+    implementation(libs.androidx.compose.material3.window.size)
     implementation(libs.androidx.compose.material.icons)
     // Phase 211: navigation-compose REMOVED — declared since project genesis
     // but NEVER used: the app navigates via MainActivity's mutableStateOf
