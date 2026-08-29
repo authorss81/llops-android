@@ -15,24 +15,16 @@ on:
   schedule:
     # Cron = the retry engine. Every 10 min, a cheap check: only runs work if
     # a phase is pending or deferred. Near-zero minutes when idle.
-    # Multiple schedules (every 10 + every 30) ensure the pipeline runs at least
-    # every 10 min even if GitHub throttles one schedule. We keep
-    # cancel-in-progress: false (not true) because cancel-in-progress: true
-    # would risk losing phase work that is in-flight in scripts/phase_runner.sh
-    # between its 300s checkpoint_wip() pushes. With false, the new tick is
-    # blocked while a long phase runs but no work is ever cancelled mid-flight.
+    # Two schedules (every 10 + every 30) provide redundancy: even if GitHub
+    # throttles one schedule (which can happen on public runners under load),
+    # the other is offset by 20 minutes so the pipeline runs at least every
+    # 10-20 minutes. We keep cancel-in-progress: false (not true) because
+    # cancel-in-progress: true would risk losing phase work that is in-flight
+    # in scripts/phase_runner.sh between its 300s checkpoint_wip() pushes.
+    # With false, a new tick is blocked while a long phase runs but no work
+    # is ever cancelled mid-flight.
     - cron: "*/10 * * * *"
     - cron: "*/30 * * * *"
-  # Self-perpetuating chain: as soon as a previous llops run completes, fire a
-  # new one. This way the pipeline keeps advancing without waiting for the next
-  # cron tick. The select-phase job is cheap (API-only) and the cron above
-  # provides the fallback when no prior run has completed recently (e.g. after
-  # the repo goes quiet for a while). The workflow_run trigger is a
-  # `requested` event, not a `completed` event, which fires as soon as the prior
-  # run enters its post-job completion phase, not just on success.
-  workflow_run:
-    workflows: ["llops"]
-    types: [requested, completed]
 
 
 permissions:

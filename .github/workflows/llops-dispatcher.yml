@@ -1,0 +1,54 @@
+name: llops-dispatcher
+
+# This dispatcher triggers the main `llops` workflow when a previous run
+# completes. GitHub prevents a workflow from triggering itself (see
+# https://docs.github.com/en/actions/using-workflows/events-that-trigger-workflows),
+# so we need a separate workflow for the self-perpetuating chain.
+#
+# How it works:
+# 1. `llops` workflow finishes (success, failure, or cancelled)
+# 2. This dispatcher fires on `workflow_run: completed`
+# 3. It dispatches a new `llops` run via the API
+# 4. The new `llops` run starts, select-phase short-circuits if nothing pending
+# 5. When that run finishes, the dispatcher fires again
+#
+# Safety: dispatch is rate-limited (1000/hr) and idempotent — the `llops`
+# workflow's select-phase exits fast if no work is pending. If a long phase
+# is running, the `concurrency: group: llops-pipeline` in `llops.yml`
+# prevents overlapping runs.
+
+on:
+  workflow_run:
+    workflows: ["llops"]
+    types: [completed]
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait briefly so the previous run's commit step fully settles
+        run: sleep 5
+      - name: Check if there's work to do
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Read .done markers via the API (no checkout needed)
+          gh api "repos/$GITHUB_REPOSITORY/git/trees/HEAD?recursive=1" --jq '.tree[].path' > /tmp/tree.txt
+          # Find the lowest phase WITHOUT .done AND WITHOUT .blocked
+          for name in $(grep -E '^workspace/phase-[0-9]+/' /tmp/tree.txt | cut -d/ -f2 | sort -V -u); do
+            if ! gh api "repos/$GITHUB_REPOSITORY/contents/workspace/${name}/.done" --silent 2>/dev/null; then
+              if ! gh api "repos/$GITHUB_REPOSITORY/contents/workspace/${name}/.blocked" --silent 2>/dev/null; then
+                echo "::notice::Work to do: $name — dispatching llops"
+                exit 0
+              fi
+            fi
+          done
+          echo "::notice::No work to do, skipping dispatch"
+          exit 1
+      - name: Dispatch llops workflow
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh workflow run llops --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME"
+          echo "::notice::Dispatched llops, will run on next cron tick"
