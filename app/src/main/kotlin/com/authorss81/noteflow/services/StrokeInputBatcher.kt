@@ -22,10 +22,13 @@ package com.authorss81.noteflow.services
  * runs (`drain`), so historical samples flow through the exact same pipeline
  * (page-bounds gate → pressure/tilt low-pass → stabilizer) as live ones.
  *
- * Coordinates are stored in the RAW window space the MotionEvent reports;
- * mapping into canvas world space happens at CONSUMPTION time using the
- * current pan/zoom/box-offset (same transform the predicted-tail path uses),
- * never at capture time.
+ * Coordinates are stored in the frame the pointerInteropFilter delivers:
+ * Compose offsets the dispatch MotionEvent by the filter node's root offset
+ * (PointerInteropFilter.toMotionEventScope → offsetLocation(-rootOffset)),
+ * so samples are CANVAS-BOX-LOCAL — NOT raw window coords. Mapping into
+ * canvas world space happens at CONSUMPTION time using the current pan/zoom
+ * (same transform all ingestion paths use), never at capture time; no
+ * window-offset subtraction is applied anywhere (Phase 240 Bug 2).
  *
  * Thread-safety: SPSC ring with @Volatile indices. TODAY BOTH SIDES RUN ON THE
  * UI THREAD, and that is the supported contract: the overflow path in [offer]
@@ -36,9 +39,9 @@ package com.authorss81.noteflow.services
  * outruns the consumer keeps its freshest geometry, never stalls).
  */
 class RawInputSample(
-    /** Window-space X (host view coordinates, as reported by the MotionEvent). */
+    /** Box-local X (pointerInteropFilter node space, see class doc — NOT window). */
     val x: Float,
-    /** Window-space Y (host view coordinates). */
+    /** Box-local Y (pointerInteropFilter node space). */
     val y: Float,
     /** Raw pointer pressure in [0..1], UNREMAPPED (smoothing precedes remap). */
     val pressure: Float,

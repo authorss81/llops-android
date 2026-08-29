@@ -688,6 +688,35 @@
 > `ShapeRecognitionHelper.rulerLineEligible` (min 15px) blocks zero-length ruler LINES; `sanitize`
 > clamps ±360 without the 359.5→0 mid-gesture snap. `Phase223PerspectiveGridPolicyTest` now 20 tests.
 
+> **Implemented in phase-240** (2026-08-29, pinch/touch regression fixes, see
+> `workspace/phase-240/REPORT.md`): (1) **Bugs fixed.** (a) Two-finger pinch no
+> longer rotates the page: `calculateRotation()` returns per-event DEGREES and a
+> pure radial pinch yields small non-zero deltas EVERY frame (fingers never
+> exactly equidistant from the centroid), which previously accumulated into a
+> slow rotation and forced `event.changes.forEach { it.consume() }` (drawing
+> died while two fingers were down). `services/CanvasRotationPolicy.kt` now
+> gates every 2-finger event: `ROTATION_DEAD_ZONE_DEGREES=2f`,
+> `ZOOM_DOMINANCE_THRESHOLD=0.03f` (zoom deviating >3% = PINCH, suppressed),
+> `PAN_DOMINANCE_PX=12f` (centroid travelling >12px = PAN, suppressed), wired as
+> `intentionalRotationDelta(event.calculateRotation(), zoomChange, panChange.getDistance())` —
+> only a genuine twist (stable separation + stationary centroid + real angular
+> delta) rotates; jitter/no-op multi-touch neither transforms nor consumes, so
+> single-finger drawing survives. (b) Stroke dots landed far from the touch:
+> compose-ui **1.7.6** already offsets the bridge's MotionEvent to the filter
+> NODE (see `PointerInteropFilter.android.kt` `toMotionEventScope(localToRoot(Zero))`
+> → `offsetLocation(-localToRoot)`), so the old drain subtract of the box's
+> `positionInWindow()` was a DOUBLE offset (dots at `actual − 2×(boxOffset)`).
+> Both drain paths hand `sample.x/y` to `ingestPointerSample` AS-IS; the
+> phase-196 predicted tail now passes the NEUTRAL frame (0f/0f — the predictor
+> extrapolates in the same node-local record space); the dead
+> `canvasBoxWindowOffset` state + `onGloballyPositioned{positionInWindow()}`
+> capture + unused import are deleted. ONE node-local ingestion frame
+> everywhere (`change.position`, drain, predictor). `Phase240RotationGateTest`
+> (11) + `HistoryBatchTest` drain pins updated to the node-local contract (with
+> negative anti-regression pins). `gradle testDebugUnitTest` **3556 / 0 / 0**,
+> `assembleDebug` green, `lintDebug` 0 errors. No schema, no deps,
+> `.github/workflows/` untouched.
+
 > **Implemented in phase-224** (2026-08-27, timelapse replay + MP4 export of a page's
 > timestamped strokes, see `workspace/phase-224/REPORT.md`): replays a page's strokes in
 > timestamp order at 30× real-time as an H.264 MP4 (platform `MediaCodec`+`MediaMuxer` only —

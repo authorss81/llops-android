@@ -24,12 +24,18 @@ import com.authorss81.noteflow.data.model.PointF
  *     ([PredictedTailTracker.stripFrom]) BEFORE the real sample is appended and
  *     BEFORE the stroke is committed, so stored stroke geometry never contains
  *     a predicted point.
- *  3. Coordinate mapping — raw `MotionEvent` samples are relative to the
- *     hosting view/window, while the canvas drag handlers work in the canvas
- *     box's own layout space; [predictedWorldPoint] subtracts the box's window
- *     offset, un-applies pan/zoom, then coerces into the active page bounds
- *     with the SAME clamp the real drag path uses, so a predicted point can
- *     never escape the page or land at stale-transform coordinates.
+ *  3. Coordinate mapping — the pointerInteropFilter bridge delivers, and the
+ *     predictor records, MotionEvents that Compose ALREADY offset into the
+ *     canvas box's own layout space (node-local; `PointerInteropFilter`
+ *     applies `offsetLocation(-rootOffset)` on dispatch). `[predictedWorldPoint]`
+ *     takes explicit canvasWindowX/Y so its math is unit-tested, but the LIVE
+ *     channel passes the neutral frame (0f/0f) because both the recorded real
+ *     samples and the extrapolated prediction are node-local — subtracting the
+ *     box's window offset again would displace the tail by exactly that offset
+ *     (Phase 240 Bug 2). The function then un-applies pan/zoom and coerces into
+ *     the active page bounds with the SAME clamp the real drag path uses, so a
+ *     predicted point can never escape the page or land at stale-transform
+ *     coordinates.
  *
  * This object is intentionally free of Android framework dependencies so the
  * gate/mapping/tracker logic is directly unit-testable on the JVM.
@@ -69,11 +75,14 @@ object MotionPredictionPolicy {
         !panningWhiteSpace
 
     /**
-     * Maps one predicted sample from host-view (window) coordinates into canvas
-     * WORLD coordinates:
+     * Maps one predicted sample from the predictor's box-local coordinates into
+     * canvas WORLD coordinates:
      *
-     *   local  = predicted - canvasBoxWindowOffset   (view space -> box space)
-     *   world  = (local - pan) / zoom                (box space -> world space)
+     *   local = predicted - canvasWindowX/Y   (caller passes the frame offset of
+     *                                          its recorded MotionEvents' space;
+     *                                          the LIVE channel passes 0f/0f — the
+     *                                          recorded events are already node-local)
+     *   world = (local - pan) / zoom           (box space -> world space)
      *
      * Parity with the real drag path (`AnnotationCanvas.onDrag`): a sample that
      * maps OUTSIDE the active page bounds is DROPPED (null) — exactly like the

@@ -21,6 +21,31 @@ object CanvasRotationPolicy {
     const val DEFAULT_DEGREES = 0f
 
     /**
+     * Phase 240 dead-zone: a per-event rotation delta below this magnitude is
+     * treated as finger/sensor micro-jitter and NEVER applied. `calculateRotation()`
+     * returns the angular change between the PREVIOUS and CURRENT event in DEGREES,
+     * so a pure pinch (fingers spread radially, angle to centroid ~constant) yields
+     * sub-threshold deltas across many frames that previously ACCUMULATED into a
+     * slowly-rotating page. A deliberate twist clears the dead-zone within one or
+     * two events.
+     */
+    const val ROTATION_DEAD_ZONE_DEGREES = 2f
+
+    /**
+     * Phase 240: an event whose per-frame zoom deviates from 1f by more than this
+     * is a radial spread/squeeze (a PINCH), not a twist — rotation is suppressed.
+     * A true twist keeps the two fingers at roughly constant separation.
+     */
+    const val ZOOM_DOMINANCE_THRESHOLD = 0.03f
+
+    /**
+     * Phase 240: an event whose centroid translates more than this many pixels is
+     * a PAN, not a twist — rotation is suppressed. A symmetric twist keeps the
+     * centroid (roughly) stationary.
+     */
+    const val PAN_DOMINANCE_PX = 12f
+
+    /**
      * Sanitise a rotation value: coerce to [-MAX_ABS, +MAX_ABS] (non-finite input
      * falls back to the default). Full turns never snap — a rotation of ±360 is
      * visually identical to upright, so there is no discontinuous mid-gesture
@@ -58,4 +83,43 @@ object CanvasRotationPolicy {
      */
     fun accumulate(currentDeg: Float, gestureDeltaDeg: Float): Float =
         sanitize(currentDeg + gestureDeltaDeg)
+
+    /**
+     * Phase 240: dead-zone gate for one event's rotation delta.
+     * `calculateRotation()` returns degrees; pure-pinch micro-jitter is typically
+     * well under [ROTATION_DEAD_ZONE_DEGREES] per event. Returns the original
+     * delta when it clears the dead-zone (a real twist), 0f otherwise so a pinch
+     * can never drift the page.
+     */
+    fun gatedRotationDelta(rawDeltaDeg: Float): Float =
+        if (rawDeltaDeg.isFinite() && kotlin.math.abs(rawDeltaDeg) >= ROTATION_DEAD_ZONE_DEGREES) {
+            rawDeltaDeg
+        } else {
+            0f
+        }
+
+    /**
+     * Phase 240: full rotation-intent gate for one 2-finger event.
+     *
+     * `calculateRotation()` returns the per-event rotation delta in DEGREES; even
+     * a pure radial pinch reports a small non-zero value each frame (the two
+     * fingers are never exactly equidistant from the centroid between events), so
+     * a dead-zone alone is not sufficient — the same event ALSO has to NOT be a
+     * dominant zoom or pan. A true twist keeps the fingers at roughly constant
+     * separation (zoom ~ 1f) and the centroid ~ stationary (tiny pan). A pinch
+     * spreads the fingers (zoom deviates) and a pan translates the centroid.
+     *
+     * Returns the gated delta when the user is genuinely twisting, 0f otherwise.
+     */
+    fun intentionalRotationDelta(
+        rawDeltaDeg: Float,
+        zoomChange: Float,
+        panDistancePx: Float
+    ): Float {
+        val gated = gatedRotationDelta(rawDeltaDeg)
+        if (gated == 0f) return 0f
+        if (!zoomChange.isFinite() || kotlin.math.abs(zoomChange - 1f) > ZOOM_DOMINANCE_THRESHOLD) return 0f
+        if (!panDistancePx.isFinite() || panDistancePx > PAN_DOMINANCE_PX) return 0f
+        return gated
+    }
 }

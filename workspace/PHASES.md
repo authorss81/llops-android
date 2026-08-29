@@ -91,6 +91,7 @@ painting engine, free features).
 | phase-226 | **Selection transform** — scale (corner handles) + rotate (`CanvasItemRotationMath`) for lasso selection, baked into points | painting |
 | phase-227 | **Paper deckled edge + texture + layered export** — wavy `Path` clip, `paperTextureStrength` slider, PSD per-layer + PNG transparent toggle | painting |
 | phase-228 | **Fix all failing tests + green APK/CI** — `testDebugUnitTest` 0 failures, `assembleDebug`/`assembleRelease` green, `lintDebug` 0 errors, full `gradle build` CI green, no regressions (6h) | quality |
+| phase-240 | **Pinch/touch regression fixes** — two-finger pinch no longer rotates the page (`CanvasRotationPolicy` dead-zone 2° + zoom >3% / pan >12px dominance gates) and stroke dots land exactly on the touch (remove the double `canvasBoxWindowOffset` subtraction: `pointerInteropFilter` events are already node-local) — see `workspace/phase-240/REPORT.md`, status `docs/phase-status.md` [DONE] | user-requested |
 
 ## How phases run
 

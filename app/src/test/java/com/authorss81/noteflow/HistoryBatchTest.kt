@@ -173,10 +173,16 @@ class HistoryBatchTest {
             "drained samples must be ingested AFTER the drain",
             src.indexOf("ingestPointerSample(", drainIdx) > drainIdx
         )
-        // Window -> box-local mapping happens at consumption time (same space
-        // transform the phase-196 predicted tail uses).
-        assertTrue(src.contains("sample.x - canvasBoxWindowOffset.x"))
-        assertTrue(src.contains("sample.y - canvasBoxWindowOffset.y"))
+        // Drained samples are CANVAS-BOX-LOCAL already (Compose offsets the
+        // pointerInteropFilter MotionEvent to the filter node — see
+        // PointerInteropFilter.toMotionEventScope): samples are handed to the
+        // shared ingestion helper AS-IS, with NO window-offset subtraction
+        // (Phase 240 Bug 2). The box window offset is reserved for nothing in
+        // this path; subtracting it again would shift dots by 2x the offset.
+        assertTrue(src.contains("boxLocalX = sample.x,"))
+        assertTrue(src.contains("boxLocalY = sample.y,"))
+        assertTrue("double-subtraction must NOT be pinned", !src.contains("sample.x - canvasBoxWindowOffset.x"))
+        assertTrue("double-subtraction must NOT be pinned", !src.contains("sample.y - canvasBoxWindowOffset.y"))
         // Monotonic gate guards every ingested sample.
         assertTrue(src.contains("StrokeBatchPolicy.isStale(sample.timestampMs, lastIngestedInputTimestampMs)"))
         // Review-fix: the gate stamp advances ONLY when the sample was actually

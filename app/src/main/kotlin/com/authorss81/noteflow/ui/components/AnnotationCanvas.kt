@@ -48,7 +48,6 @@ import androidx.compose.ui.graphics.drawscope.Stroke as DrawStrokeStyle
 import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
@@ -784,11 +783,13 @@ fun AnnotationCanvas(
     // Pointer count of the LAST recorded MotionEvent (UI-thread-only access):
     // two pointers means pinch/undo territory — never predict then.
     val predictionPointerCount = remember { java.util.concurrent.atomic.AtomicInteger(0) }
-    // Window-space origin of this canvas box. Raw MotionEvents are relative to
-    // the hosting view/window while the drag handlers work in box-local space;
-    // subtracting this offset makes both spaces agree (the editor hosts the
-    // canvas inside Scaffold padding, so they are NOT equal by default).
-    var canvasBoxWindowOffset by remember { mutableStateOf(Offset.Zero) }
+    // Phase 240 (Bug 2): `canvasBoxWindowOffset` was DELETED. Compose's
+    // pointerInteropFilter bridge delivers MotionEvents already offset into
+    // this box's node-local space (`toMotionEventScope` applies
+    // offsetLocation(-rootOffset)), so all ingestion paths share ONE coordinate
+    // frame (the live drag handlers' `change.position`, the coalesced batch
+    // drain, and the phase-196 predictor's recorded/extrapolated samples) with
+    // NO window-offset subtraction anywhere.
 
     fun dropPredictedTail() {
         predictedTailTracker.stripFrom(activePoints)
@@ -846,8 +847,15 @@ fun AnnotationCanvas(
                     val point = com.authorss81.noteflow.services.MotionPredictionPolicy.predictedWorldPoint(
                         predictedViewX = predicted.x,
                         predictedViewY = predicted.y,
-                        canvasWindowX = canvasBoxWindowOffset.x,
-                        canvasWindowY = canvasBoxWindowOffset.y,
+                        // Phase 240 fix (Bug 2): the motionPredictor records the SAME
+                        // node-local MotionEvent the passive bridge delivers, so its
+                        // extrapolated output is node-local too — subtracting the box
+                        // WINDOW offset here again displaced the whole predicted tail
+                        // away from the pen (same double-offset as the batch drain).
+                        // The pure-JVM mapping keeps its canvasWindowX/Y parameters for
+                        // unit tests, but the LIVE channel passes the neutral frame.
+                        canvasWindowX = 0f,
+                        canvasWindowY = 0f,
                         zoomScale = internalZoomScale,
                         panX = internalPanOffset.x,
                         panY = internalPanOffset.y,
@@ -1212,13 +1220,9 @@ fun AnnotationCanvas(
     BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
-            // Phase 196: capture this box's window-space origin so raw
-            // MotionEvent coordinates (host-view relative) can be mapped into
-            // the same local space the Compose drag handlers see. The offset is
-            // read only by the prediction loop — never during composition.
-            .onGloballyPositioned { coords ->
-                canvasBoxWindowOffset = coords.positionInWindow()
-            }
+            // Phase 240 (Bug 2): the canvas needs NO window-origin capture. The
+            // pointerInteropFilter bridge, the Compose drag handlers' `change.position`
+            // and the phase-196 predictor all work in this box's node-local space.
             .background(
                 if (divideIntoPages) {
                     if (isDarkTheme) Color(0xFF0F172A) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
@@ -1335,7 +1339,25 @@ fun AnnotationCanvas(
                         if (event.changes.size > 1) {
                             val zoomChange = event.calculateZoom()
                             val panChange = event.calculatePan()
-                            val rotationChange = event.calculateRotation()
+                            // Phase 240 fix: gate the per-event rotation delta.
+                            // calculateRotation() reports DEGREES and even a pure
+                            // radial pinch produces small non-zero deltas (the two
+                            // fingers are never exactly equidistant from the
+                            // centroid between frames) that previously ACCUMULATED
+                            // into a slowly-rotating page. The gate ALSO suppresses
+                            // rotation when the same event is a dominant zoom or
+                            // pan, so pinch/pan can never rotate the canvas — only
+                            // a genuine twist (>= the 2° dead-zone with a roughly
+                            // stable separation and centroid) does.
+                            val rotationChange = if (currentCanvasTwistEnabled) {
+                                com.authorss81.noteflow.services.CanvasRotationPolicy.intentionalRotationDelta(
+                                    rawDeltaDeg = event.calculateRotation(),
+                                    zoomChange = zoomChange,
+                                    panDistancePx = panChange.getDistance()
+                                )
+                            } else {
+                                0f
+                            }
                             if (zoomChange != 1f || panChange != Offset.Zero || rotationChange != 0f) {
                                 val newScale = (internalZoomScale * zoomChange).coerceIn(0.5f, 4.0f)
                                 val actualZoomChange = newScale / internalZoomScale
@@ -1862,14 +1884,15 @@ fun AnnotationCanvas(
                                 return@detectDragGestures
                             }
 
-                            // Phase 214: one ingestion path for EVERY pointer sample,
-                            // live or coalesced-historical. The passive bridge stores
-                            // RAW WINDOW coords (see :1249); this function receives
-                            // CANVAS-BOX-LOCAL offsets — the caller subtracted the
-                            // canvas box origin (`canvasBoxWindowOffset` from
-                            // `positionInWindow`) just before calling, so only the
-                            // pan/zoom transform below remains. Raw window coords never
-                            // reach this function.
+                            // Phase 240 fix (Bug 2): ONE ingestion path for EVERY pointer sample,
+                            // live or coalesced-historical. The coordinates are already
+                            // CANVAS-BOX-LOCAL (both the passive `pointerInteropFilter`
+                            // bridge and the live `change.position` fallback deliver
+                            // node-local coords — Compose offsets the dispatch MotionEvent
+                            // by the filter node's root offset). NO window-offset subtraction
+                            // happens anywhere in this path — the phase-196 predicted tail
+                            // (which records the same node-local events) passes the neutral
+                            // frame as well. Only the pan/zoom transform below remains.
                             // Returns TRUE iff the sample was actually ingested; the
                             // page-bounds rejection returns FALSE so the monotonic
                             // batch-gate stamp never advances past a REJECTED sample
@@ -2019,9 +2042,20 @@ fun AnnotationCanvas(
                             if (drainedCount > 1 && currentTool.isFreehandTool) {
                                 for (sample in batchDrainScratch) {
                                     if (StrokeBatchPolicy.isStale(sample.timestampMs, lastIngestedInputTimestampMs)) continue
+                                    // Phase 240 fix (Bug 2): pointerInteropFilter already
+                                    // delivers node-LOCAL coordinates (Compose offsets the
+                                    // dispatch MotionEvent by the filter node's root offset —
+                                    // see PointerInteropFilter.toMotionEventScope), so the old
+                                    // window-offset SUBTRACTION here was a DOUBLE offset that
+                                    // shifted registered dots far from the actual touch.
+                                    // boxLocal == sample (the same space the live
+                                    // `change.position` fallback below and the phase-196
+                                    // predicted-tail path use — that path now passes the
+                                    // neutral frame too, since the predictor extrapolates
+                                    // in the same recorded node-local space).
                                     val accepted = ingestPointerSample(
-                                        boxLocalX = sample.x - canvasBoxWindowOffset.x,
-                                        boxLocalY = sample.y - canvasBoxWindowOffset.y,
+                                        boxLocalX = sample.x,
+                                        boxLocalY = sample.y,
                                         rawPressure = sample.pressure,
                                         tiltDegrees = if (sample.tiltRad != 0f) Math.toDegrees(sample.tiltRad.toDouble()).toFloat() else 0f,
                                         sampleTimestampMs = sample.timestampMs
@@ -2032,8 +2066,8 @@ fun AnnotationCanvas(
                                 val newest = batchDrainScratch.last()
                                 if (!StrokeBatchPolicy.isStale(newest.timestampMs, lastIngestedInputTimestampMs)) {
                                     val accepted = ingestPointerSample(
-                                        boxLocalX = newest.x - canvasBoxWindowOffset.x,
-                                        boxLocalY = newest.y - canvasBoxWindowOffset.y,
+                                        boxLocalX = newest.x,
+                                        boxLocalY = newest.y,
                                         rawPressure = newest.pressure,
                                         tiltDegrees = if (newest.tiltRad != 0f) Math.toDegrees(newest.tiltRad.toDouble()).toFloat() else 0f,
                                         sampleTimestampMs = newest.timestampMs
