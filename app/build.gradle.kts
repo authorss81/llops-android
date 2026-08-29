@@ -407,6 +407,16 @@ dependencies {
     // flows can be built outside Android. junit is the existing test runner.
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
+
+    // Phase 235: critical-path INSTRUMENTED Compose tests (app/src/androidTest/).
+    // ui-test-junit4 + ui-test-manifest come from the existing composeBom
+    // (2024.12.01) — no new version pins, nothing added to the base APK (androidTest
+    // + debug configurations only). `debugImplementation(ui-test-manifest)` provides
+    // the empty ComponentActivity entry that createAndroidComposeRule needs.
+    androidTestImplementation(platform(libs.androidx.compose.bom))
+    androidTestImplementation(libs.androidx.compose.ui.test.junit4)
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    debugImplementation(libs.androidx.compose.ui.test.manifest)
 }
 
 // --- Downloadable-LLM-plugin seed ------------------------------------------
