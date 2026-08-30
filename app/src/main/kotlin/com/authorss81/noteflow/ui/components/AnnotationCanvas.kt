@@ -294,28 +294,14 @@ fun AnnotationCanvas(
     // Phase 222: per-layer alpha-lock + clipping-mask sets.
     alphaLockLayerIds: Set<String> = emptySet(),
     clippingMaskLayerIds: Set<String> = emptySet(),
-    // Phase 223: canvas rotate (two-finger twist). rotationDegrees drives the
-    // graphicsLayer rotationZ; onRotationDegreesChanged reports the sanitized
-    // value so the parent can persist it per page (settings, NO schema change).
-    rotationDegrees: Float = 0f,
-    onRotationDegreesChanged: (Float) -> Unit = {},
     // Phase 223: ruler/straight-line snap. When enabled the live preview snaps a
     // rough freehand drag to an exact straight LINE (bypassing the shape-snap
     // perpendicularDeviation gate) and draws a live start→current guide.
-    rulerEnabled: Boolean = false,
-    // Phase 223: gate for two-finger twist. When false the two-finger handler
-    // keeps classic pinch-zoom + pan exactly (rotation never applies).
-    canvasTwistEnabled: Boolean = true
+    rulerEnabled: Boolean = false
 ) {
     val vibrancyBoost = if (vibrancyEnabled) vibrancyBoostLevel.coerceIn(0f, 1f) else 0f
     var internalZoomScale by remember { mutableFloatStateOf(zoomScale) }
     var internalPanOffset by remember { mutableStateOf(panOffset) }
-    // Phase 223: canvas rotate — sanitized rotation degrees alongside zoom/pan.
-    var internalRotationDegrees by remember {
-        mutableFloatStateOf(com.authorss81.noteflow.services.CanvasRotationPolicy.sanitize(rotationDegrees))
-    }
-    val currentOnRotationDegreesChanged by rememberUpdatedState(onRotationDegreesChanged)
-    val currentCanvasTwistEnabled by rememberUpdatedState(canvasTwistEnabled)
 
     // 22.9: light tick when a stroke is committed (skipped under reduce-motion).
     val hapticFeedback = androidx.compose.ui.platform.LocalHapticFeedback.current
@@ -337,14 +323,6 @@ fun AnnotationCanvas(
     LaunchedEffect(zoomScale, panOffset) {
         internalZoomScale = zoomScale
         internalPanOffset = panOffset
-    }
-
-    // Phase 223 review fix: the hoisted rotationDegrees must re-sync into the
-    // internal state (same pattern as zoom/pan above) so a parent-side reset
-    // (rotation reset row / onResetZoomPan) or a page switch actually restores
-    // the upright canvas instead of leaving the last gesture's angle applied.
-    LaunchedEffect(rotationDegrees) {
-        internalRotationDegrees = com.authorss81.noteflow.services.CanvasRotationPolicy.sanitize(rotationDegrees)
     }
 
     val coroutineScope = rememberCoroutineScope()
@@ -1423,14 +1401,8 @@ fun AnnotationCanvas(
                     }
                 }
             }
-            // 1. Two-finger Zoom, Pan and (Phase 223) Rotate Gestures.
-            // Rotation reuses the SAME event stream. calculateRotation() reports
-            // the angle change between the PREVIOUS and CURRENT pointer events
-            // (it is a per-event delta, exactly like calculateZoom/calculatePan),
-            // so each frame's delta is accumulated straight into the sanitized
-            // internalRotationDegrees that drives the applied graphicsLayer
-            // rotationZ. A single finger still draws, exactly as before —
-            // rotation only ever applies while two pointers are down.
+            // 1. Two-finger Zoom and Pan Gestures. A single finger still draws, exactly
+            // as before — zoom/pan only ever apply while two pointers are down.
             .pointerInput(Unit) {
                 awaitPointerEventScope {
                     while (true) {
@@ -1438,26 +1410,7 @@ fun AnnotationCanvas(
                         if (event.changes.size > 1) {
                             val zoomChange = event.calculateZoom()
                             val panChange = event.calculatePan()
-                            // Phase 240 fix: gate the per-event rotation delta.
-                            // calculateRotation() reports DEGREES and even a pure
-                            // radial pinch produces small non-zero deltas (the two
-                            // fingers are never exactly equidistant from the
-                            // centroid between frames) that previously ACCUMULATED
-                            // into a slowly-rotating page. The gate ALSO suppresses
-                            // rotation when the same event is a dominant zoom or
-                            // pan, so pinch/pan can never rotate the canvas — only
-                            // a genuine twist (>= the 2° dead-zone with a roughly
-                            // stable separation and centroid) does.
-                            val rotationChange = if (currentCanvasTwistEnabled) {
-                                com.authorss81.noteflow.services.CanvasRotationPolicy.intentionalRotationDelta(
-                                    rawDeltaDeg = event.calculateRotation(),
-                                    zoomChange = zoomChange,
-                                    panDistancePx = panChange.getDistance()
-                                )
-                            } else {
-                                0f
-                            }
-                            if (zoomChange != 1f || panChange != Offset.Zero || rotationChange != 0f) {
+                            if (zoomChange != 1f || panChange != Offset.Zero) {
                                 val newScale = (internalZoomScale * zoomChange).coerceIn(0.5f, 4.0f)
                                 val actualZoomChange = newScale / internalZoomScale
 
@@ -1468,16 +1421,6 @@ fun AnnotationCanvas(
                                 val newPanOffset = centroid - (centroid - internalPanOffset) * actualZoomChange + panChange
 
                                 updateZoomAndPan(newScale, newPanOffset)
-                                // Phase 223: rotation only applies when the twist
-                                // gesture is enabled (default on); a single finger
-                                // still only draws.
-                                if (currentCanvasTwistEnabled && rotationChange != 0f) {
-                                    val newRot = com.authorss81.noteflow.services.CanvasRotationPolicy.accumulate(
-                                        internalRotationDegrees, rotationChange
-                                    )
-                                    internalRotationDegrees = newRot
-                                    currentOnRotationDegreesChanged(newRot)
-                                }
                                 event.changes.forEach { it.consume() }
                             }
                         }
@@ -2841,7 +2784,6 @@ fun AnnotationCanvas(
                     .graphicsLayer {
                         scaleX = internalZoomScale
                         scaleY = internalZoomScale
-                        rotationZ = internalRotationDegrees
                         translationX = internalPanOffset.x
                         translationY = internalPanOffset.y
                         transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0f, 0f)
@@ -3261,7 +3203,6 @@ blenderStrengthPercent = blenderStrengthPercent,
                         .graphicsLayer {
                             scaleX = internalZoomScale
                             scaleY = internalZoomScale
-                            rotationZ = internalRotationDegrees
                             translationX = internalPanOffset.x
                             translationY = internalPanOffset.y
                             transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0f, 0f)
@@ -3312,7 +3253,6 @@ blenderStrengthPercent = blenderStrengthPercent,
                         .graphicsLayer {
                             scaleX = internalZoomScale
                             scaleY = internalZoomScale
-                            rotationZ = internalRotationDegrees
                             translationX = internalPanOffset.x
                             translationY = internalPanOffset.y
                             transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0f, 0f)
@@ -3326,7 +3266,6 @@ blenderStrengthPercent = blenderStrengthPercent,
                     zoomScale = internalZoomScale,
                     // Phase 226: transform handles + preview wiring.
                     transformLocked = selectionTransformLocked,
-                    canvasRotationDegrees = internalRotationDegrees,
                     onSelectionScale = currentOnSelectionScale,
                     onSelectionRotate = currentOnSelectionRotate
                 )
@@ -4183,9 +4122,6 @@ internal fun StrokeSelectionOverlay(
     // handles scale; the top handle rotates. Mid-drag preview is a dashed
     // outline only; the single commit call fires on gesture end.
     transformLocked: Boolean = true,
-    // Phase 226 review-fix: canvas world rotation (internalRotationDegrees), so
-    // the scale-handle drags un-rotate screen deltas into world space.
-    canvasRotationDegrees: Float = 0f,
     onSelectionScale: (scaleX: Float, scaleY: Float, centerX: Float, centerY: Float) -> Unit = { _, _, _, _ -> },
     onSelectionRotate: (degrees: Float, centerX: Float, centerY: Float) -> Unit = { _, _, _ -> }
 ) {
@@ -4318,7 +4254,6 @@ internal fun StrokeSelectionOverlay(
                     sizePx = selHandlePx,
                     accentColor = accentColor,
                     zoomScale = currentZoom,
-                    canvasRotationDegrees = canvasRotationDegrees,
                     corner = corner,
                     locked = transformLocked,
                     onDragUpdate = { worldDx, worldDy ->
@@ -4396,11 +4331,6 @@ private fun SelectionCornerHandle(
     sizePx: Float,
     accentColor: Color,
     zoomScale: Float,
-    // Phase 226 review-fix: the canvas WORLD rotation (internalRotationDegrees)
-    // applied to the overlay layer. dragAmount arrives in that rotated screen
-    // frame, so we un-rotate by -canvasRotationDegrees before dividing by zoom
-    // to get true world-space deltas (matches the embed drag compensation).
-    canvasRotationDegrees: Float,
     corner: com.authorss81.noteflow.services.SelectionTransformPolicy.Corner,
     locked: Boolean,
     onDragUpdate: (worldDx: Float, worldDy: Float) -> Unit,
@@ -4415,7 +4345,6 @@ private fun SelectionCornerHandle(
     val currentOnEnd by rememberUpdatedState(onDragEnd)
     val currentOnCancel by rememberUpdatedState(onDragCancel)
     val currentZoom by rememberUpdatedState(zoomScale)
-    val currentCanvasRotation by rememberUpdatedState(canvasRotationDegrees)
     val currentLocked by rememberUpdatedState(locked)
     val sizePxDp = with(LocalDensity.current) { sizePx.toDp() }
 
@@ -4433,16 +4362,8 @@ private fun SelectionCornerHandle(
                     },
                     onDrag = { change, dragAmount ->
                         change.consume()
-                        // Phase 226 review-fix: un-rotate the screen delta into
-                        // world space so "drag right → grow right / drag down →
-                        // grow down" holds even when the canvas is rotated.
-                        val rad = Math.toRadians((-currentCanvasRotation).toDouble())
-                        val cosA = cos(rad).toFloat()
-                        val sinA = sin(rad).toFloat()
-                        val worldDx = dragAmount.x * cosA - dragAmount.y * sinA
-                        val worldDy = dragAmount.x * sinA + dragAmount.y * cosA
-                        accDx += worldDx / currentZoom.coerceAtLeast(0.01f)
-                        accDy += worldDy / currentZoom.coerceAtLeast(0.01f)
+                        accDx += dragAmount.x / currentZoom.coerceAtLeast(0.01f)
+                        accDy += dragAmount.y / currentZoom.coerceAtLeast(0.01f)
                         currentOnUpdate(accDx, accDy)
                     },
                     onDragEnd = {

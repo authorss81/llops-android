@@ -86,6 +86,42 @@ fun HybridMarkdownEditor(
     var editingBlock by remember { mutableStateOf(-1) }
     var editingText by remember { mutableStateOf("") }
     var dirty by remember { mutableStateOf(false) }
+    // Phase 243: byte offset (in doc.content) where the edited block's source
+    // begins, captured when the raw editor opens. The keystroke path is anchored
+    // HERE instead of a fixed block index: a keystroke can re-split the block
+    // window into a different topology, and rewriting a drifted index is exactly
+    // what duplicated text on screen. The run's start byte never moves while
+    // editing (only the run itself is rewritten), so the anchor stays stable.
+    var editingAnchorByte by remember { mutableIntStateOf(0) }
+
+    /** Byte offset where `startLine` begins inside `lines.joinToString("\n")`. */
+    fun sourceOffsetOfLine(lines: List<String>, startLine: Int): Int {
+        var off = 0
+        for (i in 0 until startLine) off += lines[i].length + 1
+        return off
+    }
+
+    fun emitBlockEdit(prevRaw: String, blockIndex: Int, newRaw: String) {
+        dirty = true
+        // Anchor by TEXT, not index: locate the previous edited source (which we
+        // emitted verbatim) at/after the recorded run start and replace exactly
+        // those bytes, so a window re-split can never make the next keystroke
+        // write into a drifted slot (the phase-243 duplication bug).
+        val at = if (prevRaw.isEmpty()) -1 else {
+            val anchored = doc.content.indexOf(prevRaw, editingAnchorByte)
+            if (anchored >= 0) anchored else doc.content.indexOf(prevRaw)
+        }
+        if (at >= 0) {
+            val endByte = (at + prevRaw.length).coerceAtMost(doc.content.length)
+            doc = MarkdownBlockTokenizer.replaceContentRun(doc, at, endByte, newRaw)
+        } else {
+            // Fallback when the run cannot be located by text (an external
+            // replace, or a checkbox toggle elsewhere shifted earlier bytes):
+            // the block-index path still re-tokenizes the window consistently.
+            doc = MarkdownBlockTokenizer.replaceBlock(doc, blockIndex, newRaw)
+        }
+        onValueChange(doc.content)
+    }
 
     // External change (plugin replace, session, version restore) → adopt it and
     // collapse any open raw editor. Our own lived-through edits set `dirty` so
@@ -98,12 +134,6 @@ fun HybridMarkdownEditor(
         } else if (dirty) {
             dirty = false
         }
-    }
-
-    fun emitBlockEdit(blockIndex: Int, newRaw: String) {
-        dirty = true
-        doc = MarkdownBlockTokenizer.replaceBlock(doc, blockIndex, newRaw)
-        onValueChange(doc.content)
     }
 
     Column(
@@ -128,8 +158,12 @@ fun HybridMarkdownEditor(
                     label = blockLabel(block),
                     value = editingText,
                     onValueChange = { newRaw ->
+                        // The previous source is the CURRENT field text (read
+                        // from state, not the composition-time value), so fast
+                        // IME bursts between frames still replace the right run.
+                        val prev = editingText
                         editingText = newRaw
-                        emitBlockEdit(index, newRaw)
+                        emitBlockEdit(prev, index, newRaw)
                     },
                     onDone = {
                         editingBlock = -1
@@ -153,7 +187,11 @@ fun HybridMarkdownEditor(
                         doc = MarkdownBlockTokenizer.toggleCheckbox(doc, candidateIndex)
                         onValueChange(doc.content)
                     },
-                    onEdit = { editingBlock = index; editingText = doc.blockSource(block) }
+                    onEdit = {
+                        editingBlock = index
+                        editingText = doc.blockSource(block)
+                        editingAnchorByte = sourceOffsetOfLine(doc.lines, block.startLine)
+                    }
                 )
             }
         }

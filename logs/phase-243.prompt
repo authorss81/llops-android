@@ -1,0 +1,140 @@
+# PIPELINE CONTEXT (injected by phase_runner.sh — do not delete)
+
+## Hard rules (AGENTS.md)
+## Hard rules
+- **MAJOR ARCHITECTURAL CHANGE → ASK THE USER FIRST.** Any change that restructures packages, replaces the navigation model (e.g., migrating away from `mutableStateOf` navigation to Navigation Compose), adds a new DB schema/migration, introduces SQLCipher, adds new dependencies with broad impact, or rewrites a subsystem (canvas renderer, encryption layer) MUST be proposed to the user and get explicit approval BEFORE writing code. Tell the user what's changing, why, and the risk. Do not silently refactor architecture.
+  - **USER APPROVED (2026-08-14): hybrid downloadable-plugin architecture** — the plugin model change (base-APK-size constraint, downloadable signature-verified plugins for heavy native features, compile-time for lightweight plugins, user-approved dynamic updates) was proposed to the user with risks and explicitly approved (commit `9292978`). Implementation proceeds per phases 22–26; the approved design doc is `docs/plugin-architecture.md`.
+- **Android hardware reality**: this is a native Kotlin app targeting API 26+. Every feature must ship with a fallback for older/lower-end devices (API 33- for AGSL, API 31- for dynamic color, low-RAM behavior for 2-core devices). Never silent degradation — one-time non-alarming message + settings re-enable. See ROADMAP Phase 33 + `docs/COMPATIBILITY.md` (to be created).
+- **Kali Linux pentest findings → write to a FILE immediately, not just the agent reply.** Security/pentest agents (running in opencode on the Kali VM) MUST append findings incrementally to `docs/pentest-findings-<YYYY-MM-DD>.md` as they work (one block per finding: severity, evidence, file/line or command output, reproducer), and commit/push after each agent batch. This prevents detail loss when a report grows long or context is truncated. The pentest plan lives in `docs/pentest-plan.md`; the summary report goes to `docs/pentest-report.md`.
+- `allowBackup="false"` + `data_extraction_rules.xml` — never re-enable backup.
+- **Base-APK size is a hard constraint.** Heavy/native features (ML Kit OCR, ML Kit
+  barcode/QR, the MediaPipe `tasks-genai` LLM) MUST NOT be baked into the base APK.
+  They ship as **downloadable, signature-verified plugins** (Phase 23 runtime:
+  HTTPS download → pinned-cert-hash verify → `DexClassLoader` load → capability
+  facade, never direct DB/keystore handles). Lightweight pure-JVM plugins stay
+  compile-time. Do NOT add large native deps to the base app; use a separate
+  plugin module instead. Plan: Phase 22 = architecture skeleton, Phase 23 =
+  downloadable runtime, Phase 24 = user-approved updates, Phase 25 = ink→shape,
+  Phase 26 = lightweight ecosystem, Phase 29 = move the LLM out of the base APK
+  into a downloadable plugin.
+- PBKDF2WithHmacSHA256 600k iterations, AES-256-GCM (12-byte IV, 128-bit tag), AndroidKeyStore-wrapped DEK, in-memory zeroization on lock (`NoteRepository.kt`, `EncryptionService.kt`, `SecurityService.kt`).
+- Never log keys, passwords, or decrypted note content. Never add `INTERNET` usage without a real feature.
+- Known broken things (do NOT trust ROADMAP [x] claims — see ROADMAP.md "POST-AUDIT TRUTH TABLE" @ commit ac781de):
+  - ~~Checksum hashes `noteflow.db`~~ — FIXED: `DatabaseSecurityHelper` HMACs the real `noteflow.sqlite` (`DatabaseSecurityHelper.kt:26`) and the result is surfaced as the `databaseTampered` banner in MainActivity (`NoteflowViewModel.kt:35-55`). This stale claim was corrected in Phase 09.
+  - `pointsJson` (stroke geometry) is FIELD-ENCRYPTED at rest now — title/extractedText/textContent/pointsJson are all encrypted fields (`saveStrokesForPage`, NoteRepository.kt); the Phase 02 restore re-key gap is closed.
+  - "Sync" = WebDAV upload/download of ENCRYPTED backup archives to/from the user's own server (`WebDavSyncService.kt`, HTTPS enforced, HTTP only with explicit opt-in for local-network hosts), reachable from HomeScreen's ⋮ menu via `WebDavSyncDialog` — Phase 14 FIXED the previously-dead menu trigger; AGSL wet-mixing is WIRED through `WetBrushEngine` in `AnnotationCanvas` (gated by `ShaderCapabilityHelper.isAgslSupported` + the `gpuWetBrushesEnabled` setting, verified in the Phase 14 audit); pressure/tilt/timestamp are captured via the official raw-MotionEvent bridge (`pointerInteropFilter`, no reflection); FLAG_SECURE is applied in non-debug builds; R8 minify is ON in release; baseline-profile TOOLCHAIN is WIRED since phase-199 (`:baselineprofile` producer + consumer plugin + pinned profileinstaller + R8 fullMode + shrinkResources) but no profile is generated/committed yet — the guarded `compileArtProfile` stopgap stays active until a real profile lands (see `workspace/phase-199/REPORT.md`; the old dead `baseline-prof.txt` was deleted in the Phase 03 honesty audit). Phase-199 second review-fix round (2026-08-28) completed the producer's lockfile entries and wired `app/build.gradle.kts` `baselineProfile { from(project(":baselineprofile")) }` so `gradle :app:generateBaselineProfile` plans the real producer chain — run it (and any `:baselineprofile:*` producer task) with `--no-configuration-cache`, since the repo sets `org.gradle.configuration-cache=true` and AGP's `CheckAarMetadataTask`/`checkTestedAppObfuscation` fields aren't config-cache-serializable.
+  - WAL checkpoint DOES execute — `checkpointWal()` fully steps the cursor (`NoteRepository.kt:136-144`).
+  - **Phase 14 (2026-08-13) production readiness + LocalSend**: full per-phase audit lives in `workspace/phase-14/AUDIT_REPORT.md`. LocalSend sender (Protocol v2.2, sender-only, local-network only, no new permissions) is implemented in `services/localsend/` (`LocalSendProtocol.kt` pure-JVM + `LocalSendSender.kt` network) and reachable from HomeScreen's ⋮ menu → "Send to Nearby Device (LocalSend)". It sends a single note as HTML, the encrypted vault backup, or the Obsidian/HTML vault archives; the receiving device must human-accept before bytes move. Unit tests: `LocalSendProtocolTest` (18 tests, no network). **Release signing (updated 2026-08-17, phase-57/B1-PLAT-1): the release build FAILS CLOSED when `RELEASE_KEYSTORE_B64` (or `KEYSTORE_FILE`) is unset — the old debug-keystore fallback is gone; see `docs/RELEASE.md` + `B1Plat01ReleaseSigningTest`.**
+  - **Phase 21 (2026-08-14) added the Plugin Store + verified the execution path** (see `docs/PLUGINS.md` "Plugin Store — install/uninstall lifecycle"): `PluginStoreCatalog` (bundled catalog, no network) + `PluginStoreController` (pure-JVM download/delete) + `PluginRegistry.installPlugin/uninstallPlugin` (install-aware registry; `compiledPlugins` = full shipped set, `allPlugins` = installed set) + `SettingsPluginInstallStore`/`SettingsManager.plugin_uninstalled_<id>` (default installed = backward compatible). Delete wipes opt-in + ever-enabled + all `plugins.<id>.*` settings and deletes downloaded assets (`NoteflowPlugin.deleteDownloadedAssets`); Disable keeps data. `CaseChangePlugin` is the store's OPTIONAL plugin (not in `defaultPlugins()`). UI: `PluginStoreDialog` reachable from HomeScreen ⋮ menu → "Plugin Store". Tests: `PluginStoreLifecycleTest` (8), `PluginExecutionSimulationTest` (4). Also fixed a pre-existing `PaletteCatalog.familyFor` hue-band bug (curated swatches misclassified) — `PaletteCatalogTest` is green again.
+  - **Phase 10 (2026-08-13) added a REAL plugin framework** (`app/src/main/kotlin/com/authorss81/noteflow/plugins/`): `NoteflowPlugin` + `PluginCapability` sealed type (`TextTransform`, `OCR`, `WebSearch`, `FileTransfer`, `Assistant`, `Export`), compile-time `PluginRegistry` (no dynamic APK loading), `PluginManager` routing that fails loudly via `PluginResult.Failure`, per-plugin opt-in persisted in `SettingsManager` (`plugin_enabled_<id>`, off by default), a Settings → Plugins dialog (`PluginSettingsDialog`, reachable from HomeScreen's ⋮ menu), and `Rot13TransformPlugin` served through the `TextTransformPlugin` interface and wired into the Markdown editor's Plugins menu (`MarkdownPreviewScreen`). Covered by `PluginFrameworkTest` (10 tests). **Phase 12 made OCR + Web Search real**: `OnDeviceOcrPlugin` (ML Kit text-recognition, offline, no API key) and `DuckDuckGoWebSearchPlugin` (HTTPS, keyless) are registered (`PluginRegistry.kt`) and wired into `EditorScreen` (OCR result dialog) and `MarkdownPreviewScreen` (web-search dialog). The still-unserved capabilities are `FileTransfer`, `Assistant`, `Export` — requests for those fail loudly with `NO_PLUGIN_INSTALLED`. See `docs/PLUGINS.md`.
+  - **Phase 09 (2026-08-13) fixed the two Phase-02 data-loss defects that were still live** (see workspace/phase-09/REPORT.md): (1) H2 — a corrupt/wrong-key DB open no longer DELETES the vault files; `SafeSupportSQLiteOpenHelper` now quarantines them as `*.corrupt-<timestamp>` (bytes preserved), sets a persistent corruption flag, and MainActivity shows `CorruptionRecoveryScreen` (restore-from-backup or explicit start-fresh) before any normal vault UI (`NoteflowDatabase.kt` `quarantineCorruptDatabase`, `DatabaseSecurityHelper.kt` corruption flags, `MainActivity.kt` `CorruptionRecoveryScreen`). (2) H1 — a failed restore no longer bricks the app: the backup password is validated BEFORE `closeDatabase()` (`ImportExportService.validateBackupPassword` now called from `HomeScreen.performRestore` and `NoteflowViewModel.attemptRecoveryFromBackup`), and on any post-close failure the Room instance is reopened (`NoteflowDatabase.dispose()` + `NoteRepository.reopenDatabase`) and the process restarts via the existing restart dialog. (3) C1 — `reencryptPlaintextFields` now also re-encrypts `note_versions.{title,extractedText}`, matching the cross-device migrate map.
+  - **Phase 03 (2026-08-13) removed these dead/fake features**: the LibMyPaint C++ stub + whole engine-selector stack (`mypaint_jni.cpp`/`CMakeLists.txt`, `LibMyPaintJni`, `BrushEngine`/`BrushEngineFactory`, `HardwareProfiler`/`RenderingEngineTier`, `BrushEngineSettingsDialog`, `SettingsManager.renderingEngineOverride` — all deleted; the canvas renders via `WetBrushEngine`); `HandwritingRecognitionService` + `HandwritingToTextDialog` (dictionary-hash stub, unreachable — deleted); `FtsSearchEngine` (misnamed in-memory loop — deleted; vault search now uses a cached decrypted corpus in `NoteRepository`). Shape auto-snap is now WIRED (`ShapeRecognitionHelper.trySnapShape` runs on freehand draw-end in `AnnotationCanvas`, gated by the `shapeAutoSnapEnabled` setting; wet tools, LASER, DOTTED and NEON are excluded, and the RECT/ARROW/LINE detectors require real geometry fits so plain handwriting isn't snapped).
+
+## Roadmap state (August 2026)
+
+## Orientation (read these files yourself — do NOT rely on memory)
+- docs/ARCHITECTURE.md = living architecture map (package layout, core
+  subsystem file:line anchors, build/CI essentials, gotchas). READ IT.
+- docs/phase-status.md = phase status truth table. READ IT, then UPDATE
+  your phase's row when you finish.
+- workspace/PHASES.md = full phase table.
+- workspace/SECURITY_FIX_PLAN.md + docs/security-report*.md = security
+  findings status (only if your phase touches security).
+
+## Your task
+Execute the phase described in workspace/phase-243/PROMPT.md. Read that file now and
+complete it fully. The context above is orientation only.
+
+# Phase 243 — Fix Markdown Editor Text Duplication + Remove Page Rotation Feature
+
+## Goal
+Fix two user-reported issues from screenshots:
+1. **Markdown text duplicates** — typing `*hi*` shows `_bu - hi` multiple times in the editor (the raw source is rendered MULTIPLE times, and the block split causes content to appear duplicated)
+2. **Remove page rotation** — the user explicitly said "dlette page rotation it is not needed" (delete page rotation). The two-finger twist rotation feature in the canvas should be removed.
+
+## Context — Verified Root Cause (from screenshots)
+
+### Bug 1: Markdown text duplication
+**File:** `app/src/main/kotlin/com/authorss81/noteflow/ui/components/markdown/HybridMarkdownEditor.kt`
+**Symptom (from screenshot):** User typed `hi` and the screen shows `_bu - hi` appearing MULTIPLE times in the editor, with `* hi *` shown below it as rendered preview.
+
+**Root cause:** The editor at line 130-133 calls `emitBlockEdit(index, newRaw)` on every keystroke, which:
+1. Sets `dirty = true` (line 104)
+2. Calls `doc = MarkdownBlockTokenizer.replaceBlock(doc, index, newRaw)` (line 105) — re-tokenizes the entire document on every keystroke
+3. Calls `onValueChange(doc.content)` (line 106) — emits the full content
+
+But the rendered blocks below still show the OLD content. The `LaunchedEffect(value)` at line 93 checks `if (!dirty && value != doc.content)` — if `dirty` is true, it skips the re-tokenize. BUT the parent (EditorScreen) is also receiving the updated `value` via `onValueChange` and updating its own state, which then causes a re-render. The re-render re-runs the LaunchedEffect with the new value but the `dirty` is still true so nothing happens. HOWEVER, the next call to `RawBlockEditor` in the forEachIndexed at line 125 gets a new value from the `editingText` state but the state's update flow has a race condition.
+
+The actual bug: The `editingText` local state in the composable at line 87 is set on every keystroke via the OutlinedTextField's onValueChange. But the `value` parameter coming INTO the composable (line 70) is the PARENT's value, which is `doc.content`. When the user types, the OutlinedTextField updates `editingText`, calls `onValueChange` which is `emitBlockEdit` which updates `doc` and calls `onValueChange(doc.content)`. The parent updates its state and re-passes it down. The `LaunchedEffect(value)` at line 93 sees the same value, dirty is true, so it does nothing. BUT there's a race: the `editingText` local state can become stale because the parent might pass a different value (the full document with the raw block) and the editor's local state `editingText` only updates via the OutlinedTextField.
+
+Multiple `_bu` appearing — this is because the block tokenizer is including the raw block in its rendered output OR there are multiple blocks being created when the user types `*hi*` and the tokenizer creates:
+- Block 1: empty paragraph
+- Block 2: the typed text with `*` markers
+- The `*` at the start of `*hi*` gets interpreted as italic markdown, which when rendered shows the `_` underline
+
+The fix: The `MarkdownBlockTokenizer.replaceBlock` should NOT re-tokenize the entire document. It should only update the specific block. OR the `onValueChange` should pass only the affected block's content, not the whole document.
+
+### Bug 2: Remove page rotation feature
+**File:** `app/src/main/kotlin/com/authorss81/noteflow/ui/screens/EditorScreen.kt`
+**Symptom:** User said "dlette page rotation it is not needed" — they want the two-finger twist rotation feature removed.
+
+**Current code:**
+- `EditorScreen.kt:572` `var canvasTwistEnabled by remember { mutableStateOf(viewModel.settings.canvasTwistEnabled) }`
+- `EditorScreen.kt:1353-1359` rotation code that calls `CanvasRotationPolicy.accumulate` when 2 fingers are down
+- `EditorScreen.kt:2711, 3131, 3182, 3196` applies `rotationZ = internalRotationDegrees` to the canvas
+- `AnnotationCanvas.kt:1323-1364` the 2-finger handler that detects rotation
+
+**Fix:** Remove all rotation code:
+1. Remove `canvasTwistEnabled` from SettingsManager (or default to false and hide the UI)
+2. Remove the rotation block from AnnotationCanvas.kt:1353-1359
+3. Remove `rotationZ` from all `Modifier.graphicsLayer { ... }` calls
+4. Remove the rotation settings UI from `Canvas & Paper Options` sheet
+5. Remove `CanvasRotationPolicy` and its tests
+6. Keep `phase-238`'s `WindowSizeClass` adaptive layout (that was a separate fix for responsive UI)
+
+## Files to Fix
+
+### 1. `app/src/main/kotlin/com/authorss81/noteflow/ui/components/markdown/HybridMarkdownEditor.kt`
+- Fix the block tokenizer to NOT emit multiple blocks when user types `*hi*`
+- Fix the `emitBlockEdit` function to only update the specific block, not re-tokenize the entire document
+- The fix: keep `doc` stable, only update the specific block's source
+- The `MarkdownBlockTokenizer.replaceBlock` should take the EXISTING doc and just replace the specific block's source, preserving the other blocks' structure
+
+### 2. `app/src/main/kotlin/com/authorss81/noteflow/services/MarkdownBlockTokenizer.kt`
+- Fix `replaceBlock` to be an in-place mutation of the existing document
+- Don't re-tokenize the whole document
+
+### 3. `app/src/main/kotlin/com/authorss81/noteflow/ui/screens/EditorScreen.kt`
+- Remove `canvasTwistEnabled` state and setting
+- Remove `internalRotationDegrees` state
+- Remove `rotationDegrees` from settings
+- Remove `onRotationDegreesChanged` callback
+- Remove the rotation handler in `AnnotationCanvas.kt:1353-1359`
+
+### 4. `app/src/main/kotlin/com/authorss81/noteflow/ui/components/AnnotationCanvas.kt`
+- Remove the rotation calculation block
+- Keep the zoom and pan (no rotation)
+
+### 5. `app/src/main/kotlin/com/authorss81/noteflow/services/CanvasRotationPolicy.kt`
+- Delete the file entirely
+
+### 6. `app/src/main/kotlin/com/authorss81/noteflow/services/SettingsManager.kt`
+- Remove `canvasTwistEnabled`, `canvasRotationDegreesForPage` keys
+- Migration: existing user data — just ignore these keys
+
+### 7. Remove the rotation toggle from `Canvas & Paper Options` sheet (EditorScreen.kt around line 5380-5390)
+
+## Constraints
+- No schema change
+- No new dependencies
+- No `.github/workflows/` edits
+- Must not break existing tests (run `gradle testDebugUnitTest`)
+- The remaining `Modifier.graphicsLayer` must still compile
+
+## DoD
+- `gradle :app:assembleDebug` + `assembleRelease` green
+- `gradle :app:testDebugUnitTest` 3420+ tests green (some rotation tests will need to be deleted)
+- `gradle :app:lintDebug` 0 errors
+- Manual test: typing `*hi*` in markdown editor shows text only ONCE, no `_bu` duplication
+- Manual test: 2-finger gesture no longer rotates the canvas
+- `workspace/phase-243/REPORT.md` with file:line evidence

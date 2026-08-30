@@ -67,28 +67,6 @@ class Phase223DraftingGridSnapshotTest {
         }
     }
 
-    @Test
-    fun rotatedCanvas() {
-        paparazzi.snapshot(name = "phase223_rotated_canvas") {
-            NoteflowTheme(themeMode = AppThemeMode.LIGHT) {
-                // A 20° rotationZ applied through graphicsLayer — the same mechanism
-                // the canvas rotate feature uses for the whole world layer.
-                Box(
-                    Modifier
-                        .fillMaxSize()
-                        .padding(24.dp)
-                        .graphicsLayer {
-                            rotationZ = 20f
-                            transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0.5f, 0.5f)
-                            clip = true
-                        }
-                ) {
-                    GridSheet(template = "isometric")
-                }
-            }
-        }
-    }
-
     @androidx.compose.runtime.Composable
     private fun GridSheet(template: String) {
         Box(

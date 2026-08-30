@@ -3,7 +3,6 @@ package com.authorss81.noteflow
 import com.authorss81.noteflow.data.model.PointF
 import com.authorss81.noteflow.data.model.Stroke
 import com.authorss81.noteflow.data.model.StrokeTool
-import com.authorss81.noteflow.services.CanvasRotationPolicy
 import com.authorss81.noteflow.services.PerspectiveGridPolicy
 import com.authorss81.noteflow.services.ShapeRecognitionHelper
 import org.junit.Assert.assertEquals
@@ -177,58 +176,8 @@ class Phase223PerspectiveGridPolicyTest {
     }
 
     // --- Rotation matrix ---
-    @Test
-    fun rotationMatrix_zeroDegrees_isIdentity() {
-        val (x, y) = CanvasRotationPolicy.rotatePoint(1f, 2f, 0f)
-        assertEquals(1f, x, 1e-5f)
-        assertEquals(2f, y, 1e-5f)
-    }
-
-    @Test
-    fun rotationMatrix_90Degrees_isQuarterTurn() {
-        // (1,0) rotated 90° CCW -> (0,1) in Compose's y-down screen space the
-        // convention differs, but the policy is applied consistently; verify the
-        // unit-circle point (1,0) maps to (cos,sin).
-        val (x, y) = CanvasRotationPolicy.rotatePoint(1f, 0f, 90f)
-        assertEquals(kotlin.math.cos(java.lang.Math.toRadians(90.0)), x.toDouble(), 1e-4)
-        assertEquals(kotlin.math.sin(java.lang.Math.toRadians(90.0)), y.toDouble(), 1e-4)
-    }
-
-    @Test
-    fun rotationMatrix_isUnitPreserving() {
-        for (deg in floatArrayOf(0f, 15f, 45f, -120f, 270f)) {
-            val (x, y) = CanvasRotationPolicy.rotatePoint(3f, 4f, deg)
-            val len = kotlin.math.sqrt(x * x + y * y)
-            assertEquals(5.0, len.toDouble(), 1e-3)
-        }
-    }
-
-    @Test
-    fun sanitize_boundsWithoutDiscontinuousSnap() {
-        assertEquals(0f, CanvasRotationPolicy.sanitize(0f), 1e-5f)
-        // ±360 is visually identical to upright via rotationZ, so it clamps at
-        // the bound (no mid-gesture snap-to-0 jump at ~359.5°).
-        assertEquals(360f, CanvasRotationPolicy.sanitize(360f), 1e-5f)
-        assertEquals(-360f, CanvasRotationPolicy.sanitize(-360f), 1e-5f)
-        assertEquals(90f, CanvasRotationPolicy.sanitize(90f), 1e-5f)
-        assertEquals(360f, CanvasRotationPolicy.sanitize(450f), 1e-5f)
-        assertEquals(-360f, CanvasRotationPolicy.sanitize(-450f), 1e-5f)
-        assertEquals(0f, CanvasRotationPolicy.sanitize(Float.NaN), 1e-5f)
-        assertEquals(0f, CanvasRotationPolicy.sanitize(Float.POSITIVE_INFINITY), 1e-5f)
-        assertEquals(0f, CanvasRotationPolicy.sanitize(Float.NEGATIVE_INFINITY), 1e-5f)
-    }
-
-    @Test
-    fun accumulate_sumsIntoSanitizedTotal() {
-        assertEquals(45f, CanvasRotationPolicy.accumulate(10f, 35f), 1e-5f)
-        assertEquals(-40f, CanvasRotationPolicy.accumulate(-10f, -30f), 1e-5f)
-        // 350 + 20 -> clamps to the +360 bound; rotationZ(360) renders upright.
-        assertEquals(360f, CanvasRotationPolicy.accumulate(350f, 20f), 1f)
-        // A full turn accumulates continuously (clamps to the bound, never a
-        // discontinuous fold back to 0).
-        assertEquals(360f, CanvasRotationPolicy.accumulate(0f, 360f), 1e-5f)
-        assertEquals(-10f, CanvasRotationPolicy.accumulate(30f, -40f), 1e-5f)
-    }
+    // (Phase 243: two-finger canvas twist removed; the rotation matrix, sanitize
+    // and accumulate tests were deleted with CanvasRotationPolicy.)
 
     @Test
     fun stepFactor_scalesLineFamiliesWithoutBreakingGeometry() {

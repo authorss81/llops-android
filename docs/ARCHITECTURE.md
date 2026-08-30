@@ -246,7 +246,7 @@
 | `data/model/` | `Entities.kt`, `StrokeModels.kt` | Room entities (8) + stroke/ink types |
 | `data/db/` | `NoteflowDatabase.kt`, `Daos.kt` | Room DB (schema v9, 8 DAOs), corrupt-DB quarantine |
 | `data/repository/` | `NoteRepository.kt`, `LruBoundedMap.kt` | Encrypted read/write, search corpus, WAL checkpoint, re-key |
-| `services/` | `EncryptionService.kt`, `SecurityService.kt`, `DatabaseSecurityHelper.kt`, `VaultKeyHolder.kt`, `ExportSessionPolicy.kt`, `WetBrushEngine.kt`, `WebDavSyncService.kt`, `ImportExportService.kt`, `ImportArchivePolicy.kt`, `PaletteCatalog.kt`, `ColorModePersistencePolicy.kt`, `ShapeRecognitionHelper.kt`, `SsrfHostPolicy.kt`, `VoiceNoteCrypto.kt`, `DecryptFailurePolicy.kt`, `BrushEdgePolicy.kt`, `PerspectiveGridPolicy.kt`, `CanvasRotationPolicy.kt`, `TimelapsePolicy.kt`, `TimelapseExporter.kt` | Non-UI: crypto/vault, brush math, sync, import/export, zip-import zip-bomb policy (B1-DB-5), palette, rainbow-mode persistence decision table (phase-122), SSRF blocklist (B1-NET-04), voice-note audio cryptor (B1-DB-3), decrypt-failure render decision (B1-DB-8), brush cap/join roundness policy (phase-121); phase-223 drafting-grid geometry + canvas-rotation math; phase-224 timelapse timing model + MediaCodec/MediaMuxer MP4 export |
+| `services/` | `EncryptionService.kt`, `SecurityService.kt`, `DatabaseSecurityHelper.kt`, `VaultKeyHolder.kt`, `ExportSessionPolicy.kt`, `WetBrushEngine.kt`, `WebDavSyncService.kt`, `ImportExportService.kt`, `ImportArchivePolicy.kt`, `PaletteCatalog.kt`, `ColorModePersistencePolicy.kt`, `ShapeRecognitionHelper.kt`, `SsrfHostPolicy.kt`, `VoiceNoteCrypto.kt`, `DecryptFailurePolicy.kt`, `BrushEdgePolicy.kt`, `PerspectiveGridPolicy.kt`, `TimelapsePolicy.kt`, `TimelapseExporter.kt` | Non-UI: crypto/vault, brush math, sync, import/export, zip-import zip-bomb policy (B1-DB-5), palette, rainbow-mode persistence decision table (phase-122), SSRF blocklist (B1-NET-04), voice-note audio cryptor (B1-DB-3), decrypt-failure render decision (B1-DB-8), brush cap/join roundness policy (phase-121); phase-223 drafting-grid geometry (canvas-rotation math REMOVED in phase-243); phase-224 timelapse timing model + MediaCodec/MediaMuxer MP4 export |
 | `services/localsend/` | `LocalSendProtocol.kt`, `LocalSendSender.kt`, `LocalSendPairing.kt`, `SettingsLocalSendPairedDeviceStore.kt`, `LocalSendDiscoveryPolicy.kt`, `FileTransferSender.kt`, `LocalSendSenderFactory.kt` | Pure-JVM LocalSend v2.2 + real network sender + TOFU pairing gate (B1-NET-02) + discovery/sweep gate (B1-NET-06) + FileTransfer seam/factory (phase-173) |
 | `plugins/` | `NoteflowPlugin.kt`, `PluginRegistry.kt`, `PluginManager.kt`, `PluginDiagnostics.kt`, `PluginLifecycle.kt` | Compile-time plugin framework + typed serving interfaces + capability routes |
 | `plugins/runtime/` | `RuntimePluginLoader.kt`, `SignatureVerifiedPluginRuntime.kt`, `ArtifactSignatureVerifier.kt`, `PinnedCertHash.kt`, `PinnedTlsConnector.kt`, `PluginManifestFetcher.kt`, `HttpsPluginDownloadTransport.kt`, `PluginDownloader.kt`, `PluginUpdateEngine.kt`, `CompileTimePluginPinStore.kt`, `PluginFrameworkClassLoader.kt`, `ArtifactStaticScan.kt` | Downloadable-plugin runtime: pinned-cert verify (manifest + artifact transports, no redirects), DexClassLoader (scoped `plugins.*`-only parent), verify-time static content scan (B1-AUTH-01), updates |
@@ -671,10 +671,9 @@
 > `SelectionTransformPolicyTest` (12) + `paparazzi/SelectionTransformOverlayPaparazziTest`
 > (env-broken on runner; VisDoD via `RenderSelectionTransform.java` Java2D → PNG).
 > `assembleDebug` green, no schema, no new deps.
-> **Review fixes (2026-08-27)**: `SelectionCornerHandle` accepts `canvasRotationDegrees`
-> (thru `StrokeSelectionOverlay` ← `internalRotationDegrees`) and un-rotates the
-> drag delta into world space before `/zoom` so corner-scale stays axis-true under
-> canvas rotation; handle sizes scale down on tiny selections (floored ~0.33×) so
+> **Review fixes (2026-08-27)**: corner-scale drag deltas divide by `zoom` (the
+> canvas-rotation un-rotation was REMOVED with the feature in phase-243); handle
+> sizes scale down on tiny selections (floored ~0.33×) so
 > they don't overlap/dwarf the selection; the phase-216 blockquote whitespace typo
 > here was fixed and `candidateScaleFromDrag` corrected to `cornerScaleFromDrag`.
 
@@ -697,13 +696,12 @@
 > lattice); `AnnotationCanvas.drawPaperTemplate` extended with
 > `perspective_1pt`/`perspective_2pt`/`isometric`; editor picker chips +
 > `TemplateLibraryDialog` customisable-paper gating; `PaperTemplatePreview` renders
-> the real geometry as the thumbnail. (2) **Rotate** — pure-JVM
-> `services/CanvasRotationPolicy.kt` (sanitize/rotatePoint/accumulate ±360);
-> two-finger twist folded into the existing pinch/pan handler via a `calculateRotation()`
-> diff gated by `canvasTwistEnabled`; `rotationZ` applied to all 3 world
-> `graphicsLayer` blocks; per-page `SettingsManager.canvas_rotation_<page>` prefs
-> (no schema), ruler + twist toggles in `CanvasSettingsBottomSheet`, rotation reset
-> via `onResetZoomPan`. (3) **Ruler** — `ShapeRecognitionHelper.forceLineSnap`
+> the real geometry as the thumbnail. (2) ~~**Rotate**~~ **REMOVED in phase-243**
+> (2026-08-30): the two-finger canvas twist (twist gesture +
+> `CanvasRotationPolicy` + `rotationZ` + per-page `canvas_rotation_<page>` prefs +
+> twist/rotation UI) was deleted wholesale per user request; the two-finger
+> handler is classic pinch-zoom + pan again and the corner-scale handle divides
+> drag deltas by zoom without rotation compensation. (3) **Ruler** — `ShapeRecognitionHelper.forceLineSnap`
 > collapses ANY drag to an exact start→end LINE (bypasses the auto-snap
 > `perpendicularDeviation` gate), live start→current preview, shared long-press
 > haptic; `rulerEnabled` added to the drag-`pointerInput` key list. No schema, no
@@ -725,14 +723,11 @@
 > pure radial pinch yields small non-zero deltas EVERY frame (fingers never
 > exactly equidistant from the centroid), which previously accumulated into a
 > slow rotation and forced `event.changes.forEach { it.consume() }` (drawing
-> died while two fingers were down). `services/CanvasRotationPolicy.kt` now
-> gates every 2-finger event: `ROTATION_DEAD_ZONE_DEGREES=2f`,
-> `ZOOM_DOMINANCE_THRESHOLD=0.03f` (zoom deviating >3% = PINCH, suppressed),
-> `PAN_DOMINANCE_PX=12f` (centroid travelling >12px = PAN, suppressed), wired as
-> `intentionalRotationDelta(event.calculateRotation(), zoomChange, panChange.getDistance())` —
-> only a genuine twist (stable separation + stationary centroid + real angular
-> delta) rotates; jitter/no-op multi-touch neither transforms nor consumes, so
-> single-finger drawing survives. (b) Stroke dots landed far from the touch:
+> died while two fingers were down). (Gating lived in
+> `services/CanvasRotationPolicy.kt` — deleted with the feature in phase-243;
+> the pinch-regression conclusion survives: the two-finger handler now applies
+> only zoom/pan and never rotates, so a radial pinch can no longer drift the
+> canvas.) (b) Stroke dots landed far from the touch:
 > compose-ui **1.7.6** already offsets the bridge's MotionEvent to the filter
 > NODE (see `PointerInteropFilter.android.kt` `toMotionEventScope(localToRoot(Zero))`
 > → `offsetLocation(-localToRoot)`), so the old drain subtract of the box's
