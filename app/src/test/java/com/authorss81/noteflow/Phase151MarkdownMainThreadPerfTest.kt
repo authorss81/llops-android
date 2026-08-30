@@ -376,8 +376,10 @@ class Phase151MarkdownMainThreadPerfTest {
         assertFalse("no per-block candidate filter remains", editor.contains("candidates.filter { it.blockIndex == index }"))
         assertTrue("the document is tokenized once into a MarkdownDocument",
             editor.contains("MarkdownBlockTokenizer.tokenize(value)"))
-        assertTrue("the keystroke path is the incremental replaceBlock",
-            editor.contains("MarkdownBlockTokenizer.replaceBlock(doc, blockIndex, newRaw)"))
+        assertTrue("the keystroke primary path is the incremental replaceContentRun",
+            editor.contains("MarkdownBlockTokenizer.replaceContentRun(doc, at, endByte, newRaw)"))
+        assertTrue("the keystroke fallback is the incremental replaceBlock",
+            editor.contains("MarkdownBlockTokenizer.replaceBlock(doc, ") || editor.contains("MarkdownBlockTokenizer.replaceBlock(doc,"))
         assertTrue("candidate indexes come from the pre-indexed map",
             editor.contains("doc.candidatesByBlock[index] ?: emptyList()"))
         assertTrue("block sources come from the cached lines",

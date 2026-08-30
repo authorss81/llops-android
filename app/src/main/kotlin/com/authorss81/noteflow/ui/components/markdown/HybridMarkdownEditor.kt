@@ -101,7 +101,18 @@ fun HybridMarkdownEditor(
         return off
     }
 
-    fun emitBlockEdit(prevRaw: String, blockIndex: Int, newRaw: String) {
+    /** Line index (into [lines]) that CONTAINS byte [byte] of the joined string. */
+    fun lineIndexAtByte(lines: List<String>, byte: Int): Int {
+        var off = 0
+        for ((i, line) in lines.withIndex()) {
+            val next = off + line.length + 1
+            if (byte < next) return i
+            off = next
+        }
+        return lines.lastIndex
+    }
+
+    fun emitBlockEdit(prevRaw: String, newRaw: String) {
         dirty = true
         // Anchor by TEXT, not index: locate the previous edited source (which we
         // emitted verbatim) at/after the recorded run start and replace exactly
@@ -116,9 +127,17 @@ fun HybridMarkdownEditor(
             doc = MarkdownBlockTokenizer.replaceContentRun(doc, at, endByte, newRaw)
         } else {
             // Fallback when the run cannot be located by text (an external
-            // replace, or a checkbox toggle elsewhere shifted earlier bytes):
-            // the block-index path still re-tokenizes the window consistently.
-            doc = MarkdownBlockTokenizer.replaceBlock(doc, blockIndex, newRaw)
+            // replace, or a checkbox toggle elsewhere shifted earlier bytes).
+            // Never write into an unrelated block: only replace a block whose
+            // line range still overlaps the edited anchor line. If no block
+            // qualifies, drop the edit (the parent `value` re-syncs `doc` via
+            // the LaunchedEffect). Mirrors replaceContentRun's invariant that the
+            // produced doc is a fresh full re-tokenize of the resulting content.
+            val anchorLine = lineIndexAtByte(doc.lines, editingAnchorByte)
+            val targetIndex = doc.blocks.indexOfFirst { anchorLine in it.startLine..it.endLine }
+            if (targetIndex >= 0) {
+                doc = MarkdownBlockTokenizer.replaceBlock(doc, targetIndex, newRaw)
+            }
         }
         onValueChange(doc.content)
     }
@@ -163,7 +182,7 @@ fun HybridMarkdownEditor(
                         // IME bursts between frames still replace the right run.
                         val prev = editingText
                         editingText = newRaw
-                        emitBlockEdit(prev, index, newRaw)
+                        emitBlockEdit(prev, newRaw)
                     },
                     onDone = {
                         editingBlock = -1

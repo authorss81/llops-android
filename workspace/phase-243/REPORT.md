@@ -59,7 +59,7 @@ replaces a **contiguous byte run of the live document source** and re-tokenizes
 
 ### Tests
 
-`Phase243MarkdownEditorDuplicationTest` (7 tests, all green): byte-exact
+`Phase243MarkdownEditorDuplicationTest` (8 tests, all green, after review-fix): byte-exact
 expected content for each keystroke; `EditorSim` mirror of the editor's runtime
 state asserts `doc.content never regresses` and `assertConsistent` re-tokenizes
 the whole document fresh (`MarkdownBlockTokenizer.tokenize(value)`) and checks
@@ -121,3 +121,65 @@ Removed **every** surface of the Phase-223/240 "canvas twist" feature:
 - `gradle lintDebug` — 0 errors.
 - No new dependencies, `.github/workflows/` untouched, base-APK-size rule
   intact, `allowBackup=false` untouched, no DB schema/migration.
+---
+
+## Review fixes (2026-08-30)
+
+Addressed the review findings on the committed phase-243 work; no behavior
+change to the core duplication algorithm or the rotation removal (both re-verified).
+
+### F1 — `Phase243MarkdownEditorDuplicationTest` over-strict invariants
+
+The `assertInvariants`/`assertConsistent` helpers asserted that blocks "cover
+every line" and that `joinBlockSources` round-trips the content byte-for-byte.
+That is stronger than the tokenizer actually guarantees: for content ending in a
+trailing newline (e.g. `a\n\nb\n`), the trailing empty line is owned by NO block
+(`MarkdownBlockTokenizer.blocksFromLines` grows the first block of a region
+backward but never forward over a trailing blank), so the join drops it and the
+over-strict claim would fail on such input. The helpers were relaxed to the real
+semantics:
+
+- `assertInvariants` now asserts contiguity/non-overlap for the covered run and
+  that any uncovered TAIL consists solely of blank lines (with a diagnostic);
+- `assertConsistent`'s round-trip check asserts the block-source join reproduces
+  the covered lines exactly, and separately that the content is exactly that
+  join plus `"\n"` × the number of trailing blank lines (`"\n".repeat(count)`).
+
+A new regression test, `edits near a trailing blank run stay consistent`,
+edits a block adjacent to a trailing `\n` and asserts the relaxed invariants
+hold through successive keystrokes (this content would have thrown under the
+previous helpers).
+
+### F2 — guarded `emitBlockEdit` fallback (can't write into an unrelated block)
+
+`HybridMarkdownEditor.emitBlockEdit`'s fallback (reached only when the
+TEXT-anchored replacement cannot find `prevRaw`, i.e. an external replace or a
+checkbox toggle elsewhere shifted earlier bytes) previously called
+`MarkdownBlockTokenizer.replaceBlock(doc, blockIndex, newRaw)` with the
+composition-time index. If that index had drifted to a neighbouring block the
+edit would rewrite an unrelated block. The fallback now re-anchors by line:
+`lineIndexAtByte(doc.lines, editingAnchorByte)` then
+`doc.blocks.indexOfFirst { anchorLine in it.startLine..it.endLine }` and
+replaces only that block; if no block contains the anchor line it drops the edit
+(the parent `value` re-syncs `doc` via the `LaunchedEffect`). This preserves the
+Phase-151 pinned incremental `replaceBlock` path while never corrupting a
+neighbour. A small `lineIndexAtByte` helper was added to the editor.
+
+### F3 — Phase151 source-pin updated for the new fallback
+
+`Phase151MarkdownMainThreadPerfTest` source-pins the keystroke path. It asserted
+the now-stale literal `MarkdownBlockTokenizer.replaceBlock(doc, blockIndex,
+newRaw)`; updated to pin the PRIMARY incremental `replaceContentRun(doc, at,
+endByte, newRaw)` call and the incremental `replaceBlock(doc, …)` fallback
+(variable-agnostic), so the no-full-document-re-tokenize guarantee still holds.
+
+### Verification (this round)
+
+- `gradle :app:testDebugUnitTest` — **3557 green / 0 failures** (3556 + 1 new
+  `Phase243MarkdownEditorDuplicationTest` test). Full suite run twice; the
+  pre-existing `Phase151MarkdownMainThreadPerfTest` near-linear-scaling timing
+  flake failed once under the full-suite run and passed in isolation (known
+  timing flake, not related to these changes).
+- `gradle :app:assembleDebug` — green.
+- `gradle :app:lintDebug` — 0 errors.
+- No schema change, no new deps, `.github/workflows/` untouched.

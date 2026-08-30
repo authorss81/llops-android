@@ -34,10 +34,17 @@ class Phase243MarkdownEditorDuplicationTest {
         return off
     }
 
-    /** Blocks are contiguous, non-overlapping and cover every line. */
+    /**
+     * Blocks are contiguous and non-overlapping, covering every content line
+     * (0 until the first uncovered line). The tokenizer deliberately leaves a
+     * TRAILING BLANK RUN (a trailing `\n`/`\n\n` after the last content) owned
+     * by no block — see [MarkdownBlockTokenizer.blocksFromLines] — so the
+     * highest covered line may be less than `lines.lastIndex`. The optional
+     * uncovered tail (if any) must be entirely blank lines.
+     */
     private fun assertInvariants(doc: MarkdownDocument) {
         if (doc.blocks.isEmpty()) {
-            assertEquals(0, doc.lines.size)
+            assertTrue("all-blank docs still keep every line", doc.lines.all { it.isBlank() })
             return
         }
         var expectedStart = 0
@@ -47,7 +54,10 @@ class Phase243MarkdownEditorDuplicationTest {
             assertTrue("end < lines", b.endLine < doc.lines.size)
             expectedStart = b.endLine + 1
         }
-        assertEquals("blocks cover every line", doc.lines.size, expectedStart)
+        assertTrue(
+            "uncovered trailing lines must be blank (got: ${doc.lines.drop(expectedStart).map { "[$it]" }})",
+            doc.lines.drop(expectedStart).all { it.isBlank() }
+        )
     }
 
     /** The incremental doc must agree exactly with a fresh full re-tokenize. */
@@ -58,8 +68,18 @@ class Phase243MarkdownEditorDuplicationTest {
         assertEquals("blocks match a fresh full re-tokenize", fresh.blocks, doc.blocks)
         assertEquals("candidates match a fresh full pass", fresh.candidates, doc.candidates)
         assertEquals("candidatesByBlock is consistent", fresh.candidatesByBlock, doc.candidatesByBlock)
-        assertEquals("join of block sources round-trips byte-exact", doc.content,
-            doc.blocks.joinToString("\n") { doc.blockSource(it) })
+        // Round-trip: block sources joined with `\n` reproduce the content up to
+        // the last owned line; any trailing BLANK RUN is preserved as the content's
+        // trailing newlines and asserted separately (the tokenizer owns no trailing
+        // block for a trailing `\n`). Several blank tail lines == several trailing
+        // `\n`s in the content string.
+        val joined = doc.blocks.joinToString("\n") { doc.blockSource(it) }
+        val lastOwned = if (doc.blocks.isEmpty()) -1 else doc.blocks.last().endLine
+        assertEquals("block-source join reproduces the covered content line-for-line",
+            doc.lines.subList(0, lastOwned + 1).joinToString("\n"), joined)
+        val trailingBlankCount = doc.lines.size - (lastOwned + 1)
+        assertEquals("content is exactly the covered join plus the trailing blank run",
+            joined + "\n".repeat(trailingBlankCount), doc.content)
     }
 
     /** Mirrors the editor's anchored keystroke path (emitBlockEdit). */
@@ -167,6 +187,22 @@ class Phase243MarkdownEditorDuplicationTest {
     }
 
     // ---- replaceContentRun contract -----------------------------------------
+
+    @Test
+    fun `edits near a trailing blank run stay consistent`() {
+        // Content that ends in a trailing newline (a trailing empty line the
+        // tokenizer deliberately owns with no block). assertConsistent's relaxed
+        // invariants must still hold after replacing a run adjacent to it.
+        val sim = EditorSim("first\n\nlast\n", editingBlock = 0)
+        sim.type("firstX")
+        assertEquals("firstX\n\nlast\n", sim.doc.content)
+        assertConsistent(sim.doc)
+        sim.type("firstXY")
+        assertEquals("firstXY\n\nlast\n", sim.doc.content)
+        assertConsistent(sim.doc)
+        assertEquals(1, sim.doc.content.lines().count { it == "last" })
+        assertTrue(sim.doc.content.endsWith("last\n"))
+    }
 
     @Test
     fun `replaceContentRun matches a full re-tokenize on random docs`() {
