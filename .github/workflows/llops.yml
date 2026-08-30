@@ -48,7 +48,17 @@ concurrency:
 
 env:
   OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
-  OPENCODE_MODEL: opencode/big-pickle,opencode/muse-spark-1.2-contributor-free,opencode/nemotron-3-ultra-free,openrouter/nvidia/nemotron-3-super-120b-a12b:free,opencode/nemotron-3.5-lightning-free,opencode/mimo-v2.5-free,opencode/hy3-free
+  # Model fallback chain (best coding models first, free tier preferred)
+  # Based on OpenCode Zen benchmarks (https://opencode.ai/docs/zen):
+  # - Big Pickle: 50.81% SWE Atlas Codebase QnA (GitHub/PhillipChaffee 2026-08-11), stealth free
+  # - Muse Spark 1.2: AI Index 93.7, GDPval-AA v2 Elo 1631 (#5), Terminal-Bench v2.1 80% (coding-tuned, Meta)
+  # - Nemotron 3 Ultra Free: NVIDIA agentic coding, strong tool use
+  # - Nemotron 3.5 Lightning Free: fast, NVIDIA, good fallback
+  # - MiMo-V2.5 Free: Xiaomi, general coding
+  # - Hy3 Free: additional fallback
+  # The chain tries each model in order; on rate limit, timeout, or model error,
+  # it advances to the next. All are free tier on OpenCode Zen.
+  OPENCODE_MODEL: opencode/big-pickle,opencode/muse-spark-1.2-contributor-free,opencode/nemotron-3-ultra-free,opencode/nemotron-3.5-lightning-free,opencode/mimo-v2.5-free,opencode/hy3-free,openrouter/nvidia/nemotron-3-super-120b-a12b:free
 jobs:
   select-phase:
     # Fix 4: no checkout — read marker files via the GitHub API (one trees call,
