@@ -143,6 +143,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.NonCancellable
 import java.io.File
 import java.util.UUID
 
@@ -4015,6 +4016,13 @@ fun updatePageTags(id: String, tags: String) {
      * autosave BEFORE the flush, so a stale snapshot can never land after this
      * one and the newest state always wins.
      *
+     * Phase 249 (Bug 2): the body runs inside `withContext(NonCancellable)` so
+     * the write COMPLETES even if `viewModelScope` is cancelled while it is in
+     * flight (process kill, low-memory activity teardown, force-stop). The
+     * dispose-flushed stroke (Phase 242) can no longer be silently dropped in
+     * the write window. The phase-242 `cancel() → join()` settle ordering is
+     * preserved verbatim.
+     *
      * This is the single navigate-away flush: every path that leaves the editor
      * (system back, top-bar back, composition dispose) uses it, so a page closed
      * within the 1s debounce window — or mid-gesture, when the canvas has just
@@ -4032,13 +4040,15 @@ fun updatePageTags(id: String, tags: String) {
         pendingDebounce: Job?
     ) {
         viewModelScope.launch {
-            pendingDebounce?.cancel()
-            // B2-UI-3 (phase-73): await settlement. The cancelled debounce either
-            // never started its write (delay pending) or had already launched it —
-            // joining guarantees the stale write is done/cancelled before the
-            // final flush below is issued, so the newest snapshot lands last.
-            pendingDebounce?.join()
-            flushEditorPageSave(pageId, strokes, stickyNotes, embeds, layers)
+            withContext(NonCancellable) {
+                pendingDebounce?.cancel()
+                // B2-UI-3 (phase-73): await settlement. The cancelled debounce either
+                // never started its write (delay pending) or had already launched it —
+                // joining guarantees the stale write is done/cancelled before the
+                // final flush below is issued, so the newest snapshot lands last.
+                pendingDebounce?.join()
+                flushEditorPageSave(pageId, strokes, stickyNotes, embeds, layers)
+            }
         }
     }
 

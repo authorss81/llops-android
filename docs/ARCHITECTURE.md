@@ -1759,6 +1759,27 @@
     topInsetPx).coerceAtLeast(0f)` (`:3489`) and feeds it into both the resting anchors (`:3493`/`:3497`)
     and the drag clamp (`:3587`). Tests: `Phase248MinimapPaneSizeTest` (11, incl. source pins for both
     wires).`
+  - **Implemented in phase-249** (2026-08-30, canvas criticals from `AUDIT_2026-08-30.md`, see
+    `workspace/phase-249/REPORT.md`): (1) **wet throttle grounded in REAL event timestamps + RAW
+    distance** — new pure-JVM `services/WetThrottlePolicy.kt` (`MIN_PX_FOR_WET_SAMPLE = 1.5f` on the raw
+    digitizer delta, `MAX_MS_PER_WET_SAMPLE = 16L` on real MotionEvent uptime, fail-open on missing refs);
+    the `isWet` gate in `AnnotationCanvas.kt:2143-2178` feeds it `sampleTimestampMs` (the exact
+    `eventTime` threaded through `pointerInteropFilter` → `StrokeInputBatcher` → node-local drain) +
+    pre-smoothing `rawCanvasX/rawCanvasY`, tracked in stroke-local `lastRawWetX/Y/TimeMs` (`:1695-1697`,
+    reset `= null` per stroke start `:1922-1924`) — pre-249 wall-clock `now()-16/100L` fabrications and
+    the smoothed-distance `dist >= 6f` floor (which dropped real fast-stroke ink) are gone; non-wet
+    tools still add every live sample (phase-228 gate intact). (2) **card-hit ghost tail**
+    — `dropPredictedTail()` now runs in the `isHittingCard` `onDragStart` branch before
+    `isDraggingCard = true` (`:1837-1846`), a documented FIFTH reconcile hop (`Phase196MotionPredictionTest`
+    count pin extended 4→5). (3) **eraser O(strokes×points×samples) → spatial bucket** — new pure-JVM
+    `services/EraseHitBucketPolicy.kt` (world-space grid, cell `max(384f, selectionRadius*3)` from the
+    `EraserGeometryPolicy` radii so coverage is a true subset → no false negatives; identity-based
+    `replaceStrokes` re-tiles only changed strokes) + per-pass sample window capped at
+    `MAX_ERASE_SAMPLES_PER_APPLY = 8` (`applyEraser` `:1726-1739`, lazy bucket seeded on the first
+    eraser sample `:1746-1750`, drag-start resets `:1974-1975`); one O(strokes) z-order pass only when a
+    stroke changed. (4) **`flushPendingSaves` survives process kill** — body wrapped in
+    `withContext(NonCancellable)` (`NoteflowViewModel.kt:4043`, import `:146`) preserving
+    `cancel(); join()` ordering. Tests: `Phase249CanvasCriticalsTest` (9) + `EraseHitBucketPolicyTest` (7).
   - **Implemented in phase-150** (R2-b2b4-DOS-02/03 + R2-b2b5-FEA-04, see `workspace/phase-150/REPORT.md`): canvas
     memory + per-frame render budgets. `services/LayerRenderBudgetPolicy.kt` owns the LIVE layer cap
     (`MAX_LIVE_LAYER_COUNT` = 16, the SAME number as the phase-82 export cap) + `MAX_RESIDENT_BITMAP_BYTES` = 64 MB,

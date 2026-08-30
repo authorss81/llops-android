@@ -318,11 +318,25 @@ class Phase196MotionPredictionTest {
         )
         // ...and the tail is reconciled: frame loop (!extend + replace),
         // top of onDrag and top of onDragEnd — both BEFORE any early-return.
-        val expectedDropCallSites = 4
+        // Phase 249 added a FIFTH hop: the card-hit onDragStart early-return
+        // drops the tail before it claims the gesture (a tail left over from a
+        // prior freehand stroke would otherwise render as a ghost segment ahead
+        // of the next stroke's first real sample).
+        val expectedDropCallSites = 5
         assertEquals(
             "dropPredictedTail() must be called exactly at the $expectedDropCallSites reconcile hops",
             expectedDropCallSites + 1, // +1 = the definition itself
             src.countOccurrences("dropPredictedTail()")
+        )
+        // Ordering pin (phase-249): in onDragStart, the card-hit branch strips
+        // the predicted tail BEFORE isDraggingCard = true and its early-return.
+        val cardHitDragStart = src.indexOf("if (isHittingCard(canvasOffset)) {")
+        assertTrue(cardHitDragStart >= 0)
+        val tailBeforeCardClaim = src.indexOf("dropPredictedTail()", cardHitDragStart)
+        val cardClaim = src.indexOf("isDraggingCard = true", cardHitDragStart)
+        assertTrue(
+            "onDragStart must strip the predicted tail BEFORE the card claim",
+            tailBeforeCardClaim in 0 until cardClaim
         )
         // Ordering pin (review-fix): in onDrag, reconcile precedes the FIRST
         // early-return (isDraggingCard). The first `onDrag = {` in the file is
