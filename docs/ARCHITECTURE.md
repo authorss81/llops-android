@@ -1782,18 +1782,22 @@
     `cancel(); join()` ordering. Tests: `Phase249CanvasCriticalsTest` (9) + `EraseHitBucketPolicyTest` (7).
   - **Implemented in phase-250** (2026-08-30, data-loss criticals from `AUDIT_2026-08-30.md`, see
     `workspace/phase-250/REPORT.md`): (1) **stale autosave can no longer overwrite a newer flush** —
-    new `@Volatile editorSaveGeneration: Int` token (`NoteflowViewModel.kt:216`); every write-entry bumps it
-    (`flushPendingSaves` `:4095`, `flushEditorPageSave` `:4020`, `saveLayersGated` `:4149`, EditorScreen
+    new `@Volatile editorSaveGeneration: Int` token (`NoteflowViewModel.kt:216`); every STROKE write-entry bumps it
+    (`flushPendingSaves` `:4095`, `flushEditorPageSave` `:4020`, EditorScreen
     `triggerAutoSave` `:1050`) and `persistEditorSaveSuspend` re-checks `isCurrentSaveGeneration(generation)`
-    at the WRITE ENTRY (`:4250` + `:4264` before `unlockedPersist` — the single entry into
+    at the WRITE ENTRY (`:4269` + `:4283` before `unlockedPersist` — the single entry into
     `repo.saveStrokesForPage`; deliberately not at the UI layer so plugin/WebDAV paths keep their contract),
-    so a debounce-already-mid-write stale snapshot is skipped instead of landing last. (2) **lock during page
+    so a debounce-already-mid-write stale snapshot is skipped instead of landing last. **Review-fix (findings
+    #1/#2):** the token orders only STROKE data — `saveLayersGated` (`:4142`, layers-ONLY write) does NOT bump
+    and is passed `generation = null` (ungated; `persistEditorSaveSuspend(generation: Int?, ...)` gates on
+    `generation != null`), so a layer toggle landing inside a just-drawn stroke's 1s debounce can no longer
+    invalidate that stroke autosave (the layer write doesn't carry strokes). (2) **lock during page
     load can no longer wipe the page** — the load `LaunchedEffect` (`EditorScreen.kt:885`, keyed
     `(page.id, isAuthenticated)`) re-checks the auth gate at the ASSIGNMENT MOMENT and sets
     `isInitialLoadComplete = true` only INSIDE the `if (viewModel.authenticated.value)` block (`:906`); a
     dropped gate sets `loadFailedDueToLock = true` (`:912`) + keeps `isInitialLoadComplete = false`, and both
     back paths (`BackHandler` `:1761`, top-bar `IconButton` `:1797`) gate `flushPendingSaves` on
-    `!loadFailedDueToLock` so no `strokes = emptyList()` wipe can ever fire. Tests: `Phase250DataLossCriticalsTest` (8).
+    `!loadFailedDueToLock` so no `strokes = emptyList()` wipe can ever fire. Tests: `Phase250DataLossCriticalsTest` (11).
   - **Implemented in phase-150** (R2-b2b4-DOS-02/03 + R2-b2b5-FEA-04, see `workspace/phase-150/REPORT.md`): canvas
     memory + per-frame render budgets. `services/LayerRenderBudgetPolicy.kt` owns the LIVE layer cap
     (`MAX_LIVE_LAYER_COUNT` = 16, the SAME number as the phase-82 export cap) + `MAX_RESIDENT_BITMAP_BYTES` = 64 MB,

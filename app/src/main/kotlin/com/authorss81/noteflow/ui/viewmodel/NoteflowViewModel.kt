@@ -4138,7 +4138,20 @@ fun updatePageTags(id: String, tags: String) {
 
     /** Layers-only write (layer rename/order/visibility). Layers hold no secret
      *  payload, but a post-lock write would hit the disposed pool — route it
-     *  through the same deferred flush as the rest of the page. */
+     *  through the same deferred flush as the rest of the page.
+     *
+     *  Phase 250 review-fix (findings #1/#2): this write persists ONLY layers
+     *  (never strokes), so it deliberately does NOT bump [editorSaveGeneration]
+     *  and is NOT generation-gated. Bumping would otherwise invalidate a
+     *  concurrently-armed STROKE-only autosave (e.g. a just-drawn stroke sits in
+     *  the 1s debounce while a layer visibility/blend toggle lands inside the
+     *  window) even though this write carries disjoint data — the drawn stroke
+     *  would be silently dropped until a later save/flush. The phase-250 Bug-1
+     *  ordering guarantee (a stale autosave can never overwrite a newer FULL-PAGE
+     *  flush) is preserved because [flushPendingSaves]/[flushEditorPageSave]
+     *  (the full-page writers) still bump the token and out-rank older autosaves.
+     *  The generation gate is therefore applied only to stroke data; layers are
+     *  left to their own (pre-250, ungated) ordering, which is unchanged here. */
     fun saveLayersGated(
         pageId: String,
         layers: List<LayerEntity>,
@@ -4146,10 +4159,9 @@ fun updatePageTags(id: String, tags: String) {
         stickyNotes: List<CanvasStickyNote>,
         embeds: List<CanvasMediaEmbed>
     ) {
-        val myGen = bumpSaveGeneration()
         persistOrDefer(
             EditorFlushPolicy.DeferredSave(pageId, strokes, stickyNotes, embeds, layers),
-            generation = myGen,
+            generation = null,
             unlockedPersist = { repo -> repo.saveLayersForPage(pageId, layers) }
         )
     }
@@ -4241,13 +4253,20 @@ fun updatePageTags(id: String, tags: String) {
      * stale autosave whose token was superseded by a newer
      * [flushPendingSaves]/[flushEditorPageSave] is SKIPPED (logged, never
      * written) — it can never overwrite the newest snapshot.
+     *
+     * Phase 250 review-fix (findings #1/#2): [generation] is nullable — `null`
+     * marks a write that is NOT generation-gated. Only the layers-only write
+     * ([saveLayersGated]) passes `null`: it persists disjoint data (layers only,
+     * never strokes), so it must neither be invalidated by nor invalidate a
+     * stroke-save ordering token. Stroke-carrying writes always pass a concrete
+     * generation and are gated.
      */
     private suspend fun persistEditorSaveSuspend(
-        generation: Int,
+        generation: Int?,
         save: EditorFlushPolicy.DeferredSave,
         unlockedPersist: suspend (NoteRepository) -> Unit
     ) {
-        if (!isCurrentSaveGeneration(generation)) {
+        if (generation != null && !isCurrentSaveGeneration(generation)) {
             android.util.Log.w(
                 "NoteflowViewModel",
                 "Stale editor save skipped (gen $generation != ${editorSaveGeneration}) — newest snapshot already committed"
@@ -4261,7 +4280,7 @@ fun updatePageTags(id: String, tags: String) {
         // Phase 250 (Bug 1): re-check the generation IMMEDIATELY before the write
         // so a flush that bumped the token between the entry check and this point
         // still cannot be overwritten by a stale snapshot landing last.
-        if (!isCurrentSaveGeneration(generation)) {
+        if (generation != null && !isCurrentSaveGeneration(generation)) {
             android.util.Log.w(
                 "NoteflowViewModel",
                 "Stale editor save skipped mid-gate (gen $generation != ${editorSaveGeneration}) — newest snapshot already committed"
@@ -4300,7 +4319,7 @@ fun updatePageTags(id: String, tags: String) {
      */
     private fun persistOrDefer(
         save: EditorFlushPolicy.DeferredSave,
-        generation: Int,
+        generation: Int?,
         unlockedPersist: suspend (NoteRepository) -> Unit
     ) {
         viewModelScope.launch(Dispatchers.IO) {

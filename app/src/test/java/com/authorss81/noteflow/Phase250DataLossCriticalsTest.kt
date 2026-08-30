@@ -27,6 +27,15 @@ import org.junit.Test
  * The generation semantics are provable on the pure JVM (modeled in
  * [GenerationGate] below); the Compose / ViewModel wiring is pinned at source
  * level, consistent with the repo's pure-JVM unit-suite convention.
+ *
+ * Phase 250 review-fix (findings #1/#2): the generation token orders only STROKE
+ * data. The layers-ONLY write ([NoteflowViewModel.saveLayersGated]) persists
+ * disjoint data, so it does NOT bump the token and is NOT generation-gated —
+ * otherwise a layer toggle landing inside a just-drawn stroke's 1s debounce
+ * would invalidate that stroke autosave even though the layer write does not
+ * carry the strokes (loss until a later save/flush). The full-page writers
+ * (flushPendingSaves / flushEditorPageSave) and the stroke autosave still bump,
+ * preserving the Bug-1 guarantee.
  */
 class Phase250DataLossCriticalsTest {
 
@@ -160,7 +169,72 @@ class Phase250DataLossCriticalsTest {
         )
         // The check lives inside persistEditorSaveSuspend (the single entry into
         // repo.saveStrokesForPage for the autosave path) — NOT at the UI layer.
-        assertTrue("the generation gate must delegate to isCurrentSaveGeneration", persist.contains("if (!isCurrentSaveGeneration(generation))"))
+        assertTrue("the generation gate must delegate to isCurrentSaveGeneration", persist.contains("generation != null && !isCurrentSaveGeneration(generation)"))
+    }
+
+    // ------------------------------------------------------------------
+    // Bug 1 review-fix (findings #1/#2): a layers-ONLY write must NOT bump the
+    // generation token, so it can never invalidate a pending STROKE autosave
+    // whose data it does not carry. The gate applies only to stroke data.
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `a layers only write that does not bump the generation does not invalidate a pending stroke save`() {
+        val gate = GenerationGate()
+        val strokeGen = gate.bump() // gen 1 — stroke autosave armed by triggerAutoSave
+
+        // A layer change does NOT bump the token (saveLayersGated passes null,
+        // no bump) — the stroke autosave's token stays current.
+        assertTrue(
+            "a non-bumping (ungated) write must not supersede the stroke autosave",
+            gate.isCurrentSaveGeneration(strokeGen)
+        )
+        // No bump happened — the generation is unchanged and the stroke write still passes.
+        assertEquals(1, gate.currentGeneration)
+
+        var strokeCommitted = false
+        assertTrue("the pending stroke save must still commit", gate.persistIfCurrent(strokeGen) { strokeCommitted = true } != null)
+        assertTrue("the pending stroke save must run its write", strokeCommitted)
+    }
+
+    @Test
+    fun `source pin - saveLayersGated is ungated and does not bump the generation`() {
+        val vm = file("app/src/main/kotlin/com/authorss81/noteflow/ui/viewmodel/NoteflowViewModel.kt")
+        val layers = vm.substringAfter("fun saveLayersGated(", "END").substringBefore("\n    private fun isLockRacedWrite(", "END")
+
+        // No bump — the layers-only write must not invalidate a pending stroke autosave.
+        assertFalse(
+            "saveLayersGated must NOT bump the generation (layers only, no stroke supersession)",
+            layers.contains("bumpSaveGeneration()")
+        )
+        // It routes through the shared persist path with an UNGATED (null) generation.
+        assertTrue(
+            "saveLayersGated must pass generation = null (not generation-gated)",
+            layers.contains("generation = null") && layers.contains("persistOrDefer(")
+        )
+        // And it writes ONLY layers — never strokes.
+        assertTrue(
+            "saveLayersGated must persist only layers",
+            layers.contains("repo.saveLayersForPage")
+        )
+    }
+
+    @Test
+    fun `source pin - persistEditorSaveSuspend skips the gate only when generation is null`() {
+        val vm = file("app/src/main/kotlin/com/authorss81/noteflow/ui/viewmodel/NoteflowViewModel.kt")
+        val persist = vm.substringAfter("private suspend fun persistEditorSaveSuspend(", "END")
+            .substringBefore("\n    private fun persistOrDefer(", "END")
+
+        // The gate must be conditional on a non-null generation — a null
+        // (ungated, layers-only) write must never be skipped by the stroke gate.
+        assertTrue(
+            "the entry gate must be conditional on a non-null generation",
+            persist.contains("generation != null && !isCurrentSaveGeneration(generation)")
+        )
+        assertTrue(
+            "the signature must accept a nullable (potentially ungated) generation",
+            persist.contains("generation: Int?")
+        )
     }
 
     // ------------------------------------------------------------------
