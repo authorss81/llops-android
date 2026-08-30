@@ -19,7 +19,7 @@ Closes the four HIGH/CRITICAL canvas issues from `AUDIT_2026-08-30.md` that the 
   - `shouldProcess(lastRawX, lastRawY, lastSampleTimeMs, rawX, rawY, sampleTimeMs)` **fails open** when any reference is missing (first sample of a stroke) `:44-49`.
 - `AnnotationCanvas.kt` wet gate (`:2143-2178`):
   - `curTime = sampleTimestampMs` is the **exact `MotionEvent.eventTime`** already threaded through the passive `pointerInteropFilter` bridge → `StrokeInputBatcher` → node-local drain (the Phase-214 drain variable, unchanged).
-  - `lastTime = lastRawWetTimeMs ?: activePoints.lastOrNull()?.timestampMs` — the **previous accepted RAW sample's** real stamp, never wall-clock.
+  - `lastTime = lastRawWetTimeMs` — the **previous accepted RAW sample's** real stamp, never wall-clock. (Review-fix: the `?: activePoints.lastOrNull()?.timestampMs` fallback was dead code — `lastRawWetX/Y/TimeMs` are set and cleared as ONE unit, so when the timestamp ref is null the position refs are null too and `shouldProcess` fails open; removed for clarity, no behavior change.)
   - The gate is fed the **pre-smoothing, pre-clamping world-space RAW digitizer position** (`rawCanvasX/rawCanvasY`), `lastRawWetX/Y/TimeMs` updated only on acceptance (`:2175-2177`).
   - New block-scope vars `lastRawWetX/Y/TimeMs` (`:1695-1697`), reset to `null` per stroke start (`:1922-1924`) so a fresh stroke never inherits a stale "huge jump" reference that would throttle its first samples.
   - Interpolation path (`:2179-2198`) is untouched — translucent wet layers still deposit full stamps, then `wetBrushEngine.interpolateSegment` fills gaps.
@@ -114,3 +114,12 @@ Source pins for the Compose wiring (the repo's unit suite is pure JVM — no Com
 - `app/src/test/java/com/authorss81/noteflow/Phase249CanvasCriticalsTest.kt` — NEW.
 - `app/src/test/java/com/authorss81/noteflow/services/EraseHitBucketPolicyTest.kt` — NEW.
 - `app/src/test/java/com/authorss81/noteflow/Phase196MotionPredictionTest.kt` — pin extended to the phase-249 card-hit reconcile hop.
+
+## Review-fix round (2026-08-30)
+
+Applied the two actionable findings from the phase-249 code review:
+
+- **Finding 2 (LOW/cosmetic — dead code):** removed the inert `?: activePoints.lastOrNull()?.timestampMs` fallback in the wet gate (`AnnotationCanvas.kt:2171`). `lastRawWetX/Y/TimeMs` are always set and cleared as ONE unit (acceptance `:2175-2177`, per-stroke reset `:1922-1924`), so the fallback arm was never reachable and implied a mixed raw/smoothed state that cannot occur. Behavior is byte-identical (when the timestamp ref is null the position refs are null too → `shouldProcess` fails open, so a fresh stroke's first sample is never throttled). Comment updated to document the invariant.
+- **Finding 7 (style — `.editorconfig`):** added the missing final newline (`insert_final_newline = true`) to all four new files: `WetThrottlePolicy.kt`, `EraseHitBucketPolicy.kt`, `Phase249CanvasCriticalsTest.kt`, `EraseHitBucketPolicyTest.kt`.
+
+No functional changes; the source-pin tests, unit suite, and builds are unaffected. `gradle :app:testDebugUnitTest` still **3610 / 0 failures / 0 errors**; `assembleDebug` + `lintDebug` 0 errors re-verified green after the fixes.

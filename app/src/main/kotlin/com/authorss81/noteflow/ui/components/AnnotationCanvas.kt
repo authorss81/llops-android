@@ -2158,8 +2158,17 @@ fun AnnotationCanvas(
                                         // previous ACCEPTED RAW sample (pre-smoothing,
                                         // pre-clamping world-space digitizer position).
                                         // NEVER feed this gate the smoothed `drawPoint`.
+                                        // Comment: `lastRawWetX/Y/TimeMs` are always set and
+                                        // cleared as ONE unit (acceptance below + per-stroke
+                                        // reset at drag start), so they can never be in a mixed
+                                        // state — when the timestamp ref is null the position
+                                        // refs are null too and `shouldProcess` fails open (a
+                                        // fresh stroke's first sample is never throttled by an
+                                        // absent reference). The old
+                                        // `?: activePoints.lastOrNull()?.timestampMs` arm was
+                                        // unreachable and implied a raw/smoothed mixed state.
                                         val curTime = sampleTimestampMs
-                                        val lastTime = lastRawWetTimeMs ?: activePoints.lastOrNull()?.timestampMs
+                                        val lastTime = lastRawWetTimeMs
                                         if (
                                             !com.authorss81.noteflow.services.WetThrottlePolicy.shouldProcess(
                                                 lastRawX = lastRawWetX,
