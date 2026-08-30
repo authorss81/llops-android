@@ -45,6 +45,8 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke as DrawStrokeStyle
+import androidx.compose.ui.input.pointer.AwaitPointerEventScope
+import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -1609,16 +1611,30 @@ fun AnnotationCanvas(
                 )
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
-                    // Long-press = still down after viewConfiguration.longPressTimeoutMillis.
+                    // Long-press = the pointer stays DOWN beyond the long-press window.
                     // NOTE: use the scope's OWN withTimeoutOrNull member (restricted
                     // suspending scope — kotlinx.coroutines.withTimeoutOrNull is NOT
                     // callable inside awaitEachGesture).
+                    //
+                    // Phase 245 ("weird shape when I draw", donut/dot on canvas): a
+                    // long-press must YIELD to a moving pointer. A user who rests the
+                    // finger/stylus still for >= longPressTimeout while AIMING the
+                    // first mark (or drawing slow, deliberate ink) used to let the ring
+                    // pop open over the canvas and consume the press — the intended
+                    // stroke never deposited ink and the user saw the ring donut (and
+                    // its center dot) instead of their stroke. The wait now aborts the
+                    // moment the primary pointer moves beyond the touch slop, so a
+                    // stroke that crosses the drag slop is never pre-empted: the ring
+                    // opens ONLY for a genuinely STILL hold of the full timeout, and a
+                    // yielding stroke records its first point at the exact down
+                    // position (no lost start, no stray dot at a ring anchor).
                     val timedOut = withTimeoutOrNull(quickColorRingLongPressMillis) {
-                        waitForUpOrCancellation()
+                        waitForUpOrSlopMove(down, viewConfiguration.touchSlop)
                     }
                     if (timedOut != null) {
-                        // Released (or cancelled) before the timeout — ordinary
-                        // tap/potential drag; let the stroke path handle it.
+                        // Released (or cancelled) before the timeout, OR the pointer
+                        // moved beyond the touch slop (a stroke is starting) — either
+                        // way this is not a long-press; the stroke/tap path handles it.
                         return@awaitEachGesture
                     }
                     // Long-press confirmed: take exclusive ownership of this finger.
@@ -4603,6 +4619,43 @@ private fun EyedropperMagnifierLoupe(
                 )
             )
         }
+    }
+}
+
+/**
+ * Phase 245: movement-aware long-press wait for the Quick-Color Ring.
+ *
+ * Waits until the [down] pointer either goes UP (returns TRUE — a normal
+ * tap/release) or clearly starts a stroke (returns FALSE — the user is DRAWING,
+ * not long-pressing). "Clearly starts a stroke" is
+ * [QuickColorRingMath.holdWithinLongPressSlop]: the pointer's displacement from
+ * its DOWN position crossed the touch slop. A second pointer pressing in the
+ * middle of the hold also returns FALSE, so pinch/undo/redo gestures never get
+ * the ring. The caller only opens the ring if this suspends for the FULL
+ * long-press window without returning — i.e. the pointer stayed effectively
+ * STILL, so neither the stroke path nor a two-finger gesture needs the events.
+ *
+ * Bonus: because the stroke's first sample is recorded at the ORIGINAL down
+ * position, a ring that yields mid-target never drops the stroke start and
+ * never leaves a stray dot at a ring anchor.
+ */
+private suspend fun AwaitPointerEventScope.waitForUpOrSlopMove(
+    down: PointerInputChange,
+    slopPx: Float
+): Boolean {
+    while (true) {
+        val event = awaitPointerEvent()
+        val change = event.changes.firstOrNull { it.id == down.id }
+        if (change == null || !change.pressed) return true
+        if (event.changes.any { it.id != down.id && it.pressed }) return false
+        if (!com.authorss81.noteflow.services.QuickColorRingMath.holdWithinLongPressSlop(
+                pointerX = change.position.x,
+                pointerY = change.position.y,
+                downX = down.position.x,
+                downY = down.position.y,
+                slopPx = slopPx
+            )
+        ) return false
     }
 }
 

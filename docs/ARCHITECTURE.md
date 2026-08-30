@@ -754,6 +754,35 @@
 > original Bug 1's jitter drift), documented in the `ROTATION_DEAD_ZONE_DEGREES`
 > KDoc. Comments/docs only — no logic change.
 
+> **Implemented in phase-245** (2026-08-30, drawing "weird shape" + dots
+> comparison, see `workspace/phase-245/REPORT.md`): (1) **the long-press
+> Quick-Color Ring now yields to a stroke.** The ring donut (backing disc +
+> filled current-color CENTER disc = the "dot") popped for ANY quiet hold of
+> `longPressTimeoutMillis` — while the user aimed the first mark or drew slow
+> deliberate ink, the ring consumed the press, the stroke never deposited, and
+> the donut stayed on screen. New pure-JVM decision
+> `QuickColorRingMath.holdWithinLongPressSlop(px, py, downX, downY, slopPx)` =
+> displacement-from-DOWN ≤ touch slop (boundary-inclusive; a slow-but-steady
+> drag accumulates exactly like a fast flick, sub-slop tremor never aborts), and
+> `AnnotationCanvas.waitForUpOrSlopMove` (`:4642-4664`) replaces the ring's
+> `waitForUpOrCancellation()` wait in the detector (`:1631-1639`): it aborts on
+> slop-crossing OR a second finger (pinch/undo/redo never get the ring). The
+> ring opens only for a genuinely STILL hold; a yielding stroke records its
+> first point at the exact down position — no lost start, no stray dot at a
+> ring anchor. (2) **The dots bug is CONFIRMED fixed, not re-broken**: the
+> PROMPT's `canvasBoxWindowOffset` double-subtract describes pre-phase-240 code;
+> the git history (`5d7288d`/`3ad9911`/`fb8520b`) + compose-ui 1.7.6
+> `PointerInteropFilter` bytecode prove all ingestion paths (batch drain
+> `:2098-2127`, newest `:2110-2116`, fallback `:2124`, predicted-tail neutral
+> frame `:827-848`) pass node-local coords as-is. Tests: `Phase245DrawingRegressionTest`
+> (13 — ring slop boundaries/drift/zero-slop, neutral-frame world mapping,
+> window-offset displacement proof, FIFO node-local drain identity, monotonic
+> stale gate, out-of-page drop parity); `Phase193ResizeHandleVisibilityTest`
+> source-pin updated to the new wait. `gradle testDebugUnitTest` **3573 / 0 /
+> 0**, `assembleDebug` + `assembleRelease` (R8+signed) green, `lintDebug` 0
+> errors. No schema, no deps, `.github/workflows/` untouched, base-APK rule
+> intact.
+
 > **Implemented in phase-224** (2026-08-27, timelapse replay + MP4 export of a page's
 > timestamped strokes, see `workspace/phase-224/REPORT.md`): replays a page's strokes in
 > timestamp order at 30× real-time as an H.264 MP4 (platform `MediaCodec`+`MediaMuxer` only —

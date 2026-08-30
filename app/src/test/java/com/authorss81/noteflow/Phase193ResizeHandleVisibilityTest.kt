@@ -129,7 +129,12 @@ class Phase193ResizeHandleVisibilityTest {
         // pre-existing quick-color-ring handler (phase-155) we do not touch.
         assertEquals(2, src.countOccurrences("// Observes touches WITHOUT consuming them"))
         assertTrue(src.countOccurrences("awaitFirstDown(requireUnconsumed = false)") >= 3)
-        assertTrue(src.countOccurrences("waitForUpOrCancellation()") >= 3)
+        assertTrue(src.countOccurrences("waitForUpOrCancellation()") >= 2)
+        // Phase-245: the quick-color-ring wait is now movement-aware — it yields
+        // to a stroke the moment the pointer crosses the touch slop (fixes the
+        // long-press donut appearing while aiming the first mark), so the ring
+        // no longer uses plain waitForUpOrCancellation. Pin the new wait exists.
+        assertTrue(src.countOccurrences("waitForUpOrSlopMove(") >= 1)
     }
 
     @Test

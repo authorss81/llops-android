@@ -156,6 +156,36 @@ object QuickColorRingMath {
     }
 
     /**
+     * Phase 245: decides whether a still long-press may still open the ring, or
+     * whether the pointer has started a DRAWING gesture that must take over.
+     *
+     * Before this, the ring hijacked strokes: ANY quiet hold of the long-press
+     * window popped the donut over the canvas — even when the user was merely
+     * aiming the first mark, or drawing slow deliberate ink on a line that took
+     * longer than the long-press window. The movement wait now aborts the moment
+     * the pointer's DISPLACEMENT FROM ITS DOWN POSITION exceeds [slopPx], so the
+     * ring opens ONLY for a genuinely still hold. A stroke always records its
+     * first point at the down position, so yielding never loses the start and
+     * never leaves a stray dot at a ring anchor.
+     *
+     * Displacement-from-down (NOT the per-event delta) is the measure: a slow but
+     * steady drag accumulates exactly like a fast flick and yields too, while
+     * sub-slop finger tremor while holding still never aborts the ring.
+     *
+     * @return TRUE while the hold may still become a long-press (the pointer is
+     *         still within [slopPx] of where it landed); FALSE once the pointer
+     *         clearly intends a stroke, so the caller must yield the gesture to
+     *         the draw path.
+     */
+    fun holdWithinLongPressSlop(
+        pointerX: Float,
+        pointerY: Float,
+        downX: Float,
+        downY: Float,
+        slopPx: Float
+    ): Boolean = hypot(pointerX - downX, pointerY - downY) <= slopPx
+
+    /**
      * Selection "ring highlight" position normalized 0..1 along the ring — the
      * fraction used to animate the selection halo. Uses the same hue-wrapping
      * semantics as [BrushColorModeMath.normalizeHue] so the two stay consistent.

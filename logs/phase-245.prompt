@@ -1,0 +1,196 @@
+# PIPELINE CONTEXT (injected by phase_runner.sh — do not delete)
+
+## Hard rules (AGENTS.md)
+## Hard rules
+- **MAJOR ARCHITECTURAL CHANGE → ASK THE USER FIRST.** Any change that restructures packages, replaces the navigation model (e.g., migrating away from `mutableStateOf` navigation to Navigation Compose), adds a new DB schema/migration, introduces SQLCipher, adds new dependencies with broad impact, or rewrites a subsystem (canvas renderer, encryption layer) MUST be proposed to the user and get explicit approval BEFORE writing code. Tell the user what's changing, why, and the risk. Do not silently refactor architecture.
+  - **USER APPROVED (2026-08-14): hybrid downloadable-plugin architecture** — the plugin model change (base-APK-size constraint, downloadable signature-verified plugins for heavy native features, compile-time for lightweight plugins, user-approved dynamic updates) was proposed to the user with risks and explicitly approved (commit `9292978`). Implementation proceeds per phases 22–26; the approved design doc is `docs/plugin-architecture.md`.
+- **Android hardware reality**: this is a native Kotlin app targeting API 26+. Every feature must ship with a fallback for older/lower-end devices (API 33- for AGSL, API 31- for dynamic color, low-RAM behavior for 2-core devices). Never silent degradation — one-time non-alarming message + settings re-enable. See ROADMAP Phase 33 + `docs/COMPATIBILITY.md` (to be created).
+- **Kali Linux pentest findings → write to a FILE immediately, not just the agent reply.** Security/pentest agents (running in opencode on the Kali VM) MUST append findings incrementally to `docs/pentest-findings-<YYYY-MM-DD>.md` as they work (one block per finding: severity, evidence, file/line or command output, reproducer), and commit/push after each agent batch. This prevents detail loss when a report grows long or context is truncated. The pentest plan lives in `docs/pentest-plan.md`; the summary report goes to `docs/pentest-report.md`.
+- `allowBackup="false"` + `data_extraction_rules.xml` — never re-enable backup.
+- **Base-APK size is a hard constraint.** Heavy/native features (ML Kit OCR, ML Kit
+  barcode/QR, the MediaPipe `tasks-genai` LLM) MUST NOT be baked into the base APK.
+  They ship as **downloadable, signature-verified plugins** (Phase 23 runtime:
+  HTTPS download → pinned-cert-hash verify → `DexClassLoader` load → capability
+  facade, never direct DB/keystore handles). Lightweight pure-JVM plugins stay
+  compile-time. Do NOT add large native deps to the base app; use a separate
+  plugin module instead. Plan: Phase 22 = architecture skeleton, Phase 23 =
+  downloadable runtime, Phase 24 = user-approved updates, Phase 25 = ink→shape,
+  Phase 26 = lightweight ecosystem, Phase 29 = move the LLM out of the base APK
+  into a downloadable plugin.
+- PBKDF2WithHmacSHA256 600k iterations, AES-256-GCM (12-byte IV, 128-bit tag), AndroidKeyStore-wrapped DEK, in-memory zeroization on lock (`NoteRepository.kt`, `EncryptionService.kt`, `SecurityService.kt`).
+- Never log keys, passwords, or decrypted note content. Never add `INTERNET` usage without a real feature.
+- Known broken things (do NOT trust ROADMAP [x] claims — see ROADMAP.md "POST-AUDIT TRUTH TABLE" @ commit ac781de):
+  - ~~Checksum hashes `noteflow.db`~~ — FIXED: `DatabaseSecurityHelper` HMACs the real `noteflow.sqlite` (`DatabaseSecurityHelper.kt:26`) and the result is surfaced as the `databaseTampered` banner in MainActivity (`NoteflowViewModel.kt:35-55`). This stale claim was corrected in Phase 09.
+  - `pointsJson` (stroke geometry) is FIELD-ENCRYPTED at rest now — title/extractedText/textContent/pointsJson are all encrypted fields (`saveStrokesForPage`, NoteRepository.kt); the Phase 02 restore re-key gap is closed.
+  - "Sync" = WebDAV upload/download of ENCRYPTED backup archives to/from the user's own server (`WebDavSyncService.kt`, HTTPS enforced, HTTP only with explicit opt-in for local-network hosts), reachable from HomeScreen's ⋮ menu via `WebDavSyncDialog` — Phase 14 FIXED the previously-dead menu trigger; AGSL wet-mixing is WIRED through `WetBrushEngine` in `AnnotationCanvas` (gated by `ShaderCapabilityHelper.isAgslSupported` + the `gpuWetBrushesEnabled` setting, verified in the Phase 14 audit); pressure/tilt/timestamp are captured via the official raw-MotionEvent bridge (`pointerInteropFilter`, no reflection); FLAG_SECURE is applied in non-debug builds; R8 minify is ON in release; baseline-profile TOOLCHAIN is WIRED since phase-199 (`:baselineprofile` producer + consumer plugin + pinned profileinstaller + R8 fullMode + shrinkResources) but no profile is generated/committed yet — the guarded `compileArtProfile` stopgap stays active until a real profile lands (see `workspace/phase-199/REPORT.md`; the old dead `baseline-prof.txt` was deleted in the Phase 03 honesty audit). Phase-199 second review-fix round (2026-08-28) completed the producer's lockfile entries and wired `app/build.gradle.kts` `baselineProfile { from(project(":baselineprofile")) }` so `gradle :app:generateBaselineProfile` plans the real producer chain — run it (and any `:baselineprofile:*` producer task) with `--no-configuration-cache`, since the repo sets `org.gradle.configuration-cache=true` and AGP's `CheckAarMetadataTask`/`checkTestedAppObfuscation` fields aren't config-cache-serializable.
+  - WAL checkpoint DOES execute — `checkpointWal()` fully steps the cursor (`NoteRepository.kt:136-144`).
+  - **Phase 14 (2026-08-13) production readiness + LocalSend**: full per-phase audit lives in `workspace/phase-14/AUDIT_REPORT.md`. LocalSend sender (Protocol v2.2, sender-only, local-network only, no new permissions) is implemented in `services/localsend/` (`LocalSendProtocol.kt` pure-JVM + `LocalSendSender.kt` network) and reachable from HomeScreen's ⋮ menu → "Send to Nearby Device (LocalSend)". It sends a single note as HTML, the encrypted vault backup, or the Obsidian/HTML vault archives; the receiving device must human-accept before bytes move. Unit tests: `LocalSendProtocolTest` (18 tests, no network). **Release signing (updated 2026-08-17, phase-57/B1-PLAT-1): the release build FAILS CLOSED when `RELEASE_KEYSTORE_B64` (or `KEYSTORE_FILE`) is unset — the old debug-keystore fallback is gone; see `docs/RELEASE.md` + `B1Plat01ReleaseSigningTest`.**
+  - **Phase 21 (2026-08-14) added the Plugin Store + verified the execution path** (see `docs/PLUGINS.md` "Plugin Store — install/uninstall lifecycle"): `PluginStoreCatalog` (bundled catalog, no network) + `PluginStoreController` (pure-JVM download/delete) + `PluginRegistry.installPlugin/uninstallPlugin` (install-aware registry; `compiledPlugins` = full shipped set, `allPlugins` = installed set) + `SettingsPluginInstallStore`/`SettingsManager.plugin_uninstalled_<id>` (default installed = backward compatible). Delete wipes opt-in + ever-enabled + all `plugins.<id>.*` settings and deletes downloaded assets (`NoteflowPlugin.deleteDownloadedAssets`); Disable keeps data. `CaseChangePlugin` is the store's OPTIONAL plugin (not in `defaultPlugins()`). UI: `PluginStoreDialog` reachable from HomeScreen ⋮ menu → "Plugin Store". Tests: `PluginStoreLifecycleTest` (8), `PluginExecutionSimulationTest` (4). Also fixed a pre-existing `PaletteCatalog.familyFor` hue-band bug (curated swatches misclassified) — `PaletteCatalogTest` is green again.
+  - **Phase 10 (2026-08-13) added a REAL plugin framework** (`app/src/main/kotlin/com/authorss81/noteflow/plugins/`): `NoteflowPlugin` + `PluginCapability` sealed type (`TextTransform`, `OCR`, `WebSearch`, `FileTransfer`, `Assistant`, `Export`), compile-time `PluginRegistry` (no dynamic APK loading), `PluginManager` routing that fails loudly via `PluginResult.Failure`, per-plugin opt-in persisted in `SettingsManager` (`plugin_enabled_<id>`, off by default), a Settings → Plugins dialog (`PluginSettingsDialog`, reachable from HomeScreen's ⋮ menu), and `Rot13TransformPlugin` served through the `TextTransformPlugin` interface and wired into the Markdown editor's Plugins menu (`MarkdownPreviewScreen`). Covered by `PluginFrameworkTest` (10 tests). **Phase 12 made OCR + Web Search real**: `OnDeviceOcrPlugin` (ML Kit text-recognition, offline, no API key) and `DuckDuckGoWebSearchPlugin` (HTTPS, keyless) are registered (`PluginRegistry.kt`) and wired into `EditorScreen` (OCR result dialog) and `MarkdownPreviewScreen` (web-search dialog). The still-unserved capabilities are `FileTransfer`, `Assistant`, `Export` — requests for those fail loudly with `NO_PLUGIN_INSTALLED`. See `docs/PLUGINS.md`.
+  - **Phase 09 (2026-08-13) fixed the two Phase-02 data-loss defects that were still live** (see workspace/phase-09/REPORT.md): (1) H2 — a corrupt/wrong-key DB open no longer DELETES the vault files; `SafeSupportSQLiteOpenHelper` now quarantines them as `*.corrupt-<timestamp>` (bytes preserved), sets a persistent corruption flag, and MainActivity shows `CorruptionRecoveryScreen` (restore-from-backup or explicit start-fresh) before any normal vault UI (`NoteflowDatabase.kt` `quarantineCorruptDatabase`, `DatabaseSecurityHelper.kt` corruption flags, `MainActivity.kt` `CorruptionRecoveryScreen`). (2) H1 — a failed restore no longer bricks the app: the backup password is validated BEFORE `closeDatabase()` (`ImportExportService.validateBackupPassword` now called from `HomeScreen.performRestore` and `NoteflowViewModel.attemptRecoveryFromBackup`), and on any post-close failure the Room instance is reopened (`NoteflowDatabase.dispose()` + `NoteRepository.reopenDatabase`) and the process restarts via the existing restart dialog. (3) C1 — `reencryptPlaintextFields` now also re-encrypts `note_versions.{title,extractedText}`, matching the cross-device migrate map.
+  - **Phase 03 (2026-08-13) removed these dead/fake features**: the LibMyPaint C++ stub + whole engine-selector stack (`mypaint_jni.cpp`/`CMakeLists.txt`, `LibMyPaintJni`, `BrushEngine`/`BrushEngineFactory`, `HardwareProfiler`/`RenderingEngineTier`, `BrushEngineSettingsDialog`, `SettingsManager.renderingEngineOverride` — all deleted; the canvas renders via `WetBrushEngine`); `HandwritingRecognitionService` + `HandwritingToTextDialog` (dictionary-hash stub, unreachable — deleted); `FtsSearchEngine` (misnamed in-memory loop — deleted; vault search now uses a cached decrypted corpus in `NoteRepository`). Shape auto-snap is now WIRED (`ShapeRecognitionHelper.trySnapShape` runs on freehand draw-end in `AnnotationCanvas`, gated by the `shapeAutoSnapEnabled` setting; wet tools, LASER, DOTTED and NEON are excluded, and the RECT/ARROW/LINE detectors require real geometry fits so plain handwriting isn't snapped).
+
+## Roadmap state (August 2026)
+
+## Orientation (read these files yourself — do NOT rely on memory)
+- docs/ARCHITECTURE.md = living architecture map (package layout, core
+  subsystem file:line anchors, build/CI essentials, gotchas). READ IT.
+- docs/phase-status.md = phase status truth table. READ IT, then UPDATE
+  your phase's row when you finish.
+- workspace/PHASES.md = full phase table.
+- workspace/SECURITY_FIX_PLAN.md + docs/security-report*.md = security
+  findings status (only if your phase touches security).
+
+## Your task
+Execute the phase described in workspace/phase-245/PROMPT.md. Read that file now and
+complete it fully. The context above is orientation only.
+
+# Phase 245 — Fix Drawing "Weird Shape" + Compare with Previous Code for the Dots Bug
+
+## Goal
+Fix the remaining drawing issues:
+1. **"Some weird shape when I try to draw"** — when the user draws, a weird shape appears instead of the expected stroke
+2. **Compare with before-dots code** — figure out why the dots bug is still happening despite the phase-239 fix
+3. **The dots bug is still there** — even after phase-239's fix, dots are still registered
+
+## Context — Verified Root Cause (from screenshots)
+
+### Bug 1: "Weird shape" when drawing
+**Symptom (from screenshots):** When the user tries to draw, instead of a smooth stroke, a "weird shape" appears — this could be:
+- A debug overlay (like a circle showing the touch position) that's leaking into release builds
+- A wrong coordinate transform
+- A stale render
+
+Looking at the user's screenshots more carefully, the "weird shape" appears to be a circle/donut shape on the canvas, which is likely:
+- The `Quick-Color Ring` from the canvas settings (visible in the settings screenshot)
+- The eraser cursor preview
+- A debug visualization
+
+### Bug 2: Dots are still happening
+**Symptom (from user):** "still dots, compare code with before dots and see what might cause problem"
+
+The previous code that worked correctly had:
+- `phase-228` `REPORT.md:42-50` says the fix was to gate `shouldProcessPoint` to only wet tools and remove the `> 1.5px` gate
+
+But the current code at `AnnotationCanvas.kt:1964` still has the `if (isWet)` gate — this was applied in `1e54820` (earlier commit).
+
+Looking at the current code more carefully:
+- `AnnotationCanvas.kt:1956-1957` reads `s.x, s.y` from the `StabilizerFilter` output
+- `AnnotationCanvas.kt:1960-1962` gets the `last` point and time
+- `AnnotationCanvas.kt:1964` checks `wetBrushEngine.shouldProcessPoint` only if `isWet` (correct fix from `1e54820`)
+- BUT — there's still an issue: the `StabilizerFilter.next()` is called even for non-wet tools, which applies EWMA smoothing. This smoothing might be CAUSING the dots because it interpolates between samples.
+
+Wait — the user said "still dots". The dots are REGISTERED but they appear far from the touch position. This is the SAME bug as before — the coordinate offset is wrong. The `1e54820` fix only fixed the throttle (which removed the 6px/16ms gate for pen), but the coordinate offset bug (where dots appear far from touch) is STILL present.
+
+Looking at the code at `AnnotationCanvas.kt:2012-2030`:
+```kotlin
+val drainedCount = strokeInputBatcher.drainInto(batchDrainScratch)
+if (drainedCount > 1 && currentTool.isFreehandTool) {
+    for (sample in batchDrainScratch) {
+        ...
+        val accepted = ingestPointerSample(
+            boxLocalX = sample.x - canvasBoxWindowOffset.x,
+            boxLocalY = sample.y - canvasBoxWindowOffset.y,
+            ...
+        )
+    }
+}
+```
+
+The `boxLocalX = sample.x - canvasBoxWindowOffset.x` is STILL subtracting. The `canvasBoxWindowOffset` is the position of the canvas Box in the window. The `sample.x` is the position from the `MotionEvent` in the `pointerInteropFilter` at line 1231. The `MotionEvent` coords are RELATIVE TO THE VIEW (the canvas Box). So they should be the SAME as `boxLocalX` — no subtraction needed.
+
+Looking at the code at line 1220:
+```kotlin
+canvasBoxWindowOffset = coords.positionInWindow()
+```
+
+And line 1229-1231 (the pointerInteropFilter):
+```kotlin
+.pointerInteropFilter { motionEvent ->
+    // ... reads motionEvent.x, motionEvent.y (view-relative)
+}
+```
+
+Then in the sample loop at line 2023:
+```kotlin
+boxLocalX = sample.x - canvasBoxWindowOffset.x,
+boxLocalY = sample.y - canvasBoxWindowOffset.y,
+```
+
+`sample.x` is already view-relative (because it came from the pointerInteropFilter which receives MotionEvent coords which are view-relative). `canvasBoxWindowOffset.x` is the window-relative position of the canvas. So `boxLocalX = sample.x - canvasBoxWindowOffset.x` is WRONG — it's subtracting a window-relative offset from a view-relative coord.
+
+The CORRECT calculation would be: `boxLocalX = sample.x` (no subtraction, since sample is already view-relative). OR if you want to be safe: `boxLocalX = sample.x - canvasPositionInWindow.x` where `canvasPositionInWindow` is the canvas Box's position in the window (NOT the view's position, which would be 0,0).
+
+Wait — actually, looking at this more carefully: if the canvas is the View itself (i.e., the pointerInteropFilter is on the canvas Modifier), then the MotionEvent coords are relative to the canvas, which IS the box-local coords. So no subtraction is needed.
+
+If the pointerInteropFilter is on an OUTER container, then the MotionEvent coords are relative to that outer container, and we need to subtract the offset between the outer container and the canvas.
+
+Looking at the code structure at `AnnotationCanvas.kt:1220`:
+```kotlin
+canvasBoxWindowOffset = coords.positionInWindow()
+```
+
+This is inside a `Modifier.onGloballyPositioned` callback. The `coords` parameter here is from the layout that the modifier is attached to. If this is the canvas Box's own onGloballyPositioned, then `coords.positionInWindow()` is the canvas's top-left in window space.
+
+And the pointerInteropFilter at line 1229-1231 receives `motionEvent` which has coords relative to the View that has the pointerInteropFilter modifier. If pointerInteropFilter is on the same Box as onGloballyPositioned, then the MotionEvent coords are ALSO relative to the canvas Box. In that case, `sample.x - canvasBoxWindowOffset.x` is subtracting a window-space offset from a box-local offset, which is WRONG.
+
+The CORRECT fix: `boxLocalX = sample.x` (no subtraction). OR the pointerInteropFilter is on the canvas Box but `coords.positionInWindow()` returns the window-space position, so the subtraction is converting from view-local to window-local? No, that doesn't make sense either.
+
+The actual fix: `boxLocalX = sample.x` because `sample.x` is already view-local (relative to the canvas Box if the pointerInteropFilter is on the canvas Box). The `canvasBoxWindowOffset` is used for OTHER purposes (like calculating the pointer's position in the window for the quick-color ring).
+
+So the bug is: `boxLocalX = sample.x - canvasBoxWindowOffset.x` should be `boxLocalX = sample.x`. This is the "dots far from touch" bug.
+
+## Files to Fix
+
+### 1. `app/src/main/kotlin/com/authorss81/noteflow/ui/components/AnnotationCanvas.kt`
+- Fix `boxLocalX = sample.x - canvasBoxWindowOffset.x` to `boxLocalX = sample.x` at line 2023
+- Fix `boxLocalX = newest.x - canvasBoxWindowOffset.x` to `boxLocalX = newest.x` at line 2024
+- This is the actual fix for the "dots far from touch" bug
+
+### 2. `app/src/main/kotlin/com/authorss81/noteflow/ui/components/AnnotationCanvas.kt`
+- Find the "weird shape" — likely a debug visualization (like a circle) that's leaking into release builds
+- Search for `Canvas { drawCircle(...) }` or `Canvas { drawOval(...) }` that's not part of the normal drawing
+- Remove or gate the debug visualization
+
+### 3. Compare with the previous code
+- Look at the git history for `AnnotationCanvas.kt` to see what changed between the working version and the current version
+- The `1e54820` fix and `8a2032d` fix were both correct, but the coordinate offset fix at `3ad9911` was REVERTED in `fb8520b`
+- The revert in `fb8520b` was correct (the subtract IS needed for the batch samples), but the issue is that the batch samples come from `pointerInteropFilter` which gives view-relative coords, while the `canvasBoxWindowOffset` is the window-relative position of the canvas
+- So the subtraction converts view-relative to window-relative, but the `ingestPointerSample` function expects WINDOW-relative coords (because it then does `boxLocalX - internalPanOffset.x` which assumes window-relative)
+- Wait — but if `ingestPointerSample` expects window-relative, then the subtraction IS correct
+- The bug might be that `boxLocalX` is computed in the wrong coordinate space, causing the "dots far from touch" symptom
+
+Actually, re-reading the code at line 1884-1885:
+```kotlin
+val rawCanvasX = (boxLocalX - internalPanOffset.x) / internalZoomScale
+val rawCanvasY = (boxLocalY - internalPanOffset.y) / internalZoomScale
+```
+
+If `boxLocalX` is supposed to be in the "view-local" coordinate space (i.e., relative to the canvas), then subtracting `internalPanOffset` (which is also in view-local space) gives the world-space coordinate. So `boxLocalX` should be view-local, NOT window-local.
+
+But the pointerInteropFilter receives `motionEvent.x` which is relative to the View that has the modifier. If the modifier is on the canvas Box, then `motionEvent.x` is view-local (relative to the canvas). So `boxLocalX = sample.x` (no subtract) is correct.
+
+If the modifier is on an outer container, then `motionEvent.x` is relative to that outer container, and we need to subtract the offset between the outer container and the canvas.
+
+Looking at the code structure, the pointerInteropFilter is on the same Box as the onGloballyPositioned. So both are relative to the same View, which is the canvas Box. So `boxLocalX = sample.x` (no subtract) is correct.
+
+The fix: remove the `canvasBoxWindowOffset.x` and `canvasBoxWindowOffset.y` subtraction in the sample loop.
+
+### 4. Remove or fix the "weird shape" debug visualization
+- Search for `Canvas { drawCircle(...) }` calls in `AnnotationCanvas.kt` that are not part of the normal drawing pipeline
+- The "weird shape" is likely the eraser cursor preview or a debug overlay
+
+## Constraints
+- No schema change
+- No new dependencies
+- No `.github/workflows/` edits
+- Must not break existing tests
+- Must not change the drawing logic fundamentally (just fix the coordinate offset)
+
+## DoD
+- `gradle :app:assembleDebug` + `assembleRelease` green
+- `gradle :app:testDebugUnitTest` 3420+ tests green
+- `gradle :app:lintDebug` 0 errors
+- Manual test: drawing stroke follows the finger EXACTLY (no offset)
+- Manual test: no "weird shape" appears on the canvas
+- `workspace/phase-245/REPORT.md` with file:line evidence and the comparison with previous working code
