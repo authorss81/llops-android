@@ -775,9 +775,11 @@
 > `PointerInteropFilter` bytecode prove all ingestion paths (batch drain
 > `:2098-2127`, newest `:2110-2116`, fallback `:2124`, predicted-tail neutral
 > frame `:827-848`) pass node-local coords as-is. Tests: `Phase245DrawingRegressionTest`
-> (13 — ring slop boundaries/drift/zero-slop, neutral-frame world mapping,
+> (11 — ring slop boundaries/drift/zero-slop, neutral-frame world mapping,
 > window-offset displacement proof, FIFO node-local drain identity, monotonic
-> stale gate, out-of-page drop parity); `Phase193ResizeHandleVisibilityTest`
+> stale gate, out-of-page drop parity; the `waitForUpOrSlopMove` gesture wait
+> itself is source-pinned, not behavior-tested on the JVM);
+> `Phase193ResizeHandleVisibilityTest`
 > source-pin updated to the new wait. `gradle testDebugUnitTest` **3573 / 0 /
 > 0**, `assembleDebug` + `assembleRelease` (R8+signed) green, `lintDebug` 0
 > errors. No schema, no deps, `.github/workflows/` untouched, base-APK rule

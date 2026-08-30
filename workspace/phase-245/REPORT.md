@@ -38,11 +38,11 @@ The ring's **center disc** (`QuickColorRingOverlay` draws `currentColor` at `CEN
 ## Changes
 - `services/QuickColorRingMath.kt`: added `holdWithinLongPressSlop` (pure JVM).
 - `ui/components/AnnotationCanvas.kt`: ring long-press now yields to drawing via `waitForUpOrSlopMove`; imports `AwaitPointerEventScope`/`PointerInputChange`.
-- `test/.../Phase245DrawingRegressionTest.kt` (new, 13 tests): ring slope-yield boundary/oscil/drift/zero-slop; neutral-frame world mapping; double-offset displacement proof; FIFO node-local drain identity; monotonic stale gate; out-of-page drop parity.
+- `test/.../Phase245DrawingRegressionTest.kt` (new, 11 tests): ring slope-yield boundary/oscil/drift/zero-slop; neutral-frame world mapping; double-offset displacement proof; FIFO node-local drain identity; monotonic stale gate; out-of-page drop parity. NOTE: `waitForUpOrSlopMove` itself (second-finger abort, pointer-up return, non-consumption yield) is not directly testable on the plain JVM — it is SOURCE-PINNED (Phase193 `waitForUpOrSlopMove(` ≥ 1), while the 11 live tests cover the pure-JVM math and the world-mapping/batcher layers.
 - `test/.../Phase193ResizeHandleVisibilityTest.kt`: source-pin updated — the ring wait is now `waitForUpOrSlopMove(` (≥1) and the `waitForUpOrCancellation()` floor is 2 (the two media-embed handlers).
 
 ## Verification
-- `gradle :app:testDebugUnitTest` — **3573 tests green** (3560 baseline + 13 new; the only failure in the first run was the phase-193 source-pin that legitimately changed, now updated).
+- `gradle :app:testDebugUnitTest` — **3573 tests green** (3562 baseline + 11 new; the only failure in the first run was the phase-193 source-pin that legitimately changed, now updated).
 - `gradle :app:assembleDebug` — green.
 - `gradle :app:assembleRelease` (R8 + signed, CI keystore) — green.
 - `gradle :app:lintDebug` — **0 errors**.
