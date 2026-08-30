@@ -168,11 +168,17 @@ class Phase253FinalAuditRegressionTest {
     fun `249 - flushPendingSaves body is wrapped in withContext NonCancellable`() {
         val src = source("ui/viewmodel/NoteflowViewModel.kt")
         assertTrue(src.contains("import kotlinx.coroutines.NonCancellable"))
-        val flush = src.substring(src.indexOf("fun flushPendingSaves("))
-        val block = flush.substring(0, flush.indexOf("}", flush.indexOf("{") + 1))
-        assertTrue("flush body must run in NonCancellable", block.contains("withContext(NonCancellable) {"))
-        assertTrue("cancel-then-await settle must be preserved", block.contains("pendingDebounce?.cancel()"))
-        assertTrue("cancel-then-await settle must be preserved", block.contains("pendingDebounce?.join()"))
+        val flushStart = src.indexOf("fun flushPendingSaves(")
+        val body = functionBodyAt(src, flushStart)
+        // The withContext NonCancellable BLOCK must CONTAIN the cancel/join settle
+        // AND the final flush call. (The old first-brace cut stopped before the
+        // block's close and could not catch a flush moved outside the block.)
+        val wcStart = body.indexOf("withContext(NonCancellable) {")
+        assertTrue("NonCancellable block must exist", wcStart >= 0)
+        val withContextBody = functionBodyAt(body, wcStart)
+        assertTrue("cancel-then-await settle must be preserved", withContextBody.contains("pendingDebounce?.cancel()"))
+        assertTrue("cancel-then-await settle must be preserved", withContextBody.contains("pendingDebounce?.join()"))
+        assertTrue("final flush must run inside NonCancellable", withContextBody.contains("flushEditorPageSave("))
     }
 
     @Test
@@ -245,10 +251,14 @@ class Phase253FinalAuditRegressionTest {
     fun `250 - back paths refuse to flush while loadFailedDueToLock is set`() {
         val src = source("ui/screens/EditorScreen.kt")
         // Both the BackHandler and the top-bar back IconButton gate on the flag.
-        val b1 = src.indexOf("BackHandler {")
-        val backBlock = src.substring(b1, b1 + 760)
-        assertTrue("BackHandler must gate on the lock flag", backBlock.contains("!loadFailedDueToLock"))
-        assertTrue("BackHandler must flush when safe", backBlock.contains("flushPendingSaves("))
+        // The BackHandler block is taken via a BALANCED-brace slice (not a magic
+        // fixed-width window), so the pin survives a longer lambda without a
+        // spurious failure and still fails if the guard/flush leave the block.
+        val backStart = src.indexOf("BackHandler {")
+        assertTrue("BackHandler must exist", backStart >= 0)
+        val backBody = functionBodyAt(src, backStart)
+        assertTrue("BackHandler must gate on the lock flag", backBody.contains("!loadFailedDueToLock"))
+        assertTrue("BackHandler must flush when safe", backBody.contains("flushPendingSaves("))
         // A forward-safe count: the guarded flush condition must appear twice
         // (the BackHandler AND the top-bar back IconButton).
         val guardCount = countOccurrences(src, "if (isInitialLoadComplete && !loadFailedDueToLock) {")
@@ -370,6 +380,29 @@ class Phase253FinalAuditRegressionTest {
         assertTrue(src.contains("FloatingWindowNoticeLauncher("))
         assertTrue(src.contains("FloatingWindowPolicy.isLikelyFloatingWindow("))
         assertTrue(src.contains("FloatingWindowPolicy.noticeDue("))
+    }
+
+    /**
+     * Slice from [startIdx] through the brace-balanced body that follows it
+     * (the first `{` after [startIdx] and its matching close). The source is
+     * always balanced (it compiles), so an unbalanced result means the marker
+     * drifted / the file broke — that surfaces as a loud failure, not a silent
+     * empty window like a fixed-width `substring` slice could.
+     */
+    private fun functionBodyAt(src: String, startIdx: Int): String {
+        val openIdx = src.indexOf("{", startIdx)
+        assertTrue("open brace not found for body at $startIdx", openIdx >= 0)
+        var depth = 0
+        for (i in openIdx until src.length) {
+            when (src[i]) {
+                '{' -> depth++
+                '}' -> {
+                    depth--
+                    if (depth == 0) return src.substring(startIdx, i + 1)
+                }
+            }
+        }
+        throw AssertionError("unbalanced braces from index $startIdx in source")
     }
 
     private fun at(src: String, marker: String): String {

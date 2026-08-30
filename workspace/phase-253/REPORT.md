@@ -37,7 +37,7 @@ superseded by the verified positions. Note the PROMPT's `data/NoteflowViewModel.
   - `ui/components/AnnotationCanvas.kt`: minimap block at `:3516-3521` binds `paneW=canvasBoxW` /
     `paneH=canvasBoxH`; drag `pointerInput(minimapDraggable, minimapWidthPx, minimapHeightPx, paneW, paneH)`
     at `:3566`; clamp `constrainWithinSafeArea(…, paneW, paneH, …)` at `:3574-3579`. `grep` proves ZERO
-    `LocalConfiguration.current.screenWidthDp/screenHeightDp` (only comments remain).
+    `LocalConfiguration.current.screenWidthDp/screenHeightDp` references in the whole file (not even comments).
   - `services/FloatingWidgetDragPolicy.kt`: `topReservedPx: Float = 0f` last param `:94`, effective top
     clamp `top + topReservedPx` `:100`.
   - `services/DockPosturePolicy.kt`: `horizontalDefaultAnchor` `:41-56` / `verticalDefaultAnchor` `:65-80`
@@ -177,3 +177,20 @@ over the real pure-JVM policy classes (`PaperTextureStrengthPolicy`, `FloatingWi
 - No production code was modified by this audit — only the new regression test + this REPORT +
   `docs/phase-status.md` + `docs/ARCHITECTURE.md` notes. The phase-247 moves the prior audits' claims are
   all verified true at HEAD (honest-strict); no finding required a new fix phase.
+
+## 6. Review fixes (2026-08-30)
+
+Findings from the post-audit review addressed (test-only + doc wording; no production code touched):
+
+1. **Brittle fixed-width slice removed** — the `250 - back paths…` test used `src.substring(b1, b1 + 760)`,
+   a magic window that would spuriously fail once the `BackHandler` lambda outgrew 760 chars. It now takes the
+   block via a balanced-brace slice (`functionBodyAt`).
+2. **NonCancellable pin tightened** — the `249 - flushPendingSaves…` test's first-brace cut stopped before
+   the `withContext` block close, so a regression moving `flushEditorPageSave` OUTSIDE the NonCancellable
+   block would have passed. It now slices the whole `withContext(NonCancellable) { … }` block and asserts the
+   cancel/join settle AND the final `flushEditorPageSave` all live inside it.
+3. **Wording** — phase-248 "only comments remain" corrected to "not even comments" (the grep matches ZERO
+   references, not zero code references).
+
+Re-verified after the review fix: `gradle :app:testDebugUnitTest` green (3653 / 0 / 0 / 0, same count),
+`assembleDebug` green, `lintDebug` 0 errors (106 warnings).
