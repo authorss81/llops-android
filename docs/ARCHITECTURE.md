@@ -241,12 +241,31 @@
 > (`getStrokesForPage` materialises every row; `getStrokesForPageBounded` filters only on the B2-DOS-01
 > stored-size cap). Tests: `Phase242StrokeDisposePersistenceTest` (7).
 
+> **Implemented in phase-252** (2026-08-30, passwordless backup portability, see
+> `workspace/phase-252/REPORT.md`): a passwordless-vault export used to write a
+> device-DEK-encrypted (AndroidKeyStore-bound) archive silently — unreadable on
+> any other device and lost on device loss/factory reset. `exportBackup`
+> (`ImportExportService.kt:1708`) now takes `requireBackupPassword: Boolean = true`
+> (default-safe for every caller) and gates the device-keyed input shape
+> (`backupPassword == null` + key available + no master password) through the
+> pure-JVM `BackupPortabilityPolicy` (`services/BackupPortabilityPolicy.kt:60`,
+> `isDeviceKeyed :49`, exact error `:34`). The phone UI never reaches that shape:
+> `HomeScreen.kt:890-907` routes `!hasMasterPassword` exports to the NEW
+> non-bypassable `ui/dialogs/BackupPasswordRequirementDialog.kt` (only "Set
+> Master Password" → SecuritySettingsDialog or "Cancel Export"; strings
+> `backup_password_requirement_*`). Documented device-keyed producers opt in
+> explicitly: WebDAV (`NoteflowViewModel.exportEncryptedBackupToZip :4615`) and
+> LocalSend VAULT_BACKUP (`LocalSendSendDialog.kt:172`) pass
+> `requireBackupPassword = false` and keep working for passwordless vaults.
+> `UiFailureTextPolicy.backupFailureMessage` maps the guard to honest copy
+> (`:208-226`).
+
 | Subpackage | Key files | Purpose |
 |---|---|---|
 | `data/model/` | `Entities.kt`, `StrokeModels.kt` | Room entities (8) + stroke/ink types |
 | `data/db/` | `NoteflowDatabase.kt`, `Daos.kt` | Room DB (schema v9, 8 DAOs), corrupt-DB quarantine |
 | `data/repository/` | `NoteRepository.kt`, `LruBoundedMap.kt` | Encrypted read/write, search corpus, WAL checkpoint, re-key |
-| `services/` | `EncryptionService.kt`, `SecurityService.kt`, `DatabaseSecurityHelper.kt`, `VaultKeyHolder.kt`, `ExportSessionPolicy.kt`, `WetBrushEngine.kt`, `WebDavSyncService.kt`, `ImportExportService.kt`, `ImportArchivePolicy.kt`, `PaletteCatalog.kt`, `ColorModePersistencePolicy.kt`, `ShapeRecognitionHelper.kt`, `SsrfHostPolicy.kt`, `VoiceNoteCrypto.kt`, `DecryptFailurePolicy.kt`, `BrushEdgePolicy.kt`, `PerspectiveGridPolicy.kt`, `TimelapsePolicy.kt`, `TimelapseExporter.kt` | Non-UI: crypto/vault, brush math, sync, import/export, zip-import zip-bomb policy (B1-DB-5), palette, rainbow-mode persistence decision table (phase-122), SSRF blocklist (B1-NET-04), voice-note audio cryptor (B1-DB-3), decrypt-failure render decision (B1-DB-8), brush cap/join roundness policy (phase-121); phase-223 drafting-grid geometry (canvas-rotation math REMOVED in phase-243); phase-224 timelapse timing model + MediaCodec/MediaMuxer MP4 export |
+| `services/` | `EncryptionService.kt`, `SecurityService.kt`, `DatabaseSecurityHelper.kt`, `VaultKeyHolder.kt`, `ExportSessionPolicy.kt`, `WetBrushEngine.kt`, `WebDavSyncService.kt`, `ImportExportService.kt`, `ImportArchivePolicy.kt`, `BackupPortabilityPolicy.kt`, `PaletteCatalog.kt`, `ColorModePersistencePolicy.kt`, `ShapeRecognitionHelper.kt`, `SsrfHostPolicy.kt`, `VoiceNoteCrypto.kt`, `DecryptFailurePolicy.kt`, `BrushEdgePolicy.kt`, `PerspectiveGridPolicy.kt`, `TimelapsePolicy.kt`, `TimelapseExporter.kt` | Non-UI: crypto/vault, brush math, sync, import/export, zip-import zip-bomb policy (B1-DB-5), palette, rainbow-mode persistence decision table (phase-122), SSRF blocklist (B1-NET-04), voice-note audio cryptor (B1-DB-3), decrypt-failure render decision (B1-DB-8), brush cap/join roundness policy (phase-121); phase-223 drafting-grid geometry (canvas-rotation math REMOVED in phase-243); phase-224 timelapse timing model + MediaCodec/MediaMuxer MP4 export; phase-252 backup-portability gate (device-keyed export rejection) |
 | `services/localsend/` | `LocalSendProtocol.kt`, `LocalSendSender.kt`, `LocalSendPairing.kt`, `SettingsLocalSendPairedDeviceStore.kt`, `LocalSendDiscoveryPolicy.kt`, `FileTransferSender.kt`, `LocalSendSenderFactory.kt` | Pure-JVM LocalSend v2.2 + real network sender + TOFU pairing gate (B1-NET-02) + discovery/sweep gate (B1-NET-06) + FileTransfer seam/factory (phase-173) |
 | `plugins/` | `NoteflowPlugin.kt`, `PluginRegistry.kt`, `PluginManager.kt`, `PluginDiagnostics.kt`, `PluginLifecycle.kt` | Compile-time plugin framework + typed serving interfaces + capability routes |
 | `plugins/runtime/` | `RuntimePluginLoader.kt`, `SignatureVerifiedPluginRuntime.kt`, `ArtifactSignatureVerifier.kt`, `PinnedCertHash.kt`, `PinnedTlsConnector.kt`, `PluginManifestFetcher.kt`, `HttpsPluginDownloadTransport.kt`, `PluginDownloader.kt`, `PluginUpdateEngine.kt`, `CompileTimePluginPinStore.kt`, `PluginFrameworkClassLoader.kt`, `ArtifactStaticScan.kt` | Downloadable-plugin runtime: pinned-cert verify (manifest + artifact transports, no redirects), DexClassLoader (scoped `plugins.*`-only parent), verify-time static content scan (B1-AUTH-01), updates |
