@@ -1688,15 +1688,43 @@ object ImportExportService {
      * key mid-run. The copy keeps the export on the SAME key it started with;
      * its lifetime is bounded to this call and it is zeroized in the finally,
      * preserving the lock-time zeroization discipline.
+     *
+     * Phase 252 (HIGH 4/5): the passwordless-portability gate. The snapshot
+     * copy is taken BEFORE the gate reads the key, and the gate can never mint
+     * a key — it only decides whether a device-keyed export (a PASSWORDLESS
+     * vault called with `backupPassword == null` and `requireBackupPassword`
+     * left at its default `true`) is allowed to proceed. It is not: the archive
+     * would carry the AndroidKeyStore-wrapped DEK blob (B1-CRYPTO-05), which no
+     * other device can unwrap — a silent data-loss trap. The HomeScreen UI is
+     * the first gate (it refuses to export for a passwordless vault until a
+     * master password is set); this throws [IllegalArgumentException] as
+     * defense-in-depth against any future caller that bypasses the UI.
+     *
+     * The device-keyed path itself is PRESERVED for callers that explicitly
+     * opt in via `requireBackupPassword = false` — the documented
+     * B1-CRYPTO-05 WebDAV/LocalSend sync producers and any future
+     * "device-locked backup" feature (see [BackupPortabilityPolicy]).
      */
     suspend fun exportBackup(
         context: Context,
         vaultDek: ByteArray?,
         backupPassword: String? = null,
+        requireBackupPassword: Boolean = true,
         repository: com.authorss81.noteflow.data.repository.NoteRepository
     ): File = withContext(Dispatchers.IO) {
         val key = vaultDek?.copyOf()
         try {
+            // Phase 252: a passwordless vault + no backup password = a
+            // device-DEK-encrypted archive that is unreadable on any other
+            // device. Blocked unless the caller explicitly opted into the
+            // device-keyed model. `requirePortableBackup` never mints/exposes a
+            // key — it only throws or passes through on the boolean table.
+            BackupPortabilityPolicy.requirePortableBackup(
+                requireBackupPassword = requireBackupPassword,
+                backupPassword = backupPassword,
+                keyAvailable = key != null,
+                hasMasterPassword = SettingsManager(context.applicationContext).hasMasterPassword
+            )
             exportBackupInternal(context, key, backupPassword, repository)
         } finally {
             ExportSessionPolicy.zeroize(key)

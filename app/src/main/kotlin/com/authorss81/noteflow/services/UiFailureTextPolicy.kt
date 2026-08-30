@@ -221,6 +221,16 @@ object UiFailureTextPolicy {
             lower.contains("no encryption key is available") ||
                 lower.contains("unlock the vault") ->
                 "Backup failed — the vault is locked. Unlock the vault and try again."
+            lower.contains("set a master password first") ->
+                // Phase 252 (HIGH 4/5): the service-layer portability gate. Any
+                // caller that tried to export a DEVICE-KEYED backup from a
+                // passwordless vault gets the honest reason, never the generic
+                // "backup failed" black box. The HomeScreen UI never reaches
+                // this (it gates at the dialog); this is defense-in-depth copy
+                // for a future caller that bypasses the UI.
+                "Backup failed — your vault has no master password, so a backup now would be " +
+                    "locked to this device\'s hardware and unreadable anywhere else. Set a master " +
+                    "password to create a portable backup."
             else -> BACKUP_FAILED_GENERIC
         }
     }

@@ -161,10 +161,15 @@ fun LocalSendSendDialog(
                 // the WAL + re-stamp the HMAC + verified-copy the DB snapshot
                 // BEFORE building the archive, exactly like the HomeScreen/WebDAV
                 // producers (previously this path shipped a WAL-stale archive).
+                // Phase 252: this is the documented B1-CRYPTO-05 device-keyed
+                // producer ("send to a nearby device"), so it explicitly opts
+                // OUT of the passwordless-portability gate that guards the
+                // interactive HomeScreen backup.
                 ImportExportService.exportBackup(
                     context,
                     viewModel.repository.encryptionKey,
                     backupPassword = null,
+                    requireBackupPassword = false,
                     repository = viewModel.repository
                 )
             LocalSendPayload.OBSIDIAN_ZIP ->

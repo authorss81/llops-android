@@ -28,4 +28,8 @@
     <string name="canvas_blender_affects_smudge">Affects SMUDGE tool blending intensity</string>
     <string name="selection_count_a11y">%1$d strokes selected</string>
     <string name="floating_window_notice">Floating or split-screen window — InkFlow compacted its layout to fit.</string>
+    <string name="backup_password_requirement_title">Portable Backup Needs a Master Password</string>
+    <string name="backup_password_requirement_body">Your vault has no master password. A backup created now would be encrypted with a key bound to this device\'s hardware — if you lose this device or factory-reset it, the backup can never be opened again. To create a portable backup that restores on any device, set a master password first.</string>
+    <string name="backup_password_requirement_set_password">Set Master Password</string>
+    <string name="backup_password_requirement_cancel_export">Cancel Export</string>
 </resources>

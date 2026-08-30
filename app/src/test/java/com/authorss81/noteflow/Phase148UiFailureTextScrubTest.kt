@@ -265,9 +265,14 @@ class Phase148UiFailureTextScrubTest {
             "import-skip text must route through the policy",
             Regex("UiFailureTextPolicy\\.importSkippedMessage\\(e\\)").findAll(source).toList().size >= 3
         )
+        // Phase-252 (2026-08-30) removed the passwordless device-keyed export
+        // surface from HomeScreen (it now redirects to the non-bypassable
+        // BackupPasswordRequirementDialog), deleting the second backup-failure
+        // catch site. The surviving master-password export surface still routes
+        // its error text through the policy, which is the real guarantee here.
         assertTrue(
             "backup-failure text must route through the policy",
-            Regex("UiFailureTextPolicy\\.backupFailureMessage\\(e\\)").findAll(source).toList().size >= 2
+            Regex("UiFailureTextPolicy\\.backupFailureMessage\\(e\\)").findAll(source).toList().size >= 1
         )
     }
 

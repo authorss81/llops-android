@@ -4604,9 +4604,15 @@ fun updatePageTags(id: String, tags: String) {
     fun exportEncryptedBackupToZip(targetZip: java.io.File, onComplete: (Boolean) -> Unit) {
         viewModelScope.launch {
             try {
+                // Phase 252 (HIGH 4/5): WebDAV is the documented B1-CRYPTO-05
+                // device-keyed backup producer ("sync to MY OWN server") — it
+                // explicitly opts OUT of the passwordless-portability gate that
+                // guards the interactive HomeScreen backup. A passwordless vault
+                // still syncs device-keyed archives here by design.
                 val backupFile = ImportExportService.exportBackup(
                     getApplication(),
                     repository.encryptionKey,
+                    requireBackupPassword = false,
                     repository = repository
                 )
                 backupFile.copyTo(targetZip, overwrite = true)

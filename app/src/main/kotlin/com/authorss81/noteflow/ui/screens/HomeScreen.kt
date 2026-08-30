@@ -57,6 +57,7 @@ import com.authorss81.noteflow.services.RestoreFailSafe
 import com.authorss81.noteflow.services.UiFailureTextPolicy
 import com.authorss81.noteflow.theme.AppThemeMode
 import com.authorss81.noteflow.ui.components.*
+import com.authorss81.noteflow.ui.dialogs.BackupPasswordRequirementDialog
 import com.authorss81.noteflow.ui.viewmodel.NoteflowViewModel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
@@ -118,6 +119,12 @@ fun HomeScreen(
     var showPluginsDialog by remember { mutableStateOf(false) }
     var showPluginStoreDialog by remember { mutableStateOf(false) }
     var showBackupPasswordDialog by rememberSaveable { mutableStateOf(false) }
+    // Phase 252 (HIGH 4/5): the passwordless export gate. A vault without a
+    // master password can never produce a portable backup (a no-password
+    // export would be device-DEK-encrypted and unreadable anywhere else), so
+    // the export path raises this NON-BYPASSABLE dialog instead. The only road
+    // out is setting a master password (Security dialog) or cancelling.
+    var showBackupPasswordRequirementDialog by rememberSaveable { mutableStateOf(false) }
     var showLegacyRestoreConfirmDialog by rememberSaveable { mutableStateOf(false) }
     var pendingRestoreFile by remember { mutableStateOf<File?>(null) }
     var backupPasswordInput by rememberSaveable { mutableStateOf("") }
@@ -886,37 +893,16 @@ fun HomeScreen(
                                     backupPasswordError = null
                                     showBackupPasswordDialog = true
                                 } else {
-                                    // B2-UI-6 (phase-96): the backup runs on the VM
-                                    // scope and completion posts through the snackbar
-                                    // pipeline, so a lock/teardown never abandons it
-                                    // silently.
-                                    vaultScope.launch {
-                                        try {
-                                            // R2-B1D-05/03 (phase-137): the checkpoint
-                                            // + HMAC re-stamp + verified DB snapshot now
-                                            // live INSIDE exportBackup (single producer).
-                                            val cacheFile = ImportExportService.exportBackup(
-                                                context,
-                                                viewModel.repository.encryptionKey,
-                                                repository = viewModel.repository
-                                            )
-                                            exporter.export(
-                                                ExportDestinationPolicy.ExportKind.ENCRYPTED_BACKUP,
-                                                cacheFile
-                                            ) { result ->
-                                                when (result) {
-                                                    SaFExportResult.SAVED -> {
-                                                        viewModel.refreshBackupTimestamp()
-                                                        viewModel.showSnackbar("Backup created and saved.")
-                                                    }
-                                                    SaFExportResult.CANCELLED -> viewModel.showSnackbar("Backup cancelled")
-                                                    SaFExportResult.FAILED -> viewModel.showSnackbar("Backup could not be written to the chosen destination")
-                                                }
-                                            }
-                                        } catch (e: Exception) {
-                                            viewModel.showSnackbar(UiFailureTextPolicy.backupFailureMessage(e))
-                                        }
-                                    }
+                                    // Phase 252 (HIGH 4/5): a passwordless export
+                                    // would write a device-DEK-encrypted archive
+                                    // (B1-CRYPTO-05) that no other device can open —
+                                    // a silent data-loss trap that previously shipped
+                                    // with zero UI indication. No path bypasses this
+                                    // dialog: the only way to export from a passwordless
+                                    // vault is to set a master password first (the
+                                    // service-layer `exportBackup` gate backs this up by
+                                    // default `requireBackupPassword = true`).
+                                    showBackupPasswordRequirementDialog = true
                                 }
                             },
                             onRestore = {
@@ -2126,6 +2112,21 @@ fun HomeScreen(
                         Text("Restart now")
                     }
                 }
+            )
+        }
+
+        // Phase 252 (HIGH 4/5): the passwordless-backup gate dialog. It exists
+        // to be the ONLY way "Backup" resolves for a vault without a master
+        // password — "Set Master Password" dismisses this dialog and opens the
+        // Security settings (where the master password is enabled), "Cancel
+        // Export" abandons the export. There is no "export anyway" path.
+        if (showBackupPasswordRequirementDialog) {
+            BackupPasswordRequirementDialog(
+                onSetMasterPassword = {
+                    showBackupPasswordRequirementDialog = false
+                    showSecurityDialog = true
+                },
+                onCancel = { showBackupPasswordRequirementDialog = false }
             )
         }
 
