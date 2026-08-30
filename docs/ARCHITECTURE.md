@@ -3086,6 +3086,15 @@ UNTRUSTED files before any staging); `ui/components/Dialogs.kt` `AppUpdateDialog
     the fail-closed `matches` contract (placeholder/wrong/near-miss pins never match; known-good does) and the
     exact placeholder value, so a changed-but-wrong constant can never silently slip in.
 - Tests: `app/src/test/java/com/authorss81/noteflow/` (~110 unit tests, pure JVM, no androidTest).
+  - **Implemented in phase-253** (release-gate audit, see `workspace/phase-253/REPORT.md`): new pure-JVM
+    `Phase253FinalAuditRegressionTest` (20 methods) re-pins the six prior phases' fixes at HEAD so a silent
+    regression back to pre-253 behavior fails the build — true-zero paper strength (247), minimap-pane + ink-bar
+    topBar reservation (248), wet-throttle real-timeline + `NonCancellable` flush + card-hit tail + eraser bucket
+    (249), save-generation token + lock-during-load guard (250), WindowSizeClass config-refresh + strict default
+    (251), passwordless-backup portability gate (252) — plus the pre-existing deferred items still present
+    (data-extraction full exclude, wired `FloatingWindowPolicy`, cacheDir staging cleanup). `testDebugUnitTest`
+    3653 green (3633 + 20), `assembleDebug` + `assembleRelease` (R8+signed) + `lintDebug` 0 errors. No production
+    code changed by the audit; no schema, no new deps.
 - **Do NOT run Gradle on the Windows dev machine** (no SDK; CI-only builds).
 - Version: `VERSION_CODE`/`VERSION_NAME` env (default 2 / "1.0.0"). Release signing is FAIL-CLOSED
   (B1-PLAT-1): `KEYSTORE_FILE`+`KEYSTORE_PASSWORD`+`KEY_ALIAS`+`KEY_PASSWORD` must be supplied or
