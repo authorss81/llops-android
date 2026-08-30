@@ -27,6 +27,16 @@ package com.authorss81.noteflow.services
  * Anchoring at [DEFAULT] (50) is the key honesty property: an untouched
  * install sees [grainScale] == [shaderGain] == 1.0, so the grain tile and the
  * wet shader are byte-identical to pre-227 rendering.
+ *
+ * Phase 247 — TRUE ZERO at strength 0. Previously every grain path had a
+ * hardcoded [MIN_ALPHA] floor, so dialing the tooth all the way down still
+ * kept ~44% of the default grain (the "the dots never fully disappear"
+ * report). Now [grainDrawAlpha], [grainScale] and [shaderGain] all early-return
+ * exactly `0f` at clamped strength 0, so the grain tile's draw alpha collapses
+ * to 0 and the AGSL `uPaperGrain` product vanishes. The lerp math for strength
+ * &gt; 0 is untouched and the [DEFAULT] anchors stay byte-identical
+ * ([grainDrawAlpha](50) == `0.045`, [grainScale](50) == [shaderGain](50) ==
+ * `1.0`), so a stock install renders the exact pre-227 grain.
  */
 object PaperTextureStrengthPolicy {
 
@@ -48,25 +58,37 @@ object PaperTextureStrengthPolicy {
     /** Dial position as a 0..1 fraction of the dial. */
     fun fraction(strength: Int): Float = clamp(strength) / 100f
 
-    /** The absolute average alpha estimate; [0.02, 0.07] for the full dial. */
+    /**
+     * The absolute average alpha estimate; `[MIN_ALPHA], [MAX_ALPHA]` for the
+     * full dial. TRUE ZERO at strength 0 (the grain must fully disappear, not
+     * sit at the old [MIN_ALPHA] floor).
+     */
     fun grainDrawAlpha(strength: Int): Float =
-        MIN_ALPHA + fraction(strength) * (MAX_ALPHA - MIN_ALPHA)
+        if (clamp(strength) == 0) 0f
+        else MIN_ALPHA + fraction(strength) * (MAX_ALPHA - MIN_ALPHA)
 
     /**
      * Draw-time multiplier over the CACHED tile. Anchored at exactly 1.0 for
-     * [DEFAULT]; 0 maps to ~0.44 (minimum tooth), 100 to ~1.56 (nearly twice
-     * the default fleck, still comfortably inside the alpha envelope).
+     * [DEFAULT]; TRUE ZERO at strength 0 (the draw call's alpha-multiplier
+     * collapses the tile to nothing), then the lerp resumes from its
+     * [MIN_ALPHA] floor so the linear dial behavior is unchanged — 100 maps
+     * to ~1.56 (nearly twice the default fleck, still comfortably inside the
+     * alpha envelope).
      */
     fun grainScale(strength: Int): Float =
-        grainDrawAlpha(strength) / grainDrawAlpha(DEFAULT)
+        if (clamp(strength) == 0) 0f
+        else grainDrawAlpha(strength) / grainDrawAlpha(DEFAULT)
 
-    /** AGSL `uPaperGrain` absolute value (`strength/100`, 0..1). */
+    /** AGSL `uPaperGrain` absolute value (`strength/100`, 0..1). Already 0 at zero. */
     fun shaderStrength(strength: Int): Float = fraction(strength)
 
     /**
      * Multiplier over the wet brush's OWN per-preset `paperGrain`
      * (`uPaperGrain = brushParams.paperGrain * shaderGain(strength)`). Anchored
-     * at 1.0 for [DEFAULT]; range 0..2 (the caller clamps the product to ≤1).
+     * at 1.0 for [DEFAULT]; TRUE ZERO at strength 0 so the AGSL grain sampling
+     * vanishes; range 0..2 (the caller clamps the product to ≤1).
      */
-    fun shaderGain(strength: Int): Float = fraction(strength) / fraction(DEFAULT)
+    fun shaderGain(strength: Int): Float =
+        if (clamp(strength) == 0) 0f
+        else fraction(strength) / fraction(DEFAULT)
 }

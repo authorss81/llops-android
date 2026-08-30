@@ -568,6 +568,17 @@
 > policy classes; Paparazzi broken on this runner). No schema, no migration, no
 > new deps, base-APK-size rule intact.
 
+> **Implemented in phase-247** (2026-08-30, paper texture true zero at strength
+> 0, see `workspace/phase-247/REPORT.md`): the `MIN_ALPHA = 0.02f` lerp floor in
+> `PaperTextureStrengthPolicy` meant dialing the tooth to 0 still drew ~44% of
+> the default grain ("the dots never fully disappear"). Now `grainDrawAlpha`,
+> `grainScale` and `shaderGain` early-return exactly `0f` at clamped strength 0
+> (the grain tile's draw alpha collapses to 0 in `AnnotationCanvas.drawPaperGrain`
+> and the AGSL `uPaperGrain` product vanishes), while the lerp math for
+> strength &gt; 0 is untouched and the DEFAULT=50 anchors stay byte-identical
+> (`grainDrawAlpha(50) == 0.045`, `grainScale(50) == shaderGain(50) == 1.0`).
+> `shaderStrength` was already linear-zero. No schema, no new deps.
+
 > **Implemented in phase-198** (2026-08-24, live-stroke invalidation isolation +
 > O(visible) culling — PERF 2.1+2.5, see `workspace/phase-198/REPORT.md`): pen samples
 > no longer re-run the whole canvas draw pass. The live ink + eraser aim cursor render

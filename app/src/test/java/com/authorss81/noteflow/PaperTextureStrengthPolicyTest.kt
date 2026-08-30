@@ -36,12 +36,15 @@ class PaperTextureStrengthPolicyTest {
     }
 
     @Test
-    fun `draw alpha follows the prompt lerp over the full dial`() {
-        assertEquals(0.02f, PaperTextureStrengthPolicy.grainDrawAlpha(0), 1e-6f)
+    fun `draw alpha follows the prompt lerp over the full dial with a true zero`() {
+        // Phase 247: strength 0 is a TRUE ZERO (the "dots never disappear" fix),
+        // not the old MIN_ALPHA lerp floor.
+        assertEquals(0f, PaperTextureStrengthPolicy.grainDrawAlpha(0), 0f)
         assertEquals(0.07f, PaperTextureStrengthPolicy.grainDrawAlpha(100), 1e-6f)
         val mid = PaperTextureStrengthPolicy.grainDrawAlpha(50)
         assertEquals(0.045f, mid, 1e-6f)
-        // strict monotone rise across the dial
+        // strict monotone rise across the dial (0 is the floor, then the lerp
+        // resumes from its MIN_ALPHA base so the linear dial is unchanged)
         var prev = -1f
         for (s in 0..100) {
             val a = PaperTextureStrengthPolicy.grainDrawAlpha(s)
@@ -56,9 +59,10 @@ class PaperTextureStrengthPolicyTest {
     }
 
     @Test
-    fun `grain scale renders the requested envelope`() {
-        // 0.02 / 0.045 and 0.07 / 0.045 (extremes of the lerp band).
-        assertEquals(0.02f / 0.045f, PaperTextureStrengthPolicy.grainScale(0), 1e-5f)
+    fun `grain scale renders the requested envelope with a true zero`() {
+        // 0 / 0.045 and 0.07 / 0.045 (the old lerp floor vs the lerp ceiling).
+        // Phase 247: strength 0 maps to EXACTLY 0 — no residual tooth.
+        assertEquals(0f, PaperTextureStrengthPolicy.grainScale(0), 0f)
         assertEquals(0.07f / 0.045f, PaperTextureStrengthPolicy.grainScale(100), 1e-5f)
         // as the draw ALPHA was never more than the paper's speckle cap (0.05-0.07),
         // even the max dial keeps the apparent fleck inside the alpha envelope.
