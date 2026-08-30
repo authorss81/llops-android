@@ -82,6 +82,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.platform.LocalConfiguration
 
 // Phase 238: official window-size class (replaces the homegrown
 // WindowSizeCategory enum that only knew WIDTH and hid landscape phones).
@@ -297,6 +298,20 @@ class MainActivity : FragmentActivity() {
             DisposableEffect(Unit) {
                 lifecycle.addObserver(multiWindowLifecycleObserver)
                 onDispose { lifecycle.removeObserver(multiWindowLifecycleObserver) }
+            }
+
+            // Phase 251: re-derive the WindowSizeClass on CONFIG changes too, not
+            // only on ON_RESUME. Dragging a freeform window's edge across 600dp
+            // / 840dp keeps the activity resurrected the whole time — no
+            // pause/resume, and on modern Android the resize may only update
+            // WindowMetrics without firing onConfigurationChanged. LocalConfiguration
+            // IS invalidated by those events, so this effect relaunches (also on
+            // first composition, per the LaunchedEffect contract), bumps the key,
+            // and the key(sizeClassRefreshKey) block below re-queries
+            // calculateWindowSizeClass(activity) against the CURRENT window
+            // metrics — the single/double-column posture never stays stuck.
+            LaunchedEffect(LocalConfiguration.current) {
+                sizeClassRefreshKey++
             }
 
             // 22.9: root SnackbarHost — visibility-critical feedback is Snackbars,

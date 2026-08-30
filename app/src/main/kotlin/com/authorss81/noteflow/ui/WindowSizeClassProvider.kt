@@ -15,11 +15,16 @@ import androidx.compose.ui.unit.dp
  * the screens read, and MainActivity sets it from `calculateWindowSizeClass()`
  * at the activity root.
  *
- * The neutral default is EXPANDED/EXPANDED (built via the public
- * `calculateFromSize`) so any probe before MainActivity provides stays in the
- * roomy layout instead of flashing compact.
+ * The neutral default is Compact/Compact (the STRICTEST class, built via the
+ * public `calculateFromSize` on a zero-size window) — any probe before
+ * MainActivity provides the real class (i.e. a single pre-provider frame,
+ * Compose previews, snapshot tests) briefly sees the compact layout instead
+ * of falsely claiming an EXPANDED 840x900 tablet that would flash a wide
+ * double-pane layout on a phone. MainActivity derives and provides the true
+ * class on the very next composition (Phase 251 also re-derives it on every
+ * config change, so the placeholder at most lasts one frame).
  */
 @OptIn(ExperimentalMaterial3WindowSizeClassApi::class)
 val LocalWindowSizeClass = staticCompositionLocalOf {
-    WindowSizeClass.calculateFromSize(DpSize(840.dp, 900.dp))
+    WindowSizeClass.calculateFromSize(DpSize(0.dp, 0.dp))
 }

@@ -2552,6 +2552,24 @@
       still reads stale `LocalConfiguration.screenWidthDp`; a soft cap, mitigated by
       the F6 resume re-derivation, tracked for a measured-width pass. F8 —
       Paparazzi goldens remain deferred with the rationale restated honestly.
+  - **Implemented in phase-251** (2026-08-30, size-class refresh on freeform
+    drag-resize — see `workspace/phase-251/REPORT.md`): phase-238's F6 re-derived
+    the `WindowSizeClass` ONLY on `ON_RESUME` (`sizeClassRefreshKey++` in the
+    resume observer), so a freeform drag crossing 600dp/840dp with no
+    pause/resume left the whole adaptive posture stuck. MainActivity now ALSO
+    bumps the key from `LaunchedEffect(LocalConfiguration.current) {
+    sizeClassRefreshKey++ }` (`MainActivity.kt:313-315`, import `:85`) directly
+    in front of the `key(sizeClassRefreshKey) { calculateWindowSizeClass(activity) }`
+    block (`:668-669`) — every config invalidation re-derives against the CURRENT
+    window metrics, and the effect fires on first composition too (LaunchedEffect
+    contract). The F5 stale-`LocalConfiguration` soft cap is thereby closed for
+    the CLASS derivation (measured-width passes inside individual screens remain
+    as-is). `ui/WindowSizeClassProvider.kt` default changed from the EXPANDED
+    `840x900` placeholder (audit 3/5 M1) to the strictest Compact/Compact
+    (`calculateFromSize(DpSize(0.dp, 0.dp))` at `:29`) — one-frame placeholder
+    at worst, never a wide-tablet lie. Tests:
+    `app/src/test/java/com/authorss81/noteflow/Phase251WindowSizeClassRefreshTest.kt`
+    (5). `gradle testDebugUnitTest` 3626/0/0.
 - **ViewModel/nav**: `ui/viewmodel/NoteflowViewModel.kt:105` (builds SecurityService/NoteRepository/PluginRegistry
   :121/PluginManager :131/PluginRuntime :170/PluginStoreController :196; ~60 capability suspend fns);
   `MainActivity.kt:73` (single activity, **`mutableStateOf` nav** — NOT Navigation Compose).
