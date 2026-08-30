@@ -1688,6 +1688,18 @@
     gated by `minimapDraggable` (default OFF), collapsible header kept; `minimapHudEnabled` default
     reverted to OFF (`SettingsManager.kt:317` ← `MinimapGeometryPolicy.VISIBLE_BY_DEFAULT=false`).
     Settings sheet gained the 4 toggles (`EditorScreen.kt:4049`). Tests: `Phase129InkBarMinimapPolicyTest` (23).
+  - **Implemented in phase-244** (minimap off-screen + ink-bar blocks drawing + minimap text overflow, see
+    `workspace/phase-244/REPORT.md`): (1) the minimap HUD (`AnnotationCanvas.kt`) now anchors to the REAL
+    canvas box — `canvasBoxW`/`canvasBoxH` captured from the `BoxWithConstraints` scope (`:2416-2421`,
+    consumed at `:3374-3375`) instead of the device-wide `LocalConfiguration` dims, so the bottom-right
+    widget can't slide past the visible canvas on devices where the canvas is smaller than the display
+    (app bar / bottom bar / system bars / cutout). (2) the floating ink bar now yields the TOP half of the
+    canvas back to drawing: new pure-JVM `services/InkBarDrawingPolicy.kt` (`shouldYieldDrawingArea`) +
+    `EditorScreen.kt FloatingToolDock` resting-position override (`:3474-3494`) — while a freehand/shape/
+    eraser drawing tool is active AND the bar would rest in the top half, it rests at its default bottom
+    anchor (persisted dragged offset untouched; pan/select restores it). (3) minimap Zoom/Layers/View lines
+    are `maxLines=1` ellipsised + `fillMaxWidth` so a long layer name / far coordinate can't balloon or spill
+    (`AnnotationCanvas.kt:3510-3547`). Tests: `Phase244InkBarDrawingPolicyTest` (6).
   - **Implemented in phase-150** (R2-b2b4-DOS-02/03 + R2-b2b5-FEA-04, see `workspace/phase-150/REPORT.md`): canvas
     memory + per-frame render budgets. `services/LayerRenderBudgetPolicy.kt` owns the LIVE layer cap
     (`MAX_LIVE_LAYER_COUNT` = 16, the SAME number as the phase-82 export cap) + `MAX_RESIDENT_BITMAP_BYTES` = 64 MB,

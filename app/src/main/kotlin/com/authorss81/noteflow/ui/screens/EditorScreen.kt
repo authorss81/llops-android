@@ -85,6 +85,7 @@ import com.authorss81.noteflow.services.PsdExportPolicy
 import com.authorss81.noteflow.services.DockPosturePolicy
 import com.authorss81.noteflow.services.DockSnapMath
 import com.authorss81.noteflow.services.FloatingWidgetDragPolicy
+import com.authorss81.noteflow.services.InkBarDrawingPolicy
 import com.authorss81.noteflow.services.MinimapGeometryPolicy
 import com.authorss81.noteflow.services.CanvasPageBudgetPolicy
 import com.authorss81.noteflow.services.HarmonyScheme
@@ -3462,13 +3463,35 @@ private fun FloatingToolDock(
         } else {
             DockPosturePolicy.verticalDefaultAnchor(screenW, screenH, dockW, dockH, endMarginPx)
         }
-        val restingPos = FloatingWidgetDragPolicy.restingPosition(
+        var restingPos = FloatingWidgetDragPolicy.restingPosition(
             enabled = draggable,
             draggedX = draggedOffset?.x,
             draggedY = draggedOffset?.y,
             defaultX = defaultAnchor.first,
             defaultY = defaultAnchor.second
         )
+
+        // Phase 244 (Bug 2): a bar sitting in the TOP half of the canvas blocks
+        // that strip from being drawn on — its buttons/drag swallow the touch, so
+        // a stroke can't begin beneath it. While a freehand/shape drawing tool is
+        // active AND the bar would rest in the top half, yield that area back to
+        // the canvas by resting at the default bottom anchor instead. Switching
+        // back to a navigation tool (pan/select) restores the user's own dragged
+        // position automatically (this only overrides the RESTING position, never
+        // the persisted dragged offset).
+        val activeDrawingTool =
+            (currentTool.isFreehandTool || currentTool.isShapeTool) ||
+                currentTool == StrokeTool.ERASER
+        val drawingToolActive = activeDrawingTool && toolbarState != FloatingToolbarState.HIDDEN_DRAWING
+        if (horizontalPosture &&
+            InkBarDrawingPolicy.shouldYieldDrawingArea(
+                drawingToolActive = drawingToolActive,
+                barTopY = restingPos.y,
+                availableHeight = screenH
+            )
+        ) {
+            restingPos = FloatingWidgetDragPolicy.Offset(defaultAnchor.first, defaultAnchor.second)
+        }
 
         val insets = WindowInsets.safeDrawing
         val topInsetPx = with(density) { insets.getTop(density).toFloat() }

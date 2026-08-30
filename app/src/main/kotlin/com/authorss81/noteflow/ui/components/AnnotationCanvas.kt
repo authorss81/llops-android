@@ -2413,6 +2413,12 @@ fun AnnotationCanvas(
             }
     ) {
         val viewHeightPx = with(LocalDensity.current) { maxHeight.toPx() }
+        // Phase 244 (Bug 1): the canvas box's real pixel bounds, captured here
+        // (in the BoxWithConstraints promoting receiver) so nested regions like
+        // the minimap HUD can anchor to the ACTUAL canvas area instead of the
+        // device-wide LocalConfiguration.density/screen dims.
+        val canvasBoxW = with(LocalDensity.current) { maxWidth.toPx() }
+        val canvasBoxH = viewHeightPx
 
         // Phase-150 review fix 4: the derived page count carries a flag when the
         // note's OWN content (not deep panning) extends past the world ceiling —
@@ -3356,10 +3362,17 @@ blenderStrengthPercent = blenderStrengthPercent,
             // only when the user opts in (default OFF); the drag offset is
             // session-scoped. The collapsible header is kept.
             if (showMinimap) {
-                val configuration = androidx.compose.ui.platform.LocalConfiguration.current
                 val mapDensity = LocalDensity.current
-                val screenW = with(mapDensity) { configuration.screenWidthDp.dp.toPx() }
-                val screenH = with(mapDensity) { configuration.screenHeightDp.dp.toPx() }
+                // Phase 244 (Bug 1): anchor to this canvas box's REAL bounds
+                // (canvasBoxW/H captured from the BoxWithConstraints scope),
+                // NOT the device-wide LocalConfiguration dimensions. The canvas
+                // may be smaller than the physical display (app bar, bottom bar,
+                // system bars, cutout), so the old device dims pushed the
+                // bottom-right minimap past the visible area on some
+                // devices/orientations. Using the actual canvas box keeps the
+                // minimap inside view on every posture.
+                val screenW = canvasBoxW
+                val screenH = canvasBoxH
                 val (worldW, worldH) = computeCanvasWorld(screenW)
                 val safePageW = if (worldW > 0f) worldW else 1000f
                 val safeCanvasH = if (worldH > 0f) worldH else 1000f
@@ -3494,12 +3507,21 @@ blenderStrengthPercent = blenderStrengthPercent,
                                 )
                             }
 
+                            // Phase 244 (Bug 3): the minimap's informational lines
+                            // are pinned to the header width with single-line
+                            // ellipsis so a long layer name or a far-panned view
+                            // coordinate can't balloon the HUD height or spill
+                            // past its (possibly narrow) box.
                             Text(
                                 text = "Zoom ${smoothZoomPct.value.toInt()}%",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.primary,
                                 fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(horizontal = 4.dp)
+                                maxLines = 1,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 4.dp)
                             )
                             Text(
                                 text = buildString {
@@ -3509,13 +3531,21 @@ blenderStrengthPercent = blenderStrengthPercent,
                                 },
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(horizontal = 4.dp)
+                                maxLines = 1,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 4.dp)
                             )
                             Text(
                                 text = "View (${viewTopLeft.x.toInt()},${viewTopLeft.y.toInt()})–(${viewBottomRight.x.toInt()},${viewBottomRight.y.toInt()})",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                                modifier = Modifier.padding(horizontal = 4.dp)
+                                maxLines = 1,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 4.dp)
                             )
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
