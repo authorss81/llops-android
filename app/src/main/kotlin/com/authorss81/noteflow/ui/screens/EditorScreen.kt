@@ -478,7 +478,6 @@ fun EditorScreen(
         }
     }
 
-
     val isRecordingVoice by voiceNoteManager.isRecording.collectAsState()
     val recordingElapsedMs by voiceNoteManager.recordingElapsedMs.collectAsState()
     val isPlayingVoice by voiceNoteManager.isPlaying.collectAsState()
@@ -604,7 +603,6 @@ fun EditorScreen(
     // scatter 0% (= legacy tight spacing).
     var blenderStrengthPercent by remember { mutableIntStateOf(viewModel.settings.blenderStrengthPercent) }
     var scatterAmountPercent by remember { mutableIntStateOf(viewModel.settings.scatterAmountPercent) }
-
 
     // Phase 155: .inkbrush brush-preset IMPORT via the SAF picker. The bytes are
     // classified by the pure-JVM codec; reject reasons are sanitized (no file
@@ -970,6 +968,7 @@ fun EditorScreen(
         }
     }
 
+    // PDF Page Count & Background Rendering
     LaunchedEffect(page.sourceFilePath, isPdf) {
         if (isPdf && !page.sourceFilePath.isNullOrEmpty()) {
             withContext(Dispatchers.IO) {
@@ -1077,7 +1076,6 @@ fun EditorScreen(
         strokes = newStrokes
         triggerAutoSave(newStrokes)
     }
-
 
     /**
      * Copy selected strokes to the system clipboard. The clipboard is a shared

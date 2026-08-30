@@ -3224,3 +3224,16 @@ Release-APK static security audit now has a complete deliverable + file-path anc
 `docs/kali-report-round2.md` (27 rows `R2-KS-01..07`, `R2-KS-10..19`, `R2-KS-20..29`) + `workspace/phase-160/REPORT.md` +
 `docs/pentest-findings-2026-08-19.md`. Key verified anchors: DB quarantine +
 FULL WAL checkpoint + HMAC recompute (`com/authorss81/noteflow/data/db/NoteflowDatabase.java:230-301,420-426`, `w2/C3697c.java:153,249-255,581-585`); AndroidKeyStore DEK `noteflow_dek_key[_auth]` + biometric invalidation (`w2/C3694b0.java`); plugin sandbox loader (`n2/G.java`) + static scan (`n2/C2548g`) + constant-time pin compare (`o3/J3`); plugin cert-pin placeholder still default → updates FAIL CLOSED (`m0/C2256b.java:772-773`); WebDAV HTTP opt-in allowlist + cross-host auth-strip (`w2/J2.java`, `X5/a.java:347`); MediaKit-baked-in base-APK **MEDIUM** findings (lingua 207.6 MB/75 langs `X2/g.java:77`; ML Kit OCR+translation) — fix-phase candidates pending phase-167 triage; 12 dynamic checks D1–D12 declared deferred with operator reproducers.
+
+### Implemented in phase-254 (comment trim)
+Pure-cosmetic comment + blank-line trim in `ui/components/AnnotationCanvas.kt`, `ui/screens/EditorScreen.kt`
+and `ui/screens/HomeScreen.kt` (see `workspace/phase-254/REPORT.md` + `docs/phase-status.md` phase-254 row).
+- Result: Δ code = 0 in all three files (code lines remain 6852 / 6422 / 3267); net −135 raw lines from the
+  phase-254 parent `32bbfe8` (AnnotationCanvas 8479→8407, EditorScreen 7386→7333, HomeScreen 3762→3752).
+- Every 3+/2+ blank run collapsed to exactly 1 (max blank run = 1 in each file); all pure divider banners
+  (`// ===…`, `// ---…`, `// ~~~…`) and trailing-tag `//` comments removed.
+- WHY/provenance (`phase-NNN`, `R2-b2b*`, `B1-*`/`B2-*`), KDoc `/**` openers (22/20/3), and
+  `TODO/FIXME/XXX` markers are all preserved (proven by `Phase254CommentTrimTest`).
+- Honest limitation, verified: the PROMPT's −2,700..−4,000-line target is arithmetically infeasible in these
+  three files — their remaining full-line comments are dominated by protected WHY/provenance + KDoc content
+  that the phase's own hard rules forbid deleting. No security contract file was touched.

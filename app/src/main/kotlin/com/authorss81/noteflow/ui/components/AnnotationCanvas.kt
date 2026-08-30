@@ -850,6 +850,7 @@ fun AnnotationCanvas(
         }
     }
 
+    // Color sampling helper for Eyedropper tool
     // Phase 27: samples the ACTUAL rendered pixel (stroked ink composited over the
     // page background) instead of guessing via a loose point-in-+18px radius. The
     // inverse screen->canvas transform (divide by zoom) lives in
@@ -8405,4 +8406,3 @@ private data class StrokeRenderOpts(
     // Phase 222: stylus tilt → width/alpha modulation.
     val tiltShadingEnabled: Boolean = false
 )
-
