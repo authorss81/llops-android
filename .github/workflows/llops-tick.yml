@@ -1,0 +1,52 @@
+name: llops-tick
+
+# Safety-net cron: every 5 min, fire a repository_dispatch of type `llops_tick`
+# to the `llops` workflow. This is the FALLBACK path; the primary path is
+# `llops.yml`'s self-retrigger job, which POSTs the same event after every
+# successful run (latency ~10-30s). The 5-min cron ensures the chain resumes
+# if the self-retrigger ever fails or is throttled.
+#
+# GitHub cron is documented as "not guaranteed" and is throttled under load
+# (3-5h gaps seen in 2026-08 logs). Using cron here is the backup, not the
+# primary signal.
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  # Allow manual retrigger for tests / outage recovery.
+  workflow_dispatch:
+
+concurrency:
+  group: llops-tick
+  cancel-in-progress: true   # this is a no-op dispatcher; safe to overlap-replace
+
+permissions:
+  contents: read
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Re-dispatch llops_tick to llops workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Skip if the llops pipeline is already running (avoid stacking).
+          IN_PROGRESS=$(gh api \
+            -H "Accept: application/vnd.github+json" \
+            "/repos/${GITHUB_REPOSITORY}/actions/runs?status=in_progress&per_page=1" \
+            --jq '.workflow_runs | map(select(.workflow_id != null and (.name | startswith("llops")))) | length' \
+            2>/dev/null || echo "0")
+          if [ "${IN_PROGRESS}" != "0" ]; then
+            echo "llops pipeline already running (${IN_PROGRESS} in-progress run) — skipping this tick."
+            exit 0
+          fi
+          echo "Firing llops_tick to llops workflow."
+          gh api \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            "/repos/${GITHUB_REPOSITORY}/dispatches" \
+            -f "event_type=llops_tick" \
+            -f "client_payload[reason]=safety_net_cron_5m" \
+            -f "client_payload[run_id]=${{ github.run_id }}" \
+            || echo "::warning::re-dispatch failed; will retry on next 5-min tick"

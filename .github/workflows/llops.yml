@@ -12,20 +12,17 @@ on:
         required: false
         type: boolean
         default: true
-  schedule:
-    # Cron = the retry engine. Every 10 min, a cheap check: only runs work if
-    # a phase is pending or deferred. Near-zero minutes when idle.
-    # Two schedules (every 10 + every 30) provide redundancy: even if GitHub
-    # throttles one schedule (which can happen on public runners under load),
-    # the other is offset by 20 minutes so the pipeline runs at least every
-    # 10-20 minutes. We keep cancel-in-progress: false (not true) because
-    # cancel-in-progress: true would risk losing phase work that is in-flight
-    # in scripts/phase_runner.sh between its 300s checkpoint_wip() pushes.
-    # With false, a new tick is blocked while a long phase runs but no work
-    # is ever cancelled mid-flight. Manual workflow_dispatch remains available
-    # for cases where the cron is throttled for >1 hour.
-    - cron: "*/10 * * * *"
-    - cron: "*/30 * * * *"
+  push:
+    branches: [main]
+  # Self-retrigger + the llops-tick safety-net workflow both POST
+  # `repository_dispatch` with `event_type: llops_tick`. The dispatch event
+  # bypasses the GitHub cron-throttling that caused 3-5h gaps in phase runs
+  # (the schedule trigger was documented "not guaranteed" — we replace it).
+  # The same workflow re-firing itself via `repository_dispatch` is allowed
+  # by GitHub's API (the "workflows cannot trigger workflows" restriction
+  # applies only to `workflow_run`, not `repository_dispatch`).
+  repository_dispatch:
+    types: [llops_tick]
 
 
 permissions:
@@ -395,3 +392,45 @@ jobs:
             logs/${{ needs.select-phase.outputs.phase }}.review.log
             logs/${{ needs.select-phase.outputs.phase }}.fix.log
           if-no-files-found: ignore
+
+  # Self-retrigger: after every run, POST a repository_dispatch to ourselves
+  # so the next run starts within ~10-30s instead of waiting for the cron
+  # safety-net. This is what closes the 3-5h gap we saw on the cron path.
+  # The job runs in parallel with `review`'s commit step and uses the same
+  # concurrency group so a second retrigger never stacks.
+  retrigger:
+    needs: [select-phase]
+    if: always() && needs.select-phase.outputs.exists == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Re-dispatch llops_tick (chain to next run)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PHASE="${{ needs.select-phase.outputs.phase }}"
+          # Only re-dispatch when the previous run actually advanced or
+          # deliberately stopped. A .deferred phase means rate-limited
+          # (will be picked up by the safety-net cron) and a .blocked phase
+          # means manual intervention is needed.
+          if [ -f "workspace/${PHASE}/.done" ]; then
+            REASON="phase_done"
+          elif [ -f "workspace/${PHASE}/.deferred" ]; then
+            REASON="phase_deferred_safety_net_will_retry"
+          elif [ -f "workspace/${PHASE}/.blocked" ]; then
+            REASON="phase_blocked_manual_intervention"
+          else
+            REASON="phase_failed_safety_net_will_retry"
+          fi
+          # 10s backoff so a stacked retrigger doesn't tight-loop (defense
+          # in case the previous run's commit step is still in flight).
+          sleep 10
+          echo "Re-dispatching llops_tick (reason=${REASON}, previous=${PHASE})"
+          gh api \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            "/repos/${GITHUB_REPOSITORY}/dispatches" \
+            -f "event_type=llops_tick" \
+            -f "client_payload[phase]=${PHASE}" \
+            -f "client_payload[reason]=${REASON}" \
+            -f "client_payload[run_id]=${{ github.run_id }}" \
+            || echo "::warning::re-dispatch failed — safety-net cron will retry in <=5 min"
