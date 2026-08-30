@@ -22,8 +22,12 @@ import org.junit.Test
  *      run (the old silent device-keyed export is gone from that branch).
  *   2. `ImportExportService.exportBackup` gains `requireBackupPassword: Boolean
  *      = true` and — through the pure-JVM `BackupPortabilityPolicy` — throws
- *      `IllegalArgumentException` when called with `password == null` AND the
- *      vault is passwordless (device-wrapped DEK).
+ *      `IllegalArgumentException` when called with `password == null` while a
+ *      key is available. Because every vault's DEK is the AndroidKeyStore-bound
+ *      device copy, this is a device-keyed export for BOTH passwordless and
+ *      master-password vaults (the review-fix round widened the predicate off
+ *      the old `hasMasterPassword` proxy, which leaked the master-password-no-
+ *      password shape through as an unportable archive).
  *   3. The new `BackupPasswordRequirementDialog` exists with only the two
  *      actions "Set Master Password" + "Cancel Export"; its copy lives in
  *      `strings.xml` (no hardcoded English literals in the composable).
@@ -110,15 +114,26 @@ class Phase252PasswordlessBackupTest {
     // --- 2. Service-layer gate (defense-in-depth) ----------------------------
 
     @Test
-    fun `BackupPortabilityPolicy throws IllegalArgumentException for a device-keyed passwordless export`() {
-        // passwordless vault (device-wrapped DEK) + no backup password + gate on
-        // (the default) => the export would be device-locked => refuse.
+    fun `BackupPortabilityPolicy throws IllegalArgumentException for any device-keyed export with no backup password`() {
+        // no backup password + key available (gate on, the default) => the export
+        // would be device-locked => refuse. Holds for a PASSWORDLESS vault...
         assertThrows(IllegalArgumentException::class.java) {
             BackupPortabilityPolicy.requirePortableBackup(
                 requireBackupPassword = true,
                 backupPassword = null,
-                keyAvailable = true,
-                hasMasterPassword = false
+                keyAvailable = true
+            )
+        }
+        // ...and for a MASTER-PASSWORD vault too: every vault's in-memory DEK is
+        // the AndroidKeyStore-wrapped device copy, so a missing backup password
+        // always yields an unportable archive regardless of hasMasterPassword.
+        // (The old phase-252 predicate leaked this shape through; fixed in the
+        // review-fix round — see BackupPortabilityPolicy KDoc.)
+        assertThrows(IllegalArgumentException::class.java) {
+            BackupPortabilityPolicy.requirePortableBackup(
+                requireBackupPassword = true,
+                backupPassword = null,
+                keyAvailable = true
             )
         }
         // The thrown message must be the documented portable-path copy.
@@ -126,8 +141,7 @@ class Phase252PasswordlessBackupTest {
             BackupPortabilityPolicy.requirePortableBackup(
                 requireBackupPassword = true,
                 backupPassword = null,
-                keyAvailable = true,
-                hasMasterPassword = false
+                keyAvailable = true
             )
             throw AssertionError("must throw")
         } catch (e: IllegalArgumentException) {
@@ -137,42 +151,48 @@ class Phase252PasswordlessBackupTest {
 
     @Test
     fun `BackupPortabilityPolicy allows every legitimate export shape`() {
-        // passwordless vault but a backup password WAS supplied => v3 portable export.
+        // a backup password WAS supplied => v3 portable export (even though this
+        // represents a vault that may or may not have a master password).
         BackupPortabilityPolicy.requirePortableBackup(
             requireBackupPassword = true,
             backupPassword = "correct horse battery staple",
-            keyAvailable = true,
-            hasMasterPassword = false
-        )
-        // password-protected vault exporting device-keyed (WebDAV/LocalSend) stays allowed.
-        BackupPortabilityPolicy.requirePortableBackup(
-            requireBackupPassword = true,
-            backupPassword = null,
-            keyAvailable = true,
-            hasMasterPassword = true
+            keyAvailable = true
         )
         // explicit opt-in (requireBackupPassword = false) preserves the
-        // B1-CRYPTO-05 device-keyed path for a passwordless vault.
+        // B1-CRYPTO-05 device-keyed path (WebDAV/LocalSend sync producers).
         BackupPortabilityPolicy.requirePortableBackup(
             requireBackupPassword = false,
             backupPassword = null,
-            keyAvailable = true,
-            hasMasterPassword = false
+            keyAvailable = true
         )
         // locked vault (no key): the existing "unlock the vault" gate owns it.
         BackupPortabilityPolicy.requirePortableBackup(
             requireBackupPassword = true,
             backupPassword = null,
-            keyAvailable = false,
-            hasMasterPassword = false
+            keyAvailable = false
         )
         assertEquals(
-            "the device-keyed predicate must classify the passwordless+no-password shape",
+            "the device-keyed predicate must classify the no-backup-password+key shape",
             true,
             BackupPortabilityPolicy.isDeviceKeyed(
                 backupPassword = null,
-                keyAvailable = true,
-                hasMasterPassword = false
+                keyAvailable = true
+            )
+        )
+        assertEquals(
+            "a supplied backup password is never device-keyed",
+            false,
+            BackupPortabilityPolicy.isDeviceKeyed(
+                backupPassword = "a real password",
+                keyAvailable = true
+            )
+        )
+        assertEquals(
+            "a locked vault (no key) is not device-keyed — the unlock gate owns it",
+            false,
+            BackupPortabilityPolicy.isDeviceKeyed(
+                backupPassword = null,
+                keyAvailable = false
             )
         )
     }
@@ -185,7 +205,7 @@ class Phase252PasswordlessBackupTest {
             "exportBackup must declare requireBackupPassword: Boolean = true",
             src.contains("requireBackupPassword: Boolean = true")
         )
-        // The gate must run against the passwordless/device-wrapped determination
+        // The gate must run against the device-keyed determination
         // before any bytes move, with a NO-key-mint contract (keyAvailable).
         val gateIdx = src.indexOf("BackupPortabilityPolicy.requirePortableBackup(")
         assertTrue("exportBackup must call the portability gate", gateIdx >= 0)
@@ -198,9 +218,9 @@ class Phase252PasswordlessBackupTest {
             "the gate must key on whether a key is available (never mints one)",
             gateBlock.contains("keyAvailable = key != null")
         )
-        assertTrue(
-            "the gate must resolve device-wrapped via the vault's live master-password state",
-            gateBlock.contains("hasMasterPassword = SettingsManager(context.applicationContext).hasMasterPassword")
+        assertFalse(
+            "the gate must NOT depend on hasMasterPassword — every vault DEK is device-bound",
+            gateBlock.contains("hasMasterPassword")
         )
     }
 

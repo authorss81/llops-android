@@ -184,7 +184,52 @@ Notes:
 - `.github/workflows/` untouched, `verification-metadata.xml` untouched, no
   schema change, no new dependencies, base-APK-size rule intact.
 
-## 5. Compatibility & security posture (constraint)
+## 5. Review-fix round (2026-08-30)
+
+**Review findings → fixes:**
+
+1. **FINDING 1 (MEDIUM): gate predicate under-blocked the actual device-keyed
+   shape.** `BackupPortabilityPolicy.isDeviceKeyed` originally was
+   `keyAvailable && backupPassword == null && !hasMasterPassword`. But the
+   writer (`ImportExportService.kt:1840→1902`) produces a device-keyed archive
+   whenever `backupPassword == null` — `hasMasterPassword` plays NO role in the
+   encryption decision, and EVERY vault's in-memory DEK is the AndroidKeyStore-
+   bound device copy. So a master-password vault calling `exportBackup` with
+   `backupPassword == null` (default gate on) passed the old predicate yet still
+   wrote an unportable archive — the exact silent-data-loss trap this phase
+   exists to prevent, left open for any non-UI caller (e.g. a future plugin).
+   **Fixed:** `isDeviceKeyed(backupPassword, keyAvailable)` is now
+   `keyAvailable && backupPassword == null`; the now-unused `hasMasterPassword`
+   parameter was removed from `isDeviceKeyed`/`requirePortableBackup` and from
+   the `ImportExportService.exportBackup` gate call (also dropping the
+   `SettingsManager(...).hasMasterPassword` read). WebDAV/LocalSend are
+   unaffected (they pass `requireBackupPassword = false`); HomeScreen is
+   unaffected (always supplies a backup password on the master-password path).
+2. **FINDING 4 (LOW):** the new test pinned the under-broad predicate — the
+   `master-password + backupPassword==null` shape was asserted to PASS. Updated
+   `Phase252PasswordlessBackupTest` to assert that shape now THROWS, the
+   `isDeviceKeyed` signature no longer takes `hasMasterPassword`, and the
+   source-pin test now asserts the service gate does NOT depend on
+   `hasMasterPassword`.
+3. **FINDING 2 (LOW):** `.editorconfig` `insert_final_newline = true` — the 3
+   NEW files (`BackupPortabilityPolicy.kt`, `BackupPasswordRequirementDialog.kt`,
+   `Phase252PasswordlessBackupTest.kt`) lacked trailing newlines; added. (The
+   pre-existing newline-less files were already so before phase-252.)
+4. **FINDING 3 (LOW, by design):** the device-keyed data-loss risk remains live
+   for passwordless vaults on WebDAV (`NoteflowViewModel.exportEncryptedBackupToZip`)
+   + LocalSend VAULT_BACKUP (both `requireBackupPassword = false`, mandated to
+   preserve B1-CRYPTO-05). Documented this limitation honestly in each call-
+   site comment (unportable on those paths by design; only the interactive
+   HomeScreen "Backup" forces a master password for real portability).
+
+**Verification (review-fix):** `gradle :app:testDebugUnitTest` **3633 / 0
+failures / 0 errors**; `gradle :app:assembleDebug` green; `gradle :app:lintDebug`
+**0 errors**. `assembleRelease` not re-run here (review scope is pure Kotlin;
+release signing env `RELEASE_KEYSTORE_B64` unset on this runner → the release
+build fails closed by design, unrelated to this change). No schema change, no
+new deps, `verification-metadata.xml` untouched, `.github/workflows/` untouched.
+
+## 6. Compatibility & security posture (constraint)
 
 - The dialog now surfaces on EVERY passwordless backup attempt — one honest,
   non-alarming message with a single action; it is not silent degradation.

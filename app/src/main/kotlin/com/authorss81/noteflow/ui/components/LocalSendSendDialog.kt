@@ -163,8 +163,13 @@ fun LocalSendSendDialog(
                 // producers (previously this path shipped a WAL-stale archive).
                 // Phase 252: this is the documented B1-CRYPTO-05 device-keyed
                 // producer ("send to a nearby device"), so it explicitly opts
-                // OUT of the passwordless-portability gate that guards the
-                // interactive HomeScreen backup.
+                // OUT of the portability gate that guards the interactive
+                // HomeScreen backup. NOTE (review-fix): a passwordless vault's
+                // sent encrypted backup therefore stays DEVICE-KEYED — it can
+                // only be decrypted on the originating device. That is by
+                // design here (a same-vault transfer, not a portable archive);
+                // the interactive HomeScreen "Backup" flow is the one that
+                // forces a master password for real portability.
                 ImportExportService.exportBackup(
                     context,
                     viewModel.repository.encryptionKey,

@@ -1689,14 +1689,16 @@ object ImportExportService {
      * its lifetime is bounded to this call and it is zeroized in the finally,
      * preserving the lock-time zeroization discipline.
      *
-     * Phase 252 (HIGH 4/5): the passwordless-portability gate. The snapshot
+     * Phase 252 (HIGH 4/5): the portability gate. The snapshot
      * copy is taken BEFORE the gate reads the key, and the gate can never mint
-     * a key — it only decides whether a device-keyed export (a PASSWORDLESS
-     * vault called with `backupPassword == null` and `requireBackupPassword`
+     * a key — it only decides whether a device-keyed export (a call with
+     * `backupPassword == null` and `requireBackupPassword`
      * left at its default `true`) is allowed to proceed. It is not: the archive
      * would carry the AndroidKeyStore-wrapped DEK blob (B1-CRYPTO-05), which no
-     * other device can unwrap — a silent data-loss trap. The HomeScreen UI is
-     * the first gate (it refuses to export for a passwordless vault until a
+     * other device can unwrap — a silent data-loss trap. Because EVERY vault's
+     * in-memory DEK is the device-bound AndroidKeyStore copy, this holds for
+     * master-password AND passwordless vaults. The HomeScreen UI is
+     * the first gate (it refuses to export after the requirement dialog until a
      * master password is set); this throws [IllegalArgumentException] as
      * defense-in-depth against any future caller that bypasses the UI.
      *
@@ -1714,16 +1716,17 @@ object ImportExportService {
     ): File = withContext(Dispatchers.IO) {
         val key = vaultDek?.copyOf()
         try {
-            // Phase 252: a passwordless vault + no backup password = a
+            // Phase 252: no backup password + a key is available = a
             // device-DEK-encrypted archive that is unreadable on any other
-            // device. Blocked unless the caller explicitly opted into the
-            // device-keyed model. `requirePortableBackup` never mints/exposes a
-            // key — it only throws or passes through on the boolean table.
+            // device (every vault's DEK is the AndroidKeyStore-wrapped device
+            // copy, so this holds for master-password AND passwordless vaults).
+            // Blocked unless the caller explicitly opted into the device-keyed
+            // model. `requirePortableBackup` never mints/exposes a key — it only
+            // throws or passes through on the boolean table.
             BackupPortabilityPolicy.requirePortableBackup(
                 requireBackupPassword = requireBackupPassword,
                 backupPassword = backupPassword,
-                keyAvailable = key != null,
-                hasMasterPassword = SettingsManager(context.applicationContext).hasMasterPassword
+                keyAvailable = key != null
             )
             exportBackupInternal(context, key, backupPassword, repository)
         } finally {

@@ -4606,9 +4606,12 @@ fun updatePageTags(id: String, tags: String) {
             try {
                 // Phase 252 (HIGH 4/5): WebDAV is the documented B1-CRYPTO-05
                 // device-keyed backup producer ("sync to MY OWN server") — it
-                // explicitly opts OUT of the passwordless-portability gate that
+                // explicitly opts OUT of the portability gate that
                 // guards the interactive HomeScreen backup. A passwordless vault
-                // still syncs device-keyed archives here by design.
+                // still syncs device-keyed archives here by design (those syncs
+                // remain unportable/device-bound; the interactive HomeScreen
+                // "Backup" flow is the one that forces a master password for a
+                // truly portable archive).
                 val backupFile = ImportExportService.exportBackup(
                     getApplication(),
                     repository.encryptionKey,
