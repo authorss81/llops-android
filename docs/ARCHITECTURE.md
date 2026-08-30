@@ -571,11 +571,12 @@
 > **Implemented in phase-247** (2026-08-30, paper texture true zero at strength
 > 0, see `workspace/phase-247/REPORT.md`): the `MIN_ALPHA = 0.02f` lerp floor in
 > `PaperTextureStrengthPolicy` meant dialing the tooth to 0 still drew ~44% of
-> the default grain ("the dots never fully disappear"). Now `grainDrawAlpha`,
-> `grainScale` and `shaderGain` early-return exactly `0f` at clamped strength 0
-> (the grain tile's draw alpha collapses to 0 in `AnnotationCanvas.drawPaperGrain`
-> and the AGSL `uPaperGrain` product vanishes), while the lerp math for
-> strength &gt; 0 is untouched and the DEFAULT=50 anchors stay byte-identical
+> the default grain ("the dots never fully disappear"). Now `grainDrawAlpha` and
+> `grainScale` early-return exactly `0f` at clamped strength 0 (the grain tile's
+> draw alpha collapses to 0 in `AnnotationCanvas.drawPaperGrain`); the `shaderGain`
+> early-return is defensive only (it was already `0` at zero pre-fix — the AGSL
+> `uPaperGrain` path never kept a floor). The lerp math for strength &gt; 0 is
+> untouched and the DEFAULT=50 anchors stay byte-identical
 > (`grainDrawAlpha(50) == 0.045`, `grainScale(50) == shaderGain(50) == 1.0`).
 > `shaderStrength` was already linear-zero. No schema, no new deps.
 

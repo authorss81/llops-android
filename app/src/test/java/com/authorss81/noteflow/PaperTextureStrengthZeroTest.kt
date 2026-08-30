@@ -37,6 +37,9 @@ class PaperTextureStrengthZeroTest {
 
     @Test
     fun `default 50 anchor is unchanged pre-227`() {
+        // Exact-bit pin: `0.02f + 0.5f * (0.07f - 0.02f)` == 0x3d3851ec == the
+        // `0.045f` literal in float32. Brittle to any arithmetic reordering — by
+        // design (the 50-anchor is a byte-identical contract, not a tolerance).
         assertEquals(0.045f, PaperTextureStrengthPolicy.grainDrawAlpha(50), 0f)
     }
 
@@ -52,6 +55,8 @@ class PaperTextureStrengthZeroTest {
 
     @Test
     fun `ceiling is preserved at strength 100`() {
+        // Exact-bit pin: `0.02f + 1f * (0.07f - 0.02f)` == 0x3d8f5c29 == the
+        // `0.07f` literal in float32. Same brittleness contract as the 50-anchor.
         assertEquals(0.07f, PaperTextureStrengthPolicy.grainDrawAlpha(100), 0f)
     }
 

@@ -28,15 +28,20 @@ package com.authorss81.noteflow.services
  * install sees [grainScale] == [shaderGain] == 1.0, so the grain tile and the
  * wet shader are byte-identical to pre-227 rendering.
  *
- * Phase 247 — TRUE ZERO at strength 0. Previously every grain path had a
- * hardcoded [MIN_ALPHA] floor, so dialing the tooth all the way down still
- * kept ~44% of the default grain (the "the dots never fully disappear"
- * report). Now [grainDrawAlpha], [grainScale] and [shaderGain] all early-return
- * exactly `0f` at clamped strength 0, so the grain tile's draw alpha collapses
- * to 0 and the AGSL `uPaperGrain` product vanishes. The lerp math for strength
- * &gt; 0 is untouched and the [DEFAULT] anchors stay byte-identical
- * ([grainDrawAlpha](50) == `0.045`, [grainScale](50) == [shaderGain](50) ==
- * `1.0`), so a stock install renders the exact pre-227 grain.
+ * Phase 247 — TRUE ZERO at strength 0. Previously the CACHED-tile draw path
+ * had a hardcoded [MIN_ALPHA] floor: `grainDrawAlpha(0)` == `0.02` and
+ * `grainScale(0)` ≈ `0.444`, so dialing the tooth all the way down still kept
+ * ~44% of the default grain (the "the dots never fully disappear" report).
+ * Now [grainDrawAlpha] and [grainScale] early-return exactly `0f` at clamped
+ * strength 0, so the grain tile's draw alpha collapses to 0. The AGSL mapping
+ * was already zero at the floor pre-fix (`shaderGain(0)` == `fraction(0) /
+ * fraction(DEFAULT)` == `0`, and [shaderStrength](0) == `0`) — their
+ * early-returns are defensive only, kept for symmetry. The lerp math for
+ * strength &gt; 0 is untouched and the [DEFAULT] anchors stay byte-identical
+ * (`grainDrawAlpha(50)` == `0.045f`, `grainScale(50)` == `shaderGain(50)` ==
+ * `1.0f`), so a stock install renders the exact pre-227 grain. Note the 0 → 1
+ * dial step is intentionally a jump (true zero vs. the [MIN_ALPHA] lerp base);
+ * that discontinuity is inherent to the specified pattern.
  */
 object PaperTextureStrengthPolicy {
 
@@ -46,7 +51,10 @@ object PaperTextureStrengthPolicy {
     /** The pre-227 look is the 50 midpoint; strength below/above is the dial. */
     const val DEFAULT = 50
 
-    /** Lerp floor — the tooth that remains at minimum strength. */
+    /**
+     * Lerp base for strengths 1..100. Superseded by a TRUE ZERO at strength 0
+     * (the tooth no longer "remains" at the minimum — see the class KDoc).
+     */
     const val MIN_ALPHA = 0.02f
 
     /** Lerp ceiling — `MIN_ALPHA + 0.05`, the prompt's `strength/100 * 0.05` term. */
@@ -59,9 +67,12 @@ object PaperTextureStrengthPolicy {
     fun fraction(strength: Int): Float = clamp(strength) / 100f
 
     /**
-     * The absolute average alpha estimate; `[MIN_ALPHA], [MAX_ALPHA]` for the
-     * full dial. TRUE ZERO at strength 0 (the grain must fully disappear, not
-     * sit at the old [MIN_ALPHA] floor).
+     * The absolute average alpha estimate. TRUE ZERO at strength 0 (the grain
+     * must fully disappear, not sit at the old [MIN_ALPHA] floor), then the
+     * lerp resumes from its [MIN_ALPHA] base: the visible dial range is
+     * `0f..[MAX_ALPHA]`, with the linear `[MIN_ALPHA]..[MAX_ALPHA]` band mapped
+     * onto strengths 1..100 (that 0 → 1 discontinuity is inherent to the
+     * specified true-zero pattern).
      */
     fun grainDrawAlpha(strength: Int): Float =
         if (clamp(strength) == 0) 0f
@@ -85,8 +96,9 @@ object PaperTextureStrengthPolicy {
     /**
      * Multiplier over the wet brush's OWN per-preset `paperGrain`
      * (`uPaperGrain = brushParams.paperGrain * shaderGain(strength)`). Anchored
-     * at 1.0 for [DEFAULT]; TRUE ZERO at strength 0 so the AGSL grain sampling
-     * vanishes; range 0..2 (the caller clamps the product to ≤1).
+     * at 1.0 for [DEFAULT]; TRUE ZERO at strength 0 (defensive only — this was
+     * already `fraction(0) / fraction(DEFAULT)` == 0 pre-fix); range 0..2 (the
+     * caller clamps the product to ≤1).
      */
     fun shaderGain(strength: Int): Float =
         if (clamp(strength) == 0) 0f
