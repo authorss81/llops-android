@@ -55,7 +55,7 @@ Fixed the three visual/layout issues from the screenshots:
 - base-APK-size rule intact.
 
 ## Tests
-- New `app/src/test/java/com/authorss81/noteflow/Phase244InkBarDrawingPolicyTest.kt` (6 tests):
+- New `app/src/test/java/com/authorss81/noteflow/Phase244InkBarDrawingPolicyTest.kt` (5 tests):
   non-drawing tool never yields; drawing tool + top-half bar yields; bottom-half bar never nudged;
   degenerate zero-height never yields; boundary at midpoint.
 
@@ -65,3 +65,12 @@ Fixed the three visual/layout issues from the screenshots:
 - `gradle :app:assembleDebug` — green.
 - `gradle :app:assembleRelease` (R8 + shrinkResources + signed) — green.
 - `gradle :app:lintDebug` — 0 errors.
+
+## Review-fix round
+- Corrected the documented `Phase244InkBarDrawingPolicyTest` count from 6 to **5** in
+  `workspace/phase-244/REPORT.md`, `docs/ARCHITECTURE.md`, and `docs/phase-status.md` (the source
+  file defines 5 `@Test` methods, matching the XML result `tests="5"`).
+- Confirmed the other review observations require no code change: the landscape (vertical) posture
+  yields are intentionally scoped to the horizontal pill only (the reported bug was the top-of-portrait
+  bar; a landscape side-bar follow-up may be considered separately), and the Bug 1 `computeCanvasWorld`
+  `worldW` narrowing in seamless mode is more correct (matches the visible canvas) and not a defect.

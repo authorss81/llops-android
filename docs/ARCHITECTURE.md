@@ -1699,7 +1699,7 @@
     eraser drawing tool is active AND the bar would rest in the top half, it rests at its default bottom
     anchor (persisted dragged offset untouched; pan/select restores it). (3) minimap Zoom/Layers/View lines
     are `maxLines=1` ellipsised + `fillMaxWidth` so a long layer name / far coordinate can't balloon or spill
-    (`AnnotationCanvas.kt:3510-3547`). Tests: `Phase244InkBarDrawingPolicyTest` (6).
+    (`AnnotationCanvas.kt:3510-3547`). Tests: `Phase244InkBarDrawingPolicyTest` (5).
   - **Implemented in phase-150** (R2-b2b4-DOS-02/03 + R2-b2b5-FEA-04, see `workspace/phase-150/REPORT.md`): canvas
     memory + per-frame render budgets. `services/LayerRenderBudgetPolicy.kt` owns the LIVE layer cap
     (`MAX_LIVE_LAYER_COUNT` = 16, the SAME number as the phase-82 export cap) + `MAX_RESIDENT_BITMAP_BYTES` = 64 MB,
