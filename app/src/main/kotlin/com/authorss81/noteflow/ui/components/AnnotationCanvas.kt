@@ -537,7 +537,6 @@ fun AnnotationCanvas(
     val stabilizerModelKeyState = rememberUpdatedState(stabilizerModelKey)
     val stabilizerPredictionPercentState = rememberUpdatedState(stabilizerPredictionPercent)
 
-    // Eyedropper Magnifying Loupe State
     var sampledColorPreview by remember { mutableStateOf<Color?>(null) }
     var eyedropperPosition by remember { mutableStateOf<Offset?>(null) }
 
@@ -584,13 +583,11 @@ fun AnnotationCanvas(
     var textAlign by remember { mutableStateOf("LEFT") }
     var textSelectedColorInt by remember(currentColor) { mutableIntStateOf(currentColor.toArgb()) }
 
-    // Floating Sticky Note Creation Dialog
     var showStickyNoteDialog by remember { mutableStateOf(false) }
     var stickyNoteOffset by remember { mutableStateOf<Offset?>(null) }
     var stickyNoteText by remember { mutableStateOf("") }
     var stickyNoteColorHex by remember { mutableStateOf("#FEF08A") } // Default Yellow
 
-    // Minimap Collapsible State
     var minimapExpanded by remember { mutableStateOf(true) }
 
     // Phase 129: session-scoped drag offset for the minimap (null = default
@@ -712,7 +709,6 @@ fun AnnotationCanvas(
         }
     }
 
-    // ---------------------------------------------------------------------
     // Phase 196: OS-level stylus motion prediction (PERF 1.1).
     //
     // The ink path only draws when a real input event lands, so on devices
@@ -816,7 +812,6 @@ fun AnnotationCanvas(
                 } catch (t: Throwable) {
                     null
                 }
-                // Reconcile: replace whatever tail the previous frame drew.
                 dropPredictedTail()
                 if (predicted != null) {
                     val pageTopY = calculatePageYOffset(activeTargetPage)
@@ -855,7 +850,6 @@ fun AnnotationCanvas(
         }
     }
 
-    // Color sampling helper for Eyedropper tool
     // Phase 27: samples the ACTUAL rendered pixel (stroked ink composited over the
     // page background) instead of guessing via a loose point-in-+18px radius. The
     // inverse screen->canvas transform (divide by zoom) lives in
@@ -981,7 +975,6 @@ fun AnnotationCanvas(
                 try {
                     baseArgb = rawBmp.getPixel(px.first, px.second)
                 } catch (e: Exception) {
-                    // ignore and fall back to paper
                 }
             }
         }
@@ -1454,7 +1447,6 @@ fun AnnotationCanvas(
                     }
                 }
             }
-            // 2. Tap Gestures for Text Input, Eyedropper & Sticky Notes
             .pointerInput(currentTool, pdfPageFilter, isContinuousMode, activeRawBitmapMap) {
                 detectTapGestures(
                     onDoubleTap = { offset ->
@@ -1474,7 +1466,6 @@ fun AnnotationCanvas(
                         )
                         val targetPage = getPageFromCanvasY(canvasOffset.y)
 
-                        // 4.1 Check if user tapped a time-synced stroke to jump audio
                         val tappedStroke = activeStrokeList.firstOrNull { stroke ->
                             stroke.timestampMs != null && strokeContainsPoint(stroke, canvasOffset)
                         }
@@ -1512,7 +1503,6 @@ fun AnnotationCanvas(
                                 var sourceBmp: android.graphics.Bitmap? = activeRawBitmapMap[targetPage]
                                 var needsRecycle = false
                                 if (sourceBmp == null || sourceBmp.isRecycled) {
-                                    // Pure-ink note: render active-layer strokes to a temp bitmap.
                                     val lw = pageWidthPx.toInt().coerceAtLeast(1)
                                     val lh = pageHeightPx.toInt().coerceAtLeast(1)
                                     val layerBmp = android.graphics.Bitmap.createBitmap(lw, lh, android.graphics.Bitmap.Config.ARGB_8888)
@@ -1892,7 +1882,6 @@ fun AnnotationCanvas(
                             val targetPageYStart = calculatePageYOffset(targetPage)
                             val targetPageYEnd = targetPageYStart + pageHeightPx
 
-                            // Prevent starting a drawing stroke outside the active page bounds
                             val isStartOutsidePage = canvasOffset.x < 0f || canvasOffset.x > pageWidthPx ||
                                     canvasOffset.y < targetPageYStart || canvasOffset.y > targetPageYEnd
 
@@ -2617,7 +2606,6 @@ fun AnnotationCanvas(
             }
         }
 
-        // Windowed Page Calculation for Fast Infinite Canvas Rendering
         LaunchedEffect(layoutPanOffset, layoutZoomScale, isContinuousMode, pdfTotalPages, viewHeightPx) {
             if (isContinuousMode && pdfTotalPages > 1) {
                 val visibleTopCanvasY = -layoutPanOffset.y / layoutZoomScale
@@ -2654,7 +2642,6 @@ fun AnnotationCanvas(
                             modifier = Modifier.fillMaxWidth()
                         )
 
-                        // Font Style Selection
                         Text("Font Family & Style", style = MaterialTheme.typography.labelMedium)
                         Row(
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -2680,7 +2667,6 @@ fun AnnotationCanvas(
                             }
                         }
 
-                        // Size and Alignment Row
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -2733,7 +2719,6 @@ fun AnnotationCanvas(
                             }
                         }
 
-                        // Background Card / Highlighting Badge
                         Text("Background Badge / Box", style = MaterialTheme.typography.labelMedium)
                         Row(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -2765,7 +2750,6 @@ fun AnnotationCanvas(
                             }
                         }
 
-                        // Text Color Palette
                         Text("Text Color", style = MaterialTheme.typography.labelMedium)
                         Row(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -3002,7 +2986,6 @@ fun AnnotationCanvas(
                 } else currentColor
 
                 if (!isContinuousMode) {
-                    // Single Page Canvas
                     drawPaperCard(0f, 0f, size.width, size.height, paperColor = parsedPaperColor, isDarkPaper = isDarkPaper, grainBrush = paperGrainBrush, paperEdge = paperEdge, grainScale = grainScale)
                     drawPaperTemplate(template, 0f, 0f, size.width, size.height, isDarkPaper = isDarkPaper, paperTexture = paperTexture, templateOverrides = templateOverridesFor(template))
 
@@ -3035,7 +3018,6 @@ fun AnnotationCanvas(
                         )
                     }
 
-                    // Render Strokes for single page.
                     // Phase 198: `previewStroke` is the wet-only live stroke — the
                     // classic live preview draws in the LiveStrokePreview overlay.
                     drawCompositedLayersStrokes(
@@ -3078,7 +3060,6 @@ fun AnnotationCanvas(
                         clippingMaskLayerIds = resolvedClippingMaskIds
                     )
                 } else if (!divideIntoPages) {
-                    // Continuous Infinite Canvas (Seamless, without page division gaps)
                     val (canvasW, infiniteH) = computeCanvasWorld(size.width)
 
                     drawPaperCard(0f, 0f, canvasW, infiniteH, paperColor = parsedPaperColor, isDarkPaper = isDarkPaper, pageLabel = null, grainBrush = paperGrainBrush, paperEdge = paperEdge, grainScale = grainScale)
@@ -3135,7 +3116,6 @@ fun AnnotationCanvas(
                         clippingMaskLayerIds = resolvedClippingMaskIds
                     )
                 } else {
-                    // Continuous Infinite Canvas with Page Divisions & Page Break Badges
                     val renderPageCount = dynamicPageCount
                     val canvasW = max(size.width, pageWidthPx)
 
@@ -3181,11 +3161,9 @@ fun AnnotationCanvas(
                     for (pageIdx in visiblePageWindow) {
                         val pageTopY = pageIdx * (pageHeightPx + pageGapPx)
 
-                        // 1. Differentiated Page Paper Container with Card Shadow & Page Badge
                         drawPaperCard(0f, pageTopY, canvasW, pageHeightPx, paperColor = parsedPaperColor, isDarkPaper = isDarkPaper, pageLabel = "Page ${pageIdx + 1}", showPageLabel = showPageIndicator, grainBrush = paperGrainBrush, paperEdge = paperEdge, grainScale = grainScale)
                         drawPaperTemplate(template, 0f, pageTopY, canvasW, pageHeightPx, isDarkPaper = isDarkPaper, paperTexture = paperTexture, templateOverrides = templateOverridesFor(template))
 
-                        // 2. Render Page Bitmap (if in window)
                         val pageBitmap = pdfPageBitmaps[pageIdx]
                         if (pageBitmap != null) {
                             val imgWidth = pageBitmap.width.toFloat()
@@ -3201,7 +3179,6 @@ fun AnnotationCanvas(
                                 )
                             }
                         } else if (pdfPageBitmaps[0] != null && renderPageCount > 1) {
-                            // Slice tall image across multiple pages if image height exceeds single page height
                             val bgBitmap = pdfPageBitmaps[0]!!
                             val imgWidth = bgBitmap.width.toFloat()
                             val imgHeight = bgBitmap.height.toFloat()
@@ -3237,7 +3214,6 @@ fun AnnotationCanvas(
                             )
                         }
 
-                        // 3. Render Strokes belonging to this page
                         // R2-b2b4-DOS-03 (phase-150): map lookup (hoisted above)
                         // instead of a fresh whole-list filter per page.
                         val pageStrokes = strokesByPage[pageIdx] ?: emptyList()
@@ -3293,7 +3269,6 @@ blenderStrengthPercent = blenderStrengthPercent,
                 // re-invalidated this whole canvas node per sample.
             }
 
-            // -----------------------------------------------------------------
             // Phase 198 (PERF 2.1): ISOLATED LIVE-STROKE LAYER.
             //
             // Every pen sample used to re-run THIS whole canvas' draw block,
@@ -3332,7 +3307,6 @@ blenderStrengthPercent = blenderStrengthPercent,
             // in the main pass (see `liveWetPreviewStroke`) because the AGSL
             // shader mixes committed strokes WITH the preview in one
             // saveLayer.
-            // -----------------------------------------------------------------
             // Keyed on the tool so the derived predicate can never capture a
             // stale tool selection; the point/cursor states have stable
             // identities (remember'd), so they need no key.
@@ -3419,7 +3393,6 @@ blenderStrengthPercent = blenderStrengthPercent,
                 )
             }
 
-            // Render Floating Draggable Canvas Sticky Notes Overlay
             for (note in activeStickyNoteList) {
                 DraggableStickyNoteCard(
                     note = note,
@@ -3433,7 +3406,6 @@ blenderStrengthPercent = blenderStrengthPercent,
                 )
             }
 
-            // Render Floating Draggable Canvas Media Embed Cards Overlay
             for (embed in activeMediaEmbedList) {
                 DraggableMediaEmbedCard(
                     embed = embed,
@@ -3456,7 +3428,6 @@ blenderStrengthPercent = blenderStrengthPercent,
                 )
             }
 
-            // Eyedropper Magnifying Loupe Overlay
             // Phase 35: now a real magnifier — a 5x5 pixel-grid loupe sampled from
             // the ACTUAL rendered page bitmap around the pointer, so users can
             // micro-target strokes that are thinner than a finger. Falls back to a
@@ -3495,7 +3466,6 @@ blenderStrengthPercent = blenderStrengthPercent,
                 )
             }
 
-            // Canvas Viewport Minimap Widget (bottom-right by default).
             // Phase 129: the map box is proportional to the canvas WORLD aspect
             // ratio (fitted inside the pre-35 120x140dp max box, aspect
             // preserved) and pan/zoom mapping uses a single uniform scale so it
@@ -3522,7 +3492,6 @@ blenderStrengthPercent = blenderStrengthPercent,
                 val safePageW = if (worldW > 0f) worldW else 1000f
                 val safeCanvasH = if (worldH > 0f) worldH else 1000f
 
-                // Aspect-correct size: preserve the world ratio, fit the max box.
                 val maxBoxW = with(mapDensity) { MinimapGeometryPolicy.MAX_BOX_WIDTH_DP.dp.toPx() }
                 val maxBoxH = with(mapDensity) { MinimapGeometryPolicy.MAX_BOX_HEIGHT_DP.dp.toPx() }
                 val fit = MinimapGeometryPolicy.aspectFit(safePageW, safeCanvasH, maxBoxW, maxBoxH)
@@ -3826,7 +3795,6 @@ blenderStrengthPercent = blenderStrengthPercent,
                                     // the page at the fitted aspect ratio.
                                     val mapScale = minOf(size.width / spW, size.height / spH)
 
-                                    // Draw background paper
                                     drawRect(
                                         color = if (isDarkTheme) Color(0xFF334155) else Color.White,
                                         topLeft = Offset(0f, 0f),
@@ -3891,7 +3859,6 @@ blenderStrengthPercent = blenderStrengthPercent,
                                         }
                                     }
 
-                                    // Viewport Box Frame
                                     val viewWOnCanvas = paneW / internalZoomScale
                                     val viewHOnCanvas = paneH / internalZoomScale
                                     val viewXOnCanvas = -internalPanOffset.x / internalZoomScale
@@ -4143,7 +4110,6 @@ private fun LiveStrokePreview(
             val len = kotlin.math.sqrt(dx * dx + dy * dy)
             if (len > 2f) {
                 val previewColor = currentColor.copy(alpha = 0.5f)
-                // Direction line
                 drawLine(
                     color = previewColor,
                     start = Offset(start.x, start.y),
@@ -4151,7 +4117,6 @@ private fun LiveStrokePreview(
                     strokeWidth = 3f,
                     cap = StrokeCap.Round
                 )
-                // Arrowhead
                 val angle = kotlin.math.atan2(dy, dx)
                 val headLen = 14f
                 val headAngle = 0.5f
@@ -4333,7 +4298,6 @@ internal fun StrokeSelectionOverlay(
 
     Box(modifier = modifier) {
         Canvas(Modifier.fillMaxSize()) {
-            // 1. Live lasso / marquee trail.
             val lasso = if (lassoVisible) lassoPointsProvider() else emptyList()
             if (lasso.size >= 2) {
                 val trail = androidx.compose.ui.graphics.Path().apply {
@@ -4731,7 +4695,6 @@ private fun EyedropperMagnifierLoupe(
                 style = DrawStrokeStyle(width = 1.5f)
             )
         }
-        // Hex label chip pinned below the grid.
         Box(
             modifier = Modifier
                 .align(Alignment.TopCenter)
@@ -4823,7 +4786,6 @@ private fun QuickColorRingOverlay(
         drawCircle(color = Color.Black.copy(alpha = 0.30f), radius = outerR)
         drawCircle(color = Color.Black.copy(alpha = 0.55f), radius = midR)
 
-        // Center disc = current tool color, "keep current" target.
         drawCircle(
             color = currentColor,
             radius = com.authorss81.noteflow.services.QuickColorRingMath.CENTER_RADIUS_PX
@@ -4834,7 +4796,6 @@ private fun QuickColorRingOverlay(
             style = DrawStrokeStyle(width = if (selectedIndex == com.authorss81.noteflow.services.QuickColorRingMath.CENTER_SLOT) 5f else 2f)
         )
 
-        // Selection halo ring when the finger sits between swatches.
         if (selectedIndex == com.authorss81.noteflow.services.QuickColorRingMath.NOTHING_HIT) {
             drawCircle(
                 color = Color.White.copy(alpha = 0.9f),
@@ -4902,13 +4863,11 @@ private fun DrawScope.drawPaperCard(
             )
         }
     } else {
-        // Legacy card: RECT (square corners) or ROUNDED (the default, 8dp).
         val radius = if (paperEdge == com.authorss81.noteflow.services.PaperEdgePolicy.PaperEdge.RECT) {
             CornerRadius(0f, 0f)
         } else {
             CornerRadius(8f, 8f)
         }
-        // Paper Card Background
         drawRoundRect(
             color = paperColor,
             topLeft = Offset(x, y),
@@ -4919,7 +4878,6 @@ private fun DrawScope.drawPaperCard(
         // cached BitmapShader — ONE textured quad per page card, drawn over the
         // flat tint and strictly UNDER everything else (template/background/ink).
         drawPaperGrain(grainBrush, x, y, width, height, radius, grainScale)
-        // Page Border Line
         drawRoundRect(
             color = borderColor,
             topLeft = Offset(x, y),
@@ -4929,7 +4887,6 @@ private fun DrawScope.drawPaperCard(
         )
     }
 
-    // Page Number Header Tag
     if (showPageLabel) {
         pageLabel?.let { label ->
             drawRoundRect(
@@ -5176,14 +5133,10 @@ private fun DrawScope.drawPaperTemplate(
             val summaryY = yOffset + height - 140.dp.toPx()
             val cueX = xOffset + width * 0.30f
 
-            // Title line
             drawLine(accentColor, Offset(xOffset, headerY), Offset(xOffset + width, headerY), strokeWidth = 3.5f)
-            // Summary line
             drawLine(accentColor, Offset(xOffset, summaryY), Offset(xOffset + width, summaryY), strokeWidth = 3.5f)
-            // Cue column line
             drawLine(accentColor, Offset(cueX, headerY), Offset(cueX, summaryY), strokeWidth = 2.5f)
 
-            // Faint lined grid in notes and cue areas
             var y = headerY + lineSpacing
             while (y < summaryY) {
                 drawLine(gridColor, Offset(xOffset, y), Offset(xOffset + width, y), strokeWidth = 1f)
@@ -5201,22 +5154,18 @@ private fun DrawScope.drawPaperTemplate(
             val headerY = yOffset + 120.dp.toPx()
             val splitX = xOffset + width * 0.58f
 
-            // Header Box
             drawRect(accentColor.copy(alpha = 0.1f), topLeft = Offset(xOffset + 16.dp.toPx(), yOffset + 16.dp.toPx()), size = androidx.compose.ui.geometry.Size(width - 32.dp.toPx(), 88.dp.toPx()))
             drawLine(accentColor, Offset(xOffset + 16.dp.toPx(), yOffset + 16.dp.toPx()), Offset(xOffset + width - 16.dp.toPx(), yOffset + 16.dp.toPx()), strokeWidth = 2f)
             drawLine(accentColor, Offset(xOffset + 16.dp.toPx(), yOffset + 104.dp.toPx()), Offset(xOffset + width - 16.dp.toPx(), yOffset + 104.dp.toPx()), strokeWidth = 2f)
 
-            // Divider line between Discussion Notes and Action Items
             drawLine(accentColor, Offset(splitX, headerY), Offset(splitX, yOffset + height - 16.dp.toPx()), strokeWidth = 2.5f)
 
-            // Lines for Discussion area
             var y = headerY + lineSpacing
             while (y < yOffset + height - 16.dp.toPx()) {
                 drawLine(gridColor, Offset(xOffset + 16.dp.toPx(), y), Offset(splitX - 12.dp.toPx(), y), strokeWidth = 1f)
                 y += lineSpacing
             }
 
-            // Lines and Checkboxes for Action Items area
             var ay = headerY + lineSpacing
             while (ay < yOffset + height - 16.dp.toPx()) {
                 drawRect(accentColor, topLeft = Offset(splitX + 16.dp.toPx(), ay - 14.dp.toPx()), size = androidx.compose.ui.geometry.Size(14.dp.toPx(), 14.dp.toPx()), style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.5f))
@@ -5231,14 +5180,10 @@ private fun DrawScope.drawPaperTemplate(
             val bottomNotesY = yOffset + height - 160.dp.toPx()
             val col2X = xOffset + width * 0.5f
 
-            // Top Header Line
             drawLine(accentColor, Offset(xOffset + 16.dp.toPx(), topHeaderY), Offset(xOffset + width - 16.dp.toPx(), topHeaderY), strokeWidth = 3f)
-            // Center Column Divider Line
             drawLine(accentColor, Offset(col2X, topHeaderY), Offset(col2X, bottomNotesY), strokeWidth = 2f)
-            // Bottom Notes Header Line
             drawLine(accentColor, Offset(xOffset + 16.dp.toPx(), bottomNotesY), Offset(xOffset + width - 16.dp.toPx(), bottomNotesY), strokeWidth = 3f)
 
-            // Column 1 Tasks
             var y1 = topHeaderY + rowHeight
             while (y1 < bottomNotesY) {
                 drawRect(accentColor, topLeft = Offset(xOffset + 20.dp.toPx(), y1 - 18.dp.toPx()), size = androidx.compose.ui.geometry.Size(16.dp.toPx(), 16.dp.toPx()), style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.5f))
@@ -5246,7 +5191,6 @@ private fun DrawScope.drawPaperTemplate(
                 y1 += rowHeight
             }
 
-            // Column 2 Tasks
             var y2 = topHeaderY + rowHeight
             while (y2 < bottomNotesY) {
                 drawRect(accentColor, topLeft = Offset(col2X + 16.dp.toPx(), y2 - 18.dp.toPx()), size = androidx.compose.ui.geometry.Size(16.dp.toPx(), 16.dp.toPx()), style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.5f))
@@ -5254,7 +5198,6 @@ private fun DrawScope.drawPaperTemplate(
                 y2 += rowHeight
             }
 
-            // Bottom Notes Grid
             var ny = bottomNotesY + rowHeight
             while (ny < yOffset + height) {
                 drawLine(gridColor, Offset(xOffset + 20.dp.toPx(), ny), Offset(xOffset + width - 20.dp.toPx(), ny), strokeWidth = 1f)
@@ -5267,13 +5210,10 @@ private fun DrawScope.drawPaperTemplate(
             val col1X = xOffset + width * 0.33f
             val col2X = xOffset + width * 0.66f
             
-            // Header Line
             drawLine(accentColor, Offset(xOffset + 16.dp.toPx(), headerY), Offset(xOffset + width - 16.dp.toPx(), headerY), strokeWidth = 3f)
-            // Column Dividers
             drawLine(accentColor, Offset(col1X, headerY), Offset(col1X, yOffset + height - 20.dp.toPx()), strokeWidth = 2f)
             drawLine(accentColor, Offset(col2X, headerY), Offset(col2X, yOffset + height - 20.dp.toPx()), strokeWidth = 2f)
             
-            // Horizontal card guides
             var y = headerY + 40.dp.toPx()
             while (y < yOffset + height - 20.dp.toPx()) {
                 drawLine(gridColor, Offset(xOffset + 16.dp.toPx(), y), Offset(col1X - 8.dp.toPx(), y), strokeWidth = 1f)
@@ -5304,7 +5244,6 @@ private fun DrawScope.drawPaperTemplate(
 
             for (i in 0 until 3) {
                 val panelY = yOffset + panelGap + i * (panelH + panelGap)
-                // Panel border (rounded rect)
                 drawRoundRect(
                     color = accentColor,
                     topLeft = Offset(panelX, panelY),
@@ -5312,7 +5251,6 @@ private fun DrawScope.drawPaperTemplate(
                     cornerRadius = androidx.compose.ui.geometry.CornerRadius(8.dp.toPx()),
                     style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.5f)
                 )
-                // Caption line at bottom of panel
                 val captionY = panelY + panelH - 28.dp.toPx()
                 drawLine(gridColor, Offset(panelX + 12.dp.toPx(), captionY), Offset(panelX + panelW - 12.dp.toPx(), captionY), strokeWidth = 1f)
             }
@@ -5779,7 +5717,6 @@ private fun DrawScope.drawCompositedLayersStrokes(
                 }
                 val clipSaveCount = nativeCanvas.saveLayer(bounds, clipPaint)
                 try {
-                    // Draw current layer content.
                     nativeCanvas.drawBitmap(layerBmp, 0f, pageTopY, null)
                     // DST_IN: keep only where previous layer has alpha.
                     val maskPaint = android.graphics.Paint().apply {
@@ -6078,7 +6015,6 @@ private fun DrawScope.drawWetLayerPass(
             val right = kotlin.math.ceil(dirty.right).toInt().coerceAtLeast(left + 1)
             val bottom = kotlin.math.ceil(dirty.bottom).toInt().coerceAtLeast(top + 1)
 
-            // Record THIS pass's strokes into the node's dirty-bounds display list.
             node.setPosition(left, top, right, bottom)
             val recordingCanvas = node.beginRecording()
             try {
@@ -7087,7 +7023,6 @@ private fun DrawScope.drawSingleStroke(
                     val startX = stroke.start.x
                     val startY = stroke.start.y + offsetY
 
-                    // Optional background highlight badge
                     if (!textStyle.bgHex.isNullOrBlank()) {
                         val maxLineWidth = lines.maxOfOrNull { paint.measureText(it) } ?: 50f
                         val bgWidth = maxLineWidth + 24f
@@ -7105,7 +7040,6 @@ private fun DrawScope.drawSingleStroke(
                         drawContext.canvas.nativeCanvas.drawRoundRect(bgRect, 16f, 16f, bgPaint)
                     }
 
-                    // Draw text lines
                     lines.forEachIndexed { i, line ->
                         drawContext.canvas.nativeCanvas.drawText(
                             line,
@@ -8030,7 +7964,6 @@ private fun DraggableMediaEmbedCard(
                 interacting = interacting,
                 collapsed = currentEmbed.isCollapsed
             )
-            // 4 Corner Resize Handles (Top-Left, Top-Right, Bottom-Left, Bottom-Right)
             val minW = if (currentEmbed.type == MediaEmbedType.AUDIO_NOTE) 220f else 120f
             val maxW = if (currentEmbed.type == MediaEmbedType.AUDIO_NOTE) 420f else 2000f
             val minH = if (currentEmbed.type == MediaEmbedType.AUDIO_NOTE) 100f else 80f
@@ -8051,7 +7984,6 @@ private fun DraggableMediaEmbedCard(
                 currentOnMediaEmbedsChanged(other + activeMediaEmbedList.toList())
             }
 
-            // Bottom-Right
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
@@ -8118,7 +8050,6 @@ private fun DraggableMediaEmbedCard(
                 )
             }
 
-            // Bottom-Left
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomStart)
@@ -8183,7 +8114,6 @@ private fun DraggableMediaEmbedCard(
                 )
             }
 
-            // Top-Right
             Box(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
@@ -8249,7 +8179,6 @@ private fun DraggableMediaEmbedCard(
                 )
             }
 
-            // Top-Left
             Box(
                 modifier = Modifier
                     .align(Alignment.TopStart)

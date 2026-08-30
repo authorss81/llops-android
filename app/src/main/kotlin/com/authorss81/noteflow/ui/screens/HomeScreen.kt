@@ -149,8 +149,8 @@ fun HomeScreen(
     // the persisted `search_recent_<n>` ring (SettingsManager prefs, no DB).
     var searchFieldFocused by remember { mutableStateOf(false) }
     var recentSearches by remember { mutableStateOf(viewModel.settings.getRecentSearches()) }
-    var selectedTab by remember { mutableIntStateOf(0) } // 0 = Pages, 1 = Recent, 2 = Tag Vault, 3 = Trash
-    var pageViewMode by remember { mutableIntStateOf(0) } // 0 = List, 1 = Gallery, 2 = Kanban, 3 = Calendar, 4 = Table
+    var selectedTab by remember { mutableIntStateOf(0) }
+    var pageViewMode by remember { mutableIntStateOf(0) }
     // Phase 208 fix #2: persisted page-list sort mode (Pages tab, all views).
     var pageSortMode by remember {
         mutableStateOf(PageSortPolicy.Mode.fromKey(viewModel.settings.pageSortModeKey))
@@ -196,11 +196,11 @@ fun HomeScreen(
             outerWindowSizeClass.heightSizeClass == androidx.compose.material3.windowsizeclass.WindowHeightSizeClass.Compact
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
 
-    var promptDialogType by remember { mutableStateOf<String?>(null) } // "add_nb", "add_sec", "rename_nb", "rename_sec", "rename_page"
+    var promptDialogType by remember { mutableStateOf<String?>(null) }
     var targetEntityId by remember { mutableStateOf<String?>(null) }
     var initialDialogText by remember { mutableStateOf("") }
 
-    var deleteConfirmType by remember { mutableStateOf<String?>(null) } // "nb", "sec", "page", "empty_trash"
+    var deleteConfirmType by remember { mutableStateOf<String?>(null) }
     var deleteWarningMessage by remember { mutableStateOf("") }
 
     // 22.9: restore needs a restart — confirm visibly instead of a snackbar that
@@ -292,7 +292,6 @@ fun HomeScreen(
         pendingRestoreFile = null
     }
 
-    // File picker for import
     val restorePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
@@ -346,7 +345,6 @@ fun HomeScreen(
         }
     }
 
-    // Global Vault Search state
     var globalSearchResults by remember { mutableStateOf<List<NotePageEntity>?>(null) }
 
     // Phase 156: home glanceable stats (n notes · n links · days since backup).
@@ -365,7 +363,6 @@ fun HomeScreen(
     // explicitly opts into the deep full-vault scan.
     var refinedSearchDone by remember { mutableStateOf(false) }
 
-    // Tag Manager and Tag Editor dialog state
     var showTagManagerDialog by remember { mutableStateOf(false) }
     var tagEditorTargetNotebook by remember { mutableStateOf<NotebookEntity?>(null) }
     var tagEditorTargetPage by remember { mutableStateOf<NotePageEntity?>(null) }
@@ -394,7 +391,7 @@ fun HomeScreen(
     }
     var pendingImportUris by remember { mutableStateOf<List<Uri>>(emptyList()) }
     var showMultiPageImportDialog by remember { mutableStateOf(false) }
-    var selectedImportOrientation by remember { mutableStateOf("AUTO") } // AUTO, PORTRAIT, LANDSCAPE
+    var selectedImportOrientation by remember { mutableStateOf("AUTO") }
 
     fun processImportedUris(uris: List<Uri>, importAsSeparatePages: Boolean, orientationChoice: String = selectedImportOrientation) {
         // B2-UI-6 (phase-96): the import loop runs on the ViewModel scope so a
@@ -560,7 +557,6 @@ fun HomeScreen(
                             Triple(extracted, count, landscapeFormat)
                         }
 
-                        // Determine format / orientation tag
                         val orientationTag = when (orientationChoice) {
                             "LANDSCAPE" -> "orientation_landscape"
                             "PORTRAIT" -> "orientation_portrait"
@@ -674,7 +670,6 @@ fun HomeScreen(
                                 )
                             }
                         } else {
-                            // Option B: Continuous Infinite Canvas (single entry displaying infinite canvas)
                             viewModel.addPage(
                                 title = fileName,
                                 sourceFilePath = path,
@@ -1141,7 +1136,6 @@ fun HomeScreen(
                         VerticalDivider()
                     }
 
-                // Main Content Panel (Pages)
                 Column(
                     modifier = Modifier
                         .weight(1f)
@@ -1222,7 +1216,6 @@ fun HomeScreen(
                         Spacer(modifier = Modifier.height(12.dp))
                     }
 
-                    // Search & Import Bar
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1363,7 +1356,6 @@ fun HomeScreen(
 
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    // Navigation Tabs: Current Section, Recent, Tag Vault, Trash
                     PrimaryTabRow(selectedTabIndex = selectedTab) {
                         Tab(
                             selected = selectedTab == 0,
@@ -2740,7 +2732,6 @@ private fun NotebookAndSectionSelectorBar(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        // Notebook Selector Chip
         AssistChip(
             onClick = { showNotebookSheet = true },
             label = {
@@ -2755,7 +2746,6 @@ private fun NotebookAndSectionSelectorBar(
             modifier = Modifier.weight(1f)
         )
 
-        // Section / Quick Notes Selector Chip
         AssistChip(
             onClick = { showSectionSheet = true },
             label = {

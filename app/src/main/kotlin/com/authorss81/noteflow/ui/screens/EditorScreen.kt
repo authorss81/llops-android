@@ -522,7 +522,6 @@ fun EditorScreen(
         )
     }
 
-    // Floating Distraction-Free Toolbar State & Quick Pen Presets
     var toolbarState by remember { mutableStateOf(FloatingToolbarState.COLLAPSED) }
     val penPresets = remember {
         listOf(
@@ -542,7 +541,6 @@ fun EditorScreen(
     var activePresetId by remember { mutableStateOf<Int?>(1) }
     var activeCustomPresetId by remember { mutableStateOf<String?>(null) }
 
-    // Undo / Redo Stacks
     var undoStack by remember { mutableStateOf<List<List<Stroke>>>(emptyList()) }
     var redoStack by remember { mutableStateOf<List<List<Stroke>>>(emptyList()) }
 
@@ -557,12 +555,10 @@ fun EditorScreen(
         stateSaver = com.authorss81.noteflow.ui.screens.StrokeSelectionSaver
     ) { mutableStateOf(com.authorss81.noteflow.data.model.StrokeSelection.EMPTY) }
 
-    // Layers State
     var layers by remember { mutableStateOf<List<LayerEntity>>(emptyList()) }
     var activeLayerId by remember { mutableStateOf<String?>(null) }
     var showLayersSheet by remember { mutableStateOf(false) }
 
-    // Paper Color & Infinite Canvas Page Division State
     val surfaceColor = MaterialTheme.colorScheme.surface
     val isAppDark = remember(surfaceColor) {
         (0.299f * surfaceColor.red + 0.587f * surfaceColor.green + 0.114f * surfaceColor.blue) < 0.5f
@@ -810,7 +806,6 @@ fun EditorScreen(
             }
         }
 
-    // Multi-page PDF & Continuous View State
     var currentPdfPage by remember { mutableIntStateOf(0) }
     var isContinuousMode by remember { mutableStateOf(true) } // Default to Infinite Canvas mode
     val isPdf = remember(page.sourceFileType, page.sourceFilePath) {
@@ -822,7 +817,6 @@ fun EditorScreen(
     var activeRawBitmapMap by remember { mutableStateOf<Map<Int, android.graphics.Bitmap>>(emptyMap()) }
     var visiblePageWindow by remember { mutableStateOf(setOf(0)) }
 
-    // Interactive Zoom & Pan State
     var zoomScale by remember { mutableFloatStateOf(1f) }
     var panOffset by remember { mutableStateOf(Offset.Zero) }
 
@@ -856,7 +850,6 @@ fun EditorScreen(
         }
     }
 
-    // Auto-Save Debounce Job & Initial Load Guard
     var saveJob by remember { mutableStateOf<Job?>(null) }
     var isInitialLoadComplete by remember { mutableStateOf(false) }
     // Phase 250 (Bug 2 — lock during page load wipes the page): a lock() that
@@ -977,7 +970,6 @@ fun EditorScreen(
         }
     }
 
-    // PDF Page Count & Background Rendering
     LaunchedEffect(page.sourceFilePath, isPdf) {
         if (isPdf && !page.sourceFilePath.isNullOrEmpty()) {
             withContext(Dispatchers.IO) {
@@ -987,7 +979,6 @@ fun EditorScreen(
         }
     }
 
-    // Memory-Bounded Render Window for PDF pages & Multi-page Image calculations
     LaunchedEffect(page.sourceFilePath, isPdf, visiblePageWindow, isContinuousMode, currentPdfPage) {
         if (isPdf && !page.sourceFilePath.isNullOrEmpty()) {
             withContext(Dispatchers.IO) {
@@ -1087,7 +1078,6 @@ fun EditorScreen(
         triggerAutoSave(newStrokes)
     }
 
-    // ---- Phase 216: selection actions ---------------------------------------
 
     /**
      * Copy selected strokes to the system clipboard. The clipboard is a shared
@@ -1126,7 +1116,6 @@ fun EditorScreen(
         if (selected.isEmpty()) return
         val copies = StrokeSelectionActionPolicy.duplicateStrokes(selected, zoomScale)
         handleStrokesChange(strokes + copies)
-        // Select the newly created duplicates
         strokeSelection = com.authorss81.noteflow.data.model.StrokeSelection(
             ids = copies.map { it.id }.toSet(),
             bounds = StrokeSelectionActionPolicy.recomputeBounds(strokes + copies, copies.map { it.id }.toSet()),
@@ -1156,7 +1145,6 @@ fun EditorScreen(
             strokes, strokeSelection.ids, dx, dy, pageStride, pageHeight
         )
         handleStrokesChange(newStrokes)
-        // Recompute selection bounds after translation
         strokeSelection = strokeSelection.copy(
             bounds = StrokeSelectionActionPolicy.recomputeBounds(newStrokes, strokeSelection.ids)
         )
@@ -1791,7 +1779,6 @@ fun EditorScreen(
                         .padding(horizontal = 8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Navigation Back Button
                     IconButton(
                         onClick = {
                             if (isInitialLoadComplete && !loadFailedDueToLock) {
@@ -1812,7 +1799,6 @@ fun EditorScreen(
 
                     Spacer(modifier = Modifier.width(4.dp))
 
-                    // Page Title Display with Edit Indicator
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier
@@ -1837,7 +1823,6 @@ fun EditorScreen(
                         )
                     }
 
-                    // Voice Note Recording Pill
                     FilterChip(
                         selected = isRecordingVoice,
                         onClick = {
@@ -1887,7 +1872,6 @@ fun EditorScreen(
 
                     Spacer(modifier = Modifier.width(4.dp))
 
-                    // Add Embeds Dropdown Menu (Sticky Note, Photo, Code)
                     var showEmbedMenu by remember { mutableStateOf(false) }
                     IconButton(onClick = { showEmbedMenu = true }, modifier = Modifier.size(48.dp)) {
                         Icon(Icons.Outlined.AddCircleOutline, contentDescription = "Add Embed")
@@ -1951,12 +1935,10 @@ fun EditorScreen(
                         )
                     }
 
-                    // Layers Toggle Button
                     IconButton(onClick = { showLayersSheet = true }, modifier = Modifier.size(48.dp)) {
                         Icon(Icons.Outlined.Layers, contentDescription = "Layers Manager", tint = if (layers.isNotEmpty()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
                     }
 
-                    // Overflow Settings & Knowledge Connections Menu
                     var showOverflowMenu by remember { mutableStateOf(false) }
                     IconButton(onClick = { showOverflowMenu = true }, modifier = Modifier.size(48.dp)) {
                         Icon(Icons.Outlined.MoreVert, contentDescription = "More Options")
@@ -2515,7 +2497,6 @@ fun EditorScreen(
                 }
             }.take(com.authorss81.noteflow.services.QuickColorRingMath.MAX_SWATCHES)
 
-            // Full screen Canvas surface
             AnnotationCanvas(
                 modifier = Modifier.fillMaxSize(),
                 strokes = strokes,
@@ -2924,7 +2905,6 @@ fun EditorScreen(
 
     val showStrokePreviewsInPicker by viewModel.showStrokePreviewsInPicker.collectAsState()
 
-    // Modal Bottom Sheets for popover pickers
     when (toolbarState) {
         FloatingToolbarState.TOOL_PICKER -> {
             ToolPickerBottomSheet(
@@ -3800,7 +3780,6 @@ private fun InkBarPortraitBar(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        // 1. Tool selector button — displayTool icon + label
         Surface(
             onClick = onToolClick,
             shape = RoundedCornerShape(20.dp),
@@ -3826,7 +3805,6 @@ private fun InkBarPortraitBar(
             }
         }
 
-        // 2. Scroll / Pan Canvas toggle button
         Surface(
             onClick = onTogglePan,
             shape = RoundedCornerShape(20.dp),
@@ -3852,7 +3830,6 @@ private fun InkBarPortraitBar(
             }
         }
 
-        // 3. Color swatch button
         Surface(
             onClick = onColorClick,
             shape = CircleShape,
@@ -3870,7 +3847,6 @@ private fun InkBarPortraitBar(
             }
         }
 
-        // 4. Width badge button
         Surface(
             onClick = onWidthClick,
             shape = RoundedCornerShape(20.dp),
@@ -3896,13 +3872,11 @@ private fun InkBarPortraitBar(
             }
         }
 
-        // 5. VerticalDivider
         VerticalDivider(
             modifier = Modifier.height(24.dp).padding(horizontal = 2.dp),
             color = MaterialTheme.colorScheme.outlineVariant
         )
 
-        // 6. Canvas settings button
         IconButton(onClick = onSettingsClick, modifier = Modifier.size(40.dp)) {
             Icon(
                 Icons.Outlined.Tune,
@@ -3911,7 +3885,6 @@ private fun InkBarPortraitBar(
             )
         }
 
-        // 7. Undo / Redo
         IconButton(
             onClick = onUndo,
             enabled = canUndo,
@@ -3981,7 +3954,6 @@ private fun InkBarLandscapeBar(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        // 1. Tool selector button — displayTool icon
         Surface(
             onClick = onToolClick,
             shape = RoundedCornerShape(20.dp),
@@ -3998,7 +3970,6 @@ private fun InkBarLandscapeBar(
             }
         }
 
-        // 2. Scroll / Pan Canvas toggle button
         Surface(
             onClick = onTogglePan,
             shape = RoundedCornerShape(20.dp),
@@ -4015,7 +3986,6 @@ private fun InkBarLandscapeBar(
             }
         }
 
-        // 3. Color swatch button
         Surface(
             onClick = onColorClick,
             shape = CircleShape,
@@ -4033,7 +4003,6 @@ private fun InkBarLandscapeBar(
             }
         }
 
-        // 4. Width badge button
         Surface(
             onClick = onWidthClick,
             shape = RoundedCornerShape(20.dp),
@@ -4050,13 +4019,11 @@ private fun InkBarLandscapeBar(
             }
         }
 
-        // 5. HorizontalDivider
         HorizontalDivider(
             modifier = Modifier.width(24.dp).padding(vertical = 2.dp),
             color = MaterialTheme.colorScheme.outlineVariant
         )
 
-        // 6. Canvas settings button
         IconButton(onClick = onSettingsClick, modifier = Modifier.size(40.dp)) {
             Icon(
                 Icons.Outlined.Tune,
@@ -4065,7 +4032,6 @@ private fun InkBarLandscapeBar(
             )
         }
 
-        // 7. Undo / Redo
         IconButton(
             onClick = onUndo,
             enabled = canUndo,
@@ -4583,7 +4549,6 @@ private fun ColorPickerBottomSheet(
                     .verticalScroll(rememberScrollState())
             ) {
                 if (advancedBrushesEnabled) {
-                    // Initialize HSV from currentColor using safe android.graphics API
                     val initialHsv = remember(currentColor) {
                         val hsv = FloatArray(3)
                         android.graphics.Color.colorToHSV(currentColor.toArgb(), hsv)
@@ -4607,7 +4572,6 @@ private fun ColorPickerBottomSheet(
 
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    // Hue Slider
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(text = "H", style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(16.dp))
                         Slider(
@@ -4622,7 +4586,6 @@ private fun ColorPickerBottomSheet(
                         Text(text = "${h.toInt()}°", style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(36.dp))
                     }
 
-                    // Saturation Slider
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(text = "S", style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(16.dp))
                         Slider(
@@ -4637,7 +4600,6 @@ private fun ColorPickerBottomSheet(
                         Text(text = "${(s * 100).toInt()}%", style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(36.dp))
                     }
 
-                    // Value/Brightness Slider
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(text = "V", style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(16.dp))
                         Slider(
@@ -5214,7 +5176,6 @@ private fun WidthPickerBottomSheet(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Save Custom Preset Form
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
@@ -5484,7 +5445,6 @@ private fun CanvasSettingsBottomSheet(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Canvas Mode (Infinite vs Single Page)
             Surface(
                 shape = RoundedCornerShape(16.dp),
                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
@@ -5536,7 +5496,6 @@ private fun CanvasSettingsBottomSheet(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Paper Template selector
             Text(
                 text = "Paper Template",
                 style = MaterialTheme.typography.titleSmall,
@@ -5646,7 +5605,6 @@ private fun CanvasSettingsBottomSheet(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Paper Background Color selector
             Text(
                 text = "Paper Background Color",
                 style = MaterialTheme.typography.titleSmall,
@@ -5738,7 +5696,6 @@ private fun CanvasSettingsBottomSheet(
                 Spacer(modifier = Modifier.height(16.dp))
             }
 
-            // Minimap toggle
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -6418,7 +6375,6 @@ private fun CanvasSettingsBottomSheet(
                         )
                     }
 
-                    // Pressure response curve selector.
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -6487,7 +6443,6 @@ private fun CanvasSettingsBottomSheet(
                         )
                     }
 
-                    // Symmetry / mirror mode selector.
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -6611,7 +6566,6 @@ private fun getToolIcon(tool: StrokeTool): ImageVector {
     }
 }
 
-// PDF & Image Helper Utilities
 private fun renderPdfPageToRawBitmap(filePath: String, pageIndex: Int, targetWidth: Int = 1080, context: android.content.Context? = null): android.graphics.Bitmap? {
     return try {
         val file = File(filePath)
@@ -7066,9 +7020,7 @@ private fun LayersPanelBottomSheet(
     }
 }
 
-// ---------------------------------------------------------------------------
 // Phase 13: Offline emoji sticker gallery (STICKER tool)
-// ---------------------------------------------------------------------------
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun StickerPickerBottomSheet(
@@ -7204,9 +7156,7 @@ private fun StickerPickerBottomSheet(
     }
 }
 
-// ---------------------------------------------------------------------------
 // Phase 13: Ready-made brush preset gallery (WetBrushEngine params)
-// ---------------------------------------------------------------------------
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun BrushPresetPickerBottomSheet(
