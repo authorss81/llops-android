@@ -859,15 +859,32 @@ fun EditorScreen(
     // Auto-Save Debounce Job & Initial Load Guard
     var saveJob by remember { mutableStateOf<Job?>(null) }
     var isInitialLoadComplete by remember { mutableStateOf(false) }
+    // Phase 250 (Bug 2 — lock during page load wipes the page): a lock() that
+    // fires in the window between `loadEditorCanvasPage` returning AND
+    // `isInitialLoadComplete = true` used to render the page empty and let a
+    // back-press flush `strokes = emptyList()` over a page carrying real ink
+    // (deleting every stroke row). This session-scoped flag marks that window;
+    // the back paths skip `flushPendingSaves` while it is set, and on the next
+    // unlock the (re-keyed) load effect re-runs and clears it.
+    var loadFailedDueToLock by remember { mutableStateOf(false) }
 
     // Load Initial Strokes & Media Embeds & Sticky Notes
     // R2-b2b1-UI-01 (phase-134): all three reads run through ONE guarded VM
     // accessor (loadEditorCanvasPage) so a lock() disposing the SQLCipher pool
     // mid-load degrades to armed-empty data + a notice instead of an uncaught
-    // closed-pool ISE in this composition-scoped coroutine, and the results are
-    // only assigned while the auth gate is still up.
-    LaunchedEffect(page.id) {
+    // closed-pool ISE in this composition-scoped coroutine.
+    //
+    // Phase 250 (Bug 2): the auth gate is re-checked AT THE ASSIGNMENT MOMENT,
+    // not just once after the reads return. `isAuthenticated` is also a key, so
+    // on the next unlock this effect re-runs and reloads the page. `isInitialLoadComplete`
+    // is set ONLY inside the authenticated branch — a lock dropping the gate here
+    // keeps the page "loaded-but-locked": the flag stays false so `triggerAutoSave`
+    // and the dispose/back flushes are no-ops (NEVER a `strokes = emptyList()` wipe),
+    // and `loadFailedDueToLock` is set so the back paths refuse to flush until the
+    // page actually loads.
+    LaunchedEffect(page.id, isAuthenticated) {
         val data = viewModel.loadEditorCanvasPage(page.id)
+        loadFailedDueToLock = false
 
         if (viewModel.authenticated.value) {
             strokes = data.strokes
@@ -886,8 +903,14 @@ fun EditorScreen(
                 val maxPage = maxOf(maxStrokePage, maxNotePage, maxEmbedPage)
                 pdfTotalPages = maxOf(1, maxPage + 1)
             }
+            isInitialLoadComplete = true
+        } else {
+            // The auth gate dropped between the read and the assignment. Keep the
+            // page "loaded-but-locked" so no autosave/flush can run (and no wipe
+            // can happen); the effect re-runs on unlock via the isAuthenticated key.
+            isInitialLoadComplete = false
+            loadFailedDueToLock = true
         }
-        isInitialLoadComplete = true
     }
 
     // Phase 178: confined decode of the underlay artwork. The stored
@@ -1017,6 +1040,14 @@ fun EditorScreen(
     fun triggerAutoSave(newStrokes: List<Stroke>) {
         if (!isInitialLoadComplete) return
         saveJob?.cancel()
+        // Phase 250 (Bug 1 — stale autosave after a newer flush): bump the
+        // VM's save-generation token NOW, BEFORE the debounce is (re)launched, so
+        // this snapshot carries the newest token. If a newer flush
+        // (flushPendingSaves / flushEditorPageSave) bumps the token while this
+        // debounce is still in flight — even AFTER its delay(1000) elapsed and the
+        // write has been dispatched — this stale snapshot is skipped at the write
+        // entry and can never overwrite the newer state.
+        val myGen = ++viewModel.editorSaveGeneration
         // B2-UI-3 (phase-73): the debounce coroutine now INCLUDES the write — the
         // VM autosave is suspended and runs the persistence inline — so `saveJob`
         // covers the whole debounced flush. That lets the dispose flush (via
@@ -1030,7 +1061,7 @@ fun EditorScreen(
             // inside this 1s window (deterministic on auto-lock) ran the write
             // with encryptionKey == null and persisted PLAINTEXT stroke rows.
             // The gate persists now, or defers the whole snapshot for after unlock.
-            viewModel.autosaveStrokes(page.id, newStrokes, stickyNotes, mediaEmbeds, layers)
+            viewModel.autosaveStrokes(page.id, newStrokes, stickyNotes, mediaEmbeds, layers, myGen)
         }
     }
 
@@ -1727,11 +1758,14 @@ fun EditorScreen(
     }
 
     BackHandler {
-        if (isInitialLoadComplete) {
+        if (isInitialLoadComplete && !loadFailedDueToLock) {
             // Phase 242: cancel+AWAIT any pending debounced autosave, then flush
             // the newest snapshot — a page closed inside the 1s window never loses
             // committed strokes and no stale snapshot lands after this flush.
             // B2-UI-1 (phase-49): still routed through the lock-safe gate.
+            // Phase 250 (Bug 2): never flush while the page failed to load under a
+            // lock (strokes == emptyList()) — flushing here would DELETE every
+            // stroke row. The back just navigates; the data is intact in the vault.
             viewModel.flushPendingSaves(page.id, strokes, stickyNotes, mediaEmbeds, layers, saveJob)
             saveJob = null
         }
@@ -1760,10 +1794,12 @@ fun EditorScreen(
                     // Navigation Back Button
                     IconButton(
                         onClick = {
-                            if (isInitialLoadComplete) {
+                            if (isInitialLoadComplete && !loadFailedDueToLock) {
                                 // Phase 242: cancel+AWAIT the pending debounce then
                                 // flush newest — never a stale snapshot landing last.
                                 // B2-UI-1 (phase-49): lock-safe gated flush.
+                                // Phase 250 (Bug 2): no flush while a lock blocked the
+                                // page load (strokes == emptyList would wipe the rows).
                                 viewModel.flushPendingSaves(page.id, strokes, stickyNotes, mediaEmbeds, layers, saveJob)
                                 saveJob = null
                             }

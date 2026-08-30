@@ -190,6 +190,40 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     // DEK zeroized ⇒ defer here and flush encrypted after the next unlock.
     private val editorFlushPolicy = EditorFlushPolicy()
 
+    // Phase 250 (Bug 1 — stale autosave after a newer flush): monotonically
+    // increasing generation token stamped on every editor page-save entry point
+    // (EditorScreen's `triggerAutoSave` debounce and this VM's `flushPendingSaves`).
+    //
+    // THE RACE (AUDIT_2026-08-30): `triggerAutoSave` debounces with
+    // `delay(1000)` and then dispatches its write into `viewModelScope`. If that
+    // debounce coroutine has already passed `delay(1000)` and is mid-write when
+    // the user's back-press calls `flushPendingSaves`, the `cancel()+join()`
+    // settle returns as soon as the cancellation is applied — it does NOT wait
+    // for a write already past the cancellation point to drain. The stale
+    // autosave (older state) can thus commit LAST, over the newer flush's write,
+    // and the newest stroke disappears on page reopen.
+    //
+    // THE FIX: every write-entry captures `myGen = ++editorSaveGeneration`,
+    // stamps it on the write, and `persistEditorSaveSuspend` (the write's single
+    // entry into `repo.saveStrokesForPage`, i.e. "at the start of the WRITE",
+    // not the UI layer — the contract is preserved for plugin/WebDAV paths)
+    // re-checks `generation == editorSaveGeneration` immediately before
+    // persisting. A stale autosave carrying an older token sees the token bumped
+    // by the newer flush and is skipped — it can never overwrite a newer state.
+    // @Volatile because `flushPendingSaves`/`triggerAutoSave` bump it and the
+    // debounce coroutine reads it on `Dispatchers.IO`.
+    @Volatile
+    var editorSaveGeneration: Int = 0
+
+    // Phase 250: bump the token (invalidate every in-flight older save) and
+    // return the newly-current token for a write to stamp itself with.
+    private fun bumpSaveGeneration(): Int = ++editorSaveGeneration
+
+    // Phase 250: is this stamped generation still the newest? A stale autosave
+    // whose token was superseded by a later flush/bump is skipped (log + return)
+    // instead of being written to the vault.
+    private fun isCurrentSaveGeneration(generation: Int): Boolean = generation == editorSaveGeneration
+
     // B2-UI-5 (phase-74): serializes + latest-wins every markdown/text note-body
     // save, so a slow older write can never land after a newer one (torn-file
     // analog moved into the DB), and coordinates the body READ with any in-flight
@@ -3966,7 +4000,16 @@ fun updatePageTags(id: String, tags: String) {
     // successful unlock. A plaintext row can never be written.
     // -----------------------------------------------------------------------
 
-    /** Full-page flush (dispose flush, navigation/back flush, embed/sticky changes). */
+    /**
+     * Full-page flush (dispose flush, navigation/back flush, embed/sticky changes).
+     *
+     * Phase 250 (Bug 1): bumps the save-generation so this write carries the
+     * newest token — an in-flight STALE autosave (older token) is skipped at the
+     * write entry, so this full-page snapshot is guaranteed to be the one that
+     * lands last. Direct callers (embed/sticky edits) thus also out-rank any
+     * older in-flight autosave, which is correct: they write the full (newer)
+     * page.
+     */
     fun flushEditorPageSave(
         pageId: String,
         strokes: List<Stroke>,
@@ -3974,8 +4017,10 @@ fun updatePageTags(id: String, tags: String) {
         embeds: List<CanvasMediaEmbed>,
         layers: List<LayerEntity>
     ) {
+        val myGen = bumpSaveGeneration()
         persistOrDefer(
             EditorFlushPolicy.DeferredSave(pageId, strokes, stickyNotes, embeds, layers),
+            generation = myGen,
             unlockedPersist = { repo ->
                 maybeNotifyGeometryCapped(pageId, repo.saveStrokesForPage(pageId, strokes))
                 repo.saveCanvasItemsForPage(pageId, stickyNotes, embeds)
@@ -4030,6 +4075,14 @@ fun updatePageTags(id: String, tags: String) {
      * [viewModelScope] (which survives the editor leaving composition), so the
      * asynchronous write is guaranteed to complete even though the editor's
      * own scope is being torn down.
+     *
+     * Phase 250 (Bug 1): the body first bumps [editorSaveGeneration] — BEFORE the
+     * cancel/join/flush — so any in-flight STALE autosave (a debounce that had
+     * already passed its `delay(1000)` and was mid-write when this flush arrived)
+     * carries an older token and is skipped at the write entry by
+     * [persistEditorSaveSuspend]. The `cancel()+join()` settle stops/storms the
+     * debounce, but the generation token is the invariant that guarantees an
+     * already-dispatched stale write can NEVER land after this newest snapshot.
      */
     fun flushPendingSaves(
         pageId: String,
@@ -4039,6 +4092,7 @@ fun updatePageTags(id: String, tags: String) {
         layers: List<LayerEntity>,
         pendingDebounce: Job?
     ) {
+        bumpSaveGeneration()
         viewModelScope.launch {
             withContext(NonCancellable) {
                 pendingDebounce?.cancel()
@@ -4070,10 +4124,12 @@ fun updatePageTags(id: String, tags: String) {
         strokes: List<Stroke>,
         stickyNotes: List<CanvasStickyNote>,
         embeds: List<CanvasMediaEmbed>,
-        layers: List<LayerEntity>
+        layers: List<LayerEntity>,
+        generation: Int
     ) {
         persistEditorSaveSuspend(
-            EditorFlushPolicy.DeferredSave(pageId, strokes, stickyNotes, embeds, layers),
+            generation = generation,
+            save = EditorFlushPolicy.DeferredSave(pageId, strokes, stickyNotes, embeds, layers),
             unlockedPersist = { repo ->
                 maybeNotifyGeometryCapped(pageId, repo.saveStrokesForPage(pageId, strokes))
             }
@@ -4090,8 +4146,10 @@ fun updatePageTags(id: String, tags: String) {
         stickyNotes: List<CanvasStickyNote>,
         embeds: List<CanvasMediaEmbed>
     ) {
+        val myGen = bumpSaveGeneration()
         persistOrDefer(
             EditorFlushPolicy.DeferredSave(pageId, strokes, stickyNotes, embeds, layers),
+            generation = myGen,
             unlockedPersist = { repo -> repo.saveLayersForPage(pageId, layers) }
         )
     }
@@ -4174,13 +4232,40 @@ fun updatePageTags(id: String, tags: String) {
      * persist; locked ⇒ stash. If a lock races the gate check the repository
      * throws [VaultLockedWriteException] (or the DB pool is closed) — catch and
      * stash, never crash, never lose the user's edits.
+     *
+     * Phase 250 (Bug 1): [generation] carries the token the write-entry stamped
+     * when it was requested. At the START of the WRITE (this is the single entry
+     * into `repo.saveStrokesForPage` for the autosave/debounce path; the check
+     * deliberately lives here, not at the UI layer, so the plugin / WebDAV
+     * contract is preserved) it re-checks that the token is still the newest. A
+     * stale autosave whose token was superseded by a newer
+     * [flushPendingSaves]/[flushEditorPageSave] is SKIPPED (logged, never
+     * written) — it can never overwrite the newest snapshot.
      */
     private suspend fun persistEditorSaveSuspend(
+        generation: Int,
         save: EditorFlushPolicy.DeferredSave,
         unlockedPersist: suspend (NoteRepository) -> Unit
     ) {
+        if (!isCurrentSaveGeneration(generation)) {
+            android.util.Log.w(
+                "NoteflowViewModel",
+                "Stale editor save skipped (gen $generation != ${editorSaveGeneration}) — newest snapshot already committed"
+            )
+            return
+        }
         if (!VaultWriteGate.persistNow(repository.encryptionKey != null)) {
             editorFlushPolicy.defer(save)
+            return
+        }
+        // Phase 250 (Bug 1): re-check the generation IMMEDIATELY before the write
+        // so a flush that bumped the token between the entry check and this point
+        // still cannot be overwritten by a stale snapshot landing last.
+        if (!isCurrentSaveGeneration(generation)) {
+            android.util.Log.w(
+                "NoteflowViewModel",
+                "Stale editor save skipped mid-gate (gen $generation != ${editorSaveGeneration}) — newest snapshot already committed"
+            )
             return
         }
         try {
@@ -4215,10 +4300,11 @@ fun updatePageTags(id: String, tags: String) {
      */
     private fun persistOrDefer(
         save: EditorFlushPolicy.DeferredSave,
+        generation: Int,
         unlockedPersist: suspend (NoteRepository) -> Unit
     ) {
         viewModelScope.launch(Dispatchers.IO) {
-            persistEditorSaveSuspend(save, unlockedPersist)
+            persistEditorSaveSuspend(generation, save, unlockedPersist)
         }
     }
 
