@@ -56,9 +56,11 @@ env:
   # - Nemotron 3.5 Lightning Free: fast, NVIDIA, good fallback
   # - MiMo-V2.5 Free: Xiaomi, general coding
   # - Hy3 Free: additional fallback
+  # - Ling 3.0 Flash Fin Free: additional fallback
+  # - Laguna S 2.1 Free: additional fallback
   # The chain tries each model in order; on rate limit, timeout, or model error,
   # it advances to the next. All are free tier on OpenCode Zen.
-  OPENCODE_MODEL: opencode/big-pickle,opencode/muse-spark-1.2-contributor-free,opencode/nemotron-3-ultra-free,opencode/nemotron-3.5-lightning-free,opencode/mimo-v2.5-free,opencode/hy3-free,openrouter/nvidia/nemotron-3-super-120b-a12b:free
+  OPENCODE_MODEL: opencode/big-pickle,opencode/muse-spark-1.2-contributor-free,opencode/nemotron-3-ultra-free,opencode/nemotron-3.5-lightning-free,opencode/mimo-v2.5-free,opencode/hy3-free,opencode/ling-3.0-flash-fin-free,opencode/laguna-s-2.1-free,openrouter/nvidia/nemotron-3-super-120b-a12b:free
 jobs:
   select-phase:
     # Fix 4: no checkout — read marker files via the GitHub API (one trees call,
