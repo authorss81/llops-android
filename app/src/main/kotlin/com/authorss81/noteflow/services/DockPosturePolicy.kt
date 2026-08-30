@@ -34,39 +34,54 @@ object DockPosturePolicy {
 
     /**
      * Default portrait anchor: horizontally centred, [bottomMarginPx] above the
-     * bottom edge — content top-left.
+     * bottom edge — content top-left. [topReservedPx] (default 0) reserves the
+     * Scaffold top-app-bar band below the top inset; the resting anchor is never
+     * placed above that line (a bottom-centre pill is unaffected — harmless).
      */
     fun horizontalDefaultAnchor(
         screenW: Float,
         screenH: Float,
         barW: Float,
         barH: Float,
-        bottomMarginPx: Float
+        bottomMarginPx: Float = DEFAULT_BOTTOM_MARGIN_PX,
+        topReservedPx: Float = 0f
     ): Pair<Float, Float> {
         val sw = screenW.coerceAtLeast(1f)
         val sh = screenH.coerceAtLeast(1f)
         val bw = barW.coerceAtLeast(0f)
         val bh = barH.coerceAtLeast(0f)
         val m = bottomMarginPx.coerceAtLeast(0f)
-        return ((sw - bw) / 2f).coerceAtLeast(0f) to (sh - bh - m).coerceAtLeast(0f)
+        val reserved = topReservedPx.coerceAtLeast(0f)
+        return ((sw - bw) / 2f).coerceAtLeast(0f) to (sh - bh - m).coerceAtLeast(reserved)
     }
 
     /**
      * Default landscape anchor: vertically centred, [endMarginPx] from the
-     * end edge — content top-left.
+     * end edge — content top-left. [topReservedPx] (default 0) reserves the
+     * Scaffold top-app-bar band: the vertical centre is never allowed to rest
+     * above `topReservedPx` (i.e. the resting position stays below the app bar
+     * on short/freeform windows).
      */
     fun verticalDefaultAnchor(
         screenW: Float,
         screenH: Float,
         barW: Float,
         barH: Float,
-        endMarginPx: Float
+        endMarginPx: Float = DEFAULT_END_MARGIN_PX,
+        topReservedPx: Float = 0f
     ): Pair<Float, Float> {
         val sw = screenW.coerceAtLeast(1f)
         val sh = screenH.coerceAtLeast(1f)
         val bw = barW.coerceAtLeast(0f)
         val bh = barH.coerceAtLeast(0f)
         val m = endMarginPx.coerceAtLeast(0f)
-        return (sw - bw - m).coerceAtLeast(0f) to ((sh - bh) / 2f).coerceAtLeast(0f)
+        val reserved = topReservedPx.coerceAtLeast(0f)
+        return (sw - bw - m).coerceAtLeast(0f) to ((sh - bh) / 2f).coerceAtLeast(reserved)
     }
+
+    /** Default bottom margin (px) when the caller does not pass one. */
+    const val DEFAULT_BOTTOM_MARGIN_PX = 20f
+
+    /** Default end-edge margin (px) when the caller does not pass one. */
+    const val DEFAULT_END_MARGIN_PX = 20f
 }

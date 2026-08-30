@@ -73,6 +73,12 @@ object FloatingWidgetDragPolicy {
      * safe region [start..screenW-end] x [top..screenH-bottom]. Guards a
      * widget larger than the available region by anchoring it at the safe
      * start corner.
+     *
+     * Phase 248 (Bug 2): [topReservedPx] (default 0 = backward compatible)
+     * reserves an additional band below [top] that the widget may never enter —
+     * the Scaffold's top-app-bar height. The effective top clamp becomes
+     * `top + topReservedPx`, so a drag to the very top stops at the bottom
+     * edge of the app bar instead of at the status-bar baseline.
      */
     fun constrainWithinSafeArea(
         x: Float,
@@ -84,13 +90,14 @@ object FloatingWidgetDragPolicy {
         top: Float,
         bottom: Float,
         start: Float,
-        end: Float
+        end: Float,
+        topReservedPx: Float = 0f
     ): Offset {
         val sw = screenW.coerceAtLeast(1f)
         val sh = screenH.coerceAtLeast(1f)
         val s = start.coerceAtLeast(0f)
         val e = end.coerceAtLeast(0f)
-        val t = top.coerceAtLeast(0f)
+        val t = (top.coerceAtLeast(0f) + topReservedPx).coerceAtLeast(0f)
         val b = bottom.coerceAtLeast(0f)
         val dw = w.coerceAtLeast(0f)
         val dh = h.coerceAtLeast(0f)

@@ -1743,6 +1743,22 @@
     anchor (persisted dragged offset untouched; pan/select restores it). (3) minimap Zoom/Layers/View lines
     are `maxLines=1` ellipsised + `fillMaxWidth` so a long layer name / far coordinate can't balloon or spill
     (`AnnotationCanvas.kt:3510-3547`). Tests: `Phase244InkBarDrawingPolicyTest` (5).
+  - **Implemented in phase-248** (minimap fully pane-bound + ink bar reserves the Scaffold topBar, see
+    `workspace/phase-248/REPORT.md`): (1) the minimap block in `AnnotationCanvas.kt` binds every anchor/clamp/
+    key to the canvas box — `val paneW = canvasBoxW` / `val paneH = canvasBoxH` (`:3393-3394`), drag
+    `pointerInput(minimapDraggable, minimapWidthPx, minimapHeightPx, paneW, paneH)` (`:3440`),
+    `constrainWithinSafeArea(…, paneW, paneH, …)` (`:3451`), and all zoom/map inner math renamed
+    `screenW/screenH → paneW/paneH` (`:3512-3513`/`:3518`/`:3614`/`:3621`/`:3654-3655`/`:3667-3668`/
+    `:3676-3677`/`:3688-3689`/`:3695`/`:3769-3770`) — the pane can be far smaller than the physical display
+    (split-screen / freeform / Expanded double-pane), so the widget stays visible in the pane. (2) the
+    floating ink bar now stops at the Scaffold topBar's bottom edge, not the status-bar baseline:
+    `FloatingWidgetDragPolicy.constrainWithinSafeArea` + `DockPosturePolicy.horizontalDefaultAnchor`/
+    `verticalDefaultAnchor` gained a backward-compatible `topReservedPx: Float = 0f` (clamp
+    `top + topReservedPx` / `y coerceAtLeast topReservedPx`); `EditorScreen.kt` measures the topBar via
+    `onSizeChanged` (`:1751` → `topBarHeightPx` `:186`), derives `topReservedPx = (topBarHeightPx -
+    topInsetPx).coerceAtLeast(0f)` (`:3489`) and feeds it into both the resting anchors (`:3493`/`:3497`)
+    and the drag clamp (`:3587`). Tests: `Phase248MinimapPaneSizeTest` (11, incl. source pins for both
+    wires).`
   - **Implemented in phase-150** (R2-b2b4-DOS-02/03 + R2-b2b5-FEA-04, see `workspace/phase-150/REPORT.md`): canvas
     memory + per-frame render budgets. `services/LayerRenderBudgetPolicy.kt` owns the LIVE layer cap
     (`MAX_LIVE_LAYER_COUNT` = 16, the SAME number as the phase-82 export cap) + `MAX_RESIDENT_BITMAP_BYTES` = 64 MB,

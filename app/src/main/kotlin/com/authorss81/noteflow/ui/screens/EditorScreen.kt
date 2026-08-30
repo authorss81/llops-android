@@ -179,6 +179,11 @@ fun EditorScreen(
     onOpenPage: (NotePageEntity) -> Unit = {}
 ) {
     val scope = rememberCoroutineScope()
+    // Phase 248 (Bug 2): the Scaffold topBar's MEASURED height (status-bar inset
+    // + its 56dp content row) drives the ink bar's top reservation. A dragged
+    // bar stops at the app bar's bottom edge instead of riding up over the
+    // title/rename/back strip. Updated from the topBar's onSizeChanged below.
+    var topBarHeightPx by remember { mutableFloatStateOf(0f) }
     var currentTool by remember { mutableStateOf(StrokeTool.PEN) }
     var lastDrawingTool by remember { mutableStateOf(StrokeTool.PEN) }
     // Phase 225: EYEDROPPER is added to the non-drawing set so lastDrawingTool
@@ -1741,6 +1746,9 @@ fun EditorScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .statusBarsPadding()
+                    // Phase 248 (Bug 2): capture the topBar's real rendered height
+                    // (inset + 56dp row) so the ink bar can be clamped below it.
+                    .onSizeChanged { topBarHeightPx = it.height.toFloat() }
             ) {
                 Row(
                     modifier = Modifier
@@ -2744,6 +2752,10 @@ fun EditorScreen(
                     draggable = inkBarDraggable,
                     snapToEdgeEnabled = inkBarSnapToEdgeEnabled,
                     dockPersistEnabled = inkBarDockPersistEnabled,
+                    // Phase 248 (Bug 2): the Scaffold topBar's measured height —
+                    // the dock clamps its drag + resting anchors below it so the
+                    // bar never overlaps the app bar's back/rename strip.
+                    topBarHeightPx = topBarHeightPx,
                     draggedOffset = effectiveInkBarDragOffset,
                     onChangeDraggedOffset = { x, y ->
                         inkBarDragOffsetX = x
@@ -3413,6 +3425,10 @@ private fun FloatingToolDock(
     draggable: Boolean,
     snapToEdgeEnabled: Boolean,
     dockPersistEnabled: Boolean,
+    // Phase 248 (Bug 2): the Scaffold topBar's measured height (status-bar inset
+    // + its 56dp content row) — the dock clamps its drag + resting anchors below
+    // it so the bar never overlaps the app bar's back/rename strip.
+    topBarHeightPx: Float,
     draggedOffset: com.authorss81.noteflow.services.FloatingWidgetDragPolicy.Offset?,
     onChangeDraggedOffset: (Float, Float) -> Unit,
     onToolClick: () -> Unit,
@@ -3458,10 +3474,28 @@ private fun FloatingToolDock(
             maxWidth.value.roundToInt(),
             maxHeight.value.roundToInt()
         )
+
+        val insets = WindowInsets.safeDrawing
+        val topInsetPx = with(density) { insets.getTop(density).toFloat() }
+        val bottomInsetPx = with(density) { insets.getBottom(density).toFloat() }
+        val startInsetPx = with(density) { insets.getLeft(density, LayoutDirection.Ltr).toFloat() }
+        val endInsetPx = with(density) { insets.getRight(density, LayoutDirection.Ltr).toFloat() }
+
+        // Phase 248 (Bug 2): the app-bar content height to reserve ON TOP of the
+        // status-bar inset (`topInsetPx` rides the clamp's `top` already). The
+        // scaffold topBar is `statusBarsPadding() + 56dp`, so measuring it and
+        // subtracting the inset yields its pure content height — the drag clamp
+        // becomes `statusBar + topBar` = the app bar's bottom edge.
+        val topReservedPx = (topBarHeightPx - topInsetPx).coerceAtLeast(0f)
+
         val defaultAnchor = if (horizontalPosture) {
-            DockPosturePolicy.horizontalDefaultAnchor(screenW, screenH, dockW, dockH, bottomMarginPx)
+            DockPosturePolicy.horizontalDefaultAnchor(
+                screenW, screenH, dockW, dockH, bottomMarginPx, topReservedPx
+            )
         } else {
-            DockPosturePolicy.verticalDefaultAnchor(screenW, screenH, dockW, dockH, endMarginPx)
+            DockPosturePolicy.verticalDefaultAnchor(
+                screenW, screenH, dockW, dockH, endMarginPx, topReservedPx
+            )
         }
         var restingPos = FloatingWidgetDragPolicy.restingPosition(
             enabled = draggable,
@@ -3492,12 +3526,6 @@ private fun FloatingToolDock(
         ) {
             restingPos = FloatingWidgetDragPolicy.Offset(defaultAnchor.first, defaultAnchor.second)
         }
-
-        val insets = WindowInsets.safeDrawing
-        val topInsetPx = with(density) { insets.getTop(density).toFloat() }
-        val bottomInsetPx = with(density) { insets.getBottom(density).toFloat() }
-        val startInsetPx = with(density) { insets.getLeft(density, LayoutDirection.Ltr).toFloat() }
-        val endInsetPx = with(density) { insets.getRight(density, LayoutDirection.Ltr).toFloat() }
 
         // Compose-space resting top-left (the policy Offset is a plain holder).
         val restingOffset = Offset(restingPos.x, restingPos.y)
@@ -3550,9 +3578,13 @@ private fun FloatingToolDock(
                         },
                         onDrag = { change, amount ->
                             change.consume()
+                            // Phase 248 (Bug 2): the top clamp reserves the Scaffold
+                            // topBar's content height on top of the status-bar inset,
+                            // so a drag to the top stops at the app bar's bottom edge.
                             val constrained = FloatingWidgetDragPolicy.constrainWithinSafeArea(
                                 rawPos.x + amount.x, rawPos.y + amount.y, screenW, screenH,
-                                dockW, dockH, topInsetPx, bottomInsetPx, startInsetPx, endInsetPx
+                                dockW, dockH, topInsetPx, bottomInsetPx, startInsetPx, endInsetPx,
+                                topReservedPx = topReservedPx
                             )
                             rawPos = Offset(constrained.x, constrained.y)
                         },

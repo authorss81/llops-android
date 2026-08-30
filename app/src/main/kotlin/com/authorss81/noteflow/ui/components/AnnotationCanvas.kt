@@ -3379,17 +3379,20 @@ blenderStrengthPercent = blenderStrengthPercent,
             // session-scoped. The collapsible header is kept.
             if (showMinimap) {
                 val mapDensity = LocalDensity.current
-                // Phase 244 (Bug 1): anchor to this canvas box's REAL bounds
+                // Phase 244/248 (Bug 1): anchor to this canvas box's REAL bounds
                 // (canvasBoxW/H captured from the BoxWithConstraints scope),
                 // NOT the device-wide LocalConfiguration dimensions. The canvas
                 // may be smaller than the physical display (app bar, bottom bar,
-                // system bars, cutout), so the old device dims pushed the
+                // system bars, cutout — and the second pane in a double-pane
+                // Expanded window), so the old device dims pushed the
                 // bottom-right minimap past the visible area on some
-                // devices/orientations. Using the actual canvas box keeps the
-                // minimap inside view on every posture.
-                val screenW = canvasBoxW
-                val screenH = canvasBoxH
-                val (worldW, worldH) = computeCanvasWorld(screenW)
+                // devices/orientations. Using the ACTUAL canvas pane keeps the
+                // minimap inside view on every posture. `paneW`/`paneH` are the
+                // pane-local names so the bindings can never be confused with
+                // full-window dimensions.
+                val paneW = canvasBoxW
+                val paneH = canvasBoxH
+                val (worldW, worldH) = computeCanvasWorld(paneW)
                 val safePageW = if (worldW > 0f) worldW else 1000f
                 val safeCanvasH = if (worldH > 0f) worldH else 1000f
 
@@ -3404,8 +3407,8 @@ blenderStrengthPercent = blenderStrengthPercent,
                 val headerWidthDp = maxOf(minimapWidthDp, with(mapDensity) { 72.dp })
 
                 val defaultAnchor = MinimapGeometryPolicy.defaultAnchorBottomEnd(
-                    screenW = screenW,
-                    screenH = screenH,
+                    screenW = paneW,
+                    screenH = paneH,
                     mapW = minimapWidthPx,
                     mapH = minimapHeightPx,
                     marginPx = with(mapDensity) { MinimapGeometryPolicy.DEFAULT_MARGIN_DP.dp.toPx() }
@@ -3434,7 +3437,7 @@ blenderStrengthPercent = blenderStrengthPercent,
                     modifier = Modifier
                         .align(Alignment.TopStart)
                         .offset { IntOffset(restingPos.x.roundToInt(), restingPos.y.roundToInt()) }
-                        .pointerInput(minimapDraggable, screenW, screenH, minimapWidthPx, minimapHeightPx) {
+                        .pointerInput(minimapDraggable, minimapWidthPx, minimapHeightPx, paneW, paneH) {
                             if (!FloatingWidgetDragPolicy.mayDrag(minimapDraggable)) return@pointerInput
                             var dragStart = Offset.Zero
                             var dragBase = restingPos
@@ -3445,7 +3448,7 @@ blenderStrengthPercent = blenderStrengthPercent,
                                     val constrained = FloatingWidgetDragPolicy.constrainWithinSafeArea(
                                         dragBase.x + change.position.x - dragStart.x,
                                         dragBase.y + change.position.y - dragStart.y,
-                                        screenW, screenH, minimapWidthPx, minimapHeightPx,
+                                        paneW, paneH, minimapWidthPx, minimapHeightPx,
                                         topInsetPx, bottomInsetPx, startInsetPx, endInsetPx
                                     )
                                     minimapDragOffset = Offset(constrained.x, constrained.y)
@@ -3506,13 +3509,13 @@ blenderStrengthPercent = blenderStrengthPercent,
                                 -internalPanOffset.y / internalZoomScale
                             )
                             val viewBottomRight = Offset(
-                                viewTopLeft.x + screenW / internalZoomScale,
-                                viewTopLeft.y + screenH / internalZoomScale
+                                viewTopLeft.x + paneW / internalZoomScale,
+                                viewTopLeft.y + paneH / internalZoomScale
                             )
 
                             fun zoomCanvasBy(mult: Float) {
                                 val newScale = (internalZoomScale * mult).coerceIn(0.5f, 4.0f)
-                                val center = Offset(screenW / 2f, screenH / 2f)
+                                val center = Offset(paneW / 2f, paneH / 2f)
                                 val canvasPoint = Offset(
                                     (center.x - internalPanOffset.x) / internalZoomScale,
                                     (center.y - internalPanOffset.y) / internalZoomScale
@@ -3608,14 +3611,14 @@ blenderStrengthPercent = blenderStrengthPercent,
                                 )
                                 FilledTonalIconButton(
                                     onClick = {
-                                        val worldDims = computeCanvasWorld(screenW)
+                                        val worldDims = computeCanvasWorld(paneW)
                                         val fitWorldW = if (worldDims.first > 0f) worldDims.first else MinimapGeometryPolicy.FALLBACK_WORLD
                                         val fitWorldH = if (worldDims.second > 0f) worldDims.second else MinimapGeometryPolicy.FALLBACK_WORLD
                                         val contentBounds = com.authorss81.noteflow.services.CanvasNavigationPolicy.computeContentBounds(
                                             activeStrokeList
                                         ) { page -> if (isContinuousMode) calculatePageYOffset(page) else 0f }
                                         val fit = com.authorss81.noteflow.services.CanvasNavigationPolicy.zoomToFit(
-                                            contentBounds, screenW, screenH, fitWorldW, fitWorldH
+                                            contentBounds, paneW, paneH, fitWorldW, fitWorldH
                                         )
                                         navigateCanvasTo(fit.scale, Offset(fit.panX, fit.panY))
                                     },
@@ -3648,8 +3651,8 @@ blenderStrengthPercent = blenderStrengthPercent,
                                     .size(minimapWidthDp, minimapHeightDp)
                                     .background(if (isDarkTheme) Color(0xFF1E293B) else Color(0xFFF1F5F9), RoundedCornerShape(6.dp))
                                     .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f), RoundedCornerShape(6.dp))
-                                    .pointerInput(isContinuousMode, dynamicPageCount, divideIntoPages, layoutZoomScale, screenW, screenH, pageWidthPx, pageHeightPx) {
-                                        val (w, h) = computeCanvasWorld(screenW)
+                                    .pointerInput(isContinuousMode, dynamicPageCount, divideIntoPages, layoutZoomScale, paneW, paneH, pageWidthPx, pageHeightPx) {
+                                        val (w, h) = computeCanvasWorld(paneW)
                                         val spW = if (w > 0f) w else 1000f
                                         val spH = if (h > 0f) h else 1000f
 
@@ -3661,8 +3664,8 @@ blenderStrengthPercent = blenderStrengthPercent,
                                             val targetCanvasX = (touchPos.x / mapScale).coerceIn(0f, spW)
                                             val targetCanvasY = (touchPos.y / mapScale).coerceIn(0f, spH)
 
-                                            val newPanX = (screenW / 2f) - (targetCanvasX * internalZoomScale)
-                                            val newPanY = (screenH / 2f) - (targetCanvasY * internalZoomScale)
+                                            val newPanX = (paneW / 2f) - (targetCanvasX * internalZoomScale)
+                                            val newPanY = (paneH / 2f) - (targetCanvasY * internalZoomScale)
                                             updateZoomAndPan(internalZoomScale, Offset(newPanX, newPanY))
                                         }
 
@@ -3670,8 +3673,8 @@ blenderStrengthPercent = blenderStrengthPercent,
                                             updatePanFromMap(tapOffset)
                                         }
                                     }
-                                    .pointerInput(isContinuousMode, dynamicPageCount, divideIntoPages, layoutZoomScale, screenW, screenH, pageWidthPx, pageHeightPx) {
-                                        val (w, h) = computeCanvasWorld(screenW)
+                                    .pointerInput(isContinuousMode, dynamicPageCount, divideIntoPages, layoutZoomScale, paneW, paneH, pageWidthPx, pageHeightPx) {
+                                        val (w, h) = computeCanvasWorld(paneW)
                                         val spW = if (w > 0f) w else 1000f
                                         val spH = if (h > 0f) h else 1000f
 
@@ -3682,14 +3685,14 @@ blenderStrengthPercent = blenderStrengthPercent,
                                             val targetCanvasX = (change.position.x / mapScale).coerceIn(0f, spW)
                                             val targetCanvasY = (change.position.y / mapScale).coerceIn(0f, spH)
 
-                                            val newPanX = (screenW / 2f) - (targetCanvasX * internalZoomScale)
-                                            val newPanY = (screenH / 2f) - (targetCanvasY * internalZoomScale)
+                                            val newPanX = (paneW / 2f) - (targetCanvasX * internalZoomScale)
+                                            val newPanY = (paneH / 2f) - (targetCanvasY * internalZoomScale)
                                             updateZoomAndPan(internalZoomScale, Offset(newPanX, newPanY))
                                         }
                                     }
                             ) {
                                 Canvas(modifier = Modifier.fillMaxSize()) {
-                                    val (w, h) = computeCanvasWorld(screenW)
+                                    val (w, h) = computeCanvasWorld(paneW)
                                     val spW = if (w > 0f) w else 1000f
                                     val spH = if (h > 0f) h else 1000f
 
@@ -3763,8 +3766,8 @@ blenderStrengthPercent = blenderStrengthPercent,
                                     }
 
                                     // Viewport Box Frame
-                                    val viewWOnCanvas = screenW / internalZoomScale
-                                    val viewHOnCanvas = screenH / internalZoomScale
+                                    val viewWOnCanvas = paneW / internalZoomScale
+                                    val viewHOnCanvas = paneH / internalZoomScale
                                     val viewXOnCanvas = -internalPanOffset.x / internalZoomScale
                                     val viewYOnCanvas = -internalPanOffset.y / internalZoomScale
 
