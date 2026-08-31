@@ -123,7 +123,7 @@ fun LockScreen(
                         // whitespace-stripped input; the security dialog does
                         // the same). Existing users with passwords that
                         // intentionally contain internal spaces keep unlocking
-                        because only outer whitespace is removed.
+                        // because only outer whitespace is removed.
                         password = it.trim()
                         errorMessage = null
                     },

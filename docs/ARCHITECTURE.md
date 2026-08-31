@@ -604,6 +604,10 @@
 > untouched and the DEFAULT=50 anchors stay byte-identical
 > (`grainDrawAlpha(50) == 0.045`, `grainScale(50) == shaderGain(50) == 1.0`).
 > `shaderStrength` was already linear-zero. No schema, no new deps.
+> **Verified in phase-246** (see `workspace/phase-246/REPORT.md`): byte-exact
+> `grainDrawAlpha(0) == grainScale(0) == shaderGain(0) == 0f`, anchors
+> `grainDrawAlpha(50) == 0.045f` etc., pinned by `PaperTextureStrengthZeroTest`
+> (10) — already fixed, no phase-246 code change.
 
 > **Implemented in phase-198** (2026-08-24, live-stroke invalidation isolation +
 > O(visible) culling — PERF 2.1+2.5, see `workspace/phase-198/REPORT.md`): pen samples
@@ -738,7 +742,12 @@
 > `CanvasRotationPolicy` + `rotationZ` + per-page `canvas_rotation_<page>` prefs +
 > twist/rotation UI) was deleted wholesale per user request; the two-finger
 > handler is classic pinch-zoom + pan again and the corner-scale handle divides
-> drag deltas by zoom without rotation compensation. (3) **Ruler** — `ShapeRecognitionHelper.forceLineSnap`
+> drag deltas by zoom without rotation compensation. **Verified in phase-246**
+> (see `workspace/phase-246/REPORT.md`): grep for
+> `canvasTwist|CanvasRotationPolicy|canvas_rotation|canvasRotation|rotationDegreesForPage`
+> is 0 hits across `app/src` (the sole remaining `rotationDegrees`/`rotationZ`
+> surface is the intentionally-kept per-note/per-embed rotation +
+> `SelectionRotationHandle`). (3) **Ruler** — `ShapeRecognitionHelper.forceLineSnap`
 > collapses ANY drag to an exact start→end LINE (bypasses the auto-snap
 > `perpendicularDeviation` gate), live start→current preview, shared long-press
 > haptic; `rulerEnabled` added to the drag-`pointerInput` key list. No schema, no
@@ -1782,8 +1791,11 @@
     `top + topReservedPx` / `y coerceAtLeast topReservedPx`); `EditorScreen.kt` measures the topBar via
     `onSizeChanged` (`:1751` → `topBarHeightPx` `:186`), derives `topReservedPx = (topBarHeightPx -
     topInsetPx).coerceAtLeast(0f)` (`:3489`) and feeds it into both the resting anchors (`:3493`/`:3497`)
-    and the drag clamp (`:3587`). Tests: `Phase248MinimapPaneSizeTest` (11, incl. source pins for both
-    wires).`
+and the drag clamp (`:3587`). Tests: `Phase248MinimapPaneSizeTest` (11, incl. source pins for both
+     wires).` **Verified in phase-246** (see `workspace/phase-246/REPORT.md`):
+     zero `LocalConfiguration.current.screenWidthDp/screenHeightDp` reads remain in the file; the pane
+     dims flow into the anchor `defaultAnchorBottomEnd(screenW=paneW, screenH=paneH)` (`:3513-3519`),
+     the drag keys (`:3544`) and the clamp (`:3552-3557`); `WindowInsets.safeDrawing` retained (`:3530-3534`).
   - **Implemented in phase-249** (2026-08-30, canvas criticals from `AUDIT_2026-08-30.md`, see
     `workspace/phase-249/REPORT.md`): (1) **wet throttle grounded in REAL event timestamps + RAW
     distance** — new pure-JVM `services/WetThrottlePolicy.kt` (`MIN_PX_FOR_WET_SAMPLE = 1.5f` on the raw
@@ -2102,6 +2114,26 @@
     Tests: `Phase151MarkdownMainThreadPerfTest` (18) — reference-equivalence vs
     the old scanner, length-scaling linearity, and source pins proving the editor
     never calls the full-document paths on the keystroke path.
+  - **Implemented in phase-243 / verified in phase-246** (duplication fix, see
+    `workspace/phase-243/REPORT.md` + `workspace/phase-246/REPORT.md`): the
+    phase-151 "keystroke path is `replaceBlock`" note above is now STALE — the
+    index-based per-keystroke `replaceBlock(doc, staticIndex, …)` was the
+    duplication root cause (a keystroke that re-splits the edited window drifted
+    the index into a neighbouring slot, so old fragments resurrected as
+    duplicates). `HybridMarkdownEditor` now anchors every keystroke by TEXT via
+    `editingAnchorByte` (`HybridMarkdownEditor.kt:95`, captured at editor-open
+    `:212`) → `emitBlockEdit(prevRaw, newRaw)` (`:115-143`) → the byte-run
+    `MarkdownBlockTokenizer.replaceContentRun(doc, at, endByte, newRaw)`
+    (`MarkdownBlockTokenizer.kt:568-635`, replaces exactly the previous edited
+    run's bytes, re-tokenizes only the affected window, byte-identical to a fresh
+    full `tokenize`); the block-index `replaceBlock` survives ONLY as a
+    line-overlap-guarded fallback (`:136-140`). The summary's proposed
+    "switch to `replaceBlockSource`" was NOT used — that helper is index-based
+    too and would not have fixed the drift. Phase-246 strict re-verification
+    added the user-symptom heading regression test `typing a second line into a
+    heading block never duplicates it` (`Phase243MarkdownEditorDuplicationTest`,
+    now 9 tests) and pinned `replaceContentRun` as the primary (the phase-151
+    source pin asserts the editor contains no `replaceBlockSource(` call).
   - **Implemented in phase-68** (B1-AUTH-04, see `workspace/phase-68/REPORT.md`):
     markdown inline-image destinations resolve ONLY inside an allowlisted
     app-private subtree. New pure-JVM `services/InlineImagePathPolicy.kt` is the

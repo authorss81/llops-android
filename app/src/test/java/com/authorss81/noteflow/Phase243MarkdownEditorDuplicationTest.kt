@@ -132,6 +132,34 @@ class Phase243MarkdownEditorDuplicationTest {
     }
 
     @Test
+    fun `typing a second line into a heading block never duplicates it`() {
+        // Phase 246 strict verification: the user-facing symptom was "typing
+        // Enter + a second line into a block's editor spawns duplicate-looking
+        // rows under the still-open editor". The heading is single-line by
+        // construction, so a keystroke that introduces a body line re-splits
+        // the block window; the byte-run-anchored path must rewrite exactly the
+        // old run and leave exactly one heading + one grown body line.
+        val sim = EditorSim("# Title\n\nBody paragraph\n\nTail", editingBlock = 0)
+        sim.type("# Title\nSecond line")
+        assertEquals(
+            "first keystroke appends a body line under the heading",
+            "# Title\nSecond line\n\nBody paragraph\n\nTail",
+            sim.doc.content
+        )
+        assertConsistent(sim.doc)
+        sim.type("# Title\nSecond line again")
+        assertEquals(
+            "second keystroke rewrites only the edited run",
+            "# Title\nSecond line again\n\nBody paragraph\n\nTail",
+            sim.doc.content
+        )
+        assertConsistent(sim.doc)
+        assertEquals("the heading appears exactly once", 1, sim.doc.content.lines().count { it == "# Title" })
+        assertEquals("the edited line appears exactly once", 1, sim.doc.content.lines().count { it == "Second line again" })
+        assertEquals("neighbours survive intact", 1, sim.doc.content.lines().count { it == "Tail" })
+    }
+
+    @Test
     fun `typing asterisks into the last block of an existing note shows text once`() {
         val sim = EditorSim("# Title\n\n- task one\n\nplain *here* text", editingBlock = 2)
         val base = "plain *here* text"
