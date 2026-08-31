@@ -695,7 +695,8 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
             // even when key != null — same race as stroke saves (logcat 2026-08-31)
             val msg = e.message?.lowercase() ?: ""
             if (msg.contains("no such table") || msg.contains("is the db closed") || msg.contains("connection pool has been closed") || msg.contains("room_table_modification_log")) {
-                throw com.authorss81.noteflow.services.VaultLockedWriteException("DB closed race during page body save", e)
+                android.util.Log.w("NoteRepository", "DB closed race during page body save, deferring: ${e.message}")
+                throw com.authorss81.noteflow.services.VaultLockedWriteException()
             }
             throw e
         }
