@@ -4017,13 +4017,19 @@ fun updatePageTags(id: String, tags: String) {
         embeds: List<CanvasMediaEmbed>,
         layers: List<LayerEntity>
     ) {
+        // Merge any pending deferred for this page so close→reopen→draw does not lose the deferred stroke
+        val pending = editorFlushPolicy.peek(pageId)
+        val effStrokes = if (pending != null) (pending.strokes + strokes).associateBy { it.id }.values.toList() else strokes
+        val effNotes = if (pending != null) (pending.stickyNotes + stickyNotes).associateBy { it.id }.values.toList() else stickyNotes
+        val effEmbeds = if (pending != null) (pending.embeds + embeds).associateBy { it.id }.values.toList() else embeds
+        if (pending != null) editorFlushPolicy.remove(pageId)
         val myGen = bumpSaveGeneration()
         persistOrDefer(
-            EditorFlushPolicy.DeferredSave(pageId, strokes, stickyNotes, embeds, layers),
+            EditorFlushPolicy.DeferredSave(pageId, effStrokes, effNotes, effEmbeds, layers),
             generation = myGen,
             unlockedPersist = { repo ->
-                maybeNotifyGeometryCapped(pageId, repo.saveStrokesForPage(pageId, strokes))
-                repo.saveCanvasItemsForPage(pageId, stickyNotes, embeds)
+                maybeNotifyGeometryCapped(pageId, repo.saveStrokesForPage(pageId, effStrokes))
+                repo.saveCanvasItemsForPage(pageId, effNotes, effEmbeds)
                 repo.saveLayersForPage(pageId, layers)
             }
         )
@@ -4127,11 +4133,16 @@ fun updatePageTags(id: String, tags: String) {
         layers: List<LayerEntity>,
         generation: Int
     ) {
+        val pending = editorFlushPolicy.peek(pageId)
+        val effStrokes = if (pending != null) (pending.strokes + strokes).associateBy { it.id }.values.toList() else strokes
+        val effNotes = if (pending != null) (pending.stickyNotes + stickyNotes).associateBy { it.id }.values.toList() else stickyNotes
+        val effEmbeds = if (pending != null) (pending.embeds + embeds).associateBy { it.id }.values.toList() else embeds
+        if (pending != null) editorFlushPolicy.remove(pageId)
         persistEditorSaveSuspend(
             generation = generation,
-            save = EditorFlushPolicy.DeferredSave(pageId, strokes, stickyNotes, embeds, layers),
+            save = EditorFlushPolicy.DeferredSave(pageId, effStrokes, effNotes, effEmbeds, layers),
             unlockedPersist = { repo ->
-                maybeNotifyGeometryCapped(pageId, repo.saveStrokesForPage(pageId, strokes))
+                maybeNotifyGeometryCapped(pageId, repo.saveStrokesForPage(pageId, effStrokes))
             }
         )
     }
@@ -4274,7 +4285,7 @@ fun updatePageTags(id: String, tags: String) {
             return
         }
         if (!VaultWriteGate.persistNow(repository.encryptionKey != null)) {
-            editorFlushPolicy.defer(save)
+            editorFlushPolicy.defer(effectiveSave)
             return
         }
         // Phase 250 (Bug 1): re-check the generation IMMEDIATELY before the write
@@ -4348,7 +4359,23 @@ fun updatePageTags(id: String, tags: String) {
         val toFlush = editorFlushPolicy.drain()
         val toFlushBodies = editorFlushPolicy.drainBodies()
         if (toFlush.isEmpty() && toFlushBodies.isEmpty()) return
-        for (save in toFlush) {
+        // Merge deferred saves per pageId so a close→reopen→draw sequence does not
+        // clobber: each deferred save is a full-page snapshot taken at defer time.
+        // If user drew A (deferred as old10+A), closed, reopened (loaded old10),
+        // then drew B (new save old10+B), flushing old10+A after would delete B.
+        // Merge by ID (union) so the flush becomes old10+A+B.
+        val mergedByPage = toFlush.groupBy { it.pageId }.mapValues { (_, saves) ->
+            if (saves.size == 1) saves.first()
+            else {
+                val allStrokes = saves.flatMap { it.strokes }.associateBy { it.id }.values.toList()
+                val allNotes = saves.flatMap { it.stickyNotes }.associateBy { it.id }.values.toList()
+                val allEmbeds = saves.flatMap { it.embeds }.associateBy { it.id }.values.toList()
+                // Layers: last wins (most recent layer state)
+                val lastLayers = saves.last().layers
+                saves.first().copy(strokes = allStrokes, stickyNotes = allNotes, embeds = allEmbeds, layers = lastLayers)
+            }
+        }.values
+        for (save in mergedByPage) {
             viewModelScope.launch(Dispatchers.IO) {
                 try {
                     maybeNotifyGeometryCapped(

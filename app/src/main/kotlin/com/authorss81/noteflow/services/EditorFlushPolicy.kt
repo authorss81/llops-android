@@ -86,6 +86,12 @@ class EditorFlushPolicy {
         else deferredBodies.values.toList().also { deferredBodies.clear() }
     }
 
+    /** Peek without draining — for merging a live save with a deferred pending for the same page. */
+    fun peek(pageId: String): DeferredSave? = synchronized(this) { deferred[pageId] }
+
+    /** Remove a single page's deferred entry (after it was merged into a live save). */
+    fun remove(pageId: String): Boolean = synchronized(this) { deferred.remove(pageId) != null }
+
     /**
      * Drains (snapshots + clears) every deferred page save so the unlock handler
      * can flush them with the live key. Must only be called once the vault is
