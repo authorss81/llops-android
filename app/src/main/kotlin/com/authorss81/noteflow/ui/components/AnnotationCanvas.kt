@@ -1348,12 +1348,8 @@ fun AnnotationCanvas(
                             timestampMs = motionEvent.eventTime
                         )
                     )
-                } else if (motionEvent.actionMasked == android.view.MotionEvent.ACTION_UP ||
-                    motionEvent.actionMasked == android.view.MotionEvent.ACTION_CANCEL
-                ) {
-                    // Gesture over: nothing may leak into the next stroke.
-                    strokeInputBatcher.clear()
                 }
+                // Do not clear on ACTION_UP/CANCEL here; onDragEnd and onDragCancel in detectDragGestures handle gesture cleanup cleanly.
                 // Phase 196: record the REAL event with the OS motion predictor
                 // before anything else reacts to it (documented usage). This
                 // stays strictly passive — it consumes nothing, and the frame
@@ -2220,18 +2216,10 @@ fun AnnotationCanvas(
                             // (applyEraser/sampleColorAt rebuild per call — cost containment,
                             // documented in workspace/phase-214/REPORT.md).
                             val drainedCount = strokeInputBatcher.drainInto(batchDrainScratch)
-                            // Pen (non-wet freehand) bypasses batcher staleness — directly
-                            // append the live position so historical isStale never drops
-                            // the middle of the stroke (dots → continuous).
-                            val isWetForBypass = com.authorss81.noteflow.services.BrushStrokeMath.isWetRenderedTool(currentTool)
-                            if (!isWetForBypass && currentTool.isFreehandTool) {
-                                if (!StrokeBatchPolicy.isStale(lastTimestampMs ?: Long.MIN_VALUE, lastIngestedInputTimestampMs)) {
-                                    val accepted = ingestPointerSample(change.position.x, change.position.y, lastPressure, lastTilt, lastTimestampMs)
-                                    if (accepted && lastTimestampMs != null) lastIngestedInputTimestampMs = lastTimestampMs
-                                }
-                            } else if (drainedCount > 1 && currentTool.isFreehandTool) {
+                            if (drainedCount > 1 && currentTool.isFreehandTool) {
+                                val prevAcceptedTime = lastIngestedInputTimestampMs
                                 for (sample in batchDrainScratch) {
-                                    if (StrokeBatchPolicy.isStale(sample.timestampMs, lastIngestedInputTimestampMs)) continue
+                                    if (StrokeBatchPolicy.isStale(sample.timestampMs, prevAcceptedTime)) continue
                                     // Phase 240 fix (Bug 2): pointerInteropFilter already
                                     // delivers node-LOCAL coordinates (Compose offsets the
                                     // dispatch MotionEvent by the filter node's root offset —
@@ -2265,12 +2253,17 @@ fun AnnotationCanvas(
                                     if (accepted) lastIngestedInputTimestampMs = newest.timestampMs
                                 }
                             } else {
-                                // Defensive fallback: an event that somehow bypassed the passive
-                                // bridge (queue empty) still processes exactly ONE sample, using the
-                                // pre-214 state values — behaviour identical to the old single-sample path.
-                                if (!StrokeBatchPolicy.isStale(lastTimestampMs ?: Long.MIN_VALUE, lastIngestedInputTimestampMs)) {
-                                    val accepted = ingestPointerSample(change.position.x, change.position.y, lastPressure, lastTilt, lastTimestampMs)
-                                    if (accepted && lastTimestampMs != null) lastIngestedInputTimestampMs = lastTimestampMs
+                                // Direct Compose PointerInputChange fallback: use change.uptimeMillis and node-local change.position
+                                val changeTime = change.uptimeMillis
+                                val accepted = ingestPointerSample(
+                                    boxLocalX = change.position.x,
+                                    boxLocalY = change.position.y,
+                                    rawPressure = lastPressure,
+                                    tiltDegrees = lastTilt,
+                                    sampleTimestampMs = changeTime
+                                )
+                                if (accepted) {
+                                    lastIngestedInputTimestampMs = changeTime
                                 }
                             }
                         },
