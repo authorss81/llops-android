@@ -126,17 +126,13 @@ fun HybridMarkdownEditor(
             val endByte = (at + prevRaw.length).coerceAtMost(doc.content.length)
             doc = MarkdownBlockTokenizer.replaceContentRun(doc, at, endByte, newRaw)
         } else {
-            // Fallback when the run cannot be located by text (an external
-            // replace, or a checkbox toggle elsewhere shifted earlier bytes).
-            // Never write into an unrelated block: only replace a block whose
-            // line range still overlaps the edited anchor line. If no block
-            // qualifies, drop the edit (the parent `value` re-syncs `doc` via
-            // the LaunchedEffect). Mirrors replaceContentRun's invariant that the
-            // produced doc is a fresh full re-tokenize of the resulting content.
-            val anchorLine = lineIndexAtByte(doc.lines, editingAnchorByte)
-            val targetIndex = doc.blocks.indexOfFirst { anchorLine in it.startLine..it.endLine }
-            if (targetIndex >= 0) {
-                doc = MarkdownBlockTokenizer.replaceBlock(doc, targetIndex, newRaw)
+            // Fallback when the run cannot be located by text: use the
+            // editingBlock index directly (the block that was opened for edit)
+            // — more reliable than anchor line when doc was updated externally.
+            // If editingBlock is still valid, replace that block; otherwise drop
+            // the edit and let LaunchedEffect re-sync from parent value.
+            if (editingBlock >= 0 && editingBlock < doc.blocks.size) {
+                doc = MarkdownBlockTokenizer.replaceBlock(doc, editingBlock, newRaw)
             }
         }
         onValueChange(doc.content)

@@ -4296,7 +4296,18 @@ fun updatePageTags(id: String, tags: String) {
         } catch (e: Exception) {
             // A lock can zeroize the DEK / dispose the pool after the gate
             // check; any save-path failure is re-queued for the next unlock.
-            if (repository.encryptionKey == null) {
+            // Also defer on DB-closed / invalidation races (room_table_modification_log
+            // "no such table" / "is the db closed" / "connection pool has been closed")
+            // even when key != null — the live DB handle was disposed mid-write
+            // (logcat 2026-08-31 showed this during draw) and the stroke must not be lost.
+            val msg = e.message?.lowercase() ?: ""
+            val isDbClosedRace = isLockRacedWrite(e) ||
+                msg.contains("no such table") ||
+                msg.contains("is the db closed") ||
+                msg.contains("connection pool has been closed") ||
+                msg.contains("room_table_modification_log")
+            if (repository.encryptionKey == null || isDbClosedRace) {
+                android.util.Log.w("NoteflowViewModel", "Deferring save on DB race: ${e.javaClass.simpleName}: ${e.message}")
                 editorFlushPolicy.defer(save)
             } else {
                 throw e

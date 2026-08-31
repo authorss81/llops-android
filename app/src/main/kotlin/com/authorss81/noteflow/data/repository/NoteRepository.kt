@@ -688,7 +688,17 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
         // B2-UI-1 (phase-49): fail closed — the note body column is encrypted at
         // rest, so a locked vault must throw rather than store the raw body.
         val storedBody = EncryptionService.encryptField(body.toByteArray(), requireEncryptionKey(), "pages", id, "extractedText")
-        db.pageDao().updatePageBody(id, storedBody)
+        try {
+            db.pageDao().updatePageBody(id, storedBody)
+        } catch (e: Exception) {
+            // Defer on DB-closed / invalidation race (room_table_modification_log)
+            // even when key != null — same race as stroke saves (logcat 2026-08-31)
+            val msg = e.message?.lowercase() ?: ""
+            if (msg.contains("no such table") || msg.contains("is the db closed") || msg.contains("connection pool has been closed") || msg.contains("room_table_modification_log")) {
+                throw com.authorss81.noteflow.services.VaultLockedWriteException("DB closed race during page body save", e)
+            }
+            throw e
+        }
         invalidateSearchCorpus()
     }
 
