@@ -609,8 +609,15 @@ fun AnnotationCanvas(
     }
     val activeStrokeList = remember { mutableStateListOf<Stroke>() }
     LaunchedEffect(filteredStrokes) {
+        val incomingMap = filteredStrokes.associateBy { it.id }
+        val pendingLocalStrokes = activeStrokeList.filter { it.id !in incomingMap }
         activeStrokeList.clear()
         activeStrokeList.addAll(filteredStrokes)
+        for (pending in pendingLocalStrokes) {
+            if (activeStrokeList.none { it.id == pending.id }) {
+                activeStrokeList.add(pending)
+            }
+        }
     }
 
     // 23.4: single source of truth for the canvas world size (renderer +
@@ -641,8 +648,15 @@ fun AnnotationCanvas(
     }
     val activeStickyNoteList = remember { mutableStateListOf<CanvasStickyNote>() }
     LaunchedEffect(filteredStickyNotes) {
+        val incomingMap = filteredStickyNotes.associateBy { it.id }
+        val pendingLocal = activeStickyNoteList.filter { it.id !in incomingMap }
         activeStickyNoteList.clear()
         activeStickyNoteList.addAll(filteredStickyNotes)
+        for (pending in pendingLocal) {
+            if (activeStickyNoteList.none { it.id == pending.id }) {
+                activeStickyNoteList.add(pending)
+            }
+        }
     }
 
     val filteredMediaEmbeds = remember(mediaEmbeds, pdfPageFilter, isContinuousMode) {
@@ -650,8 +664,15 @@ fun AnnotationCanvas(
     }
     val activeMediaEmbedList = remember { mutableStateListOf<CanvasMediaEmbed>() }
     LaunchedEffect(filteredMediaEmbeds) {
+        val incomingMap = filteredMediaEmbeds.associateBy { it.id }
+        val pendingLocal = activeMediaEmbedList.filter { it.id !in incomingMap }
         activeMediaEmbedList.clear()
         activeMediaEmbedList.addAll(filteredMediaEmbeds)
+        for (pending in pendingLocal) {
+            if (activeMediaEmbedList.none { it.id == pending.id }) {
+                activeMediaEmbedList.add(pending)
+            }
+        }
     }
 
     fun calculatePageYOffset(pageIndex: Int): Float {
