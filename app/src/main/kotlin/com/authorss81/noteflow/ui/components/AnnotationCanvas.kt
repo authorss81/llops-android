@@ -2220,7 +2220,16 @@ fun AnnotationCanvas(
                             // (applyEraser/sampleColorAt rebuild per call — cost containment,
                             // documented in workspace/phase-214/REPORT.md).
                             val drainedCount = strokeInputBatcher.drainInto(batchDrainScratch)
-                            if (drainedCount > 1 && currentTool.isFreehandTool) {
+                            // Pen (non-wet freehand) bypasses batcher staleness — directly
+                            // append the live position so historical isStale never drops
+                            // the middle of the stroke (dots → continuous).
+                            val isWetForBypass = com.authorss81.noteflow.services.BrushStrokeMath.isWetRenderedTool(currentTool)
+                            if (!isWetForBypass && currentTool.isFreehandTool) {
+                                if (!StrokeBatchPolicy.isStale(lastTimestampMs ?: Long.MIN_VALUE, lastIngestedInputTimestampMs)) {
+                                    val accepted = ingestPointerSample(change.position.x, change.position.y, lastPressure, lastTilt, lastTimestampMs)
+                                    if (accepted && lastTimestampMs != null) lastIngestedInputTimestampMs = lastTimestampMs
+                                }
+                            } else if (drainedCount > 1 && currentTool.isFreehandTool) {
                                 for (sample in batchDrainScratch) {
                                     if (StrokeBatchPolicy.isStale(sample.timestampMs, lastIngestedInputTimestampMs)) continue
                                     // Phase 240 fix (Bug 2): pointerInteropFilter already
