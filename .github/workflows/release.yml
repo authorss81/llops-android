@@ -51,8 +51,8 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: noteflow-release-apk
-          path: app/build/outputs/apk/release/app-release.apk
-          if-no-files-found: warn
+          path: app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
 
       - name: Build Debug APK (as fallback downloadable APK)
         run: gradle assembleDebug
