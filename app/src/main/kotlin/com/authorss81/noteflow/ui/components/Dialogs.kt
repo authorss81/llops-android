@@ -418,14 +418,14 @@ fun SecuritySettingsDialog(
                     if (showPasswordInput) {
                         OutlinedTextField(
                             value = password,
-                            onValueChange = { password = it },
+                            onValueChange = { password = it.trim() },
                             label = { Text("Master Password") },
                             visualTransformation = PasswordVisualTransformation(),
                             modifier = Modifier.fillMaxWidth()
                         )
                         OutlinedTextField(
                             value = passwordConfirm,
-                            onValueChange = { passwordConfirm = it },
+                            onValueChange = { passwordConfirm = it.trim() },
                             label = { Text("Confirm Master Password") },
                             visualTransformation = PasswordVisualTransformation(),
                             modifier = Modifier.fillMaxWidth()
@@ -489,7 +489,7 @@ fun SecuritySettingsDialog(
                                     Text("Please enter your Master Password to confirm this action.")
                                     OutlinedTextField(
                                         value = verifyPassword,
-                                        onValueChange = { verifyPassword = it; verifyError = null },
+                                        onValueChange = { verifyPassword = it.trim(); verifyError = null },
                                         label = { Text("Master Password") },
                                         visualTransformation = PasswordVisualTransformation(),
                                         isError = verifyError != null,
@@ -581,21 +581,21 @@ fun SecuritySettingsDialog(
                                     Text("Re-encrypt DEK key container with a new master password.")
                                     OutlinedTextField(
                                         value = currentPass,
-                                        onValueChange = { currentPass = it; changeError = null },
+                                        onValueChange = { currentPass = it.trim(); changeError = null },
                                         label = { Text("Current Master Password") },
                                         visualTransformation = PasswordVisualTransformation(),
                                         modifier = Modifier.fillMaxWidth()
                                     )
                                     OutlinedTextField(
                                         value = newPass,
-                                        onValueChange = { newPass = it; changeError = null },
+                                        onValueChange = { newPass = it.trim(); changeError = null },
                                         label = { Text("New Master Password") },
                                         visualTransformation = PasswordVisualTransformation(),
                                         modifier = Modifier.fillMaxWidth()
                                     )
                                     OutlinedTextField(
                                         value = newPassConfirm,
-                                        onValueChange = { newPassConfirm = it; changeError = null },
+                                        onValueChange = { newPassConfirm = it.trim(); changeError = null },
                                         label = { Text("Confirm New Password") },
                                         visualTransformation = PasswordVisualTransformation(),
                                         modifier = Modifier.fillMaxWidth()

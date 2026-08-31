@@ -117,7 +117,14 @@ fun LockScreen(
                 OutlinedTextField(
                     value = password,
                     onValueChange = {
-                        password = it
+                        // Phase 255 (lock bug): trim the input so a stray leading/
+                        // trailing space from a copy-paste never silently makes
+                        // the password "wrong" (the lock screen accepts
+                        // whitespace-stripped input; the security dialog does
+                        // the same). Existing users with passwords that
+                        // intentionally contain internal spaces keep unlocking
+                        because only outer whitespace is removed.
+                        password = it.trim()
                         errorMessage = null
                     },
                     label = { Text("Master Password") },

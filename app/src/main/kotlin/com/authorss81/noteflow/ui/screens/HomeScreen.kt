@@ -1984,7 +1984,11 @@ fun HomeScreen(
                         OutlinedTextField(
                             value = backupPasswordInput,
                             onValueChange = {
-                                backupPasswordInput = it
+                                // Phase 255 (lock/backup bug): trim outer whitespace
+                                // so a stray copy-paste space never silently makes
+                                // the master password "wrong" during the export
+                                // pre-check.
+                                backupPasswordInput = it.trim()
                                 backupPasswordError = null
                             },
                             label = { Text("Password") },

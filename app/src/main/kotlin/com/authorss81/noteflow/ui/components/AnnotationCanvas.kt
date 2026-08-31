@@ -2169,7 +2169,15 @@ fun AnnotationCanvas(
                                                 sampleTimeMs = curTime
                                             )
                                         ) {
-                                            return true
+                                            // Phase 255 (Bug dots): return FALSE so the
+                                            // outer batcher does NOT advance
+                                            // lastIngestedInputTimestampMs past a
+                                            // rejected sample. Returning TRUE made the
+                                            // gate skip every subsequent sample whose
+                                            // timestamp was <= this one, dropping whole
+                                            // segments of a fast wet stroke and leaving
+                                            // only the first accepted point behind.
+                                            return false
                                         }
                                         lastRawWetX = rawCanvasX
                                         lastRawWetY = rawCanvasY
