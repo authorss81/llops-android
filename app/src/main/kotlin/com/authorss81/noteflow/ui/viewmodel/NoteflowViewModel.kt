@@ -4481,24 +4481,19 @@ fun updatePageTags(id: String, tags: String) {
             "canvas data",
             EditorCanvasData(emptyList(), emptyList(), emptyList(), emptyList())
         ) {
-            val strokes = repository.getStrokesForPage(pageId)
-            // R2-b2b4-DOS-02 (phase-150): the repository read is ALREADY bounded
-            // to the top LayerRenderBudgetPolicy.MAX_LIVE_LAYER_COUNT layers (the
-            // canvas rasterizes one full-page bitmap per layer). Phase-150 review
-            // fix 6: the RAW count is read BEFORE the bounded load, so it is the
-            // pre-insert figure — a genuinely empty page (0 rows) correctly derives
-            // 0 omitted, never a spurious notice after getLayersForPage inserts the
-            // default layer.
-            val rawLayerCount = repository.getLayerCountForPage(pageId)
-            val layers = repository.getLayersForPage(pageId)
+            val data = repository.loadEditorCanvasPage(pageId)
             maybeNotifyLayersCapped(
                 pageId,
-                layers.size,
-                LayerRenderBudgetPolicy.omittedLayerCount(rawLayerCount)
+                data.layers.size,
+                LayerRenderBudgetPolicy.omittedLayerCount(data.rawLayerCount)
             )
-            val (stickyNotes, mediaEmbeds) = repository.getCanvasItemsForPage(pageId)
-            val referenceImage = repository.getReferenceImageForPage(pageId)
-            EditorCanvasData(strokes, layers, stickyNotes, mediaEmbeds, referenceImage)
+            EditorCanvasData(
+                strokes = data.strokes,
+                layers = data.layers,
+                stickyNotes = data.stickyNotes,
+                mediaEmbeds = data.mediaEmbeds,
+                referenceImage = data.referenceImage
+            )
         }
 
     /**

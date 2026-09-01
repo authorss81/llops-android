@@ -33,6 +33,15 @@ import java.util.Collections
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
+data class RepositoryCanvasData(
+    val strokes: List<Stroke>,
+    val layers: List<LayerEntity>,
+    val stickyNotes: List<CanvasStickyNote>,
+    val mediaEmbeds: List<CanvasMediaEmbed>,
+    val referenceImage: CanvasMediaEmbed? = null,
+    val rawLayerCount: Int = 0
+)
+
 class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: File) {
     var encryptionKey: ByteArray?
         get() = VaultKeyHolder.dek
@@ -1448,6 +1457,24 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
         h = 31 * h + s.colorSeed
         h = 31 * h + (s.gradientToColorInt ?: 0)
         return h
+    }
+
+    /**
+     * Mutex-guarded load for EditorCanvas — strictly serialized with saves.
+     * Without this, a load that races a dispose flush (close→reopen) could read
+     * stale or missing rows and the UI would initialise with empty data that
+     * then overwrites previous strokes on the first new draw.
+     */
+    suspend fun loadEditorCanvasPage(pageId: String): RepositoryCanvasData = withContext(Dispatchers.Default) {
+        val lock = pageSaveLocks.computeIfAbsent(pageId) { Mutex() }
+        lock.withLock {
+            val strokes = getStrokesForPage(pageId)
+            val rawLayerCount = getLayerCountForPage(pageId)
+            val layers = getLayersForPage(pageId)
+            val (stickyNotes, mediaEmbeds) = getCanvasItemsForPage(pageId)
+            val referenceImage = getReferenceImageForPage(pageId)
+            RepositoryCanvasData(strokes, layers, stickyNotes, mediaEmbeds, referenceImage, rawLayerCount)
+        }
     }
 
     /**
