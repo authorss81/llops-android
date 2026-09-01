@@ -4285,7 +4285,7 @@ fun updatePageTags(id: String, tags: String) {
             return
         }
         if (!VaultWriteGate.persistNow(repository.encryptionKey != null)) {
-            editorFlushPolicy.defer(effectiveSave)
+            editorFlushPolicy.defer(save)
             return
         }
         // Phase 250 (Bug 1): re-check the generation IMMEDIATELY before the write
