@@ -708,7 +708,7 @@ class MainActivity : FragmentActivity() {
                                     } else {
                                         com.authorss81.noteflow.ui.components.FluidPageReveal(pageKey = page.id) {
                                         if (page.title.endsWith(".md") || page.title.endsWith(".txt") || page.sourceFileType == "text") {
-                                            val contentText by produceState(initialValue = "", page.id) {
+                                            val contentText by produceState(initialValue = page.extractedText ?: "", page.id) {
                                                 // B2-UI-5 (phase-74): the body read awaits any in-flight body
                                                 // save for the page and re-reads the freshly-committed body from
                                                 // the repository — never a possibly-stale flow snapshot — so
@@ -819,7 +819,7 @@ class MainActivity : FragmentActivity() {
                                                     val page = activePage
                                                     if (page != null) {
                                                         if (page.title.endsWith(".md") || page.title.endsWith(".txt") || page.sourceFileType == "text") {
-                                                            val contentText by produceState(initialValue = "", page.id) {
+                                                            val contentText by produceState(initialValue = page.extractedText ?: "", page.id) {
                                                                 // B2-UI-5 (phase-74): the body read awaits any in-flight body
                                                                 // save for the page and re-reads the freshly-committed body
                                                                 // from the repository — never a possibly-stale flow snapshot —

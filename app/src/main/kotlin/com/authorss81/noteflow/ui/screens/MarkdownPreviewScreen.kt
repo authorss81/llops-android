@@ -382,7 +382,15 @@ fun MarkdownPreviewScreen(
     var serifReadingMode by remember(page.id) {
         mutableStateOf(viewModel.settings.serifReadingEnabled)
     }
-    var contentText by remember { mutableStateOf(initialContent) }
+    var contentText by remember(page.id) { mutableStateOf(initialContent) }
+
+    // Synchronize initial content if loaded asynchronously after initial composition
+    LaunchedEffect(page.id, initialContent) {
+        if (contentText.isEmpty() && initialContent.isNotEmpty()) {
+            contentText = initialContent
+            savedContent = initialContent
+        }
+    }
 
     // B1-DB-4 (phase-44): a text page no longer has a source file to anchor
     // relative markdown images (its body lives in the encrypted column). Fall
@@ -983,13 +991,11 @@ fun MarkdownPreviewScreen(
                                     }
                                 }
         
-                                HybridMarkdownEditor(
+                                WholeMarkdownEditor(
                                     value = contentText,
                                     onValueChange = { contentText = it },
                                     modifier = Modifier.weight(1f).fillMaxWidth().imePadding(),
                                     primaryColor = primaryColor,
-                                    baseDir = baseDir,
-                                    onOpenWikiLink = onOpenWikiLink,
                                     serif = serifReadingMode,
                                     wikiLinkTitles = lockedWikiTitles,
                                     onWikiLinkQueryEngaged = ::ensureWikiLinkTitles
@@ -1028,13 +1034,11 @@ fun MarkdownPreviewScreen(
                                                 Text("/ Commands", style = MaterialTheme.typography.labelSmall)
                                             }
                                         }
-                                        HybridMarkdownEditor(
+                                        WholeMarkdownEditor(
                                             value = contentText,
                                             onValueChange = { contentText = it },
                                             modifier = Modifier.weight(1f).fillMaxWidth(),
                                             primaryColor = primaryColor,
-                                            baseDir = baseDir,
-                                            onOpenWikiLink = onOpenWikiLink,
                                             serif = serifReadingMode,
                                             wikiLinkTitles = lockedWikiTitles,
                                             onWikiLinkQueryEngaged = ::ensureWikiLinkTitles
@@ -1081,13 +1085,11 @@ fun MarkdownPreviewScreen(
                                                 Text("/ Commands", style = MaterialTheme.typography.labelSmall)
                                             }
                                         }
-                                        HybridMarkdownEditor(
+                                        WholeMarkdownEditor(
                                             value = contentText,
                                             onValueChange = { contentText = it },
                                             modifier = Modifier.weight(1f).fillMaxWidth(),
                                             primaryColor = primaryColor,
-                                            baseDir = baseDir,
-                                            onOpenWikiLink = onOpenWikiLink,
                                             serif = serifReadingMode,
                                             wikiLinkTitles = lockedWikiTitles,
                                             onWikiLinkQueryEngaged = ::ensureWikiLinkTitles

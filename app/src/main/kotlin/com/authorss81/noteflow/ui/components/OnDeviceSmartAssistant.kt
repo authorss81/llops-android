@@ -90,26 +90,34 @@ fun OnDeviceSmartAssistantBottomSheet(
                 .padding(horizontal = 20.dp, vertical = 12.dp)
         ) {
             // Header
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(bottom = 12.dp)
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 12.dp)
             ) {
-                Icon(
-                    Icons.Outlined.AutoAwesome,
-                    contentDescription = null,
-                    tint = scheme.primary,
-                    modifier = Modifier.size(24.dp)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "On-Device Smart Assistant",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold
-                )
-                Spacer(modifier = Modifier.weight(1f))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(
+                        Icons.Outlined.AutoAwesome,
+                        contentDescription = null,
+                        tint = scheme.primary,
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "On-Device Smart Assistant",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                Spacer(modifier = Modifier.height(4.dp))
                 Surface(
                     shape = RoundedCornerShape(12.dp),
-                    color = if (modelDownloaded) scheme.primaryContainer else scheme.surfaceVariant
+                    color = if (modelDownloaded) scheme.primaryContainer else scheme.surfaceVariant,
+                    modifier = Modifier.padding(start = 32.dp)
                 ) {
                     Text(
                         text = if (modelDownloaded) "100% Local / Offline" else "Local LLM needed",
