@@ -607,10 +607,13 @@ fun AnnotationCanvas(
     val filteredStrokes = remember(strokes, pdfPageFilter, isContinuousMode) {
         if (isContinuousMode) strokes else strokes.filter { it.pdfPage == pdfPageFilter }
     }
-    val activeStrokeList = remember { mutableStateListOf<Stroke>() }
+    val activeStrokeList = remember(pdfPageFilter, isContinuousMode) { mutableStateListOf<Stroke>().apply { addAll(filteredStrokes) } }
+    var lastSeenStrokeIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     LaunchedEffect(filteredStrokes) {
         val incomingMap = filteredStrokes.associateBy { it.id }
-        val pendingLocalStrokes = activeStrokeList.filter { it.id !in incomingMap }
+        // Only retain pending that were never seen as committed (new local stroke pending propagation),
+        // not strokes that were previously seen and now intentionally removed (undo).
+        val pendingLocalStrokes = activeStrokeList.filter { it.id !in incomingMap && it.id !in lastSeenStrokeIds }
         activeStrokeList.clear()
         activeStrokeList.addAll(filteredStrokes)
         for (pending in pendingLocalStrokes) {
@@ -618,6 +621,7 @@ fun AnnotationCanvas(
                 activeStrokeList.add(pending)
             }
         }
+        lastSeenStrokeIds = incomingMap.keys
     }
 
     // 23.4: single source of truth for the canvas world size (renderer +
@@ -646,10 +650,11 @@ fun AnnotationCanvas(
     val filteredStickyNotes = remember(stickyNotes, pdfPageFilter, isContinuousMode) {
         if (isContinuousMode) stickyNotes else stickyNotes.filter { it.pdfPage == pdfPageFilter }
     }
-    val activeStickyNoteList = remember { mutableStateListOf<CanvasStickyNote>() }
+    val activeStickyNoteList = remember(pdfPageFilter, isContinuousMode) { mutableStateListOf<CanvasStickyNote>().apply { addAll(filteredStickyNotes) } }
+    var lastSeenStickyIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     LaunchedEffect(filteredStickyNotes) {
         val incomingMap = filteredStickyNotes.associateBy { it.id }
-        val pendingLocal = activeStickyNoteList.filter { it.id !in incomingMap }
+        val pendingLocal = activeStickyNoteList.filter { it.id !in incomingMap && it.id !in lastSeenStickyIds }
         activeStickyNoteList.clear()
         activeStickyNoteList.addAll(filteredStickyNotes)
         for (pending in pendingLocal) {
@@ -657,15 +662,17 @@ fun AnnotationCanvas(
                 activeStickyNoteList.add(pending)
             }
         }
+        lastSeenStickyIds = incomingMap.keys
     }
 
     val filteredMediaEmbeds = remember(mediaEmbeds, pdfPageFilter, isContinuousMode) {
         if (isContinuousMode) mediaEmbeds else mediaEmbeds.filter { it.pdfPage == pdfPageFilter }
     }
-    val activeMediaEmbedList = remember { mutableStateListOf<CanvasMediaEmbed>() }
+    val activeMediaEmbedList = remember(pdfPageFilter, isContinuousMode) { mutableStateListOf<CanvasMediaEmbed>().apply { addAll(filteredMediaEmbeds) } }
+    var lastSeenEmbedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     LaunchedEffect(filteredMediaEmbeds) {
         val incomingMap = filteredMediaEmbeds.associateBy { it.id }
-        val pendingLocal = activeMediaEmbedList.filter { it.id !in incomingMap }
+        val pendingLocal = activeMediaEmbedList.filter { it.id !in incomingMap && it.id !in lastSeenEmbedIds }
         activeMediaEmbedList.clear()
         activeMediaEmbedList.addAll(filteredMediaEmbeds)
         for (pending in pendingLocal) {
@@ -673,6 +680,7 @@ fun AnnotationCanvas(
                 activeMediaEmbedList.add(pending)
             }
         }
+        lastSeenEmbedIds = incomingMap.keys
     }
 
     fun calculatePageYOffset(pageIndex: Int): Float {

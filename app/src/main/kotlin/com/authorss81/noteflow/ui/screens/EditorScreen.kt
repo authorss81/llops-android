@@ -240,10 +240,10 @@ fun EditorScreen(
         viewModel.settings.brushColorModeKey = StrokeColorMode.GRADIENT.persistenceKey
         viewModel.settings.brushGradientToArgb = gradientTo.toArgb()
     }
-    var template by remember { mutableStateOf(page.template ?: "blank") }
-    var strokes by remember { mutableStateOf<List<Stroke>>(emptyList()) }
-    var stickyNotes by remember { mutableStateOf<List<CanvasStickyNote>>(emptyList()) }
-    var mediaEmbeds by remember { mutableStateOf<List<CanvasMediaEmbed>>(emptyList()) }
+    var template by remember(page.id) { mutableStateOf(page.template ?: "blank") }
+    var strokes by remember(page.id) { mutableStateOf<List<Stroke>>(emptyList()) }
+    var stickyNotes by remember(page.id) { mutableStateOf<List<CanvasStickyNote>>(emptyList()) }
+    var mediaEmbeds by remember(page.id) { mutableStateOf<List<CanvasMediaEmbed>>(emptyList()) }
 
     // Phase 178: per-page reference-image underlay (max one per page, delivered
     // separately from the draggable embed set). referenceImage holds the stored
@@ -540,8 +540,8 @@ fun EditorScreen(
     var activePresetId by remember { mutableStateOf<Int?>(1) }
     var activeCustomPresetId by remember { mutableStateOf<String?>(null) }
 
-    var undoStack by remember { mutableStateOf<List<List<Stroke>>>(emptyList()) }
-    var redoStack by remember { mutableStateOf<List<List<Stroke>>>(emptyList()) }
+    var undoStack by remember(page.id) { mutableStateOf<List<List<Stroke>>>(emptyList()) }
+    var redoStack by remember(page.id) { mutableStateOf<List<List<Stroke>>>(emptyList()) }
 
     // Phase 215: TRANSIENT lasso/box-marquee stroke selection for the (now real)
     // SELECT tool. Never persisted, never part of undo history — only the
@@ -849,7 +849,7 @@ fun EditorScreen(
     }
 
     var saveJob by remember { mutableStateOf<Job?>(null) }
-    var isInitialLoadComplete by remember { mutableStateOf(false) }
+    var isInitialLoadComplete by remember(page.id) { mutableStateOf(false) }
     // Phase 250 (Bug 2 — lock during page load wipes the page): a lock() that
     // fires in the window between `loadEditorCanvasPage` returning AND
     // `isInitialLoadComplete = true` used to render the page empty and let a
@@ -1056,6 +1056,7 @@ fun EditorScreen(
     }
 
     fun handleStrokesChange(newStrokes: List<Stroke>) {
+        if (!isInitialLoadComplete) return
         val newUndo = undoStack.toMutableList()
         newUndo.add(strokes)
         if (newUndo.size > 30) newUndo.removeAt(0)
