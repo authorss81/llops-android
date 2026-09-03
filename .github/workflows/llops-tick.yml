@@ -11,9 +11,7 @@ name: llops-tick
 # primary signal.
 
 on:
-  schedule:
-    - cron: "*/5 * * * *"
-  # Allow manual retrigger for tests / outage recovery.
+
   workflow_dispatch:
 
 concurrency:
