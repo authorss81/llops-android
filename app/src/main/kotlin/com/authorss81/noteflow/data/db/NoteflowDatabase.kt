@@ -717,24 +717,31 @@ internal fun quarantineMigrateFailed(
  *    leaving the live file in place while reporting success). On a failed
  *    rename the bytes are copied to the target and the source deleted only when
  *    the copy is length-identical; any failure leaves the source untouched.
+ *
+ * Review-fix: returns whether the source was quarantined (true) or skipped
+ * (false — missing source, or the collision probe exhausted its 100 suffixes).
+ * Callers ignore the result (a skipped quarantine still routes to the recovery
+ * screen via the persistent flag), but the outcome is now observable instead
+ * of a silent no-op — and unit-testable (see `Phase260StorageTest`).
  */
-internal fun quarantineSingleFile(dir: File, name: String, suffixBase: String) {
+internal fun quarantineSingleFile(dir: File, name: String, suffixBase: String): Boolean {
     val source = File(dir, name)
-    if (!source.exists()) return
+    if (!source.exists()) return false
     var target = File(dir, name + suffixBase)
     var attempt = 0
     while (target.exists() && attempt < 100) {
         attempt++
         target = File(dir, name + suffixBase + "-$attempt")
     }
-    if (target.exists()) return
+    if (target.exists()) return false
     try {
-        if (source.renameTo(target)) return
+        if (source.renameTo(target)) return true
         source.inputStream().use { input ->
             target.outputStream().use { output -> input.copyTo(output) }
         }
         if (target.length() == source.length()) {
             source.delete()
+            return true
         } else {
             runCatching { target.delete() }
         }
@@ -743,4 +750,5 @@ internal fun quarantineSingleFile(dir: File, name: String, suffixBase: String) {
             if (!target.exists() || target.length() != source.length()) target.delete()
         }
     }
+    return false
 }

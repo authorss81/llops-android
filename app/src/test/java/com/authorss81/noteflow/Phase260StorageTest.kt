@@ -176,9 +176,35 @@ class Phase260StorageTest {
             assertTrue(second.isFile)
             assertEquals("newer-bytes", second.readText())
             // Missing source is a no-op.
-            quarantineSingleFile(dir, "nope.sqlite", ".corrupt-123")
+            assertFalse(quarantineSingleFile(dir, "nope.sqlite", ".corrupt-123"))
         } finally {
             dir.deleteRecursively()
         }
+    }
+
+    @Test
+    fun `quarantine reports its outcome instead of silently skipping`() {
+        val dir = tempDir("quarantine-result")
+        try {
+            // Missing source: explicit false, no-op.
+            assertFalse(quarantineSingleFile(dir, "nope.sqlite", ".corrupt-1"))
+            // Successful quarantine: explicit true.
+            File(dir, "noteflow.sqlite").apply { writeText("vault-bytes") }
+            assertTrue(quarantineSingleFile(dir, "noteflow.sqlite", ".corrupt-1"))
+            assertEquals("vault-bytes", File(dir, "noteflow.sqlite.corrupt-1").readText())
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `vacuum runs off the caller thread`() {
+        val repo = repository()
+        val vacuumAt = repo.indexOf("\"VACUUM\"")
+        assertTrue("emptyTrash must finish with a best-effort VACUUM", vacuumAt >= 0)
+        assertTrue(
+            "VACUUM rewrites the whole DB file and must be dispatched to Dispatchers.IO",
+            repo.lastIndexOf("Dispatchers.IO", vacuumAt).let { it >= 0 && vacuumAt - it < 300 }
+        )
     }
 }

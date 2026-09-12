@@ -936,10 +936,19 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
      * root (`filesDir/noteflow/imports` → `filesDir/voice_notes`). Null when
      * the layout is unexpected — the voice-blob delete gate then fails closed
      * (files kept, rows gone) rather than deleting by an unanchored path.
+     *
+     * Review-fix: the imports root's own shape is verified first (it must end
+     * in `noteflow/imports` — the only layout `getImportsDir` ever produces),
+     * so a deviating root can never anchor `parentFile.parentFile` at an
+     * unrelated directory. The existence gate intentionally lives ONLY in
+     * `PageDeleteFilePolicy.voiceBlobForDelete` (`dir.isDirectory`): a missing
+     * voice dir holds no blobs, and a confined delete against it is a no-op.
      */
     private fun voiceNotesDir(): File? = runCatching {
+        val tail = "noteflow" + File.separator + "imports"
+        if (!importsRoot.canonicalPath.endsWith(tail)) return null
         val filesDir = importsRoot.parentFile?.parentFile ?: return null
-        File(filesDir, "voice_notes").takeIf { it.isDirectory }
+        File(filesDir, "voice_notes")
     }.getOrNull()
 
     /**
@@ -1445,7 +1454,8 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
      * best-effort VACUUM (a purge frees whole pages of strokes/embeds/versions
      * whose freelist pages would otherwise stay in the file forever). VACUUM
      * must run OUTSIDE any transaction and is silent on failure — the vault
-     * stays correct either way.
+     * stays correct either way. Review-fix: VACUUM runs on Dispatchers.IO —
+     * it rewrites the whole DB file and must never block the caller's thread.
      */
     suspend fun emptyTrash() {
         val trashed = db.pageDao().getTrashedPagesOnce()
@@ -1462,7 +1472,9 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
             runCatching { file.delete() }
         }
         runCatching {
-            db.openHelper.writableDatabase.execSQL("VACUUM")
+            withContext(Dispatchers.IO) {
+                db.openHelper.writableDatabase.execSQL("VACUUM")
+            }
         }
         invalidateSearchCorpus()
     }
