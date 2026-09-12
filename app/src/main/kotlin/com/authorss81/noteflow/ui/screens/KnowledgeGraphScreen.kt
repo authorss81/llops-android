@@ -295,12 +295,16 @@ fun KnowledgeGraphScreen(
         }
 
         // Deterministic layout (repulsion + spring + gravity + collision bounds)
-        // OFF the main thread. Phase 259: cancellable — a corpus bump (edit
-        // during layout) restarts this effect; the stale build aborts instead
-        // of overwriting the fresh one.
+        // OFF the main thread. Phase 259 + review-fix: cancellable — a corpus
+        // bump (edit during layout) restarts this effect; the progress hook
+        // re-checks cancellation every 10 iterations so the stale build aborts
+        // MID-layout instead of running to completion and overwriting the
+        // fresh one (`GraphLayoutMath.layout` itself is a synchronous loop).
         currentCoroutineContext().ensureActive()
         val settled = withContext(Dispatchers.Default) {
-            GraphLayoutMath.layout(starting, edgeRefs, profile.iterations)
+            GraphLayoutMath.layout(starting, edgeRefs, profile.iterations) { _ ->
+                coroutineContext.ensureActive()
+            }
         }
         currentCoroutineContext().ensureActive()
         val settledByPage = settled.associateBy { it.id }

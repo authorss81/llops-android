@@ -146,15 +146,24 @@ object WikiLinkParser {
      */
     internal fun fenceRanges(text: String): List<IntRange> {
         if (!text.contains("```") && !text.contains("~~~")) return emptyList()
-        val lines = text.lines()
+        // Review-fix: offsets are tracked against the ORIGINAL text with an
+        // explicit `\n` scan (a single trailing `\r` is stripped per line for
+        // `\r\n` sources) — the old `text.lines()` + `+1` math drifted by one
+        // per line on CRLF input, misaligning every later range. The unclosed
+        // fence runs to `text.lastIndex` (a valid index), not `text.length`.
         val ranges = mutableListOf<IntRange>()
-        var offset = 0
+        var pos = 0
         var openStart = -1
         var openFence = ' '
         var openLen = 0
-        for (line in lines) {
-            val lineStart = offset
-            val lineEnd = offset + line.length
+        val n = text.length
+        while (pos <= n) {
+            val nl = text.indexOf('\n', pos)
+            val rawEnd = if (nl < 0) n else nl
+            val lineEnd = if (rawEnd > pos && text[rawEnd - 1] == '\r') rawEnd - 1 else rawEnd
+            val lineStart = pos
+            val line = text.substring(lineStart, lineEnd)
+            val lineStop = lineStart + line.length
             val trimmed = line.trimStart()
             val indent = line.length - trimmed.length
             if (indent <= 3 && trimmed.isNotEmpty() && (trimmed[0] == '`' || trimmed[0] == '~')) {
@@ -168,20 +177,21 @@ object WikiLinkParser {
                         openFence = fenceChar
                         openLen = len
                     } else if (fenceChar == openFence && len >= openLen && rest.isBlank()) {
-                        ranges.add(openStart..lineEnd)
+                        ranges.add(openStart..lineStop)
                         openStart = -1
                     }
                 }
             }
-            offset = lineEnd + 1 // lines() strips the single \n separator
-            if (offset > text.length + 1) break
+            pos = if (nl < 0) n + 1 else nl + 1
         }
-        if (openStart >= 0) ranges.add(openStart..text.length)
+        if (openStart >= 0) ranges.add(openStart..text.lastIndex)
         return ranges
     }
 
-    private fun IntRange.containsIndex(index: Int): Boolean =
-        index >= start && index <= endInclusive
+    /** Review-fix: a match OVERLAPPING a fence range is fenced code — checking
+     *  only the match start misclassified matches spanning the fence edge. */
+    private fun List<IntRange>.overlapsMatch(start: Int, endInclusive: Int): Boolean =
+        any { start <= it.endInclusive && endInclusive >= it.start }
 
     // Test seam so a test can deterministically cancel a backlink scan mid-build; null in release.
     @Volatile
@@ -273,7 +283,7 @@ object WikiLinkParser {
         val out = ArrayList<WikiLink>(minOf(16, MAX_LINKS_PER_PAGE))
         for (match in wikiLinkRegex.findAll(text)) {
             if (out.size >= MAX_LINKS_PER_PAGE) break
-            if (fences.isNotEmpty() && fences.any { it.containsIndex(match.range.first) }) continue
+            if (fences.isNotEmpty() && fences.overlapsMatch(match.range.first, match.range.last)) continue
             val rawText = match.value
             val targetTitle = match.groupValues[1].trim()
             val alias = match.groupValues[2].takeIf { it.isNotBlank() }?.trim()
@@ -311,7 +321,7 @@ object WikiLinkParser {
         val seen = HashSet<String>(minOf(4096, maxTags))
         for (match in tagRegex.findAll(text)) {
             if (seen.size >= maxTags) break
-            if (fences.isNotEmpty() && fences.any { it.containsIndex(match.range.first) }) continue
+            if (fences.isNotEmpty() && fences.overlapsMatch(match.range.first, match.range.last)) continue
             val tag = match.groupValues[1].lowercase().trim('/')
             if (tag.isEmpty()) continue
             if (seen.add(tag)) {

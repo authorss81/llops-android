@@ -18,7 +18,7 @@ data class WikiLink(
  * and attacker-controlled titles were a ReDoS vector. Every entry below now
  * delegates to (or mirrors the bounds of) the services parser:
  *  - [extractWikiLinks] maps the capped, fence-aware services scan;
- *  - [extractTags] is bounded at construction (never an unbounded materialize);
+ *  - [extractTags] delegates to the services extractor (same grammar + cap);
  *  - [findLinkedPageIdsForContent] matches with ONE precompiled regex over
  *    [Regex.escape]-d titles (no per-page regex compile, no syntax crash).
  *
@@ -26,6 +26,10 @@ data class WikiLink(
  * callers use this `WikiLink(targetTitle, alias)` shape, which differs from the
  * services `WikiLink` (rawText + offsets). New code MUST import the services
  * parser directly.
+ *
+ * Review-fix: `extractTags` used to re-implement extraction with a DIFFERENT
+ * grammar (mid-word matches, no lowercasing) — it now delegates to the services
+ * extractor directly, so there is exactly one tag grammar.
  */
 @Deprecated(
     "Use com.authorss81.noteflow.services.WikiLinkParser directly — " +
@@ -33,26 +37,16 @@ data class WikiLink(
 )
 object WikiLinkParser {
 
-    /** Hard bound for a single-text tag extraction (mirrors the services cap). */
+    /** Hard bound for a single-text tag extraction (must equal the services cap). */
     const val MAX_TAGS_PER_TEXT = 20000
 
-    private val tagPattern = Regex("#([\\p{L}\\p{N}_\\p{So}\\p{Sk}]+)")
-
-    fun extractTags(text: String): List<String> {
-        if (text.isBlank()) return emptyList()
-        val fences = ServicesWikiLinkParser.fenceRanges(text)
-        val out = ArrayList<String>(16)
-        val seen = HashSet<String>(64)
-        for (match in tagPattern.findAll(text)) {
-            if (seen.size >= MAX_TAGS_PER_TEXT) break
-            val start = match.range.first
-            if (fences.isNotEmpty() && fences.any { start >= it.start && start <= it.endInclusive }) continue
-            if (seen.add(match.groupValues[1])) {
-                out.add(match.groupValues[1])
-            }
-        }
-        return out
-    }
+    /**
+     * Review-fix: direct delegation — the pre-fix body re-implemented tags with
+     * a different grammar (no whitespace anchor, no lowercasing), so the two
+     * parsers disagreed on the same text. One grammar now (services).
+     */
+    fun extractTags(text: String): List<String> =
+        ServicesWikiLinkParser.extractTags(text)
 
     fun extractWikiLinks(content: String): List<WikiLink> {
         if (content.isBlank()) return emptyList()
@@ -64,6 +58,15 @@ object WikiLinkParser {
         }
     }
 
+    /**
+     * Review-fix notes:
+     * - boundaries are `(?<!\w)` / `(?!\w)` lookarounds, NOT `\b`: a `\b` after
+     *   a non-word char never matches, so escaped titles like `C++` silently
+     *   never linked. Lookarounds treat word and non-word titles uniformly.
+     * - first title wins on case-insensitive collision (deterministic input
+     *   order; `associateBy` kept the LAST).
+     * - the 2000-title cap mirrors the services `MAX_SCAN_PAGES` bound.
+     */
     fun findLinkedPageIdsForContent(sourceContent: String, pagesToMatch: List<String>): List<String> {
         if (sourceContent.isBlank() || pagesToMatch.isEmpty()) return emptyList()
         val titles = pagesToMatch.distinct().filter { it.isNotBlank() }.take(2000)
@@ -71,8 +74,9 @@ object WikiLinkParser {
         // ONE precompiled regex over escaped titles — no per-page compile, no
         // PatternSyntaxException on regex metacharacters (C++, [TODO], a|b).
         val alternation = titles.joinToString("|") { Regex.escape(it) }
-        val wordBoundaryRegex = Regex("\\b(?:$alternation)\\b", RegexOption.IGNORE_CASE)
-        val byLower = titles.associateBy { it.lowercase() }
+        val wordBoundaryRegex = Regex("(?<!\\w)(?:$alternation)(?!\\w)", RegexOption.IGNORE_CASE)
+        val byLower = HashMap<String, String>(titles.size * 2)
+        for (t in titles) byLower.getOrPut(t.lowercase()) { t }
         return wordBoundaryRegex.findAll(sourceContent)
             .mapNotNull { byLower[it.value.lowercase()] }
             .distinct()

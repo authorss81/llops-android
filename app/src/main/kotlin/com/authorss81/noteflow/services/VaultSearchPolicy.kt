@@ -49,6 +49,11 @@ object VaultSearchPolicy {
     /** A query with no searchable content is never worth a scan. */
     fun isBlankQuery(query: String?): Boolean = query.isNullOrBlank()
 
+    /** Review-fix: one CSV `tags` cell → trimmed per-tag list (never blanks). */
+    internal fun splitTags(tags: String): List<String> =
+        if (tags.isBlank()) emptyList()
+        else tags.split(',').map { it.trim() }.filter { it.isNotEmpty() }
+
     /** Whether a vault of [totalActivePages] must bound its cached search window. */
     fun exceedsCorpusCap(totalActivePages: Int): Boolean = totalActivePages > SEARCH_CORPUS_CAP
 
@@ -97,11 +102,16 @@ object VaultSearchPolicy {
         }
         // Phase 259: the CSV `tags` column is searchable — pre-fix a tag-only
         // hit (`pageMatches` skipped `tags`) never matched at all.
-        if (page.tags.contains(query, ignoreCase = true)) return SearchMatchTier.EXACT
+        // Review-fix: match PER TAG (split on comma), not on the raw CSV blob —
+        // a blob substring crosses tag boundaries (`vel, j` hit `travel, japan`).
+        val tags = splitTags(page.tags)
+        if (tags.any { it.contains(query, ignoreCase = true) }) return SearchMatchTier.EXACT
         val body = page.extractedText
         val fuzzyTitle = FuzzyMatch.subsequenceDensity(query, page.title)
         if (fuzzyTitle != null) return SearchMatchTier.FUZZY
-        if (FuzzyMatch.subsequenceDensity(query, page.tags) != null) return SearchMatchTier.FUZZY
+        for (tag in tags) {
+            if (FuzzyMatch.subsequenceDensity(query, tag) != null) return SearchMatchTier.FUZZY
+        }
         // Phase 259: fuzzy body probe is head-bounded (see FUZZY_BODY_SCAN_CAP)
         // instead of a full-body walk per keystroke per non-matching page.
         if (body != null) {

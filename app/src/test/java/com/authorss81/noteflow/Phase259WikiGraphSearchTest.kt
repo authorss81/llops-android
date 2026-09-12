@@ -31,6 +31,16 @@ class Phase259WikiGraphSearchTest {
         val matches = UtilsWikiLinkParser.findLinkedPageIdsForContent(source, titles)
         assertTrue("plain title must still match", matches.contains("party"))
         assertFalse("must not match inside another word", matches.contains("art"))
+        // Review-fix: lookaround boundaries (not \b) link non-word titles too.
+        assertTrue("C++ title must link, not just not-crash", matches.contains("C++"))
+        assertTrue("[TODO] title must link", matches.contains("[TODO]"))
+        assertTrue("a|b title must link", matches.contains("a|b"))
+    }
+
+    @Test
+    fun `legacy matcher first title wins on case collision`() {
+        val matches = UtilsWikiLinkParser.findLinkedPageIdsForContent("party time", listOf("Party", "party"))
+        assertEquals(listOf("Party"), matches)
     }
 
     @Test
@@ -130,6 +140,18 @@ class Phase259WikiGraphSearchTest {
             VaultSearchPolicy.pageMatchTier(page, "japan")
         )
         assertFalse(VaultSearchPolicy.pageMatches(page, "zzzqqq"))
+        // Review-fix: per-tag matching must not span the comma boundary.
+        assertFalse(
+            "query spanning two tags must not match the raw CSV blob",
+            VaultSearchPolicy.pageMatches(page, "vel, j")
+        )
+    }
+
+    @Test
+    fun `crlf fenced code contributes no links`() {
+        val text = "Real [[target]]\r\n```kotlin\r\ncode [[fake]]\r\n```\r\n"
+        val links = ServicesWikiLinkParser.extractWikiLinks(text)
+        assertEquals(listOf("target"), links.map { it.targetTitle })
     }
 
     @Test
@@ -149,6 +171,10 @@ class Phase259WikiGraphSearchTest {
         val source = readSource("utils/WikiLinkParser.kt")
         assertTrue(source.contains("Regex.escape"))
         assertTrue(source.contains("ServicesWikiLinkParser.extractWikiLinks"))
+        assertTrue(
+            "non-word titles need lookaround boundaries, not \\b",
+            source.contains("(?<!\\\\w)")
+        )
         assertFalse(
             "unescaped per-page title interpolation must be gone",
             source.contains("\$page")
@@ -206,7 +232,8 @@ class Phase259WikiGraphSearchTest {
         assertTrue(repo.contains("currentCoroutineContext().ensureActive()"))
         val policy = readSource("services/VaultSearchPolicy.kt")
         assertTrue(policy.contains("FUZZY_BODY_SCAN_CAP"))
-        assertTrue(policy.contains("page.tags.contains"))
+        // Review-fix: tags match per-tag (splitTags), not on the raw CSV blob.
+        assertTrue(policy.contains("splitTags"))
     }
 
     // ---------- source pins: tokenizer ----------
