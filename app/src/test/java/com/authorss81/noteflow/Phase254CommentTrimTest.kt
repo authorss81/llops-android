@@ -96,13 +96,21 @@ import org.junit.Test
  * No KDoc opener added (plain `//` comments only — the KDoc counts below
  * are unchanged). Re-measured on the phase-266 tree: AnnotationCanvas
  * 8754 raw / 7020 code, EditorScreen 7440 raw / 6491 code.
+ *
+ * PHASE 266 REVIEW-FIX RE-BASELINE: comment-only growth — AnnotationCanvas
+ * +4 raw / +0 code (semantics non-merge rationale +3, hex-label floor note
+ * +1) and EditorScreen +5 raw / +0 code (expanded caption rationale +3,
+ * empty-state hint wash removal note +2). HomeScreen untouched.
+ * Re-measured on the review-fix tree (lineSequence counts include the
+ * trailing line): AnnotationCanvas 8758 raw / 7020 code, EditorScreen 7445
+ * raw / 6491 code.
  */
 class Phase254CommentTrimTest {
 
-    // Phase-255/256/257/264/266 re-baselined raw line counts (phase-266 values measured on the phase-266 tree).
+    // Phase-255/256/257/264/266 re-baselined raw line counts (review-fix values measured on the review-fix tree).
     private val headRaw = mapOf(
-        "ui/components/AnnotationCanvas.kt" to 8754,
-        "ui/screens/EditorScreen.kt" to 7440,
+        "ui/components/AnnotationCanvas.kt" to 8758,
+        "ui/screens/EditorScreen.kt" to 7445,
         "ui/screens/HomeScreen.kt" to 3845
     )
     // Phase-255/256/257/264/266 re-baselined code-line counts (non-blank, non-full-`//` lines).

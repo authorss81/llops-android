@@ -4212,10 +4212,13 @@ private fun DockQuickToolsRow(
                             Text(
                                 text = "Blend",
                                 style = MaterialTheme.typography.labelSmall,
-                                // Phase 266: 7sp captions are unreadable (WCAG
-                                // 1.4.3/1.4.4 at 200% scale); floor at 10sp.
-                                fontSize = 10.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                // Phase 266 + review fix: 7sp captions are
+                                // unreadable (WCAG 1.4.3/1.4.4 at 200% scale);
+                                // floor at the policy minimum (11sp, = labelSmall
+                                // default) with full-strength onSurfaceVariant
+                                // (no 0.7f wash — small text needs full contrast).
+                                fontSize = com.authorss81.noteflow.services.A11yPolicy.MIN_LABEL_TEXT_SP.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
@@ -4264,10 +4267,10 @@ private fun DockQuickToolsColumn(
                             Text(
                                 text = "Blend",
                                 style = MaterialTheme.typography.labelSmall,
-                                // Phase 266: 7sp captions are unreadable (WCAG
-                                // 1.4.3/1.4.4 at 200% scale); floor at 10sp.
-                                fontSize = 10.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                // Phase 266 + review fix: see DockQuickToolsRow
+                                // above — policy floor with full contrast.
+                                fontSize = com.authorss81.noteflow.services.A11yPolicy.MIN_LABEL_TEXT_SP.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
@@ -5232,7 +5235,9 @@ private fun WidthPickerBottomSheet(
                     Text(
                         text = "No custom presets saved yet.",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        // Review fix (phase 266): no alpha wash on small hint
+                        // text — full-strength onSurfaceVariant for contrast.
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(vertical = 4.dp)
                     )
                 } else {

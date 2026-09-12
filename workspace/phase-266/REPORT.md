@@ -59,7 +59,38 @@ controls already are: pin "Pin/Unpin", overflow "More Options", zoom "Zoom In/Ou
 
 ## 5. Deferred (honest)
 
-Dual-pane `focusGroup/order/restorer`, palette-swipe `customActions`, D-pad focus ring: structural
-navigation-model work → requires a user-approved proposal per AGENTS.md (MAJOR ARCHITECTURAL CHANGE).
-Snapshot/2.0x-font-scale device DoD needs hardware (CI has no emulator); structural guards
-(`verticalScroll`/`horizontalScroll`/`heightIn` presence, `maxLines`+ellipsis) hold by pin where added.
+ Dual-pane `focusGroup/order/restorer`, palette-swipe `customActions`, D-pad focus ring: structural
+ navigation-model work → requires a user-approved proposal per AGENTS.md (MAJOR ARCHITECTURAL CHANGE).
+ Snapshot/2.0x-font-scale device DoD needs hardware (CI has no emulator); structural guards
+ (`verticalScroll`/`horizontalScroll`/`heightIn` presence, `maxLines`+ellipsis) hold by pin where added.
+
+ ## 6. Review-fix round (2026-09-12, 9 findings)
+
+ 1. `canvasContentDescription(committedStrokes)` ignored its param → now
+    parameterless `canvasContentDescription()`; count lives only in
+    `canvasStateDescription`. Call site + tests updated.
+ 2. Graph pulse `!reduceMotion` → `shouldAnimate()` was behavior-neutral and
+    left the infinite transition ticking → the transition is now only CREATED
+    when motion is allowed, else a static `0f` phase (no animation, no
+    recomposition cost under reduce-motion).
+ 3. Dead policy surface wired into prod: `CELEBRATION_DURATION_MS=800`
+    (budget enforced by construction — ConfettiOverlay `tween()` uses it) and
+    `MIN_LABEL_TEXT_SP` referenced by EditorScreen captions + the color-picker
+    hex label; `meets*` remain documented audit contracts pinned by tests.
+ 4. Contrast honesty: 0.6f pin alpha reworded as estimate (not lab-measured);
+    `Blend` captions AND the presets empty-state hint dropped their
+    `0.7f`/`0.7f`-alpha washes to full-strength `onSurfaceVariant`.
+ 5. Label floor raised 10sp → 11sp (= `labelSmall` default); no-200%-device
+    verification stated honestly in `A11yPolicy` KDoc.
+ 6. Canvas semantics pinned non-merging: no `clearAndSetSemantics`, no
+    `mergeDescendants=true` (children stay traversable); graph-dot
+    `customActions` stay deferred with the nav model (needs user approval).
+ 7. Tests hardened beyond `contains`: budgeted-duration pin (`tween(1800`
+    absence), conditional-transition pin, non-merge pins, policy-floor
+    reference pin. Pure-JVM limit (no Robolectric per phase-239) documented.
+ 8. Confetti reduce-motion path documented as decorative-only suppression;
+    file now uses imports instead of fully-qualified names.
+ 9. Scope shortfall acknowledged: icon/48dp/MotionSystem items were
+    allowlist+pin work; remaining nav items need a user-approved proposal.
+ Re-baseline: AnnotationCanvas 8758/7020, EditorScreen 7445/6491 (comment-only
+ growth), HomeScreen untouched.

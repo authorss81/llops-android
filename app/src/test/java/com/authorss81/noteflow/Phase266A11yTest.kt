@@ -54,16 +54,21 @@ class Phase266A11yTest {
     }
 
     @Test
-    fun `label floor rejects 7sp captions`() {
+    fun `label floor rejects 7sp and 10sp captions`() {
         assertFalse(A11yPolicy.meetsLabelSize(7))
+        assertFalse(A11yPolicy.meetsLabelSize(10))
         assertTrue(A11yPolicy.meetsLabelSize(A11yPolicy.MIN_LABEL_TEXT_SP))
-        assertEquals(10, A11yPolicy.MIN_LABEL_TEXT_SP)
+        assertEquals(11, A11yPolicy.MIN_LABEL_TEXT_SP)
     }
 
     @Test
     fun `ambient motion budget rejects the old 1800ms confetti flight`() {
         assertFalse(A11yPolicy.meetsMotionBudget(1800))
         assertTrue(A11yPolicy.meetsMotionBudget(500))
+        assertTrue(
+            "celebration duration must sit inside the budget by construction",
+            A11yPolicy.meetsMotionBudget(A11yPolicy.CELEBRATION_DURATION_MS)
+        )
         assertEquals(48, A11yPolicy.MIN_TOUCH_TARGET_DP)
     }
 
@@ -75,9 +80,9 @@ class Phase266A11yTest {
 
     @Test
     fun `canvas descriptions carry counts never content`() {
-        assertEquals("Drawing canvas", A11yPolicy.canvasContentDescription(3))
+        assertEquals("Drawing canvas", A11yPolicy.canvasContentDescription())
         assertEquals("12 strokes", A11yPolicy.canvasStateDescription(12))
-        assertEquals("Drawing canvas", A11yPolicy.canvasContentDescription(0))
+        assertEquals("0 strokes", A11yPolicy.canvasStateDescription(0))
     }
 
     // --- Source pins --------------------------------------------------
@@ -93,14 +98,30 @@ class Phase266A11yTest {
             "confetti must gate on A11yPolicy.shouldAnimate",
             src.contains("A11yPolicy.shouldAnimate")
         )
+        assertTrue(
+            "confetti flight must use the budgeted policy duration, not a magic 1800",
+            src.contains("A11yPolicy.CELEBRATION_DURATION_MS")
+        )
+        assertFalse(
+            "magic 1800ms flight must be gone",
+            src.contains("tween(1800")
+        )
     }
 
     @Test
-    fun `graph link pulse is gated through A11yPolicy`() {
+    fun `graph link pulse transition is only created when motion is allowed`() {
         val src = mainSource("ui/screens/KnowledgeGraphScreen.kt")
         assertTrue(
             "pulse draw must branch on A11yPolicy.shouldAnimate(reduceMotion)",
             src.contains("A11yPolicy.shouldAnimate(reduceMotion)")
+        )
+        assertTrue(
+            "infinite transition must be created conditionally (no ticking under reduce-motion)",
+            src.contains("rememberInfiniteTransition(label = \"linkPulse\")")
+        )
+        assertTrue(
+            "reduce-motion path must fall back to a static phase",
+            src.contains("} else {") && src.contains("0f")
         )
         // The settle tweens stay manually gated (no MotionSystem.spec — the
         // branch snaps); the pin holds the gate so motion is never unconditional.
@@ -133,11 +154,19 @@ class Phase266A11yTest {
     }
 
     @Test
-    fun `no 7sp captions remain in EditorScreen`() {
+    fun `no 7sp or 10sp captions remain in EditorScreen`() {
         val src = mainSource("ui/screens/EditorScreen.kt")
         assertFalse(
-            "7sp dock captions must stay floored at 10sp",
+            "7sp dock captions must stay floored at the policy minimum",
             src.contains("7.sp")
+        )
+        assertTrue(
+            "dock captions must reference the policy floor, not a magic number",
+            src.contains("A11yPolicy.MIN_LABEL_TEXT_SP.sp")
+        )
+        assertFalse(
+            "0.7f caption wash must be gone (small text needs full contrast)",
+            src.contains("onSurfaceVariant.copy(alpha = 0.7f)")
         )
     }
 
@@ -146,11 +175,23 @@ class Phase266A11yTest {
         val src = mainSource("ui/components/AnnotationCanvas.kt")
         assertTrue(
             "canvas root must set a contentDescription via the policy",
-            src.contains("A11yPolicy.canvasContentDescription(strokes.size)")
+            src.contains("A11yPolicy.canvasContentDescription()")
         )
         assertTrue(
             "canvas root must set a stateDescription via the policy",
             src.contains("A11yPolicy.canvasStateDescription(strokes.size)")
+        )
+        val canvasBlock = src.substring(
+            src.indexOf("A11yPolicy.canvasContentDescription"),
+            src.indexOf("A11yPolicy.canvasStateDescription") + 60
+        )
+        assertFalse(
+            "canvas semantics must not clear child semantics (children stay traversable)",
+            canvasBlock.contains("clearAndSetSemantics")
+        )
+        assertFalse(
+            "canvas semantics must not merge descendants into one node",
+            canvasBlock.contains("mergeDescendants")
         )
         val semanticsBlock = src.substring(
             src.indexOf("A11yPolicy.canvasContentDescription"),

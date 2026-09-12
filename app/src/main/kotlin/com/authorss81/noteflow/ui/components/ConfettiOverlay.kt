@@ -7,6 +7,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import com.authorss81.noteflow.services.A11yPolicy
+import com.authorss81.noteflow.theme.LocalReduceMotion
 import java.util.Random
 
 private data class ConfettiParticle(
@@ -21,17 +23,18 @@ private data class ConfettiParticle(
 @Composable
 fun ConfettiOverlay(triggerTime: Long) {
     if (triggerTime <= 0) return
-    // Phase 266: celebratory motion is suppressible — under reduce-motion the
-    // overlay completes instantly (no 1800ms particle flight).
-    if (!com.authorss81.noteflow.services.A11yPolicy.shouldAnimate(
-            com.authorss81.noteflow.theme.LocalReduceMotion.current
-        )
-    ) return
+    // Phase 266 + review fix: celebratory motion is DECORATIVE-only (it
+    // carries no information), so under reduce-motion the overlay is
+    // suppressed entirely — no particle flight at all.
+    if (!A11yPolicy.shouldAnimate(LocalReduceMotion.current)) return
 
     val animProgress = remember(triggerTime) { Animatable(0f) }
     LaunchedEffect(triggerTime) {
         animProgress.snapTo(0f)
-        animProgress.animateTo(1f, animationSpec = tween(1800, easing = LinearOutSlowInEasing))
+        animProgress.animateTo(
+            1f,
+            animationSpec = tween(A11yPolicy.CELEBRATION_DURATION_MS, easing = LinearOutSlowInEasing)
+        )
     }
 
     val progress = animProgress.value

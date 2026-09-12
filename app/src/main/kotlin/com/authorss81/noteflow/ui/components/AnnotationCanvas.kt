@@ -1798,14 +1798,17 @@ fun AnnotationCanvas(
             // Phase 240 (Bug 2): the canvas needs NO window-origin capture. The
             // pointerInteropFilter bridge, the Compose drag handlers' `change.position`
             // and the phase-196 predictor all work in this box's node-local space.
-            // Phase 266: the drawing surface was silent to TalkBack (toolbar
-            // labeled, canvas unlabeled) — expose a stable description plus a
-            // committed-stroke count (never stroke content/titles). Only the
-            // committed list is read: activePoints mutates per pen sample and
-            // must never be subscribed here (per-sample recomposition).
+            // Phase 266 + review fix: the drawing surface was silent to
+            // TalkBack (toolbar labeled, canvas unlabeled) — expose a stable
+            // description plus a committed-stroke count (never stroke
+            // content/titles). Plain .semantics{} (NOT clearAndSetSemantics,
+            // NOT mergeDescendants=true) so child controls stay independently
+            // traversable. Only the committed list is read: activePoints
+            // mutates per pen sample and must never be subscribed here
+            // (per-sample recomposition).
             .semantics {
                 contentDescription =
-                    com.authorss81.noteflow.services.A11yPolicy.canvasContentDescription(strokes.size)
+                    com.authorss81.noteflow.services.A11yPolicy.canvasContentDescription()
                 stateDescription =
                     com.authorss81.noteflow.services.A11yPolicy.canvasStateDescription(strokes.size)
             }
@@ -5053,7 +5056,8 @@ private fun EyedropperMagnifierLoupe(
                 text = hexLabel,
                 style = MaterialTheme.typography.labelSmall.copy(
                     color = if (textLight) Color.White else Color.Black,
-                    fontSize = 10.sp
+                    // Review fix (phase 266): honor the a11y label floor.
+                    fontSize = com.authorss81.noteflow.services.A11yPolicy.MIN_LABEL_TEXT_SP.sp
                 )
             )
         }

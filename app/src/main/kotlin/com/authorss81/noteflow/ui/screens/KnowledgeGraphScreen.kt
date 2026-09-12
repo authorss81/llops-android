@@ -380,14 +380,22 @@ fun KnowledgeGraphScreen(
         }
     }
 
-    // Link particle-pulse phase — only actively informed when pulses are drawn.
-    val pulsePhase = rememberInfiniteTransition(label = "linkPulse")
-    val pulseT by pulsePhase.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(1400, easing = LinearEasing), RepeatMode.Restart),
-        label = "linkPulseT"
-    )
+    // Link particle-pulse phase — the infinite transition is ONLY created when
+    // motion is allowed (review fix: gating just the draw read left the
+    // transition ticking and recomposing under reduce-motion). Under
+    // reduce-motion the phase is a static 0f and nothing animates.
+    val pulseT: Float = if (com.authorss81.noteflow.services.A11yPolicy.shouldAnimate(reduceMotion)) {
+        val pulsePhase = rememberInfiniteTransition(label = "linkPulse")
+        val animatedT by pulsePhase.animateFloat(
+            initialValue = 0f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(tween(1400, easing = LinearEasing), RepeatMode.Restart),
+            label = "linkPulseT"
+        )
+        animatedT
+    } else {
+        0f
+    }
 
     val transformState = rememberTransformableState { zoomChange, panChange, _ ->
         zoomScale = (zoomScale * zoomChange).coerceIn(0.2f, 4f)
