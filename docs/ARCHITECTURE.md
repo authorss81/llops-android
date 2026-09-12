@@ -3248,6 +3248,14 @@ UNTRUSTED files before any staging); `ui/components/Dialogs.kt` `AppUpdateDialog
     cert-renewal procedure; the placeholder is intentionally NOT substituted. `PinnedCertHashTest` (4→9) pins
     the fail-closed `matches` contract (placeholder/wrong/near-miss pins never match; known-good does) and the
     exact placeholder value, so a changed-but-wrong constant can never silently slip in.
+  - **Implemented in phase-268** (build supply-chain, see `workspace/phase-268/REPORT.md`): all four APK
+    schemes now pinned explicitly (`enableV1/V2/V3 = true`, `enableV4 = false` — supersedes the phase-171
+    "v1/v4 untouched" note; `app/build.gradle.kts:67-85`); the release keystore gate additionally refuses
+    0-byte files at config (`:99-109`) and execution (`:327-338` backstop); R8 fullMode+shrinkResources proven
+    keystore-less via `:app:minifyReleaseWithR8` (mapping.txt emitted); verification-metadata (verify
+    true/true, 17 reviewed ignored-keys, jitpack absent) + wrapper/CI version parity pinned by
+    `Phase268BuildTest` (9). Workflow-side items (action SHAs, `distribution-sha256-sum`, mapping upload,
+    `VERSION_CODE`-from-env) pending user approval — `.github/workflows/` untouched.
 - Tests: `app/src/test/java/com/authorss81/noteflow/` (~110 unit tests, pure JVM, no androidTest).
   - **Implemented in phase-253** (release-gate audit, see `workspace/phase-253/REPORT.md`): new pure-JVM
     `Phase253FinalAuditRegressionTest` (20 methods) re-pins the six prior phases' fixes at HEAD so a silent

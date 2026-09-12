@@ -1,3 +1,4 @@
+import java.io.File
 import java.util.Properties
 
 // Phase 170 (Phase-32-NEW-01 MEDIUM): lingua 1.2.2 ships ALL 75 `language-models/<iso>/**`
@@ -64,34 +65,46 @@ android {
     // auto-generated debug keystore.
     signingConfigs {
         create("releaseConfig") {
-            // Phase 171 (Phase-32-NEW-03 INFO): force APK Signature Scheme v3 ON.
-            // Root cause is NOT a config flag disabling v3 — AGP 8.7.3 only enables
-            // v3 automatically when `minSdk >= 28`, and this app floors at minSdk 26
-            // (below), so every prior release built v2-only and had NO in-place
-            // signing-key-rotation capability. `enableV3Signing = true` overrides
-            // that threshold while leaving v2 on (v2 remains the fallback scheme a
-            // pre-Android-9 device understands) and v1/v4 untouched by design:
-            // v4 only accelerates Android 11+ incremental installs and is not
-            // required; bumping minSdk to 28 would be a user-approval-level change
-            // and is intentionally OUT of scope here.
+            // Phase 171 (Phase-32-NEW-03 INFO) + phase 268 (explicit-scheme pins):
+            // root cause of the old v2-only releases is NOT a config flag
+            // disabling v3 — AGP 8.7.3 only enables v3 automatically when
+            // `minSdk >= 28`, and this app floors at minSdk 26 (below), so every
+            // prior release built v2-only and had NO in-place signing-key-rotation
+            // capability. Phase 268 pins ALL FOUR schemes explicitly so a future
+            // AGP default flip can never silently change the signing set:
+            // v1 (JAR signatures) ON — side-loaders/tooling that still check JAR
+            // signatures keep working; v2 ON — the fallback scheme a pre-Android-9
+            // device understands; v3 ON — overrides the minSdk-28 threshold and
+            // enables in-place key rotation; v4 explicitly OFF — it only
+            // accelerates Android 11+ incremental installs via adb and is not
+            // required for store/sideload APKs. Bumping minSdk to 28 would be a
+            // user-approval-level change and stays OUT of scope.
+            enableV1Signing = true
+            enableV2Signing = true
             enableV3Signing = true
+            enableV4Signing = false
             val ksFilePath = System.getenv("KEYSTORE_FILE")
             val ksPassword = System.getenv("KEYSTORE_PASSWORD")
             val ksAlias = System.getenv("KEY_ALIAS")
             val ksKeyPass = System.getenv("KEY_PASSWORD")
 
-            // All-or-nothing: only a real, complete, existing keystore qualifies.
-            // If any of the four variables is missing/blank, or the file is absent,
-            // the config stays EMPTY (storeFile = null) and the release build is
-            // refused — never a debug-signed "release" APK. Paths are resolved
-            // against the REPO ROOT (so `./release.keystore` = `rootDir/release.keystore`).
-            if (ksFilePath != null &&
-                !ksPassword.isNullOrBlank() &&
+            // All-or-nothing: only a real, complete, existing, NON-EMPTY keystore
+            // qualifies. If any of the four variables is missing/blank, the file
+            // is absent, or it decodes to 0 bytes (unchecked `base64 -d` of an
+            // empty secret — phase 268), the config stays EMPTY (storeFile = null)
+            // and the release build is refused — never a debug-signed "release"
+            // APK. Paths are resolved ONCE here: an absolute KEYSTORE_FILE (e.g.
+            // CI's $RUNNER_TEMP/release.keystore) is used as-is; a relative path
+            // resolves against the REPO ROOT (so `./release.keystore` =
+            // `rootDir/release.keystore`).
+            val ksRawFile = File(ksFilePath ?: "")
+            val ksFile = if (ksRawFile.isAbsolute) ksRawFile else rootProject.file(ksFilePath ?: "")
+            if (!ksPassword.isNullOrBlank() &&
                 !ksAlias.isNullOrBlank() &&
                 !ksKeyPass.isNullOrBlank() &&
-                rootProject.file(ksFilePath).exists()
+                ksFile.isFile && ksFile.length() > 0
             ) {
-                storeFile = rootProject.file(ksFilePath)
+                storeFile = ksFile
                 storePassword = ksPassword
                 keyAlias = ksAlias
                 keyPassword = ksKeyPass
@@ -304,6 +317,19 @@ gradle.taskGraph.whenReady {
                     "KEY_PASSWORD, then run the release task again. The debug-keystore/repo-blob " +
                     "fallbacks were removed — a release APK can no longer be produced signed with " +
                     "the well-known Android debug key. See docs/RELEASE.md."
+            )
+        }
+        // Phase 268: a 0-byte storeFile (an unchecked `base64 -d` of an empty
+        // RELEASE_KEYSTORE_B64 secret decodes to an empty file that passes
+        // exists()) is a missing keystore, not a keystore — refuse here before
+        // R8/minify burns minutes. The signingConfigs block above already refuses
+        // it at configuration time; this is the execution-time backstop.
+        if (releaseSigning.storeFile?.length() == 0L) {
+            throw GradleException(
+                "Release build refused: release keystore at " +
+                    "${releaseSigning.storeFile?.absolutePath} is 0 bytes " +
+                    "(phase-268 — likely an empty RELEASE_KEYSTORE_B64 secret). " +
+                    "Restore a real keystore and run the release task again."
             )
         }
     }
