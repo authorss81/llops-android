@@ -91,6 +91,23 @@ painting engine, free features).
 | phase-226 | **Selection transform** — scale (corner handles) + rotate (`CanvasItemRotationMath`) for lasso selection, baked into points | painting |
 | phase-227 | **Paper deckled edge + texture + layered export** — wavy `Path` clip, `paperTextureStrength` slider, PSD per-layer + PNG transparent toggle | painting |
 | phase-228 | **Fix all failing tests + green APK/CI** — `testDebugUnitTest` 0 failures, `assembleDebug`/`assembleRelease` green, `lintDebug` 0 errors, full `gradle build` CI green, no regressions (6h) | quality |
+| phase-255 | **Canvas ingest: stale-timestamp dots + batcher tail loss** (prevAcceptedTime live stamp, single eventTime clock, dispose drains batcher) | AI Studio audit 2026-09-01 |
+| phase-256 | **Eraser precision + atomic undo** (segment hit + densifyPoints, pressure-radius decision, one undo per swipe) | AI Studio audit 2026-09-01 |
+| phase-257 | **Undo resurrect + page-state keying + mutex load** (lastSeenIds, remember(page.id), isInitialLoadComplete guard, pageSaveLocks load) | AI Studio audit 2026-09-01 |
+| phase-258 | **Markdown whole-doc vs blocks + blank + dirty** (single editor, remember(page.id,initialContent) sync, external-during-dirty, dispose keyed) | AI Studio audit 2026-09-01 |
+| phase-259 | **Wiki/graph/search/tags** (Regex.escape, no utils shadow, caps, graph/tag rekey, corpus guards) | AI Studio audit 2026-09-01 |
+| phase-260 | **Storage Room/WAL/quarantine + crypto leftovers** (no destructive fallback, FK/index, atomic deletes, confined delete, WAL BUSY, paged re-encrypt) | AI Studio audit 2026-09-01 |
+| phase-261 | **Sync WebDAV DNS + backup staging** (InetAddress-local only, staging finally-deleted, sync warning) | AI Studio audit 2026-09-01 |
+| phase-262 | **Voice lifecycle/crypto/files** (prepareAsync, elapsedRealtime, legacy .m4a delete, streamed crypto, native caps) | AI Studio audit 2026-09-01 |
+| phase-263 | **Home/gallery/tab state + import** (rememberSaveable, ScrollableTabRow, 48dp, IME Search) | AI Studio audit 2026-09-01 |
+| phase-264 | **Responsive minimap/inkbar** (menu BoxWithConstraints cap, single mapScale, drag keys, yield fires) | AI Studio audit 2026-09-01 |
+| phase-265 | **Perf R8 baseline bitmaps** (pump pre-TIRAMISU, profile runbook + CI mapping proof) | AI Studio audit 2026-09-01 |
+| phase-266 | **A11y semantics + targets + scale + contrast + motion + nav** (WCAG 2.2 AA pass 1) | AI Studio audit 2026-09-01 |
+| phase-267 | **Settings prefs clamp thread** (commit() wipes, sanitize bounds, KeyStore sync) | AI Studio audit 2026-09-01 |
+| phase-268 | **Build CI verification signing** (verification on, no jitpack confusion, R8 CI proof, SHA pins) | AI Studio audit 2026-09-01 |
+| phase-269 | **Compat hardware low-RAM API** (single AgslGate, paged graph, trim at RUNNING_LOW) | AI Studio audit 2026-09-01 |
+| phase-270 | **Plugins sandbox verify** (optional default, atomic delete, canonical payload) | AI Studio audit 2026-09-01 |
+| phase-271 | **Final verification gate** (prove 255-270, no regressions, F-Droid release-gate) | AI Studio audit 2026-09-01 |
 | phase-240 | **Pinch/touch regression fixes** — two-finger pinch no longer rotates the page (`CanvasRotationPolicy` dead-zone 2° + zoom >3% / pan >12px dominance gates) and stroke dots land exactly on the touch (remove the double `canvasBoxWindowOffset` subtraction: `pointerInteropFilter` events are already node-local) — see `workspace/phase-240/REPORT.md`, status `docs/phase-status.md` [DONE] | user-requested |
 
 ## How phases run

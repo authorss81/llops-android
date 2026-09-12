@@ -14,10 +14,14 @@ on:
         default: true
   push:
     branches: [main]
+  schedule:
+    - cron: "*/10 * * * *"
+    - cron: "*/30 * * * *"
   # Self-retrigger + the llops-tick safety-net workflow both POST
   # `repository_dispatch` with `event_type: llops_tick`. The dispatch event
   # bypasses the GitHub cron-throttling that caused 3-5h gaps in phase runs
-  # (the schedule trigger was documented "not guaranteed" — we replace it).
+  # (the schedule trigger was documented "not guaranteed" — we keep it as
+  # a fallback alongside the self-retrigger for maximum continuity).
   # The same workflow re-firing itself via `repository_dispatch` is allowed
   # by GitHub's API (the "workflows cannot trigger workflows" restriction
   # applies only to `workflow_run`, not `repository_dispatch`).
