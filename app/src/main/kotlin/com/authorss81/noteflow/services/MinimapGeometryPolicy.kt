@@ -124,6 +124,54 @@ object MinimapGeometryPolicy {
     }
 
     /**
+     * Phase-264: the SINGLE uniform minimap scale. Every minimap site (tap,
+     * drag, thumbnail draw, viewport rect) must use this — `size.width / worldW`
+     * alone over-scales tall/infinite worlds (a 1528x4000 canvas in a fitted
+     * box renders ~0.82x hit scale, ~118px error). `minOf` keeps both axes
+     * inside the fitted box, matching [aspectFit] (which derives the box from
+     * the same `minOf` natural scale). Degenerate inputs fail safe to 1f.
+     */
+    fun mapScale(
+        containerW: Float,
+        containerH: Float,
+        worldW: Float,
+        worldH: Float
+    ): Float {
+        val cw = if (containerW.isFinite() && containerW > 0f) containerW else return 1f
+        val ch = if (containerH.isFinite() && containerH > 0f) containerH else return 1f
+        val ww = if (worldW.isFinite() && worldW > 0f) worldW else FALLBACK_WORLD
+        val wh = if (worldH.isFinite() && worldH > 0f) worldH else FALLBACK_WORLD
+        return minOf(cw / ww, ch / wh).coerceAtLeast(1e-6f)
+    }
+
+    /** Map a minimap touch point (container px) to world coords, clamped. */
+    fun mapToWorld(
+        mapX: Float,
+        mapY: Float,
+        scale: Float,
+        worldW: Float,
+        worldH: Float
+    ): Offset {
+        val s = if (scale.isFinite() && scale > 0f) scale else 1f
+        val ww = if (worldW.isFinite() && worldW > 0f) worldW else FALLBACK_WORLD
+        val wh = if (worldH.isFinite() && worldH > 0f) worldH else FALLBACK_WORLD
+        return Offset(
+            (mapX / s).coerceIn(0f, ww),
+            (mapY / s).coerceIn(0f, wh)
+        )
+    }
+
+    /** Map a world point back to minimap container px (round-trip oracle). */
+    fun worldToMap(
+        worldX: Float,
+        worldY: Float,
+        scale: Float
+    ): Offset {
+        val s = if (scale.isFinite() && scale > 0f) scale else 1f
+        return Offset(worldX * s, worldY * s)
+    }
+
+    /**
      * Pre-35 default anchor: bottom-right corner with [marginPx] breathing room
      * (content top-left).
      */

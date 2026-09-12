@@ -281,6 +281,19 @@
 > with a TalkBack-labelled type badge. Pins: `Phase263HomeGalleryTest` (16);
 > phase-184/188 grid literal re-pinned to 150dp, phase-254 HomeScreen
 > re-baselined to 3845 raw / 3310 code.
+>
+> **Implemented in phase-264** (2026-09-12, responsive residuals — menus + map
+> scale + drag keys + yield, see `workspace/phase-264/REPORT.md`):
+> `OverflowMenuSupport.kt` caps menus from the live window
+> (`rememberLiveWindowSizeDp` ViewTreeObserver listener — zero
+> `LocalConfiguration` reads); `MinimapGeometryPolicy.mapScale/mapToWorld/
+> worldToMap` is the SINGLE `minOf` scale for tap+drag+thumbnail draw;
+> minimap/dock/map gestures use minimal `pointerInput` keys with measured
+> state via `rememberUpdatedState` (`MinimapDragGeom`, `DockDragGeom`, unified
+> map `awaitEachGesture`); minimap offset is `rememberSaveable`; ink-bar yield
+> runs on usable height for both postures with a post-snap re-check.
+> Pins: `Phase264ResponsiveTest` (10); phase-248/253 pins + phase-254
+> baselines (AnnotationCanvas 8749/7024, EditorScreen 7436/6493) updated.
 
 | Subpackage | Key files | Purpose |
 |---|---|---|

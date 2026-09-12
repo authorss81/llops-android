@@ -72,19 +72,29 @@ import org.junit.Test
  * isSearching + the debounce spinner branch, 48dp minimums. EditorScreen is
  * UNCHANGED (the four 48dp minimums ride existing modifier lines, zero added
  * lines). Re-measured on the phase-263 tree: HomeScreen 3845 raw / 3310 code.
+ *
+ * PHASE 264 RE-BASELINE: responsive residuals — AnnotationCanvas grew for the
+ * unified minimap tap/drag gesture (single awaitEachGesture handler +
+ * rememberUpdatedState snapshots + MinimapDragGeom + rememberSaveable drag
+ * offset with saver + single-formula mapScale call sites) and EditorScreen
+ * grew for the dock drag snapshot (DockDragGeom + rememberUpdatedState),
+ * the usable-height yield for both postures, and the post-snap yield
+ * re-check. No KDoc opener added (plain `//` comments only — the KDoc counts
+ * below are unchanged). Re-measured on the phase-264 tree: AnnotationCanvas
+ * 8749 raw / 7024 code, EditorScreen 7436 raw / 6493 code.
  */
 class Phase254CommentTrimTest {
 
-    // Phase-255/256/257 re-baselined raw line counts (measured on the phase-257 review-fix tree).
+    // Phase-255/256/257/264 re-baselined raw line counts (phase-264 values measured on the phase-264 tree).
     private val headRaw = mapOf(
-        "ui/components/AnnotationCanvas.kt" to 8668,
-        "ui/screens/EditorScreen.kt" to 7347,
+        "ui/components/AnnotationCanvas.kt" to 8749,
+        "ui/screens/EditorScreen.kt" to 7436,
         "ui/screens/HomeScreen.kt" to 3845
     )
-    // Phase-255/256/257 re-baselined code-line counts (non-blank, non-full-`//` lines).
+    // Phase-255/256/257/264 re-baselined code-line counts (non-blank, non-full-`//` lines).
     private val headCode = mapOf(
-        "ui/components/AnnotationCanvas.kt" to 6956,
-        "ui/screens/EditorScreen.kt" to 6426,
+        "ui/components/AnnotationCanvas.kt" to 7024,
+        "ui/screens/EditorScreen.kt" to 6493,
         "ui/screens/HomeScreen.kt" to 3310
     )
     // Parent baseline KDoc `/**` opener counts (no KDoc opener may be deleted).

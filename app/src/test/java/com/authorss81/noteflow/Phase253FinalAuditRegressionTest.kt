@@ -92,9 +92,10 @@ class Phase253FinalAuditRegressionTest {
             "minimap must not read the device-wide screen dims",
             src.contains("LocalConfiguration.current.screenHeightDp")
         )
-        // The minimap drag pointerInput keys are the pane-local dims.
-        val dragInput = src.substring(src.indexOf("pointerInput(minimapDraggable, minimapWidthPx, minimapHeightPx, paneW, paneH)"))
-        assertTrue("minimap drag clamps within the pane box", dragInput.contains("paneW, paneH, minimapWidthPx, minimapHeightPx"))
+        // The minimap drag pointerInput keys are the gate + pane-local dims
+        // (phase-264: sizes ride rememberUpdatedState, never keys).
+        val dragInput = src.substring(src.indexOf("pointerInput(minimapDraggable, paneW, paneH)"))
+        assertTrue("minimap drag clamps within the pane box", dragInput.contains("g.paneW, g.paneH, g.mapW, g.mapH"))
     }
 
     @Test

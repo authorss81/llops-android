@@ -3437,6 +3437,27 @@ fun EditorScreen(
  * Expanding the pill reveals the phase-35 one-tap quick-tool rail, so every
  * existing tool stays reachable in ≤2 taps (quick rail = 1, tool picker = 2).
  */
+
+// Phase-264: snapshot of the dock drag geometry read via rememberUpdatedState
+// inside the drag handler (never a pointerInput key, so resizes never restart
+// a drag mid-gesture). Carries the snap re-check inputs too.
+private data class DockDragGeom(
+    val screenW: Float,
+    val screenH: Float,
+    val dockW: Float,
+    val dockH: Float,
+    val topInsetPx: Float,
+    val bottomInsetPx: Float,
+    val startInsetPx: Float,
+    val endInsetPx: Float,
+    val topReservedPx: Float,
+    val usableHeightPx: Float,
+    val drawingToolActive: Boolean,
+    val defaultAnchorX: Float,
+    val defaultAnchorY: Float,
+    val snapMarginPx: Float
+)
+
 @Composable
 private fun FloatingToolDock(
     currentTool: StrokeTool,
@@ -3539,15 +3560,25 @@ private fun FloatingToolDock(
         // back to a navigation tool (pan/select) restores the user's own dragged
         // position automatically (this only overrides the RESTING position, never
         // the persisted dragged offset).
+        // Phase-264: the yield fires whenever shouldYield says so — NO draggable
+        // gate (a dragged-to-top bar + PEN yields even when dragging is enabled),
+        // the threshold is the USABLE height (window minus system bars, so nav
+        // bars don't shift the midpoint), and BOTH postures decide explicitly
+        // (a vertical side column dragged to the top blocks drawing too).
         val activeDrawingTool =
             (currentTool.isFreehandTool || currentTool.isShapeTool) ||
                 currentTool == StrokeTool.ERASER
         val drawingToolActive = activeDrawingTool && toolbarState != FloatingToolbarState.HIDDEN_DRAWING
-        if (horizontalPosture &&
+        val usableHeightPx = (screenH - topInsetPx - bottomInsetPx).coerceAtLeast(1f)
+        // Decided explicitly per posture: the horizontal pill AND the vertical
+        // side column both yield when a drawing tool is active and the bar sits
+        // in the top half (the column's buttons still swallow top touches).
+        val yieldAppliesForPosture = true
+        if (yieldAppliesForPosture &&
             InkBarDrawingPolicy.shouldYieldDrawingArea(
                 drawingToolActive = drawingToolActive,
                 barTopY = restingPos.y,
-                availableHeight = screenH
+                availableHeight = usableHeightPx
             )
         ) {
             restingPos = FloatingWidgetDragPolicy.Offset(defaultAnchor.first, defaultAnchor.second)
@@ -3588,6 +3619,31 @@ private fun FloatingToolDock(
         }
         val isPanActive = currentTool == StrokeTool.PAN || currentTool == StrokeTool.SELECT
 
+        // Phase-264: measure-driven drag inputs are read via rememberUpdatedState
+        // so a header collapse / zoom-HUD wrap / resize never restarts the
+        // gesture mid-drag. The pointerInput keys hold the drag gate only.
+        // The snap re-check inputs (yield decision after the snap lands) ride
+        // the same snapshot.
+        val dockDragGateState by rememberUpdatedState(draggable)
+        val dockSnapGateState by rememberUpdatedState(snapToEdgeEnabled)
+        val dockGeomState by rememberUpdatedState(
+            DockDragGeom(
+                screenW = screenW,
+                screenH = screenH,
+                dockW = dockW,
+                dockH = dockH,
+                topInsetPx = topInsetPx,
+                bottomInsetPx = bottomInsetPx,
+                startInsetPx = startInsetPx,
+                endInsetPx = endInsetPx,
+                topReservedPx = topReservedPx,
+                usableHeightPx = usableHeightPx,
+                drawingToolActive = drawingToolActive,
+                defaultAnchorX = defaultAnchor.first,
+                defaultAnchorY = defaultAnchor.second,
+                snapMarginPx = with(density) { 16.dp.toPx() }
+            )
+        )
         Box(
             modifier = Modifier
                 .offset { IntOffset(displayPos.x.roundToInt(), displayPos.y.roundToInt()) }
@@ -3595,8 +3651,8 @@ private fun FloatingToolDock(
                     if (!isDragging) { dockW = size.width.toFloat(); dockH = size.height.toFloat() }
                     if (waitForMeasure) waitForMeasure = false
                 }
-                .pointerInput(draggable, screenW, screenH, dockW, dockH) {
-                    if (!FloatingWidgetDragPolicy.mayDrag(draggable)) return@pointerInput
+                .pointerInput(draggable) {
+                    if (!FloatingWidgetDragPolicy.mayDrag(dockDragGateState)) return@pointerInput
                     detectDragGestures(
                         onDragStart = {
                             rawPos = snapAnim.value
@@ -3607,25 +3663,43 @@ private fun FloatingToolDock(
                             // Phase 248 (Bug 2): the top clamp reserves the Scaffold
                             // topBar's content height on top of the status-bar inset,
                             // so a drag to the top stops at the app bar's bottom edge.
+                            val g = dockGeomState
                             val constrained = FloatingWidgetDragPolicy.constrainWithinSafeArea(
-                                rawPos.x + amount.x, rawPos.y + amount.y, screenW, screenH,
-                                dockW, dockH, topInsetPx, bottomInsetPx, startInsetPx, endInsetPx,
-                                topReservedPx = topReservedPx
+                                rawPos.x + amount.x, rawPos.y + amount.y, g.screenW, g.screenH,
+                                g.dockW, g.dockH, g.topInsetPx, g.bottomInsetPx, g.startInsetPx, g.endInsetPx,
+                                topReservedPx = g.topReservedPx
                             )
                             rawPos = Offset(constrained.x, constrained.y)
                         },
                         onDragEnd = {
-                            if (FloatingWidgetDragPolicy.maySnapToEdge(snapToEdgeEnabled)) {
-                                val centre = Offset(rawPos.x + dockW / 2f, rawPos.y + dockH / 2f)
+                            val g = dockGeomState
+                            // Phase-264: re-check the yield AFTER the snap lands —
+                            // a snap that parks the bar in the top half while a
+                            // drawing tool is active yields to the default bottom
+                            // anchor instead of staying blocking.
+                            fun applyYieldIfNeeded(target: Offset): Offset {
+                                return if (com.authorss81.noteflow.services.InkBarDrawingPolicy.shouldYieldDrawingArea(
+                                        drawingToolActive = g.drawingToolActive,
+                                        barTopY = target.y,
+                                        availableHeight = g.usableHeightPx
+                                    )
+                                ) {
+                                    Offset(g.defaultAnchorX, g.defaultAnchorY)
+                                } else {
+                                    target
+                                }
+                            }
+                            if (FloatingWidgetDragPolicy.maySnapToEdge(dockSnapGateState)) {
+                                val centre = Offset(rawPos.x + g.dockW / 2f, rawPos.y + g.dockH / 2f)
                                 val anchor = DockSnapMath.snap(
                                     centre = DockSnapMath.Offset(centre.x, centre.y),
-                                    screenW = screenW,
-                                    screenH = screenH,
-                                    marginPx = with(density) { 16.dp.toPx() },
-                                    dockW = dockW,
-                                    dockH = dockH
+                                    screenW = g.screenW,
+                                    screenH = g.screenH,
+                                    marginPx = g.snapMarginPx,
+                                    dockW = g.dockW,
+                                    dockH = g.dockH
                                 )
-                                val target = Offset(anchor.x, anchor.y)
+                                val target = applyYieldIfNeeded(Offset(anchor.x, anchor.y))
                                 isDragging = false
                                 scope.launch {
                                     snapAnim.snapTo(rawPos)
@@ -3645,9 +3719,24 @@ private fun FloatingToolDock(
                                 }
                             } else {
                                 isDragging = false
+                                val target = applyYieldIfNeeded(rawPos)
                                 scope.launch {
                                     snapAnim.snapTo(rawPos)
-                                    onChangeDraggedOffset(rawPos.x, rawPos.y)
+                                    if (target != rawPos) {
+                                        if (reduceMotion) {
+                                            snapAnim.snapTo(target)
+                                        } else {
+                                            snapAnim.animateTo(
+                                                targetValue = target,
+                                                animationSpec = spring(
+                                                    dampingRatio = Spring.DampingRatioNoBouncy,
+                                                    stiffness = Spring.StiffnessMedium,
+                                                    visibilityThreshold = Offset(1f, 1f)
+                                                )
+                                            )
+                                        }
+                                    }
+                                    onChangeDraggedOffset(target.x, target.y)
                                 }
                             }
                         },

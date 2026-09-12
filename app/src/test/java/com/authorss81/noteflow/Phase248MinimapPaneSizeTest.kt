@@ -185,18 +185,18 @@ class Phase248MinimapPaneSizeTest {
             minimap.contains("val paneW = canvasBoxW") && minimap.contains("val paneH = canvasBoxH")
         )
         assertTrue(
-            "the minimap drag pointerInput keys are the pane dims (not screenW/H)",
-            minimap.contains(".pointerInput(minimapDraggable, minimapWidthPx, minimapHeightPx, paneW, paneH)")
+            "the minimap drag pointerInput keys are the gate + pane dims only (phase-264: sizes ride rememberUpdatedState)",
+            minimap.contains(".pointerInput(minimapDraggable, paneW, paneH)")
         )
         assertFalse(
             "the minimap drag keys must never reference the old device dims",
             minimap.contains("pointerInput(minimapDraggable, minimapWidthPx, minimapHeightPx, screenW, screenH)")
         )
         assertTrue(
-            "the minimap drag clamp uses the pane dims",
+            "the minimap drag clamp uses the pane dims (phase-264: via MinimapDragGeom snapshot)",
             minimap.contains("constrainWithinSafeArea") &&
-                minimap.contains("dragBase.y + change.position.y - dragStart.y") &&
-                minimap.contains("paneW, paneH, minimapWidthPx, minimapHeightPx")
+                minimap.contains("MinimapDragGeom") &&
+                minimap.contains("g.paneW, g.paneH, g.mapW, g.mapH")
         )
     }
 

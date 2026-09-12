@@ -49,6 +49,7 @@ import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
@@ -112,6 +113,19 @@ import kotlinx.coroutines.flow.first
  * eraser stamps a pressure-aware round mask (see EraserGeometryPolicy).
  */
 data class EraseSample(val pos: Offset, val pressure: Float)
+
+// Phase-264: snapshot of the minimap drag geometry read via rememberUpdatedState
+// inside the drag handler (never a pointerInput key).
+private data class MinimapDragGeom(
+    val paneW: Float,
+    val paneH: Float,
+    val mapW: Float,
+    val mapH: Float,
+    val top: Float,
+    val bottom: Float,
+    val start: Float,
+    val end: Float
+)
 
 @Suppress("DEPRECATION")
 @OptIn(ExperimentalComposeUiApi::class)
@@ -628,7 +642,26 @@ fun AnnotationCanvas(
 
     // Phase 129: session-scoped drag offset for the minimap (null = default
     // bottom-right anchor). Survives header collapse/re-expand.
-    var minimapDragOffset by remember { mutableStateOf<Offset?>(null) }
+    // Phase-264: rememberSaveable (else a rotation drops the dragged position
+    // and the map jumps back to the default anchor). Compose Offset has no
+    // built-in saver, so persist as "x,y" (null = never dragged).
+    val minimapDragOffsetSaver = remember {
+        androidx.compose.runtime.saveable.Saver<Offset?, String>(
+            save = { offset -> offset?.let { "${it.x},${it.y}" } ?: "" },
+            restore = { saved ->
+                if (saved.isEmpty()) {
+                    null
+                } else {
+                    saved.split(",").takeIf { it.size == 2 }?.let { parts ->
+                        val x = parts[0].toFloatOrNull()
+                        val y = parts[1].toFloatOrNull()
+                        if (x != null && y != null && x.isFinite() && y.isFinite()) Offset(x, y) else null
+                    }
+                }
+            }
+        )
+    }
+    var minimapDragOffset by rememberSaveable(stateSaver = minimapDragOffsetSaver) { mutableStateOf<Offset?>(null) }
 
     val isLandscape = remember(pageTags, backgroundImage) {
         pageTags.contains("orientation_landscape") || (backgroundImage != null && backgroundImage.width > backgroundImage.height)
@@ -3762,6 +3795,24 @@ blenderStrengthPercent = blenderStrengthPercent,
                 val startInsetPx = with(mapDensity) { minimapInsets.getLeft(mapDensity, LayoutDirection.Ltr).toFloat() }
                 val endInsetPx = with(mapDensity) { minimapInsets.getRight(mapDensity, LayoutDirection.Ltr).toFloat() }
 
+                // Phase-264: measure-driven sizes/insets/positions are read via
+                // rememberUpdatedState so the drag gesture is never restarted
+                // mid-drag by a header collapse, zoom-HUD wrap, or resize. The
+                // pointerInput keys stay minimal (gate + pane dims only).
+                val minimapDragGateState by rememberUpdatedState(minimapDraggable)
+                val minimapRestingState by rememberUpdatedState(restingPos)
+                val minimapGeomState by rememberUpdatedState(
+                    MinimapDragGeom(
+                        paneW = paneW,
+                        paneH = paneH,
+                        mapW = minimapWidthPx,
+                        mapH = minimapHeightPx,
+                        top = topInsetPx,
+                        bottom = bottomInsetPx,
+                        start = startInsetPx,
+                        end = endInsetPx
+                    )
+                )
                 Surface(
                     tonalElevation = 6.dp,
                     shape = RoundedCornerShape(12.dp),
@@ -3770,19 +3821,20 @@ blenderStrengthPercent = blenderStrengthPercent,
                     modifier = Modifier
                         .align(Alignment.TopStart)
                         .offset { IntOffset(restingPos.x.roundToInt(), restingPos.y.roundToInt()) }
-                        .pointerInput(minimapDraggable, minimapWidthPx, minimapHeightPx, paneW, paneH) {
-                            if (!FloatingWidgetDragPolicy.mayDrag(minimapDraggable)) return@pointerInput
+                        .pointerInput(minimapDraggable, paneW, paneH) {
+                            if (!FloatingWidgetDragPolicy.mayDrag(minimapDragGateState)) return@pointerInput
                             var dragStart = Offset.Zero
-                            var dragBase = restingPos
+                            var dragBase = minimapRestingState
                             detectDragGestures(
-                                onDragStart = { dragStart = it; dragBase = restingPos },
+                                onDragStart = { dragStart = it; dragBase = minimapRestingState },
                                 onDrag = { change, _ ->
                                     change.consume()
+                                    val g = minimapGeomState
                                     val constrained = FloatingWidgetDragPolicy.constrainWithinSafeArea(
                                         dragBase.x + change.position.x - dragStart.x,
                                         dragBase.y + change.position.y - dragStart.y,
-                                        paneW, paneH, minimapWidthPx, minimapHeightPx,
-                                        topInsetPx, bottomInsetPx, startInsetPx, endInsetPx
+                                        g.paneW, g.paneH, g.mapW, g.mapH,
+                                        g.top, g.bottom, g.start, g.end
                                     )
                                     minimapDragOffset = Offset(constrained.x, constrained.y)
                                 },
@@ -3979,59 +4031,88 @@ blenderStrengthPercent = blenderStrengthPercent,
                             }
                             Spacer(modifier = Modifier.height(2.dp))
 
+                            // Phase-264: tap + drag share ONE gesture handler (a split
+                            // tap/drag pair double-fires on tap-down and restarts on
+                            // every debounced layoutZoomScale pulse). Keys are the
+                            // STRUCTURE only (mode/page-count/paging); pane dims,
+                            // world size, and the live zoom/pan are read via
+                            // rememberUpdatedState so resizes never restart a drag
+                            // and handlers never use the 100ms-stale layout zoom.
+                            // The map scale is the SINGLE policy formula
+                            // (MinimapGeometryPolicy.mapScale = minOf both axes),
+                            // identical to the thumbnail draw below.
+                            val mapWorldState by rememberUpdatedState(computeCanvasWorld(paneW))
+                            val mapPaneState by rememberUpdatedState(paneW to paneH)
+                            val mapZoomPanState by rememberUpdatedState(internalZoomScale to internalPanOffset)
                             Box(
                                 modifier = Modifier
                                     .size(minimapWidthDp, minimapHeightDp)
                                     .background(if (isDarkTheme) Color(0xFF1E293B) else Color(0xFFF1F5F9), RoundedCornerShape(6.dp))
                                     .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f), RoundedCornerShape(6.dp))
-                                    .pointerInput(isContinuousMode, dynamicPageCount, divideIntoPages, layoutZoomScale, paneW, paneH, pageWidthPx, pageHeightPx) {
-                                        val (w, h) = computeCanvasWorld(paneW)
-                                        val spW = if (w > 0f) w else 1000f
-                                        val spH = if (h > 0f) h else 1000f
-
-                                        // Single uniform scale — the map box's aspect was
-                                        // fitted to the world, so one scale maps both axes.
-                                        val mapScale = size.width / spW
-
-                                        val updatePanFromMap = { touchPos: Offset ->
-                                            val targetCanvasX = (touchPos.x / mapScale).coerceIn(0f, spW)
-                                            val targetCanvasY = (touchPos.y / mapScale).coerceIn(0f, spH)
-
-                                            val newPanX = (paneW / 2f) - (targetCanvasX * internalZoomScale)
-                                            val newPanY = (paneH / 2f) - (targetCanvasY * internalZoomScale)
-                                            updateZoomAndPan(internalZoomScale, Offset(newPanX, newPanY))
-                                        }
-
-                                        detectTapGestures { tapOffset ->
-                                            updatePanFromMap(tapOffset)
-                                        }
-                                    }
-                                    .pointerInput(isContinuousMode, dynamicPageCount, divideIntoPages, layoutZoomScale, paneW, paneH, pageWidthPx, pageHeightPx) {
-                                        val (w, h) = computeCanvasWorld(paneW)
-                                        val spW = if (w > 0f) w else 1000f
-                                        val spH = if (h > 0f) h else 1000f
-
-                                        val mapScale = size.width / spW
-
-                                        detectDragGestures { change, _ ->
-                                            change.consume()
-                                            val targetCanvasX = (change.position.x / mapScale).coerceIn(0f, spW)
-                                            val targetCanvasY = (change.position.y / mapScale).coerceIn(0f, spH)
-
-                                            val newPanX = (paneW / 2f) - (targetCanvasX * internalZoomScale)
-                                            val newPanY = (paneH / 2f) - (targetCanvasY * internalZoomScale)
-                                            updateZoomAndPan(internalZoomScale, Offset(newPanX, newPanY))
+                                    .pointerInput(isContinuousMode, dynamicPageCount, divideIntoPages) {
+                                        awaitEachGesture {
+                                            val down = awaitFirstDown(requireUnconsumed = false)
+                                            val (w, h) = mapWorldState
+                                            val spW = if (w > 0f) w else MinimapGeometryPolicy.FALLBACK_WORLD
+                                            val spH = if (h > 0f) h else MinimapGeometryPolicy.FALLBACK_WORLD
+                                            val mapScale = MinimapGeometryPolicy.mapScale(
+                                                size.width.toFloat(), size.height.toFloat(), spW, spH
+                                            )
+                                            val panFromMap = { touchPos: Offset ->
+                                                val world = MinimapGeometryPolicy.mapToWorld(
+                                                    touchPos.x, touchPos.y, mapScale, spW, spH
+                                                )
+                                                val (panePairW, panePairH) = mapPaneState
+                                                val (liveZoom, _) = mapZoomPanState
+                                                updateZoomAndPan(
+                                                    liveZoom,
+                                                    Offset(
+                                                        (panePairW / 2f) - (world.x * liveZoom),
+                                                        (panePairH / 2f) - (world.y * liveZoom)
+                                                    )
+                                                )
+                                            }
+                                            var dragged = false
+                                            var downConsumed = false
+                                            do {
+                                                val event = awaitPointerEvent()
+                                                val change = event.changes.firstOrNull { it.id == down.id }
+                                                    ?: event.changes.firstOrNull()
+                                                    ?: break
+                                                if (change.pressed) {
+                                                    val slop = viewConfiguration.touchSlop
+                                                    val drag = change.position - down.position
+                                                    if (!dragged && (kotlin.math.abs(drag.x) > slop || kotlin.math.abs(drag.y) > slop)) {
+                                                        dragged = true
+                                                    }
+                                                    if (dragged) {
+                                                        change.consume()
+                                                        downConsumed = true
+                                                        panFromMap(change.position)
+                                                    }
+                                                } else {
+                                                    if (!dragged && !downConsumed) {
+                                                        change.consume()
+                                                        panFromMap(change.position)
+                                                    }
+                                                    break
+                                                }
+                                            } while (event.changes.any { it.pressed })
                                         }
                                     }
                             ) {
                                 Canvas(modifier = Modifier.fillMaxSize()) {
                                     val (w, h) = computeCanvasWorld(paneW)
-                                    val spW = if (w > 0f) w else 1000f
-                                    val spH = if (h > 0f) h else 1000f
+                                    val spW = if (w > 0f) w else MinimapGeometryPolicy.FALLBACK_WORLD
+                                    val spH = if (h > 0f) h else MinimapGeometryPolicy.FALLBACK_WORLD
 
                                     // Uniform map scale so strokes + viewport align with
-                                    // the page at the fitted aspect ratio.
-                                    val mapScale = minOf(size.width / spW, size.height / spH)
+                                    // the page at the fitted aspect ratio (phase-264:
+                                    // the SINGLE policy formula — tap/drag above use
+                                    // the identical call).
+                                    val mapScale = MinimapGeometryPolicy.mapScale(
+                                        size.width, size.height, spW, spH
+                                    )
 
                                     drawRect(
                                         color = if (isDarkTheme) Color(0xFF334155) else Color.White,
