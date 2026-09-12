@@ -66,6 +66,12 @@ import org.junit.Test
  * AnnotationCanvas + per-page `canvasResetToken` in EditorScreen, see
  * Phase257UndoPageStateTest section 4) — AnnotationCanvas +33 raw / +23 code,
  * EditorScreen +8 raw / +3 code. Re-measured on the review-fix tree.
+ *
+ * PHASE 263 RE-BASELINE: HomeScreen grew for the rotation-restoration work —
+ * rememberSaveable state (+ savers), ScrollableTabRow, Search IME actions,
+ * isSearching + the debounce spinner branch, 48dp minimums. EditorScreen is
+ * UNCHANGED (the four 48dp minimums ride existing modifier lines, zero added
+ * lines). Re-measured on the phase-263 tree: HomeScreen 3845 raw / 3310 code.
  */
 class Phase254CommentTrimTest {
 
@@ -73,13 +79,13 @@ class Phase254CommentTrimTest {
     private val headRaw = mapOf(
         "ui/components/AnnotationCanvas.kt" to 8668,
         "ui/screens/EditorScreen.kt" to 7347,
-        "ui/screens/HomeScreen.kt" to 3757
+        "ui/screens/HomeScreen.kt" to 3845
     )
     // Phase-255/256/257 re-baselined code-line counts (non-blank, non-full-`//` lines).
     private val headCode = mapOf(
         "ui/components/AnnotationCanvas.kt" to 6956,
         "ui/screens/EditorScreen.kt" to 6426,
-        "ui/screens/HomeScreen.kt" to 3267
+        "ui/screens/HomeScreen.kt" to 3310
     )
     // Parent baseline KDoc `/**` opener counts (no KDoc opener may be deleted).
     private val headKdocOpeners = mapOf(

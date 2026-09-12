@@ -22,6 +22,10 @@ import org.junit.Test
  * + a "+N" badge — no wrapping `FlowRow`, no `.take(3)`, no inline chip math.
  *
  * Mechanical pins on purpose — they make a regression fail the build.
+ *
+ * PHASE 263 RE-PIN: the adaptive floor moved 168dp -> 150dp (single-column
+ * until >372dp on a 360dp phone); the LazyVerticalGrid + keyed-items structure
+ * below is unchanged.
  */
 class Phase188GalleryRobustnessTest {
 
@@ -85,7 +89,7 @@ class Phase188GalleryRobustnessTest {
     fun `grid is a lazy grid keyed by id so big galleries stay memory-bounded`() {
         val gallery = mainSource("ui/components/GalleryView.kt")
         assertTrue(gallery.contains("LazyVerticalGrid("))
-        assertTrue(gallery.contains("GridCells.Adaptive(minSize = 168.dp)"))
+        assertTrue(gallery.contains("GridCells.Adaptive(minSize = 150.dp)"))
         assertTrue(gallery.contains("items(pages, key = { it.id }) { page ->"))
     }
 

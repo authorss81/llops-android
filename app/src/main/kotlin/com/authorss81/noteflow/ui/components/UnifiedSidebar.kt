@@ -107,7 +107,8 @@ fun UnifiedSidebar(
                     }
                     IconButton(
                         onClick = onAddNotebook,
-                        modifier = Modifier.size(36.dp)
+                        // Phase 263: 48dp hit area (visual stays 36dp).
+                        modifier = Modifier.size(36.dp).minimumInteractiveComponentSize()
                     ) {
                         Icon(
                             Icons.Outlined.CreateNewFolder,
@@ -334,7 +335,8 @@ private fun SidebarNotebookRow(
             // Add section button
             IconButton(
                 onClick = { onAddSection() },
-                modifier = Modifier.size(30.dp)
+                // Phase 263: 48dp hit area (visual stays 30dp).
+                modifier = Modifier.size(30.dp).minimumInteractiveComponentSize()
             ) {
                 Icon(
                     Icons.Outlined.Add,
@@ -351,7 +353,8 @@ private fun SidebarNotebookRow(
         Box {
             IconButton(
                 onClick = { menuExpanded = true },
-                modifier = Modifier.size(30.dp)
+                // Phase 263: 48dp hit area (visual stays 30dp).
+                modifier = Modifier.size(30.dp).minimumInteractiveComponentSize()
             ) {
                 Icon(
                     Icons.Outlined.MoreVert,
@@ -435,7 +438,8 @@ private fun SidebarSectionRow(
             // Add page button
             IconButton(
                 onClick = { onAddPage() },
-                modifier = Modifier.size(28.dp)
+                // Phase 263: 48dp hit area (visual stays 28dp).
+                modifier = Modifier.size(28.dp).minimumInteractiveComponentSize()
             ) {
                 Icon(
                     Icons.Outlined.NoteAdd,
@@ -451,7 +455,8 @@ private fun SidebarSectionRow(
         Box {
             IconButton(
                 onClick = { menuExpanded = true },
-                modifier = Modifier.size(28.dp)
+                // Phase 263: 48dp hit area (visual stays 28dp).
+                modifier = Modifier.size(28.dp).minimumInteractiveComponentSize()
             ) {
                 Icon(
                     Icons.Outlined.MoreVert,
@@ -524,7 +529,8 @@ private fun SidebarPageRow(
         Box {
             IconButton(
                 onClick = { menuExpanded = true },
-                modifier = Modifier.size(26.dp)
+                // Phase 263: 48dp hit area (visual stays 26dp).
+                modifier = Modifier.size(26.dp).minimumInteractiveComponentSize()
             ) {
                 Icon(
                     Icons.Outlined.MoreVert,

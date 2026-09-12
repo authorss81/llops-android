@@ -9,6 +9,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -22,6 +24,8 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -29,7 +33,9 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewModelScope
@@ -64,6 +70,25 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 
+// Phase 263: rotation/process-death restoration savers. `Uri` and `Set` are
+// not Bundle-saveable, so the import-URI list and the selection/tag id sets
+// round-trip as plain string lists (null stays null — an absent tag filter is
+// NOT the same as a filter matching nothing).
+private val homeImportUriListSaver: Saver<List<Uri>, List<String>> = Saver(
+    save = { uris -> uris.map { it.toString() } },
+    restore = { strings -> strings.map { Uri.parse(it) } }
+)
+private val homeStringSetSaver: Saver<Set<String>, List<String>> = Saver(
+    save = { it.toList() },
+    restore = { it.toSet() }
+)
+// Null (no tag filter) and empty (filter matching nothing) are different, so
+// the nullable set round-trips through a one-boolean header element.
+private val homeNullableStringSetSaver: Saver<Set<String>?, Any> = listSaver(
+    save = { set -> if (set == null) listOf(false) else listOf(true) + set.toList() },
+    restore = { list -> if (list.firstOrNull() == true) list.drop(1).filterIsInstance<String>().toSet() else null }
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
@@ -73,6 +98,8 @@ fun HomeScreen(
     onOpenCommandPalette: () -> Unit = {}
 ) {
     val context = LocalContext.current
+    // Phase 263: cleared on imeAction=Search so the keyboard hides after Go.
+    val focusManager = LocalFocusManager.current
     val scope = rememberCoroutineScope()
     // B2-UI-6 (phase-96): vault-wide imports/exports/restore run on the ViewModel
     // scope so a lock/teardown disposing this composable can no longer cancel them
@@ -114,10 +141,15 @@ fun HomeScreen(
         isInitializingLoading = false
     }
 
-    var showSecurityDialog by remember { mutableStateOf(false) }
-    var showUpdateDialog by remember { mutableStateOf(false) }
-    var showPluginsDialog by remember { mutableStateOf(false) }
-    var showPluginStoreDialog by remember { mutableStateOf(false) }
+    // Phase 263: every dialog-visibility flag is rememberSaveable so a
+    // rotation no longer dismisses a confirm/policy gate mid-flow. The two
+    // payload holders below stay plain remember deliberately: File handles
+    // (pendingRestoreFile) and decrypted entities (tagEditorTarget*) cannot
+    // survive process death — the flags restore, the payload re-picks.
+    var showSecurityDialog by rememberSaveable { mutableStateOf(false) }
+    var showUpdateDialog by rememberSaveable { mutableStateOf(false) }
+    var showPluginsDialog by rememberSaveable { mutableStateOf(false) }
+    var showPluginStoreDialog by rememberSaveable { mutableStateOf(false) }
     var showBackupPasswordDialog by rememberSaveable { mutableStateOf(false) }
     // Phase 252 (HIGH 4/5): the passwordless export gate. A vault without a
     // master password can never produce a portable backup (a no-password
@@ -144,13 +176,19 @@ fun HomeScreen(
     }
     var showOnboarding by remember { mutableStateOf(shouldAutoShowOnboarding) }
     var showTutorial by remember { mutableStateOf(isFirstRun && !tutorialCompleted && !shouldAutoShowOnboarding) }
-    var searchQuery by remember { mutableStateOf("") }
+    // Phase 263: the search query survives rotation (the debounced
+    // LaunchedEffect below re-fires from the restored value, so results
+    // rebuild instead of flashing an empty vault).
+    var searchQuery by rememberSaveable { mutableStateOf("") }
     // Phase 209: recent-search history — focus tracking for the chips row and
     // the persisted `search_recent_<n>` ring (SettingsManager prefs, no DB).
     var searchFieldFocused by remember { mutableStateOf(false) }
     var recentSearches by remember { mutableStateOf(viewModel.settings.getRecentSearches()) }
-    var selectedTab by remember { mutableIntStateOf(0) }
-    var pageViewMode by remember { mutableIntStateOf(0) }
+    // Phase 263: tab + view-mode are saveable — rotation must not jump the
+    // user back to Pages/List (a jump to the wrong tab re-targets destructive
+    // bulk verbs at the wrong list).
+    var selectedTab by rememberSaveable { mutableIntStateOf(0) }
+    var pageViewMode by rememberSaveable { mutableIntStateOf(0) }
     // Phase 208 fix #2: persisted page-list sort mode (Pages tab, all views).
     var pageSortMode by remember {
         mutableStateOf(PageSortPolicy.Mode.fromKey(viewModel.settings.pageSortModeKey))
@@ -158,16 +196,24 @@ fun HomeScreen(
     // Phase 208 fixes #3/#4: Move-to-Section picker + multi-select state. The
     // target list is shared by the single-card "Move to Section…" menu item and
     // the bulk bar's move verb; `multiSelectedIds` non-empty == selection mode.
-    var moveTargets by remember { mutableStateOf<List<String>>(emptyList()) }
-    var multiSelectedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var moveTargets by rememberSaveable { mutableStateOf<List<String>>(emptyList()) }
+    // Phase 263: the in-progress multi-selection survives rotation with the
+    // tab (the tab-change LaunchedEffect below still drops it on purpose).
+    var multiSelectedIds by rememberSaveable(stateSaver = homeStringSetSaver) {
+        mutableStateOf<Set<String>>(emptySet())
+    }
     val selectionActive = multiSelectedIds.isNotEmpty()
-    var showBulkTagDialog by remember { mutableStateOf(false) }
-    var showTemplateLibrary by remember { mutableStateOf(false) }
-    var showWebDavDialog by remember { mutableStateOf(false) }
-    var showLocalSendDialog by remember { mutableStateOf(false) }
-    var showWebCaptureDialog by remember { mutableStateOf(false) }
-    var activeTagFilterPath by remember { mutableStateOf<String?>(null) }
-    var activeTagMatchingIds by remember { mutableStateOf<Set<String>?>(null) }
+    var showBulkTagDialog by rememberSaveable { mutableStateOf(false) }
+    var showTemplateLibrary by rememberSaveable { mutableStateOf(false) }
+    var showWebDavDialog by rememberSaveable { mutableStateOf(false) }
+    var showLocalSendDialog by rememberSaveable { mutableStateOf(false) }
+    var showWebCaptureDialog by rememberSaveable { mutableStateOf(false) }
+    // Phase 263: the active tag filter survives rotation (path + matching ids
+    // restore together; null path == no filter).
+    var activeTagFilterPath by rememberSaveable { mutableStateOf<String?>(null) }
+    var activeTagMatchingIds by rememberSaveable(stateSaver = homeNullableStringSetSaver) {
+        mutableStateOf<Set<String>?>(null)
+    }
 
     // Phase 164: the tag vault is notebook-scoped — when the active notebook
     // changes, drop any stale cross-notebook tag filter (its matching page-ids
@@ -196,18 +242,19 @@ fun HomeScreen(
             outerWindowSizeClass.heightSizeClass == androidx.compose.material3.windowsizeclass.WindowHeightSizeClass.Compact
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
 
-    var promptDialogType by remember { mutableStateOf<String?>(null) }
-    var targetEntityId by remember { mutableStateOf<String?>(null) }
-    var initialDialogText by remember { mutableStateOf("") }
+    var promptDialogType by rememberSaveable { mutableStateOf<String?>(null) }
+    var targetEntityId by rememberSaveable { mutableStateOf<String?>(null) }
+    var initialDialogText by rememberSaveable { mutableStateOf("") }
 
-    var deleteConfirmType by remember { mutableStateOf<String?>(null) }
-    var deleteWarningMessage by remember { mutableStateOf("") }
+    var deleteConfirmType by rememberSaveable { mutableStateOf<String?>(null) }
+    var deleteWarningMessage by rememberSaveable { mutableStateOf("") }
 
     // 22.9: restore needs a restart — confirm visibly instead of a snackbar that
     // is killed by exitProcess before it can ever be shown.
-    var showRestartConfirmDialog by remember { mutableStateOf(false) }
-    var restartDialogTitle by remember { mutableStateOf("Restore successful") }
-    var restartDialogMessage by remember { mutableStateOf("Your vault has been restored. The app will restart to load the restored data.") }
+    // Phase 263: saveable so the restart verdict survives rotation.
+    var showRestartConfirmDialog by rememberSaveable { mutableStateOf(false) }
+    var restartDialogTitle by rememberSaveable { mutableStateOf("Restore successful") }
+    var restartDialogMessage by rememberSaveable { mutableStateOf("Your vault has been restored. The app will restart to load the restored data.") }
 
     fun performRestore(context: android.content.Context, file: File, password: String? = null) {
         // R2-b2b1-UI-03 (phase-135): the local restore shares the SAME one-in-flight
@@ -363,12 +410,18 @@ fun HomeScreen(
     // explicitly opts into the deep full-vault scan.
     var refinedSearchDone by remember { mutableStateOf(false) }
 
-    var showTagManagerDialog by remember { mutableStateOf(false) }
+    var showTagManagerDialog by rememberSaveable { mutableStateOf(false) }
     var tagEditorTargetNotebook by remember { mutableStateOf<NotebookEntity?>(null) }
     var tagEditorTargetPage by remember { mutableStateOf<NotePageEntity?>(null) }
 
+    // Phase 263: true while the 300 ms debounce is outstanding — the list
+    // section shows a spinner instead of flashing the "no notes" empty state.
+    // Session-only (plain remember): no search is ever in flight across a
+    // rotation, and the restored query re-fires the effect below anyway.
+    var isSearching by remember { mutableStateOf(false) }
     LaunchedEffect(searchQuery) {
         if (searchQuery.isNotBlank()) {
+            isSearching = true
             refinedSearchDone = false
             kotlinx.coroutines.delay(300)
             // Phase 209 REVIEW-FIX (finding 1): the query is recorded only AFTER
@@ -384,14 +437,20 @@ fun HomeScreen(
             }
             viewModel.searchVault(searchQuery) { results ->
                 globalSearchResults = results
+                isSearching = false
             }
         } else {
             globalSearchResults = null
+            isSearching = false
         }
     }
-    var pendingImportUris by remember { mutableStateOf<List<Uri>>(emptyList()) }
-    var showMultiPageImportDialog by remember { mutableStateOf(false) }
-    var selectedImportOrientation by remember { mutableStateOf("AUTO") }
+    // Phase 263: the pending 10-file import dialog survives rotation — Uris
+    // round-trip as strings via homeImportUriListSaver.
+    var pendingImportUris by rememberSaveable(stateSaver = homeImportUriListSaver) {
+        mutableStateOf<List<Uri>>(emptyList())
+    }
+    var showMultiPageImportDialog by rememberSaveable { mutableStateOf(false) }
+    var selectedImportOrientation by rememberSaveable { mutableStateOf("AUTO") }
 
     fun processImportedUris(uris: List<Uri>, importAsSeparatePages: Boolean, orientationChoice: String = selectedImportOrientation) {
         // B2-UI-6 (phase-96): the import loop runs on the ViewModel scope so a
@@ -1225,7 +1284,7 @@ fun HomeScreen(
                             value = searchQuery,
                             onValueChange = { searchQuery = it },
                             placeholder = { Text("Search notes...", maxLines = 1, style = MaterialTheme.typography.bodyMedium) },
-                            leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null, modifier = Modifier.size(20.dp)) },
+                            leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = "Search", modifier = Modifier.size(20.dp)) },
                             trailingIcon = if (searchQuery.isNotEmpty()) {
                                 {
                                     IconButton(onClick = { searchQuery = "" }) {
@@ -1234,6 +1293,11 @@ fun HomeScreen(
                                 }
                             } else null,
                             singleLine = true,
+                            // Phase 263: Search IME action (Go runs the query —
+                            // focus clear hides the keyboard; the debounced
+                            // effect executes it) + an accessible label.
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                            keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
                             shape = androidx.compose.foundation.shape.RoundedCornerShape(24.dp),
                             colors = TextFieldDefaults.colors(
                                 focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
@@ -1312,7 +1376,9 @@ fun HomeScreen(
                                                 recentSearches = updated
                                                 viewModel.settings.setRecentSearches(updated)
                                             },
-                                            modifier = Modifier.size(20.dp)
+                                            // Phase 263: 48dp hit area (the 20dp
+                                            // box is the visual size only).
+                                            modifier = Modifier.size(20.dp).minimumInteractiveComponentSize()
                                         ) {
                                             Icon(
                                                 Icons.Outlined.Close,
@@ -1356,26 +1422,33 @@ fun HomeScreen(
 
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    PrimaryTabRow(selectedTabIndex = selectedTab) {
+                    // Phase 263: ScrollableTabRow — the fixed-width PrimaryTabRow
+                    // clipped its 4 labels at 320-360dp (72dp/tab vs 75-92dp
+                    // labels). Scrollable tabs never clip (phase-166 rule);
+                    // labels ellipsize on one line (cf. OnDeviceSmartAssistant).
+                    ScrollableTabRow(
+                        selectedTabIndex = selectedTab,
+                        edgePadding = 0.dp
+                    ) {
                         Tab(
                             selected = selectedTab == 0,
                             onClick = { selectedTab = 0 },
-                            text = { Text("Pages") }
+                            text = { Text("Pages", maxLines = 1, overflow = TextOverflow.Ellipsis) }
                         )
                         Tab(
                             selected = selectedTab == 1,
                             onClick = { selectedTab = 1 },
-                            text = { Text("Recent") }
+                            text = { Text("Recent", maxLines = 1, overflow = TextOverflow.Ellipsis) }
                         )
                         Tab(
                             selected = selectedTab == 2,
                             onClick = { selectedTab = 2 },
-                            text = { Text("Tag Vault") }
+                            text = { Text("Tag Vault", maxLines = 1, overflow = TextOverflow.Ellipsis) }
                         )
                         Tab(
                             selected = selectedTab == 3,
                             onClick = { selectedTab = 3 },
-                            text = { Text("Trash") }
+                            text = { Text("Trash", maxLines = 1, overflow = TextOverflow.Ellipsis) }
                         )
                     }
 
@@ -1425,7 +1498,8 @@ fun HomeScreen(
                                 var sortMenuExpanded by remember { mutableStateOf(false) }
                                 FilledTonalIconButton(
                                     onClick = { sortMenuExpanded = true },
-                                    modifier = Modifier.size(32.dp)
+                                    // Phase 263: 48dp hit area (visual stays 32dp).
+                                    modifier = Modifier.size(32.dp).minimumInteractiveComponentSize()
                                 ) {
                                     Icon(
                                         Icons.AutoMirrored.Outlined.Sort,
@@ -1574,7 +1648,8 @@ fun HomeScreen(
                                             activeTagFilterPath = null
                                             activeTagMatchingIds = null
                                         },
-                                        modifier = Modifier.size(24.dp)
+                                        // Phase 263: 48dp hit area (visual stays 24dp).
+                                        modifier = Modifier.size(24.dp).minimumInteractiveComponentSize()
                                     ) {
                                         Icon(Icons.Outlined.Close, contentDescription = "Clear Tag Filter")
                                     }
@@ -1716,7 +1791,18 @@ fun HomeScreen(
                             }
                         }
 
-                        if (activePageList.isEmpty()) {
+                        // Phase 263: while the debounce is outstanding the list
+                        // shows a spinner, never the "no notes" empty state.
+                        if (isSearching && activePageList.isEmpty()) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(32.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                CircularProgressIndicator()
+                            }
+                        } else if (activePageList.isEmpty()) {
                             val emptyDecision = EmptyStateResolver.decide(
                                 kind = when {
                                     selectedTab == 3 -> EmptyStateKind.TRASH
@@ -2509,8 +2595,9 @@ private fun NotebookPanel(
     onExportVaultNotebook: (NotebookEntity) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    var searchQuery by remember { mutableStateOf("") }
-    var showSearch by remember { mutableStateOf(false) }
+    // Phase 263: panel-local filter survives rotation.
+    var searchQuery by rememberSaveable { mutableStateOf("") }
+    var showSearch by rememberSaveable { mutableStateOf(false) }
 
     val filteredNotebooks = remember(notebooks, searchQuery) {
         if (searchQuery.isBlank()) notebooks
@@ -2630,8 +2717,9 @@ private fun SectionPanel(
     onExportVaultSection: (SectionEntity) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    var searchQuery by remember { mutableStateOf("") }
-    var showSearch by remember { mutableStateOf(false) }
+    // Phase 263: panel-local filter survives rotation.
+    var searchQuery by rememberSaveable { mutableStateOf("") }
+    var showSearch by rememberSaveable { mutableStateOf(false) }
 
     val filteredSections = remember(sections, searchQuery) {
         if (searchQuery.isBlank()) sections

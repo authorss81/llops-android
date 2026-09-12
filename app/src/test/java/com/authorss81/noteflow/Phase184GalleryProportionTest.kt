@@ -13,6 +13,10 @@ import org.junit.Test
  * fix removes the strict ratio and applies a font-scale-scaled `heightIn` floor
  * from the pure-JVM `GalleryCardLayoutPolicy`. These pins make the fix structural
  * so a reviewer cannot reintroduce a rigid ratio on the gallery card.
+ *
+ * PHASE 263 RE-PIN: the adaptive floor moved 168dp -> 150dp (168dp rendered a
+ * single column until the grid exceeded 372dp — a 360dp phone got one giant
+ * card per row). The Adaptive LazyVerticalGrid structure itself is unchanged.
  */
 class Phase184GalleryProportionTest {
 
@@ -102,7 +106,7 @@ class Phase184GalleryProportionTest {
         )
         assertTrue(
             "grid stays Adaptive LazyVerticalGrid (memory bounded, staggered not required)",
-            src.contains("GridCells.Adaptive(minSize = 168.dp)")
+            src.contains("GridCells.Adaptive(minSize = 150.dp)")
         )
     }
 }

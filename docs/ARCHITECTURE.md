@@ -265,6 +265,20 @@
 > `requireBackupPassword = false` and keep working for passwordless vaults.
 > `UiFailureTextPolicy.backupFailureMessage` maps the guard to honest copy
 > (`:208-226`).
+>
+> **Implemented in phase-263** (2026-09-12, home/gallery/tab restoration +
+> import + overflow, see `workspace/phase-263/REPORT.md`): rotation no longer
+> wipes `searchQuery`/`selectedTab`/`pageViewMode`/`multiSelectedIds`/
+> `activeTagFilterPath`+ids/`pendingImportUris` (Uri-list string saver)/
+> `selectedImportOrientation`/dialog flags — all `rememberSaveable`
+> (`HomeScreen.kt:77-91,117-210,419,449-452`); `PrimaryTabRow` →
+> `ScrollableTabRow` with ellipsized labels (`:1429`); search field has
+> `imeAction=Search` + an `isSearching` spinner instead of the empty-state
+> flash; 14 compact controls enforce 48dp via `minimumInteractiveComponentSize`
+> (visuals unchanged); gallery grid is `Adaptive(150.dp)` (2 columns on 360dp)
+> with a TalkBack-labelled type badge. Pins: `Phase263HomeGalleryTest` (16);
+> phase-184/188 grid literal re-pinned to 150dp, phase-254 HomeScreen
+> re-baselined to 3845 raw / 3310 code.
 
 | Subpackage | Key files | Purpose |
 |---|---|---|

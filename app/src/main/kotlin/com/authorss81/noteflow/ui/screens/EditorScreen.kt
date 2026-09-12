@@ -2728,7 +2728,7 @@ fun EditorScreen(
                         )
                         IconButton(
                             onClick = { voiceNoteManager.clearErrors() },
-                            modifier = Modifier.size(28.dp)
+                            modifier = Modifier.size(28.dp).minimumInteractiveComponentSize()
                         ) {
                             Icon(
                                 Icons.Outlined.Close,
@@ -2878,7 +2878,7 @@ fun EditorScreen(
                             )
                             IconButton(
                                 onClick = { referenceImageControlsVisible = false },
-                                modifier = Modifier.size(26.dp)
+                                modifier = Modifier.size(26.dp).minimumInteractiveComponentSize()
                             ) {
                                 Icon(
                                     Icons.Outlined.Close,
@@ -4898,7 +4898,7 @@ private fun ContrastSuggestionsRow(
             }
             Row(
                 modifier = Modifier
-                    .fillMaxWidth()
+                    .fillMaxWidth().minimumInteractiveComponentSize()
                     .clickable { onColorSelect(c) }
                     .padding(vertical = 3.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -5646,7 +5646,7 @@ private fun CanvasSettingsBottomSheet(
                     }
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.clickable { onPaperColorSelect(hex) }
+                        modifier = Modifier.minimumInteractiveComponentSize().clickable { onPaperColorSelect(hex) }
                     ) {
                         Box(
                             modifier = Modifier

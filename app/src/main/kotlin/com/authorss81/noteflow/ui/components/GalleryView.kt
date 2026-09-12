@@ -92,7 +92,12 @@ fun GalleryView(
     modifier: Modifier = Modifier
 ) {
     LazyVerticalGrid(
-        columns = GridCells.Adaptive(minSize = 168.dp),
+        // Phase 263: 150dp minimum (was 168dp, which rendered a single
+        // column until the grid exceeded 372dp — a 360dp phone got one
+        // giant card per row). 150dp keeps 2 columns < 600dp and lets
+        // tablets scale up; the content-driven min-height floor (phase-184)
+        // still owns the card proportions.
+        columns = GridCells.Adaptive(minSize = 150.dp),
         modifier = modifier
             .fillMaxSize()
             .padding(12.dp),
@@ -279,7 +284,9 @@ private fun GalleryCardItem(
                         ) {
                             Icon(
                                 imageVector = pageTypeIcon(page),
-                                contentDescription = null,
+                                // Phase 263: the type badge is meaningful —
+                                // TalkBack announces the page kind.
+                                contentDescription = pageTypeLabel(page),
                                 tint = scheme.onPrimaryContainer,
                                 modifier = Modifier
                                     .padding(6.dp)
@@ -327,7 +334,7 @@ private fun GalleryCardItem(
                     Box {
                         IconButton(
                             onClick = { menuExpanded = true },
-                            modifier = Modifier.size(28.dp)
+                            modifier = Modifier.size(28.dp).minimumInteractiveComponentSize()
                         ) {
                             Icon(
                                 imageVector = Icons.Outlined.MoreVert,

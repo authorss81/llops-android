@@ -178,7 +178,9 @@ fun LockScreen(
                 if (biometricEnabled) {
                     Spacer(modifier = Modifier.height(12.dp))
                     IconButton(
-                        onClick = { triggerBiometric() }
+                        onClick = { triggerBiometric() },
+                        // Phase 263: 48dp hit area for the biometric glyph.
+                        modifier = Modifier.minimumInteractiveComponentSize()
                     ) {
                         Icon(
                             Icons.Outlined.Fingerprint,
