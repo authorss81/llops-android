@@ -1434,8 +1434,13 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
 
         // Orphan sweep — delete leftover plaintext with no row (only the dirs we
         // actually looked at, and never a retained/failed file).
-        val dirs = legacyEmbeds
-            .mapNotNull { File(it.contentUrlOrPath ?: "").parentFile }
+        // Phase 262: also sweep the canonical voice_notes dir itself — the
+        // pre-fix set covered ONLY parents of referenced legacy embeds, so a
+        // voice dir holding JUST orphans (empty-dirs case: no legacy row left
+        // to anchor it) was never visited and raw AAC persisted forever.
+        val dirs = (legacyEmbeds
+            .mapNotNull { File(it.contentUrlOrPath ?: "").parentFile } + voiceNotesDir())
+            .filterNotNull()
             .distinct()
         val orphansDeleted = dirs.sumOf { VoiceNoteCrypto.deleteOrphanPlaintext(it, retainedPlaintext) }
 
@@ -1985,7 +1990,15 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
                     val dek = requireEncryptionKey()
                     val storedText = EncryptionService.encryptField(rawText.toByteArray(), dek, "media_embeds", embed.id, "textContent")
 
-                    val waveformJson = embed.waveformAmplitudes.joinToString(prefix = "[", postfix = "]")
+                    // Phase 262: BOUNDED + finite waveform persist — the pre-fix
+                    // joinToString wrote an unbounded series (a crafted embed
+                    // list could bloat the column) and NaN/Infinity literals
+                    // that the parse side must then scrub. Capped at the
+                    // stored-waveform ceiling with non-finite samples zeroed.
+                    val waveformJson = embed.waveformAmplitudes
+                        .take(VoiceRecordingPolicy.MAX_STORED_WAVEFORM_ENTRIES)
+                        .map { WaveformPeakMath.finiteOrZero(it) }
+                        .joinToString(prefix = "[", postfix = "]")
 
                     MediaEmbedEntity(
                         id = embed.id,

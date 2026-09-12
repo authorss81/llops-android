@@ -1407,6 +1407,15 @@
     aborts past the duration/file-size ceilings via `finalizeRecording(limitMessage)` — stops+encrypts
     (B1-DB-3 path), surfaces `recordingError`, publishes `completedRecordingResult` so `EditorScreen`'s
     `LaunchedEffect` auto-attaches the audio embed through the shared `attachVoiceRecording` helper.
+  - **Implemented in phase-262** (see `workspace/phase-262/REPORT.md`): playback
+    `prepareAsync()` (no Main-thread `prepare()` ANR); monotonic
+    `voiceMonotonicNowMs()` (`elapsedRealtime`) drives ceilings/durations; crypto
+    streams 64 KB `Cipher.update` chunks (no whole-file `readBytes`); recorder
+    has native `setMaxDuration/setMaxFileSize` + in-manager RECORD_AUDIO gate +
+    lock-free-slow-path `FinalizeSnapshot` + audio-focus/noisy handling + UUID
+    cache names; playback confined to `voice_notes`; waveform persist capped +
+    finite-filtered; legacy migrate sweeps the voice dir itself; card gains
+    drag-scrub + speed-index guard.
     `startRecording`/`stopRecording`/`finalizeRecording` are serialized under `recorderLock`.
     `NoteRepository.parseWaveformJson` (`:997-1009`) is bounded to 600 entries. Tests:
     `LiveWaveformBucketsTest` (9) + `VoiceRecordingPolicyTest` (6) + `B2Dos03VoiceRecordingTest` (12) —

@@ -1,16 +1,42 @@
 package com.authorss81.noteflow.services
 
+import android.Manifest
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.content.pm.PackageManager
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager
 import android.media.MediaPlayer
 import android.media.MediaRecorder
 import android.media.PlaybackParams
 import android.os.Build
+import android.os.SystemClock
 import android.util.Log
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.io.File
+import java.util.UUID
+
+/**
+ * Phase 262: monotonic clock for recording-duration decisions.
+ *
+ * Wall-clock `System.currentTimeMillis()` follows NTP/user steps, so a clock
+ * jump could bypass the 30-min ceiling or persist a bogus `durationMs`. All
+ * duration math uses `elapsedRealtime()` (boot-relative, monotonic); on the
+ * plain-JVM unit-test runtime the Android stub throws, so fall back to
+ * `nanoTime()`. Wall clock is still used ONLY for filename stamps (uniqueness,
+ * never a limit decision).
+ */
+internal fun voiceMonotonicNowMs(): Long = try {
+    SystemClock.elapsedRealtime()
+} catch (_: Throwable) {
+    System.nanoTime() / 1_000_000L
+}
 
 /**
  * Phase 206 (PERF/BATTERY): playback position tick cadence.
@@ -103,6 +129,20 @@ class VoiceNoteManager(private val context: Context) {
     // double-finalize must be impossible.
     private val recorderLock = Any()
 
+    // Phase 262: transient playback audio-focus + becoming-noisy handling.
+    // Focus is requested for each playback and abandoned on stop; a noisy
+    // (headset-unplug) broadcast pauses instead of blasting on speaker.
+    private var audioFocusRequest: AudioFocusRequest? = null
+    private var noisyReceiver: BroadcastReceiver? = null
+    private val audioFocusChangeListener =
+        AudioManager.OnAudioFocusChangeListener { focusChange ->
+            if (focusChange == AudioManager.AUDIOFOCUS_LOSS ||
+                focusChange == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT
+            ) {
+                pausePlayback()
+            }
+        }
+
     private val _playbackError = MutableStateFlow<String?>(null)
     val playbackError: StateFlow<String?> = _playbackError.asStateFlow()
 
@@ -114,6 +154,15 @@ class VoiceNoteManager(private val context: Context) {
     fun startRecording(pageId: String): File? = synchronized(recorderLock) {
         stopPlayback()
 
+        // Phase 262: in-manager RECORD_AUDIO gate — never rely on the caller.
+        // checkSelfPermission exists on API 23+; the app floor is API 26.
+        if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            _recordingError.value = "Microphone permission is needed to record audio."
+            return@synchronized null
+        }
+
         // B1-DB-3 (phase-54): MediaRecorder must stream to a real file, but that
         // raw AAC is PLAINTEXT — so it is written to a transient cacheDir temp
         // (the OS-scrubbed, never-backed-up location) and AES-GCM-encrypted with
@@ -123,10 +172,15 @@ class VoiceNoteManager(private val context: Context) {
         // temp from an interrupted pre-fix session is swept first.
         VoiceNoteCrypto.sweepPlaintextTemps(context.cacheDir)
 
+        // Phase 262: unpredictable cache/blob names — the pre-fix
+        // `voice_<ms>.m4a` stamp was guessable; a random suffix is appended.
+        // The wall-clock stamp stays ONLY for filename uniqueness, never for a
+        // limit decision (durations use voiceMonotonicNowMs()).
         val stamp = System.currentTimeMillis()
-        val tempFile = File(context.cacheDir, "voice_rec_${pageId}_${stamp}.m4a.tmp")
+        val nonce = UUID.randomUUID().toString().take(8)
+        val tempFile = File(context.cacheDir, "voice_rec_${pageId}_${stamp}_${nonce}.m4a.tmp")
         val voiceDir = File(context.filesDir, "voice_notes").apply { if (!exists()) mkdirs() }
-        val blobFile = File(voiceDir, "voice_${pageId}_${stamp}.${VoiceNoteCrypto.ENCRYPTED_EXTENSION}")
+        val blobFile = File(voiceDir, "voice_${pageId}_${stamp}_${nonce}.${VoiceNoteCrypto.ENCRYPTED_EXTENSION}")
         currentOutputFile = tempFile
         currentBlobFile = blobFile
 
@@ -155,6 +209,29 @@ class VoiceNoteManager(private val context: Context) {
                 setAudioEncodingBitRate(128000)
                 setAudioSamplingRate(44100)
                 setOutputFile(tempFile.absolutePath)
+                // Phase 262: NATIVE ceilings bound the recording even if the
+                // 100 ms sampler poll overshoots — the pre-fix recorder had no
+                // native cap. The OnInfoListener funnels the platform abort
+                // into the same ceiling path (saved, not discarded).
+                try {
+                    setMaxDuration(VoiceRecordingPolicy.MAX_RECORDING_DURATION_MS.toInt())
+                    setMaxFileSize(VoiceRecordingPolicy.MAX_RECORDING_BYTES)
+                    setOnInfoListener { _, what, _ ->
+                        if (what == MediaRecorder.MEDIA_RECORDER_INFO_MAX_DURATION_REACHED ||
+                            what == MediaRecorder.MEDIA_RECORDER_INFO_MAX_FILESIZE_REACHED
+                        ) {
+                            val msg = if (what == MediaRecorder.MEDIA_RECORDER_INFO_MAX_DURATION_REACHED) {
+                                VoiceRecordingPolicy.DURATION_LIMIT_MESSAGE
+                            } else {
+                                VoiceRecordingPolicy.SIZE_LIMIT_MESSAGE
+                            }
+                            finalizeRecording(msg)
+                        }
+                    }
+                } catch (_: Exception) {
+                    // Native caps are best-effort on odd encoders — the sampler
+                    // poll below remains the guaranteed backstop.
+                }
                 prepare()
                 start()
             }
@@ -176,9 +253,12 @@ class VoiceNoteManager(private val context: Context) {
             //     publishes the completed recording so it is saved, not discarded.
             timerJob?.cancel()
             timerJob = scope.launch(Dispatchers.Default) {
-                val startTime = System.currentTimeMillis()
+                // Phase 262: monotonic elapsed — immune to NTP/user clock steps
+                // that previously bypassed the 30-min ceiling and persisted a
+                // bogus durationMs.
+                val startTime = voiceMonotonicNowMs()
                 while (isActive && _isRecording.value) {
-                    val elapsed = System.currentTimeMillis() - startTime
+                    val elapsed = voiceMonotonicNowMs() - startTime
                     _recordingElapsedMs.value = elapsed
 
                     val maxAmp = try {
@@ -232,6 +312,18 @@ class VoiceNoteManager(private val context: Context) {
         return finalizeRecording(null)
     }
 
+    /** Phase 262: lock-held snapshot for [finalizeRecording] — the fast state
+     * capture that runs UNDER [recorderLock]; all slow I/O (KeyStore re-read,
+     * streaming AES-GCM encrypt) runs AFTER the lock is released so the
+     * 100 ms sampler never starves behind KeyStore/file I/O. */
+    private data class FinalizeSnapshot(
+        val tempFile: File,
+        val blobFile: File?,
+        val durationMs: Long,
+        val amplitudes: List<Float>,
+        val stopError: String?,
+    )
+
     /**
      * Stops the recorder, encrypts the finished audio into the vault-DEK `.enc`
      * blob and destroys the plaintext temp. Shared by the manual stop path
@@ -242,37 +334,53 @@ class VoiceNoteManager(private val context: Context) {
      * never double-finalize. On the ceiling path the completed recording is
      * published via [completedRecordingResult] so the editor attaches the audio
      * embed (never silently orphaned) alongside the non-alarming error banner.
+     *
+     * Phase 262: only the FAST state capture runs under [recorderLock]
+     * (flag flip, timer cancel, recorder stop/release, file-handle grab). The
+     * SLOW work — KeyStore DEK re-read + streaming encrypt — runs AFTER the
+     * lock is released, so the sampler thread can never block behind KeyStore
+     * I/O. Phase-192 fail-closed semantics are unchanged, including the
+     * ON_STOP/lock race: a DEK zeroized mid-recording resolves to LockedVault
+     * and the plaintext temp is deleted (never leaked at rest).
      */
-    private fun finalizeRecording(limitMessage: String?): VoiceRecordingResult? = synchronized(recorderLock) {
-        if (!_isRecording.value) return@synchronized null
-        _isRecording.value = false
-        timerJob?.cancel()
+    private fun finalizeRecording(limitMessage: String?): VoiceRecordingResult? {
+        val snap = synchronized(recorderLock) {
+            if (!_isRecording.value) return@synchronized null
+            _isRecording.value = false
+            timerJob?.cancel()
 
-        try {
-            mediaRecorder?.apply {
-                stop()
-                release()
+            var stopError: String? = null
+            try {
+                mediaRecorder?.apply {
+                    stop()
+                    release()
+                }
+            } catch (e: Exception) {
+                Log.e("VoiceNoteManager", "Error stopping MediaRecorder (${FailureLogPolicy.classNameToken(e)})")
+                stopError = "Recording stopped unexpectedly — the audio file may be empty."
             }
-        } catch (e: Exception) {
-            Log.e("VoiceNoteManager", "Error stopping MediaRecorder (${FailureLogPolicy.classNameToken(e)})")
-            _recordingError.value = "Recording stopped unexpectedly — the audio file may be empty."
-        }
-        mediaRecorder = null
+            mediaRecorder = null
 
-        val tempFile = currentOutputFile ?: return@synchronized null
-        val blobFile = currentBlobFile
-        if (!tempFile.exists() || tempFile.length() < 44L) {
-            // Log WITHOUT the absolute path: the path reveals the private vault
-            // file layout in logcat (low risk but unnecessary).
-            Log.w("VoiceNoteManager", "Recording produced no audio data (file too small)")
-            try { tempFile.delete() } catch (_: Exception) {}
+            val tempFile = currentOutputFile ?: return@synchronized null
+            val blobFile = currentBlobFile
             currentOutputFile = null
             currentBlobFile = null
-            _recordingError.value = "No audio was captured — the microphone may be busy or permission was revoked."
-            return@synchronized null
-        }
-        val duration = _recordingElapsedMs.value
-        val amplitudes = _waveformAmplitudes.value
+            if (!tempFile.exists() || tempFile.length() < 44L) {
+                // Log WITHOUT the absolute path: the path reveals the private vault
+                // file layout in logcat (low risk but unnecessary).
+                Log.w("VoiceNoteManager", "Recording produced no audio data (file too small)")
+                try { tempFile.delete() } catch (_: Exception) {}
+                _recordingError.value = "No audio was captured — the microphone may be busy or permission was revoked."
+                return@synchronized null
+            }
+            if (stopError != null) _recordingError.value = stopError
+            FinalizeSnapshot(tempFile, blobFile, _recordingElapsedMs.value, _waveformAmplitudes.value, stopError)
+        } ?: return null
+
+        val tempFile = snap.tempFile
+        val blobFile = snap.blobFile
+        val duration = snap.durationMs
+        val amplitudes = snap.amplitudes
 
         // Phase 192: resolve the stop-time DEK BEFORE the save. A passwordless
         // vault's device-wrapped copy IS the boot credential by design (the DB
@@ -300,8 +408,6 @@ class VoiceNoteManager(private val context: Context) {
             VoiceNoteCrypto.encryptRecordingFileDetailed(tempFile, blobFile, dek)
         } else null
         val saved = saveOutcome is VoiceEncryptOutcome.Saved
-        currentOutputFile = null
-        currentBlobFile = null
         if (!saved) {
             Log.w("VoiceNoteManager", "Recording could not be encrypted — plaintext temp destroyed")
             // R2-b2b1-UI-05: the encrypted=false path (a finished recording was
@@ -323,7 +429,7 @@ class VoiceNoteManager(private val context: Context) {
             } else {
                 VoiceRecordingSavePolicy.messageFor(stopTimeKey, saveOutcome)
             }
-            return@synchronized null
+            return null
         }
 
         val result = VoiceRecordingResult(
@@ -344,7 +450,79 @@ class VoiceNoteManager(private val context: Context) {
             _recordingError.value = limitMessage
             _completedRecordingResult.value = result
         }
-        result
+        return result
+    }
+
+    /**
+     * Phase 262: voice-blob confinement for the playback path — the stored
+     * `contentUrlOrPath` is a DB-controlled string, so a crafted `../` escape
+     * or absolute path outside `filesDir/voice_notes` must never be opened.
+     * Mirrors the delete-path gate (`PageDeleteFilePolicy.voiceBlobForDelete`)
+     * without importing it (this manager must not depend on repository types).
+     */
+    private fun isConfinedVoiceBlob(blob: File): Boolean = try {
+        val voiceDir = File(context.filesDir, "voice_notes")
+        if (!voiceDir.isDirectory) false
+        else {
+            val root = voiceDir.canonicalPath
+            val cand = blob.canonicalPath
+            cand.length > root.length && cand.startsWith(root + File.separator)
+        }
+    } catch (_: Exception) {
+        false
+    }
+
+    private fun requestPlaybackFocus(): Boolean = try {
+        val am = context.getSystemService(AudioManager::class.java) ?: return true
+        val attrs = AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_MEDIA)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+            .build()
+        val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+            .setAudioAttributes(attrs)
+            .setOnAudioFocusChangeListener(audioFocusChangeListener)
+            .build()
+        audioFocusRequest = req
+        am.requestAudioFocus(req) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+    } catch (_: Exception) {
+        true
+    }
+
+    private fun abandonPlaybackFocus() {
+        try {
+            val am = context.getSystemService(AudioManager::class.java)
+            audioFocusRequest?.let { am?.abandonAudioFocusRequest(it) }
+        } catch (_: Exception) {
+        }
+        audioFocusRequest = null
+        try {
+            noisyReceiver?.let { context.unregisterReceiver(it) }
+        } catch (_: Exception) {
+        }
+        noisyReceiver = null
+    }
+
+    private fun registerNoisyReceiver() {
+        try {
+            val receiver = object : BroadcastReceiver() {
+                override fun onReceive(c: Context?, intent: Intent?) {
+                    if (intent?.action == AudioManager.ACTION_AUDIO_BECOMING_NOISY) {
+                        pausePlayback()
+                    }
+                }
+            }
+            val filter = IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY)
+            // API 33+ (targetSdk 36): context receivers must declare visibility.
+            // A system noisy broadcast is received non-exported (same-uid only).
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                context.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                @Suppress("UnspecifiedRegisterReceiverFlag")
+                context.registerReceiver(receiver, filter)
+            }
+            noisyReceiver = receiver
+        } catch (_: Exception) {
+        }
     }
 
     fun startPlayback(filePath: String, speed: Float = 1.0f) {
@@ -359,7 +537,10 @@ class VoiceNoteManager(private val context: Context) {
         // raw AAC only exists on disk as a transient cacheDir temp while the
         // user is actively listening (deleted on stop/completion/release).
         // Decrypt off the main thread so a slow read never janks the UI.
-        if (!VoiceNoteCrypto.isEncryptedBlobName(blob.name) || !blob.isFile || blob.length() < 2L) {
+        // Phase 262: also confined to filesDir/voice_notes (DB `../` escape).
+        if (!VoiceNoteCrypto.isEncryptedBlobName(blob.name) || !blob.isFile || blob.length() < 2L ||
+            !isConfinedVoiceBlob(blob)
+        ) {
             _isPlaying.value = false
             _activePlayingFilePath.value = null
             _playbackError.value = "Audio file is missing or empty — it can't be played."
@@ -368,8 +549,10 @@ class VoiceNoteManager(private val context: Context) {
 
         playbackJob?.cancel()
         playbackJob = scope.launch {
-            val tempPlayback = File(context.cacheDir, "voice_pb_${System.currentTimeMillis()}.m4a")
-            val playFilePath = withContext(Dispatchers.Default) {
+            // Phase 262: unpredictable playback temp name (pre-fix
+            // `voice_pb_<ms>.m4a` was guessable by any same-uid reader).
+            val tempPlayback = File(context.cacheDir, "voice_pb_${UUID.randomUUID()}.m4a")
+            val playFilePath = withContext(Dispatchers.IO) {
                 val dek = VaultKeyHolder.dek
                 if (dek == null || !VoiceNoteCrypto.decryptRecordingFile(blob, tempPlayback, dek)) null
                 else tempPlayback.absolutePath
@@ -390,32 +573,57 @@ class VoiceNoteManager(private val context: Context) {
             }
 
             try {
-                val player = MediaPlayer().apply {
-                    setDataSource(playFilePath)
-                    prepare()
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                        playbackParams = PlaybackParams().apply { this.speed = speed }
-                    }
-                    start()
-                }
+                requestPlaybackFocus()
+                registerNoisyReceiver()
+                // Phase 262 CRITICAL: prepareAsync() — the pre-fix blocking
+                // prepare() parsed the whole 32 MB AAC on Dispatchers.Main
+                // (>5 s on 2-core → ANR/watchdog). prepareAsync() returns
+                // immediately; start() runs in onPrepared.
+                val player = MediaPlayer()
                 mediaPlayer = player
-                _isPlaying.value = true
-                _playbackDurationMs.value = player.duration.toLong()
-
+                player.setOnPreparedListener { player ->
+                    if (!isActive && !_isPlaying.value) {
+                        // Stopped while preparing — release without starting.
+                        runCatching { player.release() }
+                        if (mediaPlayer === player) mediaPlayer = null
+                        deletePlaybackTemp()
+                        return@setOnPreparedListener
+                    }
+                    try {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                            player.playbackParams = PlaybackParams().apply { this.speed = speed }
+                        }
+                        player.start()
+                        _isPlaying.value = true
+                        _playbackDurationMs.value = runCatching { player.duration.toLong() }.getOrDefault(0L)
+                        trackPlaybackPosition(player)
+                    } catch (e: Exception) {
+                        _isPlaying.value = false
+                        _activePlayingFilePath.value = null
+                        deletePlaybackTemp()
+                        abandonPlaybackFocus()
+                        _playbackError.value = "Playback failed — the audio file may be corrupted."
+                    }
+                }
                 player.setOnCompletionListener {
                     stopPlayback()
                 }
-
-                // Track progress — Phase 206: 200 ms cadence (see the constant's
-                // doc; was a 20 Hz poll driving seek-bar recomposition all session).
-                // Phase-206 review-fix: loop body extracted to
-                // trackPlaybackPosition so resumePlayback can restart it too.
-                trackPlaybackPosition(player)
+                player.setOnErrorListener { _, _, _ ->
+                    _isPlaying.value = false
+                    _activePlayingFilePath.value = null
+                    deletePlaybackTemp()
+                    abandonPlaybackFocus()
+                    _playbackError.value = "Playback failed — the audio file may be corrupted."
+                    true
+                }
+                player.setDataSource(playFilePath)
+                player.prepareAsync()
             } catch (e: Exception) {
                 Log.w("VoiceNoteManager", "Playback failed (${FailureLogPolicy.classNameToken(e)})")
                 _isPlaying.value = false
                 _activePlayingFilePath.value = null
                 deletePlaybackTemp()
+                abandonPlaybackFocus()
                 _playbackError.value = "Playback failed — the audio file may be corrupted."
             }
         }
@@ -509,6 +717,7 @@ class VoiceNoteManager(private val context: Context) {
         _playbackPositionMs.value = 0L
         _activePlayingFilePath.value = null
         deletePlaybackTemp()
+        abandonPlaybackFocus()
     }
 
     private fun deletePlaybackTemp() {

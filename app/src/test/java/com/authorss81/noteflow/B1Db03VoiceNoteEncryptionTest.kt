@@ -239,7 +239,13 @@ class B1Db03VoiceNoteEncryptionTest {
         val vm = sourceFile("services/VoiceNoteManager.kt")
 
         val record = vm.substringBefore("fun stopRecording")
-        assertTrue("MediaRecorder streams to the cacheDir temp, not the voice dir", record.contains("File(context.cacheDir, \"voice_rec_${'$'}{pageId}_${'$'}{stamp}.m4a.tmp\")"))
+        // Phase 262: the temp name carries an unpredictable random suffix
+        // (voice_rec_<page>_<stamp>_<nonce>.m4a.tmp) — pin the invariant
+        // (cacheDir scratch + voice_rec_ prefix + .m4a.tmp), not the literal.
+        assertTrue(
+            "MediaRecorder streams to the cacheDir temp, not the voice dir",
+            record.contains("File(context.cacheDir, \"voice_rec_") && record.contains(".m4a.tmp\")")
+        )
         val voiceDirArtifacts = Regex("File\\(voiceDir, \"([^\"]*)\"\\)").findAll(record).map { it.groupValues[1] }.toList()
         assertTrue("record constructs the at-rest artifact in the voice dir", voiceDirArtifacts.isNotEmpty())
         for (artifact in voiceDirArtifacts) {

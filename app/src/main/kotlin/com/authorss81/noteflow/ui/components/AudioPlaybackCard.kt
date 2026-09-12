@@ -4,6 +4,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -215,6 +216,10 @@ fun AudioPlaybackCard(
             val activeBarColor = MaterialTheme.colorScheme.primary
             val inactiveBarColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
 
+            // Phase 262: tap-to-seek PLUS drag-scrub — the pre-fix tap-only
+            // gesture made fine seeking on a 30-min memo a tap-lottery. Both
+            // gestures route through WaveformPeakMath.scrubTargetMs (clamped).
+            var dragRatio by remember(embed.id) { mutableStateOf<Float?>(null) }
             Canvas(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -224,9 +229,23 @@ fun AudioPlaybackCard(
                     .pointerInput(embed.id, durationMs) {
                         detectTapGestures { offset ->
                             val tapRatio = (offset.x / size.width).coerceIn(0f, 1f)
-                            val targetMs = (tapRatio * durationMs).toLong()
-                            onSeekTo(targetMs)
+                            onSeekTo(WaveformPeakMath.scrubTargetMs(tapRatio, durationMs))
                         }
+                    }
+                    .pointerInput(embed.id, durationMs) {
+                        detectHorizontalDragGestures(
+                            onDragStart = { offset ->
+                                dragRatio = (offset.x / size.width).coerceIn(0f, 1f)
+                                onSeekTo(WaveformPeakMath.scrubTargetMs(dragRatio!!, durationMs))
+                            },
+                            onHorizontalDrag = { change, _ ->
+                                change.consume()
+                                dragRatio = (change.position.x / size.width).coerceIn(0f, 1f)
+                                onSeekTo(WaveformPeakMath.scrubTargetMs(dragRatio!!, durationMs))
+                            },
+                            onDragEnd = { dragRatio = null },
+                            onDragCancel = { dragRatio = null }
+                        )
                     }
             ) {
                 val canvasWidth = size.width
@@ -312,8 +331,12 @@ fun AudioPlaybackCard(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     // Playback Speed Selector
+                    // Phase 262: indexOf guard — a persisted/custom speed not
+                    // in the list yielded index -1, so (-1+1)%size = 0 jumped
+                    // to 0.5x. Unknown speeds now step from 1.0x.
                     val speeds = listOf(0.5f, 1.0f, 1.25f, 1.5f, 2.0f)
-                    val nextSpeed = speeds[(speeds.indexOf(playbackSpeed) + 1) % speeds.size]
+                    val speedIndex = speeds.indexOf(playbackSpeed)
+                    val nextSpeed = speeds[if (speedIndex < 0) 1 else (speedIndex + 1) % speeds.size]
 
                     AssistChip(
                         onClick = { onSpeedChange(nextSpeed) },

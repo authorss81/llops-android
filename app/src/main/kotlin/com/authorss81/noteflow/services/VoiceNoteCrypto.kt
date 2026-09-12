@@ -1,6 +1,11 @@
 package com.authorss81.noteflow.services
 
 import java.io.File
+import java.io.FileInputStream
+import java.io.FileOutputStream
+import javax.crypto.Cipher
+import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.spec.SecretKeySpec
 
 /**
  * Fine-grained outcome of an encrypt-a-recording attempt (phase-192). Lets the
@@ -64,6 +69,15 @@ object VoiceNoteCrypto {
     const val MAX_BLOB_BYTES = 40L * 1024 * 1024
 
     private const val AAD_PREFIX = "Noteflow-Voice-Note-v1|"
+
+    /**
+     * Phase 262: streaming chunk size for encrypt/decrypt/re-key. Heap pin is
+     * one buffer (~64 KB) + Cipher's internal GCM block state — a 40 MB blob
+     * never materializes via `readBytes()` (pre-fix ~56 MB heap → OOM).
+     */
+    internal const val STREAM_BUFFER_BYTES = 64 * 1024
+    private const val WIRE_VERSION: Byte = 1
+    private const val WIRE_HEADER_BYTES = 1 + 12
 
     /** The AAD binds every blob to its file name (blobs are never renamed). */
     private fun aadFor(blobName: String): ByteArray = (AAD_PREFIX + blobName).toByteArray(Charsets.UTF_8)
@@ -130,22 +144,56 @@ object VoiceNoteCrypto {
         if (!isEncryptedBlobName(blob.name)) {
             return VoiceEncryptOutcome.Failed(VoiceEncryptFailure.BLOB_TARGET)
         }
+        // Phase 262: STREAMING encrypt — the plaintext is piped through
+        // Cipher.update in 64 KB chunks into a sibling tmp file (never a
+        // whole-file readBytes). Wire format is unchanged:
+        // [VERSION][12-byte IV][ciphertext + GCM tag] under the blob-name AAD.
+        var tmp: File? = null
         return try {
-            val bytes = plaintext.readBytes()
-            val combined = EncryptionService.encryptAad(bytes, dek, aadFor(blob.name))
-            bytes.fill(0.toByte())
+            val aad = aadFor(blob.name)
+            val iv = EncryptionService.newIv()
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(dek, "AES"), GCMParameterSpec(128, iv))
+            cipher.updateAAD(aad)
             blob.parentFile?.mkdirs()
-            blob.writeBytes(combined)
-            combined.fill(0.toByte())
+            tmp = File(blob.parentFile, blob.name + ".tmp")
+            FileInputStream(plaintext).use { input ->
+                FileOutputStream(tmp!!).use { out ->
+                    out.write(WIRE_VERSION.toInt())
+                    out.write(iv)
+                    val buf = ByteArray(STREAM_BUFFER_BYTES)
+                    while (true) {
+                        val n = input.read(buf)
+                        if (n < 0) break
+                        if (n == 0) continue
+                        val enc = cipher.update(buf, 0, n)
+                        if (enc != null && enc.isNotEmpty()) out.write(enc)
+                    }
+                    val final = cipher.doFinal()
+                    if (final.isNotEmpty()) out.write(final)
+                    out.flush()
+                    buf.fill(0.toByte())
+                }
+            }
             if (!plaintext.delete()) {
                 // Prefer a hard failure over leaving plaintext behind: if the
                 // source cannot be removed the blob is not usable (the temp
                 // would linger unencrypted).
-                blob.delete()
+                try { tmp!!.delete() } catch (_: Exception) {}
                 return VoiceEncryptOutcome.Failed(VoiceEncryptFailure.IO_OR_CIPHER)
             }
+            if (!tmp!!.renameTo(blob)) {
+                // Cross-FS fallback: blob.delete + retry once, else fail closed.
+                runCatching { blob.delete() }
+                if (!tmp!!.renameTo(blob)) {
+                    try { tmp!!.delete() } catch (_: Exception) {}
+                    return VoiceEncryptOutcome.Failed(VoiceEncryptFailure.IO_OR_CIPHER)
+                }
+            }
+            tmp = null
             VoiceEncryptOutcome.Saved
         } catch (e: Exception) {
+            try { tmp?.delete() } catch (_: Exception) {}
             try { blob.delete() } catch (_: Exception) {}
             VoiceEncryptOutcome.Failed(classifyException(e))
         }
@@ -168,13 +216,41 @@ object VoiceNoteCrypto {
     fun decryptRecordingFile(blob: File, destination: File, dek: ByteArray): Boolean {
         if (!blob.isFile || !isEncryptedBlobName(blob.name)) return false
         if (blob.length() > MAX_BLOB_BYTES) return false
+        if (blob.length() < WIRE_HEADER_BYTES + 16L) return false
+        // Phase 262: STREAMING decrypt — header (version + IV) is read first,
+        // then the body is piped through Cipher.update in 64 KB chunks. No
+        // whole-file readBytes on either side.
         return try {
-            val combined = blob.readBytes()
-            val plain = EncryptionService.decryptAad(combined, dek, aadFor(blob.name))
-            combined.fill(0.toByte())
-            destination.parentFile?.mkdirs()
-            destination.writeBytes(plain)
-            plain.fill(0.toByte())
+            val aad = aadFor(blob.name)
+            FileInputStream(blob).use { input ->
+                val version = input.read()
+                if (version != WIRE_VERSION.toInt()) return false
+                val iv = ByteArray(12)
+                var filled = 0
+                while (filled < iv.size) {
+                    val n = input.read(iv, filled, iv.size - filled)
+                    if (n < 0) return false
+                    filled += n
+                }
+                val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+                cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(dek, "AES"), GCMParameterSpec(128, iv))
+                cipher.updateAAD(aad)
+                destination.parentFile?.mkdirs()
+                FileOutputStream(destination).use { out ->
+                    val buf = ByteArray(STREAM_BUFFER_BYTES)
+                    while (true) {
+                        val n = input.read(buf)
+                        if (n < 0) break
+                        if (n == 0) continue
+                        val dec = cipher.update(buf, 0, n)
+                        if (dec != null && dec.isNotEmpty()) out.write(dec)
+                    }
+                    val final = cipher.doFinal()
+                    if (final.isNotEmpty()) out.write(final)
+                    out.flush()
+                    buf.fill(0.toByte())
+                }
+            }
             true
         } catch (e: Exception) {
             try { destination.delete() } catch (_: Exception) {}
@@ -192,16 +268,74 @@ object VoiceNoteCrypto {
     fun reencryptAudioBlobInPlace(blob: File, oldDek: ByteArray, newDek: ByteArray): Boolean {
         if (!blob.isFile || !isEncryptedBlobName(blob.name)) return false
         if (blob.length() > MAX_BLOB_BYTES) return false
+        if (blob.length() < WIRE_HEADER_BYTES + 16L) return false
+        // Phase 262: STREAMING re-key — decrypt-update bytes are fed straight
+        // into the encrypt-update chain chunk by chunk, so the full plaintext
+        // never materializes (pre-fix held plaintext + both payloads in heap).
+        // The swap is atomic via a sibling tmp + rename; a failure leaves the
+        // original blob byte-for-byte intact.
+        var tmp: File? = null
         return try {
-            val combined = blob.readBytes()
-            val plain = EncryptionService.decryptAad(combined, oldDek, aadFor(blob.name))
-            combined.fill(0.toByte())
-            val recombined = EncryptionService.encryptAad(plain, newDek, aadFor(blob.name))
-            plain.fill(0.toByte())
-            blob.writeBytes(recombined)
-            recombined.fill(0.toByte())
+            val aad = aadFor(blob.name)
+            tmp = File(blob.parentFile, blob.name + ".rekey.tmp")
+            FileInputStream(blob).use { input ->
+                val version = input.read()
+                if (version != WIRE_VERSION.toInt()) return false
+                val oldIv = ByteArray(12)
+                var filled = 0
+                while (filled < oldIv.size) {
+                    val n = input.read(oldIv, filled, oldIv.size - filled)
+                    if (n < 0) return false
+                    filled += n
+                }
+                val dec = Cipher.getInstance("AES/GCM/NoPadding")
+                dec.init(Cipher.DECRYPT_MODE, SecretKeySpec(oldDek, "AES"), GCMParameterSpec(128, oldIv))
+                dec.updateAAD(aad)
+                val newIv = EncryptionService.newIv()
+                val enc = Cipher.getInstance("AES/GCM/NoPadding")
+                enc.init(Cipher.ENCRYPT_MODE, SecretKeySpec(newDek, "AES"), GCMParameterSpec(128, newIv))
+                enc.updateAAD(aad)
+                FileOutputStream(tmp!!).use { out ->
+                    out.write(WIRE_VERSION.toInt())
+                    out.write(newIv)
+                    val buf = ByteArray(STREAM_BUFFER_BYTES)
+                    while (true) {
+                        val n = input.read(buf)
+                        if (n < 0) break
+                        if (n == 0) continue
+                        val pt = dec.update(buf, 0, n)
+                        if (pt != null && pt.isNotEmpty()) {
+                            val ct = enc.update(pt)
+                            if (ct != null && ct.isNotEmpty()) out.write(ct)
+                            pt.fill(0.toByte())
+                        }
+                    }
+                    val ptFinal = dec.doFinal()
+                    if (ptFinal.isNotEmpty()) {
+                        val ct = enc.update(ptFinal)
+                        if (ct != null && ct.isNotEmpty()) out.write(ct)
+                        ptFinal.fill(0.toByte())
+                    }
+                    val ctFinal = enc.doFinal()
+                    if (ctFinal.isNotEmpty()) out.write(ctFinal)
+                    out.flush()
+                    buf.fill(0.toByte())
+                }
+            }
+            if (!tmp!!.renameTo(blob)) {
+                runCatching { blob.delete() }
+                if (!tmp!!.renameTo(blob)) {
+                    try { tmp!!.delete() } catch (_: Exception) {}
+                    return false
+                }
+            }
+            // Same-file rename deleted the tmp on success on most filesystems;
+            // if it survived (copied), remove it.
+            try { if (tmp!!.exists()) tmp!!.delete() } catch (_: Exception) {}
+            tmp = null
             true
         } catch (e: Exception) {
+            try { tmp?.delete() } catch (_: Exception) {}
             false
         }
     }
