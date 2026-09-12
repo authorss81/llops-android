@@ -3570,12 +3570,12 @@ private fun FloatingToolDock(
                 currentTool == StrokeTool.ERASER
         val drawingToolActive = activeDrawingTool && toolbarState != FloatingToolbarState.HIDDEN_DRAWING
         val usableHeightPx = (screenH - topInsetPx - bottomInsetPx).coerceAtLeast(1f)
-        // Decided explicitly per posture: the horizontal pill AND the vertical
-        // side column both yield when a drawing tool is active and the bar sits
-        // in the top half (the column's buttons still swallow top touches).
-        val yieldAppliesForPosture = true
-        if (yieldAppliesForPosture &&
-            InkBarDrawingPolicy.shouldYieldDrawingArea(
+        // Both postures yield when a drawing tool is active and the bar sits
+        // in the top half (the vertical column's buttons still swallow top
+        // touches). Review-fix note: the vertical default anchor is side-middle,
+        // which itself tests inside the yield zone — but the yield maps it to
+        // itself (fixed point), so the assignment is a stable no-op, never a loop.
+        if (InkBarDrawingPolicy.shouldYieldDrawingArea(
                 drawingToolActive = drawingToolActive,
                 barTopY = restingPos.y,
                 availableHeight = usableHeightPx

@@ -644,21 +644,12 @@ fun AnnotationCanvas(
     // bottom-right anchor). Survives header collapse/re-expand.
     // Phase-264: rememberSaveable (else a rotation drops the dragged position
     // and the map jumps back to the default anchor). Compose Offset has no
-    // built-in saver, so persist as "x,y" (null = never dragged).
+    // built-in saver, so persist as "x,y" via the test-covered
+    // MinimapGeometryPolicy codec (null = never dragged).
     val minimapDragOffsetSaver = remember {
         androidx.compose.runtime.saveable.Saver<Offset?, String>(
-            save = { offset -> offset?.let { "${it.x},${it.y}" } ?: "" },
-            restore = { saved ->
-                if (saved.isEmpty()) {
-                    null
-                } else {
-                    saved.split(",").takeIf { it.size == 2 }?.let { parts ->
-                        val x = parts[0].toFloatOrNull()
-                        val y = parts[1].toFloatOrNull()
-                        if (x != null && y != null && x.isFinite() && y.isFinite()) Offset(x, y) else null
-                    }
-                }
-            }
+            save = { offset -> offset?.let { MinimapGeometryPolicy.encodeDragOffset(it.x, it.y) } ?: "" },
+            restore = { saved -> MinimapGeometryPolicy.decodeDragOffset(saved)?.let { (x, y) -> Offset(x, y) } }
         )
     }
     var minimapDragOffset by rememberSaveable(stateSaver = minimapDragOffsetSaver) { mutableStateOf<Offset?>(null) }
@@ -4076,8 +4067,10 @@ blenderStrengthPercent = blenderStrengthPercent,
                                             var downConsumed = false
                                             do {
                                                 val event = awaitPointerEvent()
+                                                // Review-fix: track ONLY the original down pointer.
+                                                // Falling back to another finger when down.id lifts
+                                                // would pan from the wrong pointer mid-gesture.
                                                 val change = event.changes.firstOrNull { it.id == down.id }
-                                                    ?: event.changes.firstOrNull()
                                                     ?: break
                                                 if (change.pressed) {
                                                     val slop = viewConfiguration.touchSlop

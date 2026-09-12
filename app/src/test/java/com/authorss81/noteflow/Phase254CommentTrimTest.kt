@@ -82,19 +82,25 @@ import org.junit.Test
  * re-check. No KDoc opener added (plain `//` comments only — the KDoc counts
  * below are unchanged). Re-measured on the phase-264 tree: AnnotationCanvas
  * 8749 raw / 7024 code, EditorScreen 7436 raw / 6493 code.
+ *
+ * PHASE 264 REVIEW-FIX RE-BASELINE: AnnotationCanvas shrank (drag-offset
+ * saver body extracted to the test-covered MinimapGeometryPolicy codec +
+ * strict down-pointer tracking) and EditorScreen lost the constant-true yield
+ * flag (one fewer code line). Re-measured: AnnotationCanvas 8742 raw / 7013
+ * code, EditorScreen 7436 raw / 6491 code; HomeScreen untouched.
  */
 class Phase254CommentTrimTest {
 
-    // Phase-255/256/257/264 re-baselined raw line counts (phase-264 values measured on the phase-264 tree).
+    // Phase-255/256/257/264 re-baselined raw line counts (phase-264 review-fix values measured on the review-fix tree).
     private val headRaw = mapOf(
-        "ui/components/AnnotationCanvas.kt" to 8749,
+        "ui/components/AnnotationCanvas.kt" to 8742,
         "ui/screens/EditorScreen.kt" to 7436,
         "ui/screens/HomeScreen.kt" to 3845
     )
     // Phase-255/256/257/264 re-baselined code-line counts (non-blank, non-full-`//` lines).
     private val headCode = mapOf(
-        "ui/components/AnnotationCanvas.kt" to 7024,
-        "ui/screens/EditorScreen.kt" to 6493,
+        "ui/components/AnnotationCanvas.kt" to 7013,
+        "ui/screens/EditorScreen.kt" to 6491,
         "ui/screens/HomeScreen.kt" to 3310
     )
     // Parent baseline KDoc `/**` opener counts (no KDoc opener may be deleted).

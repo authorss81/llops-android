@@ -240,4 +240,18 @@ class Phase264ResponsiveTest {
             canvas.contains("bottomReservePx")
         )
     }
+
+    @Test
+    fun `drag offset codec round-trips and fails safe to null`() {
+        val encoded = MinimapGeometryPolicy.encodeDragOffset(123.5f, 456.25f)
+        val decoded = MinimapGeometryPolicy.decodeDragOffset(encoded)
+        assertTrue("codec round-trips", decoded != null)
+        assertEquals(123.5f, decoded!!.first, 1e-6f)
+        assertEquals(456.25f, decoded.second, 1e-6f)
+        assertEquals("empty restores to null (never dragged)", null, MinimapGeometryPolicy.decodeDragOffset(""))
+        assertEquals("malformed restores to null", null, MinimapGeometryPolicy.decodeDragOffset("12.5"))
+        assertEquals("non-numeric restores to null", null, MinimapGeometryPolicy.decodeDragOffset("x,y"))
+        assertEquals("non-finite restores to null", null, MinimapGeometryPolicy.decodeDragOffset("NaN,1.0"))
+        assertEquals("extra parts restore to null", null, MinimapGeometryPolicy.decodeDragOffset("1.0,2.0,3.0"))
+    }
 }

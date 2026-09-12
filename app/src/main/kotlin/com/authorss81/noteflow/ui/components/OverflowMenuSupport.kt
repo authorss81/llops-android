@@ -14,6 +14,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
+import android.view.ViewTreeObserver
 import com.authorss81.noteflow.services.AdaptiveLayoutPolicy
 import com.authorss81.noteflow.services.OverflowMenuPolicy
 
@@ -63,11 +64,19 @@ private fun rememberLiveWindowSizeDp(): Pair<Int, Int> {
     val density = LocalDensity.current
     var sizePx by remember { mutableStateOf(view.width to view.height) }
     DisposableEffect(view) {
-        val listener = android.view.ViewTreeObserver.OnGlobalLayoutListener {
-            sizePx = view.width to view.height
+        // Review-fix: capture the observer once — looking it up fresh in
+        // onDispose can return a different (or dead) instance and the listener
+        // would leak. Guard isAlive on both paths, and only re-emit when the
+        // size actually changed so idle layout passes don't recompose menus.
+        val observer = view.viewTreeObserver
+        val listener = ViewTreeObserver.OnGlobalLayoutListener {
+            val next = view.width to view.height
+            if (next != sizePx) sizePx = next
         }
-        view.viewTreeObserver.addOnGlobalLayoutListener(listener)
-        onDispose { view.viewTreeObserver.removeOnGlobalLayoutListener(listener) }
+        if (observer.isAlive) observer.addOnGlobalLayoutListener(listener)
+        onDispose {
+            if (observer.isAlive) observer.removeOnGlobalLayoutListener(listener)
+        }
     }
     val (wPx, hPx) = sizePx
     return with(density) { wPx.toDp().value.toInt() to hPx.toDp().value.toInt() }

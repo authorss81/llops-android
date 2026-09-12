@@ -172,6 +172,26 @@ object MinimapGeometryPolicy {
     }
 
     /**
+     * Review-fix (phase-264 review): the `rememberSaveable` "x,y" codec for the
+     * dragged minimap offset, extracted here so it is pure-JVM testable.
+     * [encode] never returns null; [decode] returns null for empty/malformed/
+     * non-finite input (the caller treats null as "never dragged" = default
+     * anchor), so a corrupt saved instance state can never park the map
+     * off-screen.
+     */
+    fun encodeDragOffset(x: Float, y: Float): String = "$x,$y"
+
+    fun decodeDragOffset(saved: String): Pair<Float, Float>? {
+        if (saved.isEmpty()) return null
+        val parts = saved.split(",")
+        if (parts.size != 2) return null
+        val x = parts[0].toFloatOrNull() ?: return null
+        val y = parts[1].toFloatOrNull() ?: return null
+        if (!x.isFinite() || !y.isFinite()) return null
+        return x to y
+    }
+
+    /**
      * Pre-35 default anchor: bottom-right corner with [marginPx] breathing room
      * (content top-left).
      */
