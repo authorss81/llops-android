@@ -15,8 +15,10 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import com.authorss81.noteflow.R
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.authorss81.noteflow.data.model.NotePageEntity
@@ -384,6 +386,17 @@ fun LocalSendSendDialog(
                         )
                     }
                 }
+            }
+            // Phase 261 (MEDIUM): explicit device-keyed warning (phase-252
+            // copy) — the vault-backup payload is the documented device-keyed
+            // producer (requireBackupPassword = false), so it restores only on
+            // the originating device. Never silently sent.
+            if (payloadType == LocalSendPayload.VAULT_BACKUP) {
+                Text(
+                    text = stringResource(R.string.localsend_device_keyed_notice),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
             if (payloadType == LocalSendPayload.NOTE_HTML) {
                 var noteMenuOpen by remember { mutableStateOf(false) }

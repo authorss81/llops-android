@@ -373,10 +373,24 @@ class B2Dos07BackupExportStreamingTest {
         assertFalse("the v2 full-copy write must be gone", source.contains("fos.write(cipherText)"))
         assertFalse("the device-keyed Base64 full-copy must be gone", source.contains("val encryptedBase64"))
         assertFalse("no encrypt(zipData,...) call may survive", source.contains("encrypt(zipData"))
-        assertTrue("the zip must stream into an app-private staging file", source.contains("File(context.cacheDir, BackupExportPolicy.stagingFileName(backupName))"))
+        assertTrue("the zip must stream into a policy-owned staging file", source.contains("BackupExportPolicy.useStagingZip("))
         assertTrue("v2 must encrypt streamed through the policy", source.contains("BackupExportPolicy.encryptStreamGcm("))
         assertTrue("device-keyed must encrypt streamed through the policy", source.contains("BackupExportPolicy.encryptStreamDeviceKeyedBase64("))
-        assertTrue("the staging file must be deleted after encryption", source.contains("stagingZip.delete()"))
+        // Phase 261: the plaintext stage lifecycle is owned in-policy
+        // (createTempFile + finally delete inside BackupExportPolicy) — the
+        // caller holds no predictable staging path and performs no direct
+        // staging delete; a crash mid-export cannot leave plaintext behind.
+        assertFalse("no predictable staging path may survive in the caller", source.contains("BackupExportPolicy.stagingFileName(backupName)"))
+        // Scope to the EXPORT staging (exportBackup/exportBackupInternal):
+        // the restore-path decrypted staging (decryptDeviceKeyedToFile caller)
+        // legitimately keeps its own finally delete — out of scope here.
+        val exportStart = source.indexOf("suspend fun exportBackup(")
+        val exportEnd = source.indexOf("private fun copyWithLimit(")
+        val exportRegion = if (exportStart >= 0 && exportEnd > exportStart) source.substring(exportStart, exportEnd) else source
+        assertFalse("the export must not delete the stage directly", exportRegion.contains("stagingZip.delete()"))
+        val policy = codeOnly(mainSourceRootFile("services/BackupExportPolicy.kt").readText())
+        assertTrue("the stage must be a unique temp file", policy.contains("createTempFile"))
+        assertTrue("the stage must be deleted in-policy", policy.contains("staging.delete()"))
         assertTrue("the output name must still come from the filename policy", source.contains("File(context.cacheDir, backupName)"))
     }
 

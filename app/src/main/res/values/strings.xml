@@ -32,4 +32,6 @@
     <string name="backup_password_requirement_body">Your vault has no master password. A backup created now would be encrypted with a key bound to this device\'s hardware — if you lose this device or factory-reset it, the backup can never be opened again. To create a portable backup that restores on any device, set a master password first.</string>
     <string name="backup_password_requirement_set_password">Set Master Password</string>
     <string name="backup_password_requirement_cancel_export">Cancel Export</string>
+    <string name="webdav_device_keyed_notice">WebDAV sync uploads a device-encrypted backup that is locked to this device\'s hardware and cannot be restored on any other device. For a portable backup that restores anywhere, set a master password and use Backup instead.</string>
+    <string name="localsend_device_keyed_notice">This vault backup is device-encrypted — it restores only on this device. Send a note or vault archive for anything the other device must open, or set a master password and use Backup for a portable copy.</string>
 </resources>

@@ -14,9 +14,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import com.authorss81.noteflow.R
 import androidx.biometric.BiometricPrompt
 import androidx.fragment.app.FragmentActivity
 import com.authorss81.noteflow.services.BiometricAuthHelper
@@ -176,6 +178,16 @@ fun WebDavSyncDialog(
                     text = "Backs up your vault as encrypted archive files to YOUR OWN WebDAV or Nextcloud server. " +
                         "Backups are encrypted and sent over HTTPS. Your server operator can read the backup files, " +
                         "but not your note content.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = scheme.onSurfaceVariant
+                )
+
+                // Phase 261 (MEDIUM): explicit device-keyed warning (phase-252
+                // copy) — WebDAV is the documented device-keyed sync producer
+                // (requireBackupPassword = false), so the archive stays locked
+                // to this device's hardware by design. Never silently synced.
+                Text(
+                    text = stringResource(R.string.webdav_device_keyed_notice),
                     style = MaterialTheme.typography.bodySmall,
                     color = scheme.onSurfaceVariant
                 )

@@ -6,6 +6,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.net.HttpURLConnection
+import java.net.InetAddress
 import java.net.URL
 import com.authorss81.noteflow.utils.BackupFileNamePolicy
 import com.authorss81.noteflow.utils.HttpUserAgent
@@ -103,27 +104,147 @@ class WebDavSyncService(private val context: Context) {
         }
 
         /**
-         * A host is "local-network-only" when it is loopback, a private/guard
-         * RFC1918 or link-local address, or an mDNS `.local` name. Used to scope
-         * the explicit HTTP opt-in so a public IP can never be reached in
-         * cleartext.
+         * A host is "local-network-only" when it is loopback, a private
+         * RFC-1918, link-local, or unique-local address, or an mDNS `.local`
+         * name. Used to scope the explicit HTTP opt-in so a public host can
+         * never be reached in cleartext.
+         *
+         * Phase 261 (HIGH): the pre-fix implementation ran `String.startsWith`
+         * on the RAW host, so a DNS name like `10.evil.com` or
+         * `192.168.attacker.example` was misclassified as local and the
+         * `allowInsecureHttp` opt-in sent the Basic credential + encrypted
+         * backup over HTTP to an attacker. DNS names are NEVER local here —
+         * only `localhost`, `*.local`, and IP LITERALS classified via
+         * `InetAddress.getByName` (`isLoopbackAddress` / `isSiteLocalAddress` /
+         * `isLinkLocalAddress`) plus explicit `fc00::/7`, `fe80::/10`,
+         * IPv4-mapped (`::ffff:10.x`), and full `127/8` structural checks.
+         * `InetAddress.getByName` only ever sees an IP literal (DNS names
+         * return false before any resolution), so no DNS round-trip happens.
          */
         fun isLocalNetworkHost(host: String): Boolean {
-            val h = host.lowercase().trim().trimEnd('.')
-            if (h == "localhost" || h == "127.0.0.1" || h == "::1") return true
-            if (h.endsWith(".local")) return true
-            val ipv4 = h.substringBefore(':')
-            return when {
-                ipv4.startsWith("10.") -> true
-                ipv4.startsWith("192.168.") -> true
-                ipv4.startsWith("169.254.") -> true
-                ipv4.startsWith("172.") -> {
-                    val second = ipv4.substringAfter('.', "").substringBefore('.')
-                    val n = second.toIntOrNull() ?: return false
-                    n in 16..31
-                }
-                else -> false
+            val h = normalizeLocalHost(host)
+            if (h == "localhost" || h.endsWith(".local")) return true
+            if (h.isEmpty()) return false
+            // DNS names (including masquerades like 10.evil.com) are never
+            // local — only IP literals proceed to address classification.
+            if (!isNumericIpCandidate(h)) return false
+            val inetLocal = try {
+                val addr = InetAddress.getByName(h)
+                addr.isLoopbackAddress || addr.isSiteLocalAddress ||
+                    addr.isLinkLocalAddress || isUniqueLocalV6(addr)
+            } catch (_: Exception) {
+                false
             }
+            if (inetLocal) return true
+            // Structural fallback so fc00::/7, fe80::/10, mapped, and 127/8
+            // hold even where a JDK's isSiteLocal/isLinkLocal differs.
+            return isStructuralLocalLiteral(h)
+        }
+
+        private fun normalizeLocalHost(raw: String): String {
+            var h = raw.trim().lowercase()
+            if (h.endsWith(".")) h = h.dropLast(1)
+            if (h.startsWith("[") && h.endsWith("]")) h = h.substring(1, h.length - 1)
+            val pct = h.indexOf('%')
+            if (pct >= 0 && h.contains(':')) h = h.substring(0, pct)
+            if (h.count { it == ':' } == 1) {
+                val colon = h.lastIndexOf(':')
+                val port = h.substring(colon + 1)
+                if (port.isNotEmpty() && port.all { it.isDigit() }) h = h.substring(0, colon)
+            }
+            return h.trim().trimEnd('.')
+        }
+
+        private fun isNumericIpCandidate(h: String): Boolean {
+            if (h.contains(':')) return true
+            if (!h.contains('.')) {
+                if (h.startsWith("0x") || h.startsWith("0X")) {
+                    val hex = h.drop(2)
+                    return hex.isNotEmpty() && hex.length <= 8 &&
+                        hex.all { it in '0'..'9' || it in 'a'..'f' }
+                }
+                return h.isNotEmpty() && h.all { it.isDigit() }
+            }
+            val segments = h.split('.')
+            if (segments.size !in 2..4) return false
+            return segments.all { s ->
+                s.isNotEmpty() && (
+                    s.all { it.isDigit() } ||
+                        (s.startsWith("0x") && s.drop(2).isNotEmpty() &&
+                            s.drop(2).all { it in '0'..'9' || it in 'a'..'f' })
+                    )
+            }
+        }
+
+        private fun isUniqueLocalV6(addr: InetAddress): Boolean {
+            val bytes = addr.address ?: return false
+            if (bytes.size != 16) return false
+            return ((bytes[0].toInt() and 0xFF) and 0xFE) == 0xFC
+        }
+
+        private fun isStructuralLocalLiteral(h: String): Boolean {
+            if (h.contains(':')) return isStructuralLocalV6(h)
+            return parseIpv4Value(h)?.let { isPrivateIpv4Value(it) } == true
+        }
+
+        private fun isStructuralLocalV6(h: String): Boolean {
+            val s = h.substringBefore('%').lowercase()
+            if (s == "::1") return true
+            val firstHextet = s.split(':').firstOrNull { it.isNotEmpty() }
+            if (firstHextet != null) {
+                val v = firstHextet.toIntOrNull(16)
+                if (v != null) {
+                    if ((v and 0xFFC0) == 0xFE80) return true
+                    if ((v and 0xFE00) == 0xFC00) return true
+                }
+            }
+            if (s.startsWith("fc") || s.startsWith("fd")) {
+                val b0 = s.take(2).toIntOrNull(16)
+                if (b0 != null && (b0 and 0xFE) == 0xFC) return true
+            }
+            val tail = s.substringAfterLast(':')
+            if (tail.contains('.')) {
+                return parseIpv4Value(tail)?.let { isPrivateIpv4Value(it) } == true
+            }
+            return false
+        }
+
+        private fun parseIpv4Value(host: String): Long? {
+            if (host.startsWith("0x") || host.startsWith("0X")) {
+                val hex = host.drop(2)
+                if (hex.isEmpty() || hex.length > 8) return null
+                return hex.toLongOrNull(16)?.and(0xFFFFFFFFL)
+            }
+            val segments = host.split('.')
+            if (segments.size !in 1..4) return null
+            for (segment in segments) {
+                if (segment.isEmpty() || segment.length > 10) return null
+                if (segment.any { it !in '0'..'9' }) return null
+            }
+            val lastWidth = when (segments.size) {
+                1 -> 32
+                2 -> 24
+                3 -> 16
+                else -> 8
+            }
+            var value = 0L
+            for (i in 0 until segments.size - 1) {
+                val part = segments[i].toLongOrNull() ?: return null
+                if (part > 255L) return null
+                value = (value shl 8) or part
+            }
+            val last = segments.last().toLongOrNull() ?: return null
+            if (last >= (1L shl lastWidth)) return null
+            return (value shl lastWidth) or last
+        }
+
+        private fun isPrivateIpv4Value(value: Long): Boolean = when {
+            value in 0x0A000000L..0x0AFFFFFFL -> true
+            value in 0x7F000000L..0x7FFFFFFFL -> true
+            value in 0xA9FE0000L..0xA9FEFFFFL -> true
+            value in 0xAC100000L..0xAC1FFFFFL -> true
+            value in 0xC0A80000L..0xC0A8FFFFL -> true
+            else -> false
         }
 
         /**

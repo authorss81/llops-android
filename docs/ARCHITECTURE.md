@@ -283,6 +283,17 @@
 | `theme/` | `Theme.kt`, `GlassSurfaces.kt`, `GlassThemeMath.kt`, `Motion.kt`, `Type.kt`, `Color.kt` | Material3 + frosted-glass design system |
 | `utils/` | `ConstantTime.kt`, `BitmapPool.kt`, `DeviceCompatibilityManager.kt`, `NestedScrollGuard.kt` (nested-scroll crash prevention, active in debug+release since phase-237; phase-231 debug canary), `WikiLinkParser.kt` (phase-259: `@Deprecated` delegating facade over services — new code must import services directly) | Pure helpers |
 
+> **Implemented in phase-261** (2026-09-12, WebDAV DNS-masquerade + backup
+> staging hygiene, see `workspace/phase-261/REPORT.md`): `isLocalNetworkHost`
+> no longer `startsWith`-matches DNS (`10.evil.com` NOT local; literals via
+> `InetAddress` loopback/site-local/link-local + explicit `fc00::/7`,
+> `fe80::/10`, mapped, `127/8`); the plaintext backup stage is policy-owned
+> (`BackupExportPolicy.useStagingZip` = `createTempFile` + in-policy `finally`
+> delete, wired into `exportBackupInternal`); WebDAV/LocalSend dialogs carry
+> the explicit device-keyed warning (`BackupPortabilityPolicy.
+> DEVICE_KEYED_SYNC_WARNING` + `strings.xml`). Tests:
+> `Phase261WebDavBackupTest` (12); stale B2-DOS-07 staging pins reworked.
+
 > **Implemented in phase-188** (2026-08-20, GalleryView robustness, see
 > `workspace/phase-188/REPORT.md`): the user visual-review "exploration" set of 4
 > risks, none of which phases 183–187 may regress into — (1) **no stroke

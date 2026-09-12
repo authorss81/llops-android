@@ -1,5 +1,6 @@
 package com.authorss81.noteflow.services
 
+import java.io.File
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
@@ -54,6 +55,26 @@ object BackupExportPolicy {
 
     /** Suffix of the transient plaintext zip stage; deleted after encryption. */
     const val STAGING_SUFFIX: String = ".zip-staging"
+
+    /** Prefix for the transient plaintext zip stage created via [createTempFile]. */
+    const val STAGING_PREFIX: String = "noteflow-backup-"
+
+    /**
+     * Phase 261 (MEDIUM): owns the transient plaintext zip stage lifecycle.
+     * The staging file is created via `File.createTempFile` (unique per
+     * export, never a predictable name) and is ALWAYS deleted in the
+     * in-policy `finally` — a crash between staging and the caller's own
+     * cleanup can no longer leave plaintext bytes behind. Callers must do
+     * all staging work inside [block].
+     */
+    fun <T> useStagingZip(dir: File, block: (File) -> T): T {
+        val staging = File.createTempFile(STAGING_PREFIX, STAGING_SUFFIX, dir)
+        try {
+            return block(staging)
+        } finally {
+            runCatching { staging.delete() }
+        }
+    }
 
     private const val IDLE_READ_LIMIT: Int = 16
 

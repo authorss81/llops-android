@@ -1750,7 +1750,10 @@ object ImportExportService {
         val tempBackupFile = File(context.cacheDir, backupName)
         // B2-DOS-07 (phase-83): the zip is staged to a transient app-private
         // file (never a full in-heap archive), then encrypted file-to-file.
-        val stagingZip = File(context.cacheDir, BackupExportPolicy.stagingFileName(backupName))
+        // Phase 261: the plaintext stage lifecycle is owned by
+        // BackupExportPolicy.useStagingZip (createTempFile + in-policy
+        // finally delete), so no predictable staging path is ever referenced
+        // here and a crash mid-export cannot leave plaintext behind.
         // R2-B1D-05 (phase-137): the DB snapshot is staged + verified before it is
         // packed — a torn copy must never reach the archive.
         val stagedDb = File(context.cacheDir, VaultSnapshotCopyPolicy.snapshotStagingFile(backupName))
@@ -1806,6 +1809,7 @@ object ImportExportService {
             // remedy is shrinking that artifact (e.g. trimming imports/voice
             // blobs). Shipping the archive was previously the "exportable but
             // unrestorable" trap; refusing loudly is preferred.
+            BackupExportPolicy.useStagingZip(context.cacheDir) { stagingZip ->
             val packAccounting = BackupBudgetPolicy.Accounting()
             BackupExportPolicy.zipVaultEntriesToStream(FileOutputStream(stagingZip)) { zos ->
                 fun packFile(entryName: String, source: File) {
@@ -1908,6 +1912,7 @@ object ImportExportService {
                     key
                 )
             }
+            }
             // R2-B1D-04 review (phase-138): the pack budget is the SUM OF THE
             // SOURCE lengths, but the RESTORE wire gate rejects any archive whose
             // ENCRYPTED output grew past the 400 MB input cap (Base64 ~1.37x for
@@ -1923,7 +1928,6 @@ object ImportExportService {
                 )
             }
         } finally {
-            stagingZip.delete()
             stagedDb.delete()
         }
         // Phase 156: this is the SINGLE success chokepoint for every backup
