@@ -36,7 +36,10 @@ class SettingsPluginSettingsStore(
     override fun containsKey(pluginId: String, key: String): Boolean =
         settings.hasPluginSetting(pluginId, key)
 
-    override fun removeAll(pluginId: String) {
-        settings.wipePluginState(pluginId)
+    override fun removeAll(pluginId: String): Boolean {
+        // Phase-267 review fix (finding 1): surface the disk-acknowledged wipe
+        // result instead of swallowing it — the registry refuses the uninstall
+        // when this returns false.
+        return settings.wipePluginState(pluginId)
     }
 }

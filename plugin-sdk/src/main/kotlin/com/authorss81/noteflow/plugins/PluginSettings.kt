@@ -20,10 +20,14 @@ interface PluginSettingsStore {
     /**
      * Remove EVERY namespaced setting a plugin owns (used by the store's Delete
      * action). Implementations must clear all keys under `plugins.<id>.*`.
-     * Default no-op keeps existing implementations working; the in-memory and
-     * SharedPreferences stores implement it for real.
+     * Returns the disk-acknowledged result: false means the wipe did NOT land
+     * and the caller must NOT report the plugin as uninstalled (same contract
+     * as the phase-267 `SettingsManager.wipePluginState` commit() return).
+     * Default no-op keeps existing implementations working and returns true
+     * (there is nothing to wipe); the in-memory and SharedPreferences stores
+     * implement it for real.
      */
-    fun removeAll(pluginId: String) {}
+    fun removeAll(pluginId: String): Boolean = true
 }
 
 /**
@@ -52,9 +56,10 @@ class InMemoryPluginSettingsStore : PluginSettingsStore {
     override fun containsKey(pluginId: String, key: String): Boolean =
         values.containsKey(PluginSettingKey.key(pluginId, key))
 
-    override fun removeAll(pluginId: String) {
+    override fun removeAll(pluginId: String): Boolean {
         val prefix = PluginSettingKey.key(pluginId, "")
         values.keys.filter { it.startsWith(prefix) }.forEach { values.remove(it) }
+        return true
     }
 }
 

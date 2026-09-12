@@ -320,8 +320,104 @@ class Phase267SettingsTest {
         assertTrue(settings.stampPrefsVersion())
         assertEquals(SettingsPrefsPolicy.CURRENT_PREFS_VERSION, settings.prefsVersion)
 
+        // Phase-267 review fix: the already-current stamp short-circuits, so
+        // force a real write (downgrade the version) before failing the commit.
+        prefs.map["prefs_version"] = 0
         prefs.failNextCommit = true
         assertFalse(settings.stampPrefsVersion())
+    }
+
+    // ---------- phase-267 review fixes ----------
+
+    @Test
+    fun `stampPrefsVersion skips the commit when already current`() {
+        val prefs = FakePrefs()
+        val settings = settingsOver(prefs)
+        assertTrue(settings.stampPrefsVersion())
+        assertEquals(1, prefs.commitCount)
+
+        assertTrue("an already-current stamp must not cost a disk round-trip", settings.stampPrefsVersion())
+        assertEquals(1, prefs.commitCount)
+        assertEquals(SettingsPrefsPolicy.CURRENT_PREFS_VERSION, settings.prefsVersion)
+    }
+
+    @Test
+    fun `failed-attempt increment reads max of flow and disk`() {
+        val vm = readNoteflowViewModel()
+        val body = functionBody(vm, "private fun recordFailedMasterPasswordVerification")
+        assertTrue("recordFailed* must exist", body != null)
+        assertTrue(
+            "an ADB-inflated disk counter must not be written down from a stale in-memory flow",
+            body!!.contains("maxOf(_failedUnlockAttempts.value, settings.failedUnlockAttempts)")
+        )
+    }
+
+    @Test
+    fun `over-budget texture path reads as null and is skipped by orphan sweep`() {
+        val prefs = FakePrefs()
+        prefs.map["paper_texture_p1"] = "ok/path.png"
+        prefs.map["paper_texture_p2"] = "z".repeat(SettingsPrefsPolicy.MAX_TEXTURE_PATH_CHARS + 1)
+        val settings = settingsOver(prefs)
+
+        assertEquals("ok/path.png", settings.paperTexturePathForPage("p1"))
+        assertNull("ADB multi-MB blob must read as absent", settings.paperTexturePathForPage("p2"))
+        assertEquals(
+            "orphan sweep must not treat the blob as referenced",
+            listOf("ok/path.png"),
+            settings.allPaperTexturePaths()
+        )
+    }
+
+    @Test
+    fun `empty texture path clears like null`() {
+        val settings = settingsOver(FakePrefs())
+        settings.setPaperTexturePathForPage("page1", "ok/path.png")
+        assertEquals("ok/path.png", settings.paperTexturePathForPage("page1"))
+        settings.setPaperTexturePathForPage("page1", "")
+        assertNull("empty must clear, not silently keep the old texture", settings.paperTexturePathForPage("page1"))
+    }
+
+    @Test
+    fun `uninstall refuses when the settings wipe fails`() {
+        val registry = readPluginRegistry()
+        val body = functionBody(registry, "fun uninstallPlugin")
+        assertTrue("uninstallPlugin must exist", body != null)
+        assertTrue(
+            "the disk-acknowledged wipe must gate the uninstall",
+            body!!.contains("if (!settingsStore.removeAll(pluginId))")
+        )
+        assertTrue(
+            "a failed wipe must refuse, never report Uninstalled",
+            body.contains("PluginUninstallResult.Refused")
+        )
+
+        val sdk = readPluginSettingsSdk()
+        assertTrue(
+            "PluginSettingsStore.removeAll must surface the wipe result",
+            sdk.contains("fun removeAll(pluginId: String): Boolean")
+        )
+    }
+
+    @Test
+    fun `isMasterPasswordValid documents the no-burn-on-corrupt rule`() {
+        val vm = readNoteflowViewModel()
+        val body = functionBody(vm, "fun isMasterPasswordValid")
+        assertTrue("isMasterPasswordValid must exist", body != null)
+        assertTrue(
+            "corrupt credential must return before any counter-touching line",
+            body!!.contains("if (settings.masterPasswordCredentialOrLegacy == null) return false")
+        )
+    }
+
+    @Test
+    fun `auto-lock sanitize has a single implementation`() {
+        assertEquals(0, SettingsPrefsPolicy.sanitizeAutoLockTimeoutSeconds(-1))
+        assertEquals(86400, SettingsPrefsPolicy.sanitizeAutoLockTimeoutSeconds(Int.MAX_VALUE))
+        val policy = readSettingsPrefsPolicy()
+        assertTrue(
+            "SettingsPrefsPolicy must delegate to AutoLockPolicy.sanitize so the window cannot diverge",
+            policy.contains("AutoLockPolicy.sanitize(value)")
+        )
     }
 
     // ---------- file readers ----------
@@ -341,6 +437,24 @@ class Phase267SettingsTest {
     private fun readMainActivity(): String {
         val file = java.io.File(repoRoot(), "app/src/main/kotlin/com/authorss81/noteflow/MainActivity.kt")
         assertTrue("MainActivity.kt must exist", file.isFile)
+        return file.readText()
+    }
+
+    private fun readPluginRegistry(): String {
+        val file = java.io.File(repoRoot(), "app/src/main/kotlin/com/authorss81/noteflow/plugins/PluginRegistry.kt")
+        assertTrue("PluginRegistry.kt must exist", file.isFile)
+        return file.readText()
+    }
+
+    private fun readPluginSettingsSdk(): String {
+        val file = java.io.File(repoRoot(), "plugin-sdk/src/main/kotlin/com/authorss81/noteflow/plugins/PluginSettings.kt")
+        assertTrue("PluginSettings.kt must exist", file.isFile)
+        return file.readText()
+    }
+
+    private fun readSettingsPrefsPolicy(): String {
+        val file = java.io.File(repoRoot(), "app/src/main/kotlin/com/authorss81/noteflow/services/SettingsPrefsPolicy.kt")
+        assertTrue("SettingsPrefsPolicy.kt must exist", file.isFile)
         return file.readText()
     }
 

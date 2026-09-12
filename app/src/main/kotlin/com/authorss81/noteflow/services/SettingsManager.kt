@@ -115,10 +115,19 @@ class SettingsManager(context: Context) {
             prefs.edit().putInt("prefs_version", value.coerceAtLeast(0)).commit()
         }
 
-    /** Stamps [SettingsPrefsPolicy.CURRENT_PREFS_VERSION]; false when the write failed. */
-    fun stampPrefsVersion(): Boolean = prefs.edit()
-        .putInt("prefs_version", SettingsPrefsPolicy.CURRENT_PREFS_VERSION)
-        .commit()
+    /**
+     * Stamps [SettingsPrefsPolicy.CURRENT_PREFS_VERSION]; false when the write
+     * failed. Phase-267 review fix (finding 2): skips the blocking commit()
+     * when the stamp is already current — `initializeDataCore` calls this on
+     * every unlock, so an unconditional write would be a disk round-trip on
+     * the unlock path for zero effect.
+     */
+    fun stampPrefsVersion(): Boolean {
+        if (prefs.getInt("prefs_version", 0) >= SettingsPrefsPolicy.CURRENT_PREFS_VERSION) return true
+        return prefs.edit()
+            .putInt("prefs_version", SettingsPrefsPolicy.CURRENT_PREFS_VERSION)
+            .commit()
+    }
 
     var activeNotebookId: String?
         get() = prefs.getString("active_notebook_id", null)
@@ -382,12 +391,21 @@ class SettingsManager(context: Context) {
 
     // Phase 07: custom paper-texture packs. Stored in a preference keyed by
     // page id (NOT the DB schema) so tiled paper backgrounds persist per page.
+    // Phase-267 review fix (finding 4): the read path is budget-checked too —
+    // an ADB-written multi-MB blob under `paper_texture_<page>` reads back as
+    // null instead of forcing a huge decode attempt downstream. Legacy empty
+    // strings (storable pre-phase-267) also read as null; every reader already
+    // treats blank as absent (`isNullOrBlank` at the EditorScreen decode site).
     fun paperTexturePathForPage(pageId: String): String? =
         prefs.getString("paper_texture_$pageId", null)
+            ?.takeIf { SettingsPrefsPolicy.isTexturePathAcceptable(it) }
 
     fun setPaperTexturePathForPage(pageId: String, path: String?) {
         prefs.edit().apply {
-            if (path == null) {
+            if (path.isNullOrEmpty()) {
+                // Phase-267 review fix (finding 5): empty clears, like null —
+                // pre-phase-267 "" was storable, and a future ""-to-clear caller
+                // must not silently keep the old texture.
                 remove("paper_texture_$pageId")
             } else if (SettingsPrefsPolicy.isTexturePathAcceptable(path)) {
                 // Phase 267: refuse absurd ADB-length paths (fail closed, keep old).
@@ -398,11 +416,14 @@ class SettingsManager(context: Context) {
 
     /** All paper-texture file paths currently referenced by any page, so orphan
      *  files no longer referenced by any pref key can be deleted (page removed,
-     *  texture cleared, etc.). */
+     *  texture cleared, etc.). Phase-267 review fix (finding 4): over-budget
+     *  ADB blobs are skipped, matching the [paperTexturePathForPage] read. */
     fun allPaperTexturePaths(): List<String> {
         val out = mutableListOf<String>()
         prefs.all.forEach { (key, value) ->
-            if (key.startsWith("paper_texture_") && value is String) out.add(value)
+            if (key.startsWith("paper_texture_") && value is String &&
+                SettingsPrefsPolicy.isTexturePathAcceptable(value)
+            ) out.add(value)
         }
         return out
     }
@@ -603,6 +624,11 @@ class SettingsManager(context: Context) {
             System.arraycopy(cipherText, 0, combined, RECENT_SEARCH_IV_BYTES, cipherText.size)
             Base64.encodeToString(combined, Base64.NO_WRAP)
         } catch (t: Throwable) {
+            // Phase-267 review fix (finding 8): drop the cached key so the next
+            // batch re-loads (or re-mints) instead of retrying a dead handle
+            // forever — e.g. the keystore entry was deleted out of band. Still
+            // fail-closed for this entry (null, never plaintext).
+            cachedRecentSearchKey = null
             null
         }
     }
@@ -628,6 +654,10 @@ class SettingsManager(context: Context) {
                 Charsets.UTF_8
             )
         } catch (t: Throwable) {
+            // Phase-267 review fix (finding 8): same cache drop as
+            // encryptRingValue — a stale cached handle must not poison every
+            // future batch. This entry still reads back as null (fail closed).
+            cachedRecentSearchKey = null
             null
         }
     }

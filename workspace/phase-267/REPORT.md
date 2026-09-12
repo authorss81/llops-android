@@ -80,6 +80,36 @@ shape (intent preserved — still reads through the policy default).
   untouched, `allowBackup=false` untouched, no plaintext rows added (refusals keep old
   values; recent-search fail-closed path unchanged).
 
+## 5b. Review fixes (2026-09-12, findings 1–9)
+
+1. **Uninstall honesty** — `PluginSettingsStore.removeAll` now returns `Boolean`
+   (`plugin-sdk/.../PluginSettings.kt:30`, default `true`; `InMemory:59` returns
+   `true`; `SettingsPluginSettingsStore:39-44` returns `wipePluginState`);
+   `PluginRegistry.uninstallPlugin` runs the disk-acknowledged wipe FIRST and
+   returns `Refused` on failure (`PluginRegistry.kt:455-465`) — the store
+   controller already maps `Refused` to a failed delete, so no UI change needed.
+2. **Stamp guard** — `stampPrefsVersion` short-circuits when already current
+   (`SettingsManager.kt:118-130`), removing the per-unlock blocking commit.
+3. **Counter max** — `recordFailedMasterPasswordVerification` increments from
+   `maxOf(flow, disk)` (`NoteflowViewModel.kt:3815-3826`).
+4. **Texture read budget** — getter + `allPaperTexturePaths` filter through
+   `isTexturePathAcceptable` (`SettingsManager.kt:385-418`); legacy `""` reads
+   as null (readers already treat blank as absent).
+5. **Empty clears** — `""` write removes the key, like `null`.
+6. **No-burn pin** — explicit guard comment in `isMasterPasswordValid`
+   (`NoteflowViewModel.kt:3859-3867`); behavior already correct on both surfaces.
+7. **Sanitize dedupe** — `sanitizeAutoLockTimeoutSeconds` delegates to
+   `AutoLockPolicy.sanitize` (`SettingsPrefsPolicy.kt:34-37`).
+8. **Key-cache invalidate** — encrypt/decrypt failures drop
+   `cachedRecentSearchKey` so the next batch re-loads/re-mints (still
+   fail-closed for the entry).
+9. **Clock skew** — documented as accepted/fail-open-safe on
+   `sanitizeLockoutUntilEpochMs`. Findings 10–11 accepted as-is (pin shape
+   disclosed; tutorial flow out of PROMPT scope).
+   Tests: `Phase267SettingsTest` 21 → 28 (+7 review-fix pins; old stamp test
+   reshaped for the short-circuit) + `FakePrefs.commitCount`. Full suite
+   **3841 / 0 failures**; `assembleDebug` green; `lintDebug` 0 errors.
+
 ## 5. Known limitations / follow-ups
 
 - The corrupt-credential state is detectable (`hasCorruptMasterPasswordCredential`) but has

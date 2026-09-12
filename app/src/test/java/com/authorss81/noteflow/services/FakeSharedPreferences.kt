@@ -17,6 +17,9 @@ class FakePrefs : SharedPreferences {
     val map = LinkedHashMap<String, Any?>()
     val removed = mutableListOf<String>()
     var failNextCommit = false
+    // Phase-267 review fix: lets tests assert a commit() was SKIPPED (no disk
+    // round-trip), e.g. the already-current prefs-version stamp.
+    var commitCount = 0
 
     @Suppress("UNCHECKED_CAST")
     override fun getAll(): MutableMap<String, *> = map.clone() as MutableMap<String, Any?>
@@ -98,6 +101,7 @@ class FakePrefs : SharedPreferences {
         }
 
         override fun commit(): Boolean {
+            commitCount++
             if (failNextCommit) {
                 failNextCommit = false
                 return false

@@ -31,8 +31,11 @@ object SettingsPrefsPolicy {
     /** Auto-lock window bounds: 0 = off, max 24 h (phase-267). */
     const val MAX_AUTO_LOCK_TIMEOUT_SECONDS: Int = 86400
 
+    // Phase-267 review fix (finding 7): single implementation — delegates to
+    // AutoLockPolicy.sanitize (the PROMPT-mandated owner of the 0..86400
+    // window) so the two entry points can never diverge.
     fun sanitizeAutoLockTimeoutSeconds(value: Int): Int =
-        value.coerceIn(0, MAX_AUTO_LOCK_TIMEOUT_SECONDS)
+        AutoLockPolicy.sanitize(value)
 
     /** Tutorial resume slide: never negative, capped so ADB cannot push it absurd. */
     const val MAX_TUTORIAL_RESUME_INDEX: Int = 10_000
@@ -50,7 +53,10 @@ object SettingsPrefsPolicy {
      * Lockout deadline: never negative and never further than one max backoff
      * window past now, so an ADB-written far-future value cannot permanently
      * lock the vault. [MAX_LOCKOUT_DELAY_MS] mirrors the 15-minute cap in
-     * `NoteflowViewModel.computeLockoutDelayMs`.
+     * `NoteflowViewModel.computeLockoutDelayMs`. Phase-267 review fix
+     * (finding 9): wall-clock skew is accepted — if the device clock moves
+     * backward between write and read a legit lockout shortens instead of
+     * extending, which is the fail-open-safe direction for availability.
      */
     const val MAX_LOCKOUT_DELAY_MS: Long = 15 * 60 * 1000L
 

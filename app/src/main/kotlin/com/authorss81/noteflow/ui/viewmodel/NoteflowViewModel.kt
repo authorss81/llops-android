@@ -3815,8 +3815,12 @@ fun updatePageTags(id: String, tags: String) {
     private fun recordFailedMasterPasswordVerification() {
         // Phase 267: the counter is capped by the SettingsManager setter — publish
         // the post-sanitize read-back so the flow can never carry an ADB-inflated
-        // (or Int-overflowed) value the disk refused.
-        settings.failedUnlockAttempts = _failedUnlockAttempts.value + 1
+        // (or Int-overflowed) value the disk refused. Phase-267 review fix
+        // (finding 3): increment from max(flow, disk), never flow alone — an
+        // ADB-inflated disk counter must not be written DOWN by one failed
+        // attempt while the app holds a stale zero in memory.
+        settings.failedUnlockAttempts =
+            maxOf(_failedUnlockAttempts.value, settings.failedUnlockAttempts) + 1
         val newCount = settings.failedUnlockAttempts
         _failedUnlockAttempts.value = newCount
         if (newCount >= MAX_FAILED_ATTEMPTS) {
@@ -3858,6 +3862,11 @@ fun updatePageTags(id: String, tags: String) {
      */
     suspend fun isMasterPasswordValid(password: String): Boolean {
         if (lockoutActive()) return false
+        // Phase-267 review fix (finding 6): same no-burn rule as
+        // verifyMasterPassword — a present-but-unparseable credential blob can
+        // never be fixed by retrying a password, so it returns here WITHOUT
+        // reaching recordFailedMasterPasswordVerification below. Keep this
+        // early return ahead of every counter-touching line.
         if (settings.masterPasswordCredentialOrLegacy == null) return false
         val dek = try {
             unwrapMasterDek(password)

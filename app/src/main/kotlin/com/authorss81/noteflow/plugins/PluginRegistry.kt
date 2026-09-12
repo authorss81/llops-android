@@ -453,8 +453,18 @@ class PluginRegistry(
             }
         }
         // Wipe opt-in history + every namespaced setting (delete, not disable).
+        // Phase-267 review fix (finding 1): the settings wipe is the fallible
+        // disk-acknowledged step, so it runs FIRST — on failure NOTHING is torn
+        // down and the uninstall is refused (the store controller already maps
+        // Refused to a failed delete, so the UI reports honestly instead of
+        // claiming success over a half-deleted plugin).
+        if (!settingsStore.removeAll(pluginId)) {
+            return PluginUninstallResult.Refused(
+                pluginId,
+                "Could not wipe the plugin's stored settings; nothing was uninstalled."
+            )
+        }
         enableStore.wipe(pluginId)
-        settingsStore.removeAll(pluginId)
         // Drop per-process caches so a later re-install starts clean.
         enabledNotified.remove(pluginId)
         arbitrationDisabledNotified.remove(pluginId)
