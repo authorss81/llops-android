@@ -152,8 +152,20 @@ class Phase269CompatTest {
             src.contains("AgslShaders.WetMixingEffect()") && src.contains("catch (e: Exception)")
         )
         assertTrue(
+            "opted-out users must never pay a shader compile (allocation gated on the toggle)",
+            src.contains("val wetMixingEffect = remember(canvasDeviceTier, gpuWetBrushesEnabled)")
+        )
+        assertTrue(
             "grain gate must honor the tier override (no direct detectDeviceTier)",
             !src.contains("detectDeviceTier(") && src.contains("canvasDeviceTier")
+        )
+        assertTrue(
+            "tier override must apply live (prefs listener bumps an epoch — a plain prefs read as remember key never recomposes)",
+            src.contains("addDeviceTierOverrideListener") && src.contains("tierEpoch")
+        )
+        assertTrue(
+            "draw-scope tier param must fail closed (a caller that forgets the tier never opts into the shader)",
+            src.contains("deviceTier: com.authorss81.noteflow.utils.DeviceTier = com.authorss81.noteflow.utils.DeviceTier.LOW_END")
         )
     }
 
@@ -234,13 +246,22 @@ class Phase269CompatTest {
     }
 
     @Test
-    fun `tier remembers are keyed on the override`() {
+    fun `tier remembers re-resolve live on override change`() {
+        // Review fix: the override is a plain prefs read (no snapshot state),
+        // so keying remember on its VALUE never recomposed — each site keys on
+        // a listener-bumped epoch instead.
         val glass = mainSource("theme/GlassSurfaces.kt")
         assertTrue(
             "glass tier must re-resolve on override change",
-            glass.contains("glassSettings.deviceTierOverride")
+            glass.contains("addDeviceTierOverrideListener") &&
+                glass.contains("glassTierEpoch")
         )
         val editor = mainSource("ui/screens/EditorScreen.kt")
+        assertTrue(
+            "editor tier must re-resolve on override change",
+            editor.contains("addDeviceTierOverrideListener") &&
+                editor.contains("tierEpoch")
+        )
         assertTrue(
             "low-end effect must re-run on tier change, not once per process",
             editor.contains("LaunchedEffect(editorDeviceTier)")

@@ -613,10 +613,20 @@ fun EditorScreen(
     var divideIntoPages by remember { mutableStateOf(true) }
     var gpuWetBrushesEnabled by remember { mutableStateOf(viewModel.settings.gpuWetBrushesEnabled) }
     // Phase 269: override-aware device tier, shared by the low-end effect, the
-    // AGSL honesty gates and the settings rows. Keyed on `deviceTierOverride`
-    // so a settings change re-resolves instead of serving a first-composition
-    // capture (the pre-269 `LaunchedEffect(Unit)` + SDK-only checks did).
-    val editorDeviceTier = remember(context, viewModel.settings.deviceTierOverride) {
+    // AGSL honesty gates and the settings rows. Phase-269 review fix: the
+    // override is a plain prefs read (no snapshot state), so keying `remember`
+    // on it never recomposed on change — a prefs listener bumps `tierEpoch`
+    // and the tier re-resolves on THAT (the pre-269 `LaunchedEffect(Unit)` +
+    // SDK-only checks served a first-composition capture forever).
+    var tierEpoch by remember { mutableIntStateOf(0) }
+    DisposableEffect(context) {
+        val tierListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == "device_tier_override") tierEpoch++
+        }
+        viewModel.settings.addDeviceTierOverrideListener(tierListener)
+        onDispose { viewModel.settings.removeDeviceTierOverrideListener(tierListener) }
+    }
+    val editorDeviceTier = remember(context, tierEpoch) {
         com.authorss81.noteflow.utils.DeviceCompatibilityManager.getDeviceTier(context, viewModel.settings)
     }
     var shapeAutoSnapEnabled by remember { mutableStateOf(viewModel.settings.shapeAutoSnapEnabled) }
@@ -4405,7 +4415,9 @@ private fun ToolPickerBottomSheet(
     onSnackbar: (String, Boolean) -> Unit = { _, _ -> },
     // Phase 269: override-aware tier for the AGSL honesty notice (threaded
     // from the editor — the sheet cannot read composition tier state itself).
-    deviceTier: com.authorss81.noteflow.utils.DeviceTier = com.authorss81.noteflow.utils.DeviceTier.MID_RANGE
+    // Fail-closed default (LOW_END): a caller that forgets the tier shows the
+    // fallback notice rather than silently assuming the shader ran.
+    deviceTier: com.authorss81.noteflow.utils.DeviceTier = com.authorss81.noteflow.utils.DeviceTier.LOW_END
 ) {
     val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
     val reduceMotion = com.authorss81.noteflow.theme.LocalReduceMotion.current

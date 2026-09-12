@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -150,12 +151,21 @@ fun FrostedGlassSurface(
 ) {
     val scheme = MaterialTheme.colorScheme
     val context = LocalContext.current
-    // Phase 269: keyed on the tier override — the pre-269 bare `remember`
+    // Phase 269: override-aware tier — the pre-269 bare `remember`
     // served the first-composition tier forever, so a settings override never
-    // restyled already-composed glass surfaces. The override is read live from
-    // prefs on every composition (cheap); only the tier resolve is memoized.
+    // restyled already-composed glass surfaces. Phase-269 review fix: the
+    // override is a plain prefs read (no snapshot state), so the tier is keyed
+    // on a listener-bumped epoch instead of the override value itself.
     val glassSettings = remember(context) { SettingsManager(context) }
-    val tier = remember(context, glassSettings.deviceTierOverride) {
+    var glassTierEpoch by remember { mutableStateOf(0) }
+    DisposableEffect(context) {
+        val tierListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == "device_tier_override") glassTierEpoch++
+        }
+        glassSettings.addDeviceTierOverrideListener(tierListener)
+        onDispose { glassSettings.removeDeviceTierOverrideListener(tierListener) }
+    }
+    val tier = remember(context, glassTierEpoch) {
         DeviceCompatibilityManager.getDeviceTier(context, glassSettings)
     }
     val style = GlassSurfaceMath.resolveStyle(applyBlur, tier, tonal)

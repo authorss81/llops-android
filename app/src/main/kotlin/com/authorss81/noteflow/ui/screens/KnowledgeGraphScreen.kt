@@ -221,6 +221,13 @@ fun KnowledgeGraphScreen(
         // before the low-end notice could render. Now: tier → profile cap →
         // cheap COUNT → newest-first capped load (at most `cap` rows are ever
         // materialized + decrypted) → deterministic cull as a safety net.
+        // Review-fix honesty note: COUNT and capped load are two queries, so a
+        // concurrent add/delete between them can skew the culled notice by the
+        // delta — benign (the cull net below still bounds layout), never an
+        // OOM. And the cap binds EVERYTHING downstream: edges are built only
+        // over surviving endpoints and tag chips aggregate only the capped set,
+        // so a flagship vault past its cap shows fewer cross-links/tags by
+        // design (the "most recent N" notice says so).
         // Device tier → physics workload. This is the phase-38 low-end lever.
         val tier = DeviceCompatibilityManager.getDeviceTier(context, viewModel.settings)
         val lowEnd = tier == DeviceTier.LOW_END

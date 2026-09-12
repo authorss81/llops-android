@@ -115,19 +115,26 @@ import org.junit.Test
  * `//` comments only — the KDoc counts below are unchanged). Re-measured on
  * the phase-269 tree: AnnotationCanvas 8820 raw / 7054 code, EditorScreen
  * 7545 raw / 6557 code.
+ *
+ * PHASE 269 REVIEW-FIX RE-BASELINE: listener-observed tier epoch
+ * (canvas DisposableEffect + tierEpoch; editor DisposableEffect + tierEpoch;
+ * glass the same), toggle-gated effect allocation, fail-closed draw/sheet
+ * defaults, graph TOCTOU honesty comment, Settings-link failure fallback.
+ * Re-measured: AnnotationCanvas 8835 raw / 7062 code, EditorScreen 7557 raw /
+ * 6565 code; HomeScreen unchanged.
  */
 class Phase254CommentTrimTest {
 
     // Phase-255/256/257/264/266/269 re-baselined raw line counts (review-fix values measured on the review-fix tree).
     private val headRaw = mapOf(
-        "ui/components/AnnotationCanvas.kt" to 8820,
-        "ui/screens/EditorScreen.kt" to 7545,
+        "ui/components/AnnotationCanvas.kt" to 8835,
+        "ui/screens/EditorScreen.kt" to 7557,
         "ui/screens/HomeScreen.kt" to 3845
     )
     // Phase-255/256/257/264/266/269 re-baselined code-line counts (non-blank, non-full-`//` lines).
     private val headCode = mapOf(
-        "ui/components/AnnotationCanvas.kt" to 7054,
-        "ui/screens/EditorScreen.kt" to 6557,
+        "ui/components/AnnotationCanvas.kt" to 7062,
+        "ui/screens/EditorScreen.kt" to 6565,
         "ui/screens/HomeScreen.kt" to 3310
     )
     // Parent baseline KDoc `/**` opener counts (no KDoc opener may be deleted).

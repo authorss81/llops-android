@@ -798,6 +798,23 @@ class SettingsManager(context: Context) {
             }.apply()
         }
 
+    // Phase-269 review fix: `deviceTierOverride` above is a plain prefs read,
+    // so a `remember(key = deviceTierOverride)` never recomposes when the user
+    // flips the override in Settings (no snapshot state is observed). These
+    // listener helpers let composables bump a local epoch on override change
+    // and key their tier resolve on THAT, so the new tier applies live.
+    fun addDeviceTierOverrideListener(
+        listener: SharedPreferences.OnSharedPreferenceChangeListener
+    ) {
+        prefs.registerOnSharedPreferenceChangeListener(listener)
+    }
+
+    fun removeDeviceTierOverrideListener(
+        listener: SharedPreferences.OnSharedPreferenceChangeListener
+    ) {
+        prefs.unregisterOnSharedPreferenceChangeListener(listener)
+    }
+
     // Phase 28: GLASS-theme frosted blur. OFF by default on LOW_END devices is
     // handled by GlassBlurGate (tier-aware); this is the user's master switch.
     var glassBlurEnabled: Boolean

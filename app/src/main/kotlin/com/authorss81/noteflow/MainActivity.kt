@@ -356,12 +356,20 @@ class MainActivity : FragmentActivity() {
                         if (result == SnackbarResult.ActionPerformed &&
                             message.actionId == NoteflowViewModel.SNACKBAR_ACTION_OPEN_APP_SETTINGS
                         ) {
+                            // Review fix: never swallow the deep-link failure —
+                            // a dead tap with no fallback strands the user the
+                            // action was meant to rescue.
                             runCatching {
                                 startActivity(
                                     android.content.Intent(
                                         android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
                                         android.net.Uri.fromParts("package", packageName, null)
                                     )
+                                )
+                            }.onFailure {
+                                viewModel.showSnackbar(
+                                    "Couldn't open Settings — open the app's Settings page manually.",
+                                    isLong = true
                                 )
                             }
                         }

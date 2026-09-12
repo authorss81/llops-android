@@ -1147,13 +1147,23 @@ fun AnnotationCanvas(
     // cosmetic overlay, and skipping it keeps their draw path unchanged.
     val grainContext = LocalContext.current
     // Phase 269: override-aware tier, shared by the grain gate AND the AGSL
-    // single-truth gate below. Keyed on `deviceTierOverride` so a settings
-    // change re-resolves instead of serving a first-composition capture; the
-    // pre-269 grain path called `detectDeviceTier` directly and bypassed the
-    // user's tier override entirely. Reuses the canvas-owned SettingsManager
-    // (hoisted here so both gates share one instance).
+    // single-truth gate below. Phase-269 review fix: the override is a plain
+    // prefs read (no snapshot state), so keying `remember` on it never
+    // recomposed on change — instead a prefs listener bumps `tierEpoch` and
+    // the tier re-resolves on THAT. The pre-269 grain path called
+    // `detectDeviceTier` directly and bypassed the user's tier override
+    // entirely. Reuses the canvas-owned SettingsManager (hoisted here so both
+    // gates share one instance).
     val brushRenderSettings = remember(grainContext) { com.authorss81.noteflow.services.SettingsManager(grainContext) }
-    val canvasDeviceTier = remember(grainContext, brushRenderSettings.deviceTierOverride) {
+    var tierEpoch by remember { mutableIntStateOf(0) }
+    DisposableEffect(grainContext) {
+        val tierListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == "device_tier_override") tierEpoch++
+        }
+        brushRenderSettings.addDeviceTierOverrideListener(tierListener)
+        onDispose { brushRenderSettings.removeDeviceTierOverrideListener(tierListener) }
+    }
+    val canvasDeviceTier = remember(grainContext, tierEpoch) {
         com.authorss81.noteflow.utils.DeviceCompatibilityManager.getDeviceTier(grainContext, brushRenderSettings)
     }
     val paperGrainEnabled = remember(canvasDeviceTier) {
@@ -1212,13 +1222,16 @@ fun AnnotationCanvas(
     // resident bytes in between.
     // Phase 269: single-truth AGSL allocation — the tier-aware AgslGate, not
     // the SDK-only capability. A LOW_END re-enable of `gpuWetBrushes` can no
-    // longer allocate the RuntimeShader. Construction is try/caught: some
+    // longer allocate the RuntimeShader. Phase-269 review fix: also gated on
+    // the user toggle — an opted-out user never pays a RuntimeShader compile
+    // (fragile drivers throw at compile time) for a shader the pump would
+    // park unused. Construction is try/caught: some
     // API-33+ drivers (e.g. Mali-G31 Go parts) throw at RuntimeShader compile
     // time, and a shader crash must fall back to the vector path, never crash
     // the editor. A null effect routes every wet pass through the plain path.
-    val wetMixingEffect = remember(canvasDeviceTier) {
+    val wetMixingEffect = remember(canvasDeviceTier, gpuWetBrushesEnabled) {
         try {
-            if (com.authorss81.noteflow.utils.AgslGate.isSupported(
+            if (gpuWetBrushesEnabled && com.authorss81.noteflow.utils.AgslGate.isSupported(
                     android.os.Build.VERSION.SDK_INT,
                     canvasDeviceTier
                 )
@@ -5855,8 +5868,10 @@ private fun DrawScope.drawCompositedLayersStrokes(
     // Phase 222: per-layer clipping mask (set of layer ids with clipping mask on).
     clippingMaskLayerIds: Set<String> = emptySet(),
     // Phase 269: override-aware tier for the single AgslGate truth (the
-    // DrawScope extension cannot read composition state itself).
-    deviceTier: com.authorss81.noteflow.utils.DeviceTier = com.authorss81.noteflow.utils.DeviceTier.MID_RANGE
+    // DrawScope extension cannot read composition state itself). Defaults to
+    // LOW_END (fail closed — no shader) so a future caller that forgets to
+    // thread the canvas tier can never opt into the GPU path by accident.
+    deviceTier: com.authorss81.noteflow.utils.DeviceTier = com.authorss81.noteflow.utils.DeviceTier.LOW_END
 ) {
     // capture time (see SymmetryCommitPolicy): a stroke drawn while a mode was
     // active persisted BOTH rows (original + mirrored twin), so re-mirroring
