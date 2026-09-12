@@ -275,7 +275,9 @@
 > `ScrollableTabRow` with ellipsized labels (`:1429`); search field has
 > `imeAction=Search` + an `isSearching` spinner instead of the empty-state
 > flash; 14 compact controls enforce 48dp via `minimumInteractiveComponentSize`
-> (visuals unchanged); gallery grid is `Adaptive(150.dp)` (2 columns on 360dp)
+> (icon-button visuals unchanged; Contrast Studio row intentionally 48dp tall —
+> see `workspace/phase-263/REPORT.md` §6); gallery grid is `Adaptive(150.dp)`
+> (2 columns on 360dp)
 > with a TalkBack-labelled type badge. Pins: `Phase263HomeGalleryTest` (16);
 > phase-184/188 grid literal re-pinned to 150dp, phase-254 HomeScreen
 > re-baselined to 3845 raw / 3310 code.

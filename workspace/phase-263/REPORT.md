@@ -67,7 +67,7 @@ proportions) and the type badge is TalkBack-labelled
 | 4 | dialog flags survive | all visibility + string state saveable | DONE | `HomeScreen.kt:117-120,164-168,199-210,419,451` |
 | 5 | tabs never clip at 360dp | `ScrollableTabRow`, ellipsized labels | DONE | `HomeScreen.kt:1429-1460` |
 | 6 | search IME + no empty-flash | `imeAction=Search`, labelled icon, `isSearching` spinner | DONE | `HomeScreen.kt:1299-1302,421-447,1796-1805` |
-| 7 | 48dp hit areas | minimums on all 14 sites, visuals unchanged | DONE | HomeScreen `:1385,1502,1650`; Gallery `:337`; Sidebar `:111,339,357,442,459,533`; Lock `:183`; Editor `:2731,2881,4901,5649` |
+| 7 | 48dp hit areas | minimums on all 14 sites; icon-button visuals unchanged, Contrast Studio row intentionally grows to 48dp height (see §6) | DONE | HomeScreen `:1385,1502,1650`; Gallery `:337`; Sidebar `:111,339,357,442,459,533`; Lock `:183`; Editor `:2731,2881,4901,5649` |
 | 8 | gallery 2 cols on 360dp | `Adaptive(150.dp)` | DONE | `GalleryView.kt:100` |
 | 9 | badge announced | `pageTypeLabel` description | DONE | `GalleryView.kt:289` |
 | 10 | pin badge stays 18dp | untouched | DONE | `Phase186GalleryQuickActionsTest` green |
@@ -112,3 +112,23 @@ all 13 dialog flags, no stale plain-`remember`, exactly 3 saveable
 ellipsized labels, Search IME + label + `isSearching` spinner branch, 48dp
 minimums (home ×3, gallery, sidebar ≥6, lock, editor ×2), gallery 150dp
 floor + badge description.
+
+## 6. Review-fix addendum (post-review corrections, docs-only)
+
+No `.kt` change: touching `EditorScreen.kt`/`GalleryView.kt` would break the
+phase-254 line-count pins (`7347/6426`, +0 lines) and the phase-188
+`weight` pins, so all three review findings below resolve as documentation.
+
+- **Finding 7 (`weight(1f, fill = false)` kept):** re-verified inert, not a
+  live foot-gun — a `Column` inside a Lazy-grid item has unbounded maxHeight,
+  so Compose distributes zero slack through the flex child (it wraps content).
+  Removal would break `Phase188GalleryLayoutBoundsTest` pins with no behavior
+  gain. Kept deliberately; REPORT row 11 (`ACCEPTED`) stands.
+- **Finding 8 (Contrast Studio row visual):** `minimumInteractiveComponentSize`
+  on the full-width `ContrastSuggestionsRow` (`EditorScreen.kt:4901`) reserves
+  a 48dp minimum height, so that row intentionally grows from ~32dp to 48dp —
+  the larger touch target IS the fix. Row 7 above corrected accordingly; the
+  13 icon-button sites keep byte-identical visuals.
+- **Finding 4 note (LockScreen biometric):** the glyph previously had no
+  explicit size (already 48dp by `IconButton` default), so the added minimum
+  is a pin against future shrinkage, not a visual change. Harmless, kept.
