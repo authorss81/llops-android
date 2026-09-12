@@ -262,14 +262,25 @@ class B1Db03VoiceNoteEncryptionTest {
     fun `page permanent delete removes the page's voice recordings`() {
         val repo = sourceFile("data/repository/NoteRepository.kt")
         val del = repo.substringAfter("suspend fun deletePagePermanently").substringBefore("suspend fun migrateLegacyPlaintextVoiceNotes")
+        // Phase-260: the delete split into collect (confined file resolution) +
+        // deletePageRowsPermanently (one transaction) + post-commit file removal.
+        val collector = repo.substringAfter("private suspend fun collectPageFilesForDelete").substringBefore("private suspend fun deletePageRowsPermanently")
 
-        assertTrue("the AUDIO_NOTE embeds are queried before the embeds rows are dropped", del.contains("getMediaEmbedsForPage(id)"))
-        assertTrue("only AUDIO_NOTE embeds' files are deleted", del.contains("MediaEmbedType.AUDIO_NOTE.name"))
+        assertTrue("the AUDIO_NOTE embeds are queried before the embeds rows are dropped", collector.contains("getMediaEmbedsForPage("))
+        assertTrue("only AUDIO_NOTE embeds' files are collected", collector.contains("MediaEmbedType.AUDIO_NOTE.name"))
         assertTrue(
-            "voice files are removed via the encrypted-blob classifier (plaintext too)",
-            del.contains("VoiceNoteCrypto.isEncryptedBlobName(File(audioPath).name)")
+            "voice files resolve through the voice-dir confinement gate (blob + legacy plaintext names)",
+            collector.contains("PageDeleteFilePolicy.voiceBlobForDelete")
         )
-        assertTrue("audio files are deleted BEFORE the media_embeds rows are dropped", del.indexOf("try { File(audioPath).delete() }") < del.indexOf("deleteMediaEmbedsForPage(id)"))
+        assertTrue(
+            "the source document resolves through the imports-root confinement gate",
+            collector.contains("PageDeleteFilePolicy.sourceFileForDelete")
+        )
+        assertTrue("rows delete in one transaction", del.contains("deletePageRowsPermanently(id)"))
+        assertTrue(
+            "files are deleted only AFTER the row transaction commits (DB-first ordering)",
+            del.indexOf("deletePageRowsPermanently(id)") < del.indexOf("runCatching { file.delete() }")
+        )
     }
 
     @Test

@@ -129,8 +129,16 @@ class B1Db02MigrationFailureTest {
         val region = migrationRegion
 
         assertTrue("shared quarantine helper must exist", databaseSource.contains("internal fun quarantineMigrateFailed"))
-        assertTrue("the catch must route through the quarantine helper", region.contains("quarantineMigrateFailed(dbFile, tempFile)"))
+        // Phase-260: the flag is raised BEFORE the quarantine with the SAME
+        // timestamp that stamps the file suffix (kill-window ordering), so the
+        // helper takes the caller's timestamp.
+        assertTrue("the catch must route through the quarantine helper", region.contains("quarantineMigrateFailed(dbFile, tempFile, timestamp)"))
         assertTrue("the catch must raise the persistent corruption flag", region.contains("DatabaseSecurityHelper.setCorruptionDetected(context, timestamp)"))
+        assertTrue(
+            "the flag must be raised BEFORE the quarantine renames (kill-window ordering)",
+            region.indexOf("DatabaseSecurityHelper.setCorruptionDetected(context, timestamp)") <
+                region.indexOf("quarantineMigrateFailed(dbFile, tempFile, timestamp)")
+        )
         assertTrue("the catch must rethrow so initializeData surfaces the recovery screen", region.contains("throw e"))
 
         val catchTail = region.substringAfter("} catch (e: Exception) {")

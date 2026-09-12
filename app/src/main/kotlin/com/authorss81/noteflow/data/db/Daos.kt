@@ -173,6 +173,16 @@ interface NotePageDao {
     @Query("SELECT * FROM pages")
     suspend fun getAllPagesForReencrypt(): List<NotePageEntity>
 
+    // Phase-260: bounded whole-table sweep window for the re-key / re-encrypt
+    // passes (migrateFieldRecordAad, reencryptPlaintextFields, the legacy-body
+    // migration). The unbounded getAllPagesForReencrypt materialized every page
+    // row at once (50k strokes-class vaults OOM the same way note_versions did
+    // before phase-149 paged it). ORDER BY rowid ASC keeps OFFSET paging stable
+    // across the in-place field updates (updates change neither row count nor
+    // rowid order). Plain @Query additions — no schema change.
+    @Query("SELECT * FROM pages ORDER BY rowid ASC LIMIT :limit OFFSET :offset")
+    suspend fun getPagesForReencryptPaged(limit: Int, offset: Int): List<NotePageEntity>
+
     @Query("UPDATE pages SET title = :title, extractedText = :extractedText WHERE id = :id")
     suspend fun updateEncryptedFields(id: String, title: String, extractedText: String?)
 
@@ -225,6 +235,12 @@ interface StrokeDao {
     @Query("SELECT * FROM strokes")
     suspend fun getAllStrokesForReencrypt(): List<StrokeEntity>
 
+    // Phase-260: bounded sweep window for the stroke re-key / re-encrypt
+    // passes — same OOM rationale as getPagesForReencryptPaged above. Plain
+    // @Query addition, no schema change.
+    @Query("SELECT * FROM strokes ORDER BY rowid ASC LIMIT :limit OFFSET :offset")
+    suspend fun getStrokesForReencryptPaged(limit: Int, offset: Int): List<StrokeEntity>
+
     @Query("UPDATE strokes SET textContent = :textContent WHERE id = :id")
     suspend fun updateTextContent(id: String, textContent: String?)
 
@@ -256,6 +272,12 @@ interface MediaEmbedDao {
 
     @Query("SELECT * FROM media_embeds")
     suspend fun getAllEmbedsForReencrypt(): List<MediaEmbedEntity>
+
+    // Phase-260: bounded sweep window for the embed re-key / re-encrypt passes
+    // and the legacy voice-note migration filter — same OOM rationale as
+    // getPagesForReencryptPaged above. Plain @Query addition, no schema change.
+    @Query("SELECT * FROM media_embeds ORDER BY rowid ASC LIMIT :limit OFFSET :offset")
+    suspend fun getEmbedsForReencryptPaged(limit: Int, offset: Int): List<MediaEmbedEntity>
 
     @Query("UPDATE media_embeds SET textContent = :textContent WHERE id = :id")
     suspend fun updateTextContent(id: String, textContent: String?)

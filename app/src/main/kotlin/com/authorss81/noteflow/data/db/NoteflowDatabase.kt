@@ -301,8 +301,14 @@ abstract class NoteflowDatabase : RoomDatabase() {
                 // copy. The original is preserved under *.migrate-failed-<ts> and
                 // the persistent corruption flag routes the user to the
                 // corruption-recovery screen (restore from backup / start fresh).
-                val timestamp = quarantineMigrateFailed(dbFile, tempFile)
+                // Phase-260: the flag is raised BEFORE the quarantine renames (a
+                // kill between flag and renames still lands on the recovery
+                // screen with the vault bytes intact; the old order risked moved
+                // bytes with no flag) and the SAME timestamp stamps both, so the
+                // recovery screen's event identity matches the file suffix.
+                val timestamp = System.currentTimeMillis()
                 com.authorss81.noteflow.services.DatabaseSecurityHelper.setCorruptionDetected(context, timestamp)
+                quarantineMigrateFailed(dbFile, tempFile, timestamp)
                 throw e
             }
         }
@@ -390,26 +396,22 @@ abstract class NoteflowDatabase : RoomDatabase() {
              */
             private fun quarantineCorruptDatabase(context: Context, dbName: String) {
                 val timestamp = System.currentTimeMillis()
-                val suffix = ".corrupt-$timestamp"
+                // Phase-260: raise the persistent flag BEFORE touching any bytes. A
+                // kill between the flag and the renames still lands on the recovery
+                // screen with the vault files intact (restore-from-backup and
+                // explicit start-fresh both remain possible); the old
+                // rename-then-flag order risked quarantined bytes with NO flag, a
+                // vault that silently never offered its recovery path.
+                com.authorss81.noteflow.services.DatabaseSecurityHelper.setCorruptionDetected(context, timestamp)
                 val baseFile = context.getDatabasePath(dbName)
                 val dir = baseFile.parentFile
                 if (dir == null) return
                 val names = listOf(dbName, "$dbName-wal", "$dbName-shm", "$dbName-journal")
                 for (name in names) {
-                    val source = File(dir, name)
-                    if (source.exists()) {
-                        val target = File(dir, name + suffix)
-                        try {
-                            // Rename preserves the bytes; NEVER delete the source on a
-                            // corrupt open — the whole point is that nothing is destroyed.
-                            // (Timestamp collisions are impossible in practice; a failed
-                            // rename just leaves the file for the next quarantine attempt.)
-                            source.renameTo(target)
-                        } catch (_: Exception) {
-                        }
-                    }
+                    // Rename preserves the bytes; NEVER delete the source on a
+                    // corrupt open — the whole point is that nothing is destroyed.
+                    quarantineSingleFile(dir, name, ".corrupt-$timestamp")
                 }
-                com.authorss81.noteflow.services.DatabaseSecurityHelper.setCorruptionDetected(context, timestamp)
             }
         }
 
@@ -462,6 +464,22 @@ abstract class NoteflowDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Phase-260: every connection explicitly arms `wal_autocheckpoint`. The
+         * SQLite default is already 1000 pages, but the pragma is per-connection
+         * state (a future default change or a SQLCipher build quirk must never
+         * silently leave the WAL unbounded) — and the previous tree never set it
+         * anywhere, so a long session could accumulate an arbitrarily large
+         * `-wal` between the explicit FULL checkpoints. Best-effort on purpose:
+         * a pragma failure must never break the vault open.
+         */
+        private val WalAutocheckpointCallback = object : RoomDatabase.Callback() {
+            override fun onOpen(db: SupportSQLiteDatabase) {
+                super.onOpen(db)
+                runCatching { db.execSQL("PRAGMA wal_autocheckpoint=1000") }
+            }
+        }
+
         fun getDatabase(context: Context): NoteflowDatabase {
             cachedAppContext = context.applicationContext
             INSTANCE?.let { return it }
@@ -482,7 +500,17 @@ abstract class NoteflowDatabase : RoomDatabase() {
                 )
                 .setJournalMode(JournalMode.WRITE_AHEAD_LOGGING)
                 .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)
-                .fallbackToDestructiveMigration()
+                // Phase-260: NO destructive-migration fallback of either flavor
+                // (neither the unconditional wipe nor the on-downgrade-only one).
+                // The unconditional fallback silently wiped the vault whenever the
+                // on-disk user_version drifted past SCHEMA_VERSION (a newer backup
+                // restored onto this build, a missed migration edge) — total data
+                // loss with no prompt. Fail closed instead: an unknown version now
+                // throws on open (bytes preserved; the restore path's
+                // checkRestoredSchemaNotNewer guard refuses newer backups BEFORE
+                // any swap) rather than deleting the user's notes. Pinned by
+                // Phase260StorageTest (no-destructive-fallback pin).
+                .addCallback(WalAutocheckpointCallback)
                 .openHelperFactory(NoteflowSqlcipherFactory(context))
                 .build()
                 .also { INSTANCE = it }
@@ -514,16 +542,12 @@ abstract class NoteflowDatabase : RoomDatabase() {
                     // R2-B1D-01: collapse committed-but-uncheckpointed WAL frames
                     // into the main file BEFORE the connection is dropped so the
                     // re-armed baseline covers the session's true final state.
-                    // (Fully stepping the cursor is required for wal_checkpoint(FULL).)
-                    runCatching {
-                        db.query("PRAGMA wal_checkpoint(FULL)", null).use { cursor ->
-                            if (cursor != null) {
-                                while (cursor.moveToNext()) {
-                                    // Consume every row to run the FULL checkpoint
-                                }
-                            }
-                        }
-                    }
+                    // Phase-260: the checkpoint result is INSPECTED (busy flag),
+                    // not swallowed — a BUSY checkpoint is retried once. Even a
+                    // still-busy close is safe for the tamper baseline: the re-arm
+                    // below HMACs main + `-wal` (DatabaseSecurityHelper streams
+                    // both), so uncheckpointed frames are still authenticated.
+                    runWalCheckpointFull(db)
                     // B1-AUTH-02 posture: never let a close failure leak a keyed
                     // handle past the session boundary — swallow and forget it.
                     runCatching { db.close() }
@@ -562,6 +586,39 @@ abstract class NoteflowDatabase : RoomDatabase() {
 }
 
 /**
+ * Phase-260: runs `PRAGMA wal_checkpoint(FULL)` and INSPECTS the result instead
+ * of fire-and-forget stepping the cursor. `wal_checkpoint` returns one row
+ * `(busy, log_frames, checkpointed_frames)` — column 0 is non-zero when another
+ * connection held the WAL lock and frames were LEFT in the `-wal`. A single
+ * immediate retry collapses the common race (a just-released reader); a
+ * still-busy second attempt returns false and the caller closes anyway (the
+ * session-end HMAC re-arm streams main + `-wal`, so the baseline stays valid).
+ *
+ * @return true when the checkpoint completed with no busy frames remaining.
+ */
+internal fun runWalCheckpointFull(db: RoomDatabase): Boolean {
+    repeat(2) {
+        var busy = 1
+        runCatching {
+            db.query("PRAGMA wal_checkpoint(FULL)", null).use { cursor ->
+                // Fully step the cursor: the FULL checkpoint only executes while
+                // rows are consumed.
+                if (cursor != null && cursor.moveToFirst()) {
+                    busy = cursor.getInt(0)
+                    while (cursor.moveToNext()) {
+                        // Consume every row to run the FULL checkpoint to completion.
+                    }
+                } else {
+                    busy = 0
+                }
+            }
+        }
+        if (busy == 0) return true
+    }
+    return false
+}
+
+/**
  * B1-DB-1 (phase-43): the single source of truth for "is this an open failure we
  * should quarantine as genuine corruption?"
  *
@@ -571,8 +628,15 @@ abstract class NoteflowDatabase : RoomDatabase() {
  *  - SQLCipher's own `SQLiteNotADatabaseException` (raised when SQLCipher cannot
  *    recognize the file as a database — i.e. a wrong passphrase or a genuinely
  *    corrupt/crypted-over file),
- *  - the specific diagnostic messages "file is not a database", "malformed" and
+ *  - the specific diagnostic messages "file is not a database" and
  *    "database disk image is malformed".
+ *
+ * Phase-260: the bare `malformed` substring is GONE. It matched any message
+ * containing the word anywhere ("malformed URL", "malformed backup header" from
+ * a NON-database failure wrapping up through the open path) and would have
+ * quarantined a healthy vault. The two full SQLite diagnostics above plus the
+ * two exception types cover genuine corruption; anything else propagates as a
+ * regular (fail-closed, bytes-preserving) open failure.
  *
  * NEVER matches the transient, recoverable open failures that are ALSO
  * `SQLiteException` subclasses: "database is locked" (SQLiteDatabaseLockedException),
@@ -587,8 +651,7 @@ internal fun isDatabaseCorruptException(e: Throwable?): Boolean {
     return e is android.database.sqlite.SQLiteDatabaseCorruptException ||
         e is net.zetetic.database.sqlcipher.SQLiteNotADatabaseException ||
         msg.contains("file is not a database", ignoreCase = true) ||
-        msg.contains("database disk image is malformed", ignoreCase = true) ||
-        msg.contains("malformed", ignoreCase = true)
+        msg.contains("database disk image is malformed", ignoreCase = true)
 }
 
 /**
@@ -611,10 +674,19 @@ internal fun isDatabaseCorruptException(e: Throwable?): Boolean {
  * Pure JVM (File ops only), unit-tested in B1Db02MigrationFailureTest. A failed
  * rename simply leaves the file in place (bytes still preserved) — the recovery
  * screen is shown regardless.
+ *
+ * Phase-260: the timestamp is a parameter (defaulting to now) so the
+ * migrate-plaintext catch block can raise the corruption flag with the EXACT
+ * stamp the file suffix carries; quarantining routes through
+ * [quarantineSingleFile] (collision-safe target, rename result checked, byte
+ * copy fallback).
  */
-internal fun quarantineMigrateFailed(dbFile: File, tempFile: File): Long {
+internal fun quarantineMigrateFailed(
+    dbFile: File,
+    tempFile: File,
+    timestamp: Long = System.currentTimeMillis()
+): Long {
     if (tempFile.exists()) tempFile.delete()
-    val timestamp = System.currentTimeMillis()
     val suffix = ".migrate-failed-$timestamp"
     val dir = dbFile.parentFile
     if (dir != null) {
@@ -625,14 +697,50 @@ internal fun quarantineMigrateFailed(dbFile: File, tempFile: File): Long {
             dbFile.name + "-journal"
         )
         for (name in names) {
-            val source = File(dir, name)
-            if (source.exists()) {
-                try {
-                    source.renameTo(File(dir, name + suffix))
-                } catch (_: Exception) {
-                }
-            }
+            quarantineSingleFile(dir, name, suffix)
         }
     }
     return timestamp
+}
+
+/**
+ * Phase-260: the single byte-preserving quarantine primitive shared by the
+ * corrupt-open path and the failed-migration path. NEVER deletes the source —
+ * the whole point of a quarantine is that nothing is destroyed.
+ *
+ * Two hardening fixes over the old inline loops:
+ *  - millisecond timestamp collisions are real (back-to-back corrupt opens, a
+ *    migrate failure followed by a corrupt open in the same ms): the target is
+ *    probed for a free name (`<name><suffix>`, then `<name><suffix>-1…`) so a
+ *    second quarantine can never overwrite the first one's preserved bytes;
+ *  - the `renameTo` boolean is CHECKED (both old loops ignored it, silently
+ *    leaving the live file in place while reporting success). On a failed
+ *    rename the bytes are copied to the target and the source deleted only when
+ *    the copy is length-identical; any failure leaves the source untouched.
+ */
+internal fun quarantineSingleFile(dir: File, name: String, suffixBase: String) {
+    val source = File(dir, name)
+    if (!source.exists()) return
+    var target = File(dir, name + suffixBase)
+    var attempt = 0
+    while (target.exists() && attempt < 100) {
+        attempt++
+        target = File(dir, name + suffixBase + "-$attempt")
+    }
+    if (target.exists()) return
+    try {
+        if (source.renameTo(target)) return
+        source.inputStream().use { input ->
+            target.outputStream().use { output -> input.copyTo(output) }
+        }
+        if (target.length() == source.length()) {
+            source.delete()
+        } else {
+            runCatching { target.delete() }
+        }
+    } catch (_: Exception) {
+        runCatching {
+            if (!target.exists() || target.length() != source.length()) target.delete()
+        }
+    }
 }

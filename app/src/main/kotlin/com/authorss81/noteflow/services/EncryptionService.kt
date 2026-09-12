@@ -170,9 +170,18 @@ object EncryptionService {
      * salt. Callers must zeroize the returned key after use.
      */
     fun deriveKey(password: String, salt: ByteArray): ByteArray {
+        // Phase-260: the PBEKeySpec's internal char[] copy is zeroized after
+        // use (the pre-fix spec lived on until GC). Residual: the normalized
+        // String itself is immutable and cannot be wiped — same residual every
+        // JVM PBKDF2 caller carries; the returned key MUST still be zeroized by
+        // the caller.
         val keySpec = PBEKeySpec(normalizePassword(password).toCharArray(), salt, 600000, 256)
-        val factory = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
-        return factory.generateSecret(keySpec).encoded
+        try {
+            val factory = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
+            return factory.generateSecret(keySpec).encoded
+        } finally {
+            keySpec.clearPassword()
+        }
     }
 
     /**
@@ -187,9 +196,14 @@ object EncryptionService {
      * PBKDF2 behind the same GCM tag check, so it adds no oracle.
      */
     internal fun deriveKeyLegacyRaw(password: String, salt: ByteArray): ByteArray {
+        // Phase-260: same clearPassword discipline as deriveKey.
         val keySpec = PBEKeySpec(password.toCharArray(), salt, 600000, 256)
-        val factory = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
-        return factory.generateSecret(keySpec).encoded
+        try {
+            val factory = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
+            return factory.generateSecret(keySpec).encoded
+        } finally {
+            keySpec.clearPassword()
+        }
     }
 
     private fun base64Encode(data: ByteArray): String {

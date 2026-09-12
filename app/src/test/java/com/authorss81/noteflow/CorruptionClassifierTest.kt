@@ -39,8 +39,24 @@ class CorruptionClassifierTest {
     @Test
     fun messageMalformed_isCorruption() {
         assertTrue(isDatabaseCorruptException(RuntimeException("database disk image is malformed")))
-        assertTrue(isDatabaseCorruptException(RuntimeException("malformed database schema")))
         assertTrue(isDatabaseCorruptException(android.database.sqlite.SQLiteDatabaseCorruptException("malformed")))
+    }
+
+    /**
+     * Phase-260: the bare `malformed` substring is gone from the message
+     * matcher — it quarantined healthy vaults on NON-database failures whose
+     * messages merely contained the word ("malformed URL", "malformed backup
+     * header" wrapping up through the open path). Only the full SQLite
+     * diagnostic classifies by message now; the typed platform exception still
+     * classifies by type.
+     */
+    @Test
+    fun bareMalformedSubstring_noLongerCorruption() {
+        assertFalse(isDatabaseCorruptException(RuntimeException("malformed database schema")))
+        assertFalse(isDatabaseCorruptException(RuntimeException("malformed URL: no protocol")))
+        assertFalse(isDatabaseCorruptException(RuntimeException("malformed backup header")))
+        assertTrue(isDatabaseCorruptException(android.database.sqlite.SQLiteDatabaseCorruptException("malformed")))
+        assertTrue(isDatabaseCorruptException(RuntimeException("database disk image is malformed")))
     }
 
     // ---- TRANSIENT / RECOVERABLE failures must NEVER be corruption ---------

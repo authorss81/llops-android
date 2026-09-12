@@ -162,11 +162,19 @@ class Phase136TamperBaselineCadenceTest {
     fun `dispose checkpoints closes then schedules the re-arm and getDatabase joins it`() {
         val db = readSource("data/db/NoteflowDatabase.kt")
         val disposeBody = db.substringAfter("fun dispose()")
-        val checkpointIdx = disposeBody.indexOf("PRAGMA wal_checkpoint(FULL)")
+        // Phase-260: the checkpoint moved into runWalCheckpointFull (busy-flag
+        // inspection + one retry); dispose must call it before closing.
+        val checkpointIdx = disposeBody.indexOf("runWalCheckpointFull(db)")
         val closeIdx = disposeBody.indexOf("db.close()")
         val nullIdx = disposeBody.indexOf("INSTANCE = null")
         assertTrue("dispose must FULL-checkpoint the WAL", checkpointIdx >= 0)
-        assertTrue("dispose must fully step the checkpoint cursor", disposeBody.contains("while (cursor.moveToNext())"))
+        assertTrue(
+            "the checkpoint helper runs PRAGMA wal_checkpoint(FULL), fully steps the cursor and inspects the busy flag",
+            db.contains("internal fun runWalCheckpointFull") &&
+                db.contains("PRAGMA wal_checkpoint(FULL)") &&
+                db.contains("while (cursor.moveToNext())") &&
+                db.contains("cursor.getInt(0)")
+        )
         assertTrue("dispose must close the live connection", closeIdx >= 0)
         assertTrue(
             "checkpoint and close must run BEFORE the instance is forgotten",

@@ -2,15 +2,18 @@ package com.authorss81.noteflow.data.repository
 
 import androidx.room.withTransaction
 import com.authorss81.noteflow.data.db.NoteflowDatabase
+import com.authorss81.noteflow.data.db.runWalCheckpointFull
 import com.authorss81.noteflow.data.model.*
 import com.authorss81.noteflow.services.AttachmentIngestPolicy
 import com.authorss81.noteflow.services.ReferenceImagePolicy
 import com.authorss81.noteflow.services.DatabaseSecurityHelper
 import com.authorss81.noteflow.services.DecryptFailurePolicy
 import com.authorss81.noteflow.services.EncryptionService
+import com.authorss81.noteflow.services.FailureLogPolicy
 import com.authorss81.noteflow.services.LayerRenderBudgetPolicy
 import com.authorss81.noteflow.services.NoteBodyVaultPolicy
 import com.authorss81.noteflow.services.NoteVersionRetentionPolicy
+import com.authorss81.noteflow.services.PageDeleteFilePolicy
 import com.authorss81.noteflow.services.SourceFilePathPolicy
 import com.authorss81.noteflow.services.StrokeGeometryGateResult
 import com.authorss81.noteflow.services.StrokeGeometryPolicy
@@ -418,14 +421,14 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
      */
     suspend fun cachedCorpus(): List<NotePageEntity> = loadSearchCorpus()
 
-    suspend fun checkpointWal() = withContext(Dispatchers.IO) {
-        db.query("PRAGMA wal_checkpoint(FULL)", null).use { cursor ->
-            if (cursor != null) {
-                while (cursor.moveToNext()) {
-                    // Fully step the cursor to execute the WAL checkpoint fully
-                }
-            }
-        }
+    /**
+     * Phase-260: the checkpoint result is INSPECTED via [runWalCheckpointFull]
+     * (busy flag read from the pragma row, one immediate retry) instead of
+     * blindly stepping the cursor — a BUSY checkpoint previously looked exactly
+     * like a clean one. Returns true when no busy frames remain.
+     */
+    suspend fun checkpointWal(): Boolean = withContext(Dispatchers.IO) {
+        runWalCheckpointFull(db)
     }
 
     fun stampDatabaseChecksum(context: android.content.Context) {
@@ -443,55 +446,81 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
      * concern, B2-CRYPTO-10 phase-108). Idempotent: bound rows are skipped.
      */
     suspend fun migrateFieldRecordAad(dek: ByteArray) = withContext(Dispatchers.IO) {
+        // Phase-260: pages/strokes/embeds sweep in bounded batches (100 rows in
+        // flight, same REENCRYPT_BATCH_SIZE the versions path already used) —
+        // the unbounded getAll*ForReencrypt loops materialized whole tables
+        // (50k strokes OOM). OFFSET paging over rowid ASC is stable across the
+        // in-place field updates (updates change neither row count nor order).
         db.withTransaction {
-            db.pageDao().getAllPagesForReencrypt().forEach { page ->
-                var title = page.title
-                var extracted = page.extractedText
-                var dirty = false
-                if (title.isNotBlank() && !EncryptionService.isFieldBoundToRecord(title, dek, "pages", page.id, "title")) {
-                    val plain = try { EncryptionService.decrypt(title, dek) } catch (e: Exception) { null }
-                    if (plain != null) {
-                        title = EncryptionService.encryptField(plain, dek, "pages", page.id, "title")
-                        dirty = true
+            var pageOffset = 0
+            while (true) {
+                val pageBatch = db.pageDao().getPagesForReencryptPaged(NoteVersionRetentionPolicy.REENCRYPT_BATCH_SIZE, pageOffset)
+                if (pageBatch.isEmpty()) break
+                pageBatch.forEach { page ->
+                    var title = page.title
+                    var extracted = page.extractedText
+                    var dirty = false
+                    if (title.isNotBlank() && !EncryptionService.isFieldBoundToRecord(title, dek, "pages", page.id, "title")) {
+                        val plain = try { EncryptionService.decrypt(title, dek) } catch (e: Exception) { null }
+                        if (plain != null) {
+                            title = EncryptionService.encryptField(plain, dek, "pages", page.id, "title")
+                            dirty = true
+                        }
                     }
-                }
-                if (!extracted.isNullOrBlank() && !EncryptionService.isFieldBoundToRecord(extracted, dek, "pages", page.id, "extractedText")) {
-                    val plain = try { EncryptionService.decrypt(extracted, dek) } catch (e: Exception) { null }
-                    if (plain != null) {
-                        extracted = EncryptionService.encryptField(plain, dek, "pages", page.id, "extractedText")
-                        dirty = true
+                    if (!extracted.isNullOrBlank() && !EncryptionService.isFieldBoundToRecord(extracted, dek, "pages", page.id, "extractedText")) {
+                        val plain = try { EncryptionService.decrypt(extracted, dek) } catch (e: Exception) { null }
+                        if (plain != null) {
+                            extracted = EncryptionService.encryptField(plain, dek, "pages", page.id, "extractedText")
+                            dirty = true
+                        }
                     }
+                    if (dirty) db.pageDao().updateEncryptedFields(page.id, title, extracted)
                 }
-                if (dirty) db.pageDao().updateEncryptedFields(page.id, title, extracted)
+                if (pageBatch.size < NoteVersionRetentionPolicy.REENCRYPT_BATCH_SIZE) break
+                pageOffset += pageBatch.size
             }
-            db.strokeDao().getAllStrokesForReencrypt().forEach { stroke ->
-                var text = stroke.textContent
-                var points = stroke.pointsJson
-                var dirty = false
-                if (text?.isNotBlank() == true && !EncryptionService.isFieldBoundToRecord(text, dek, "strokes", stroke.id, "textContent")) {
-                    val plain = try { EncryptionService.decrypt(text, dek) } catch (e: Exception) { null }
-                    if (plain != null) {
-                        text = EncryptionService.encryptField(plain, dek, "strokes", stroke.id, "textContent")
-                        dirty = true
+            var strokeOffset = 0
+            while (true) {
+                val strokeBatch = db.strokeDao().getStrokesForReencryptPaged(NoteVersionRetentionPolicy.REENCRYPT_BATCH_SIZE, strokeOffset)
+                if (strokeBatch.isEmpty()) break
+                strokeBatch.forEach { stroke ->
+                    var text = stroke.textContent
+                    var points = stroke.pointsJson
+                    var dirty = false
+                    if (text?.isNotBlank() == true && !EncryptionService.isFieldBoundToRecord(text, dek, "strokes", stroke.id, "textContent")) {
+                        val plain = try { EncryptionService.decrypt(text, dek) } catch (e: Exception) { null }
+                        if (plain != null) {
+                            text = EncryptionService.encryptField(plain, dek, "strokes", stroke.id, "textContent")
+                            dirty = true
+                        }
                     }
-                }
-                if (points.isNotBlank() && !EncryptionService.isFieldBoundToRecord(points, dek, "strokes", stroke.id, "pointsJson")) {
-                    val plain = try { EncryptionService.decrypt(points, dek) } catch (e: Exception) { null }
-                    if (plain != null) {
-                        points = EncryptionService.encryptField(plain, dek, "strokes", stroke.id, "pointsJson")
-                        dirty = true
+                    if (points.isNotBlank() && !EncryptionService.isFieldBoundToRecord(points, dek, "strokes", stroke.id, "pointsJson")) {
+                        val plain = try { EncryptionService.decrypt(points, dek) } catch (e: Exception) { null }
+                        if (plain != null) {
+                            points = EncryptionService.encryptField(plain, dek, "strokes", stroke.id, "pointsJson")
+                            dirty = true
+                        }
                     }
+                    if (dirty) db.strokeDao().updateStrokeFields(stroke.id, text, points)
                 }
-                if (dirty) db.strokeDao().updateStrokeFields(stroke.id, text, points)
+                if (strokeBatch.size < NoteVersionRetentionPolicy.REENCRYPT_BATCH_SIZE) break
+                strokeOffset += strokeBatch.size
             }
-            db.mediaEmbedDao().getAllEmbedsForReencrypt().forEach { embed ->
-                val text = embed.textContent
-                if (text?.isNotBlank() == true && !EncryptionService.isFieldBoundToRecord(text, dek, "media_embeds", embed.id, "textContent")) {
-                    val plain = try { EncryptionService.decrypt(text, dek) } catch (e: Exception) { null }
-                    if (plain != null) {
-                        db.mediaEmbedDao().updateTextContent(embed.id, EncryptionService.encryptField(plain, dek, "media_embeds", embed.id, "textContent"))
+            var embedOffset = 0
+            while (true) {
+                val embedBatch = db.mediaEmbedDao().getEmbedsForReencryptPaged(NoteVersionRetentionPolicy.REENCRYPT_BATCH_SIZE, embedOffset)
+                if (embedBatch.isEmpty()) break
+                embedBatch.forEach { embed ->
+                    val text = embed.textContent
+                    if (text?.isNotBlank() == true && !EncryptionService.isFieldBoundToRecord(text, dek, "media_embeds", embed.id, "textContent")) {
+                        val plain = try { EncryptionService.decrypt(text, dek) } catch (e: Exception) { null }
+                        if (plain != null) {
+                            db.mediaEmbedDao().updateTextContent(embed.id, EncryptionService.encryptField(plain, dek, "media_embeds", embed.id, "textContent"))
+                        }
                     }
                 }
+                if (embedBatch.size < NoteVersionRetentionPolicy.REENCRYPT_BATCH_SIZE) break
+                embedOffset += embedBatch.size
             }
             // R2-b2b4-DOS-01 (phase-149): the re-key sweep covers the whole
             // table but pages through it — never one all-row heap materialization.
@@ -541,43 +570,65 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
      * Idempotent: stamped rows are skipped on re-runs.
      */
     suspend fun reencryptPlaintextFields(dek: ByteArray) = withContext(Dispatchers.IO) {
+        // Phase-260: bounded batches — same OOM rationale as migrateFieldRecordAad.
         db.withTransaction {
-            db.pageDao().getAllPagesForReencrypt().forEach { page ->
-                var title = page.title
-                var extracted = page.extractedText ?: ""
-                var dirty = false
-                if (EncryptionService.shouldReencryptField(title, dek, "pages", page.id, "title")) {
-                    title = EncryptionService.encryptField(title.toByteArray(), dek, "pages", page.id, "title")
-                    dirty = true
+            var pageOffset = 0
+            while (true) {
+                val pageBatch = db.pageDao().getPagesForReencryptPaged(NoteVersionRetentionPolicy.REENCRYPT_BATCH_SIZE, pageOffset)
+                if (pageBatch.isEmpty()) break
+                pageBatch.forEach { page ->
+                    var title = page.title
+                    var extracted = page.extractedText ?: ""
+                    var dirty = false
+                    if (EncryptionService.shouldReencryptField(title, dek, "pages", page.id, "title")) {
+                        title = EncryptionService.encryptField(title.toByteArray(), dek, "pages", page.id, "title")
+                        dirty = true
+                    }
+                    if (EncryptionService.shouldReencryptField(extracted, dek, "pages", page.id, "extractedText")) {
+                        extracted = EncryptionService.encryptField(extracted.toByteArray(), dek, "pages", page.id, "extractedText")
+                        dirty = true
+                    }
+                    if (dirty) db.pageDao().updateEncryptedFields(page.id, title, extracted)
                 }
-                if (EncryptionService.shouldReencryptField(extracted, dek, "pages", page.id, "extractedText")) {
-                    extracted = EncryptionService.encryptField(extracted.toByteArray(), dek, "pages", page.id, "extractedText")
-                    dirty = true
-                }
-                if (dirty) db.pageDao().updateEncryptedFields(page.id, title, extracted)
+                if (pageBatch.size < NoteVersionRetentionPolicy.REENCRYPT_BATCH_SIZE) break
+                pageOffset += pageBatch.size
             }
-            db.strokeDao().getAllStrokesForReencrypt().forEach { stroke ->
-                var text = stroke.textContent
-                var points = stroke.pointsJson
-                var dirty = false
-                if (EncryptionService.shouldReencryptField(text, dek, "strokes", stroke.id, "textContent")) {
-                    text = EncryptionService.encryptField(text.toByteArray(), dek, "strokes", stroke.id, "textContent")
-                    dirty = true
+            var strokeOffset = 0
+            while (true) {
+                val strokeBatch = db.strokeDao().getStrokesForReencryptPaged(NoteVersionRetentionPolicy.REENCRYPT_BATCH_SIZE, strokeOffset)
+                if (strokeBatch.isEmpty()) break
+                strokeBatch.forEach { stroke ->
+                    var text = stroke.textContent
+                    var points = stroke.pointsJson
+                    var dirty = false
+                    if (EncryptionService.shouldReencryptField(text, dek, "strokes", stroke.id, "textContent")) {
+                        text = EncryptionService.encryptField(text.toByteArray(), dek, "strokes", stroke.id, "textContent")
+                        dirty = true
+                    }
+                    if (EncryptionService.shouldReencryptField(points, dek, "strokes", stroke.id, "pointsJson")) {
+                        points = EncryptionService.encryptField(points.toByteArray(), dek, "strokes", stroke.id, "pointsJson")
+                        dirty = true
+                    }
+                    if (dirty) {
+                        db.strokeDao().updateStrokeFields(stroke.id, text, points)
+                    }
                 }
-                if (EncryptionService.shouldReencryptField(points, dek, "strokes", stroke.id, "pointsJson")) {
-                    points = EncryptionService.encryptField(points.toByteArray(), dek, "strokes", stroke.id, "pointsJson")
-                    dirty = true
-                }
-                if (dirty) {
-                    db.strokeDao().updateStrokeFields(stroke.id, text, points)
-                }
+                if (strokeBatch.size < NoteVersionRetentionPolicy.REENCRYPT_BATCH_SIZE) break
+                strokeOffset += strokeBatch.size
             }
-            db.mediaEmbedDao().getAllEmbedsForReencrypt().forEach { embed ->
-                val text = embed.textContent ?: ""
-                if (EncryptionService.shouldReencryptField(text, dek, "media_embeds", embed.id, "textContent")) {
-                    val encrypted = EncryptionService.encryptField(text.toByteArray(), dek, "media_embeds", embed.id, "textContent")
-                    db.mediaEmbedDao().updateTextContent(embed.id, encrypted)
+            var embedOffset = 0
+            while (true) {
+                val embedBatch = db.mediaEmbedDao().getEmbedsForReencryptPaged(NoteVersionRetentionPolicy.REENCRYPT_BATCH_SIZE, embedOffset)
+                if (embedBatch.isEmpty()) break
+                embedBatch.forEach { embed ->
+                    val text = embed.textContent ?: ""
+                    if (EncryptionService.shouldReencryptField(text, dek, "media_embeds", embed.id, "textContent")) {
+                        val encrypted = EncryptionService.encryptField(text.toByteArray(), dek, "media_embeds", embed.id, "textContent")
+                        db.mediaEmbedDao().updateTextContent(embed.id, encrypted)
+                    }
                 }
+                if (embedBatch.size < NoteVersionRetentionPolicy.REENCRYPT_BATCH_SIZE) break
+                embedOffset += embedBatch.size
             }
             // C1 (phase-09): note_versions.title/extractedText are field-encrypted
             // at write (createNoteVersion) and re-keyed on cross-device restore
@@ -733,7 +784,9 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
             // even when key != null — same race as stroke saves (logcat 2026-08-31)
             val msg = e.message?.lowercase() ?: ""
             if (msg.contains("no such table") || msg.contains("is the db closed") || msg.contains("connection pool has been closed") || msg.contains("room_table_modification_log")) {
-                android.util.Log.w("NoteRepository", "DB closed race during page body save, deferring: ${e.message}")
+                // Phase-260: logcat carries the exception CLASS only — e.message
+                // embeds app-private absolute paths (B2-LOG-03 FailureLogPolicy).
+                android.util.Log.w("NoteRepository", FailureLogPolicy.safeLogMessage(e, "DB closed race during page body save, deferring"))
                 throw com.authorss81.noteflow.services.VaultLockedWriteException()
             }
             throw e
@@ -758,7 +811,15 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
         var filesDeleted = 0
         var filesRemaining = 0
         val key = encryptionKey
-        db.pageDao().getAllPagesForReencrypt().forEach { page ->
+        // Phase-260: bounded batches — the unbounded getAllPagesForReencrypt
+        // materialized every page row at once (same OOM class as the re-key
+        // sweeps above). OFFSET paging over rowid ASC is stable here: this pass
+        // updates the extractedText column but never inserts/deletes page rows.
+        var bodyPageOffset = 0
+        while (true) {
+            val bodyPageBatch = db.pageDao().getPagesForReencryptPaged(NoteVersionRetentionPolicy.REENCRYPT_BATCH_SIZE, bodyPageOffset)
+            if (bodyPageBatch.isEmpty()) break
+            bodyPageBatch.forEach { page ->
             if (!NoteBodyVaultPolicy.isNoteTextBodySource(page.sourceFilePath, page.sourceFileType)) return@forEach
             // B1-AUTH-05 (phase-69): only a legacy body file CONFINED under the
             // imports root may be read (and later deleted) — a stored path that
@@ -834,6 +895,9 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
             } else {
                 filesRemaining++
             }
+            }
+            if (bodyPageBatch.size < NoteVersionRetentionPolicy.REENCRYPT_BATCH_SIZE) break
+            bodyPageOffset += bodyPageBatch.size
         }
         if (rowsMigrated + filesDeleted > 0) invalidateSearchCorpus()
         LegacyBodyMigrationResult(rowsMigrated, filesDeleted, filesRemaining)
@@ -867,18 +931,80 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
         db.notebookDao().updateNotebookNameAndTags(id, name.trim(), tags.trim())
     }
 
-    suspend fun deleteNotebook(id: String) {
+    /**
+     * Phase-260: the app-private `voice_notes` dir derived from the imports
+     * root (`filesDir/noteflow/imports` → `filesDir/voice_notes`). Null when
+     * the layout is unexpected — the voice-blob delete gate then fails closed
+     * (files kept, rows gone) rather than deleting by an unanchored path.
+     */
+    private fun voiceNotesDir(): File? = runCatching {
+        val filesDir = importsRoot.parentFile?.parentFile ?: return null
+        File(filesDir, "voice_notes").takeIf { it.isDirectory }
+    }.getOrNull()
+
+    /**
+     * Phase-260: resolves (but never deletes) every on-disk file owned by a
+     * page — the confined document source plus the confined voice blobs — so
+     * the DB transaction can commit FIRST and the files are removed only after
+     * (DB-first + crash = reclaimable orphaned file; files-first + crash =
+     * dangling rows or a leaked plaintext `.m4a` the vault forgot).
+     */
+    private suspend fun collectPageFilesForDelete(pageId: String): List<File> {
+        val files = ArrayList<File>(2)
+        val page = db.pageDao().getPageById(pageId)
+        PageDeleteFilePolicy.sourceFileForDelete(page?.sourceFilePath, importsRoot)?.let { files += it }
+        val voiceDir = voiceNotesDir()
+        db.mediaEmbedDao().getMediaEmbedsForPage(pageId)
+            .asSequence()
+            .filter { it.typeName == MediaEmbedType.AUDIO_NOTE.name }
+            .mapNotNull { PageDeleteFilePolicy.voiceBlobForDelete(it.contentUrlOrPath, voiceDir) }
+            .forEach { files += it }
+        return files
+    }
+
+    /**
+     * Phase-260: the DB-only half of a permanent page delete. All five row
+     * deletes run in ONE transaction (a torn crash between separate deletes
+     * previously left half-deleted pages — strokes gone with the page row
+     * surviving, or vice versa). `note_versions` rows are deleted here too:
+     * they were never covered, so every permanently-deleted page left orphaned
+     * snapshots behind — the app-layer stand-in for the missing FK cascade
+     * (adding real ForeignKeys would be a Room schema change, forbidden by the
+     * phase constraint; see REPORT).
+     */
+    private suspend fun deletePageRowsPermanently(pageId: String) {
         db.withTransaction {
-            val sectionIds = db.sectionDao().getSectionIdsForNotebook(id)
+            db.strokeDao().deleteStrokesForPage(pageId)
+            db.layerDao().deleteLayersForPage(pageId)
+            db.mediaEmbedDao().deleteMediaEmbedsForPage(pageId)
+            db.noteVersionDao().deleteVersionsForPage(pageId)
+            db.pageDao().deletePagePermanently(pageId)
+        }
+    }
+
+    suspend fun deleteNotebook(id: String) {
+        val sectionIds = db.sectionDao().getSectionIdsForNotebook(id)
+        val pageIds = ArrayList<String>()
+        val files = ArrayList<File>()
+        for (sectionId in sectionIds) {
+            for (pageId in db.pageDao().getPageIdsForSection(sectionId)) {
+                pageIds += pageId
+                files += collectPageFilesForDelete(pageId)
+            }
+        }
+        db.withTransaction {
+            for (pageId in pageIds) {
+                deletePageRowsPermanently(pageId)
+            }
             for (sectionId in sectionIds) {
-                val pageIds = db.pageDao().getPageIdsForSection(sectionId)
-                for (pageId in pageIds) {
-                    deletePagePermanently(pageId)
-                }
                 db.sectionDao().deleteSection(sectionId)
             }
             db.notebookDao().deleteNotebook(id)
         }
+        for (file in files) {
+            runCatching { file.delete() }
+        }
+        invalidateSearchCorpus()
     }
 
     suspend fun createSection(notebookId: String, name: String): SectionEntity {
@@ -892,13 +1018,21 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
     }
 
     suspend fun deleteSection(id: String) {
+        val pageIds = db.pageDao().getPageIdsForSection(id)
+        val files = ArrayList<File>()
+        for (pageId in pageIds) {
+            files += collectPageFilesForDelete(pageId)
+        }
         db.withTransaction {
-            val pageIds = db.pageDao().getPageIdsForSection(id)
             for (pageId in pageIds) {
-                deletePagePermanently(pageId)
+                deletePageRowsPermanently(pageId)
             }
             db.sectionDao().deleteSection(id)
         }
+        for (file in files) {
+            runCatching { file.delete() }
+        }
+        invalidateSearchCorpus()
     }
 
     suspend fun createPage(
@@ -1205,32 +1339,26 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
         db.pageDao().updatePageIndex(id, pageIndex)
     }
 
+    /**
+     * Phase-260: permanent single-page delete — collect confined files, delete
+     * rows in ONE transaction ([deletePageRowsPermanently]), remove files only
+     * after commit.
+     *
+     * B1-DB-3 (phase-54): a page delete must also destroy its voice
+     * recordings. Deleted pages previously left orphaned plaintext audio
+     * under filesDir/voice_notes (neither encrypted, backed up, nor ever
+     * removed) — now the AUDIO_NOTE embeds' `.enc` blobs AND any surviving
+     * legacy plaintext `.m4a` confined to the voice dir are removed with the
+     * page (the old code removed only `.enc` names, leaking plaintext).
+     * PHOTO/STICKER/CODE embeds are intentionally untouched
+     * (their contentUrlOrPath is not audio).
+     */
     suspend fun deletePagePermanently(id: String) {
-        val page = db.pageDao().getPageById(id)
-        page?.sourceFilePath?.let { path ->
-            if (path.contains("imports/") || path.contains("exports/")) {
-                try { File(path).delete() } catch (e: Exception) {}
-            }
+        val files = collectPageFilesForDelete(id)
+        deletePageRowsPermanently(id)
+        for (file in files) {
+            runCatching { file.delete() }
         }
-        // B1-DB-3 (phase-54): a page delete must also destroy its voice
-        // recordings. Deleted pages previously left orphaned plaintext audio
-        // under filesDir/voice_notes (neither encrypted, backed up, nor ever
-        // removed) — now the AUDIO_NOTE embeds' `.enc` blobs (and any surviving
-        // legacy plaintext) are removed with the page. PHOTO/STICKER/CODE embeds
-        // are intentionally untouched (their contentUrlOrPath is not audio).
-        val embeds = db.mediaEmbedDao().getMediaEmbedsForPage(id)
-        for (embed in embeds) {
-            if (embed.typeName == MediaEmbedType.AUDIO_NOTE.name) {
-                val audioPath = embed.contentUrlOrPath
-                if (audioPath != null && VoiceNoteCrypto.isEncryptedBlobName(File(audioPath).name)) {
-                    try { File(audioPath).delete() } catch (e: Exception) {}
-                }
-            }
-        }
-        db.strokeDao().deleteStrokesForPage(id)
-        db.layerDao().deleteLayersForPage(id)
-        db.mediaEmbedDao().deleteMediaEmbedsForPage(id)
-        db.pageDao().deletePagePermanently(id)
         invalidateSearchCorpus()
     }
 
@@ -1259,11 +1387,22 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
         val retainedPlaintext = mutableSetOf<String>()
         val dek = encryptionKey
 
-        val legacyEmbeds = db.mediaEmbedDao().getAllEmbedsForReencrypt()
-            .filter { embed ->
+        // Phase-260: bounded batches — the unbounded getAllEmbedsForReencrypt
+        // materialized the whole embed table (same OOM class as the re-key
+        // sweeps). OFFSET paging over rowid ASC is stable here: retargeting an
+        // embed's path updates a column but never inserts/deletes embed rows.
+        val legacyEmbeds = ArrayList<MediaEmbedEntity>()
+        var voiceEmbedOffset = 0
+        while (true) {
+            val embedBatch = db.mediaEmbedDao().getEmbedsForReencryptPaged(NoteVersionRetentionPolicy.REENCRYPT_BATCH_SIZE, voiceEmbedOffset)
+            if (embedBatch.isEmpty()) break
+            legacyEmbeds += embedBatch.filter { embed ->
                 embed.typeName == MediaEmbedType.AUDIO_NOTE.name &&
                     VoiceNoteCrypto.isPlaintextRecordingName(File(embed.contentUrlOrPath ?: "").name)
             }
+            if (embedBatch.size < NoteVersionRetentionPolicy.REENCRYPT_BATCH_SIZE) break
+            voiceEmbedOffset += embedBatch.size
+        }
 
         for (embed in legacyEmbeds) {
             val legacyPath = embed.contentUrlOrPath ?: continue
@@ -1299,11 +1438,33 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
         )
     }
 
+    /**
+     * Phase-260: trash purge — one transaction for every trashed page's rows
+     * (previously N separate non-transactional deletes, a crash mid-purge away
+     * from half-purged pages), files removed only after commit, then a
+     * best-effort VACUUM (a purge frees whole pages of strokes/embeds/versions
+     * whose freelist pages would otherwise stay in the file forever). VACUUM
+     * must run OUTSIDE any transaction and is silent on failure — the vault
+     * stays correct either way.
+     */
     suspend fun emptyTrash() {
         val trashed = db.pageDao().getTrashedPagesOnce()
+        val files = ArrayList<File>()
         for (page in trashed) {
-            deletePagePermanently(page.id)
+            files += collectPageFilesForDelete(page.id)
         }
+        db.withTransaction {
+            for (page in trashed) {
+                deletePageRowsPermanently(page.id)
+            }
+        }
+        for (file in files) {
+            runCatching { file.delete() }
+        }
+        runCatching {
+            db.openHelper.writableDatabase.execSQL("VACUUM")
+        }
+        invalidateSearchCorpus()
     }
 
     suspend fun getStrokesForPage(pageId: String): List<Stroke> = withContext(Dispatchers.Default) {
