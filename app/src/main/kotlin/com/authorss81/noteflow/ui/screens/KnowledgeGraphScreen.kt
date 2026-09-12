@@ -47,6 +47,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
@@ -730,8 +732,11 @@ fun KnowledgeGraphScreen(
                         }
 
                         // Pulsing "particles" along links touching the selected
-                        // node — disabled under reduce-motion.
-                        if (!reduceMotion && selectedId != null) {
+                        // node — disabled under reduce-motion (phase 266: the
+                        // gate is A11yPolicy.shouldAnimate, the single motion
+                        // switch; the infinite transition above only feeds this
+                        // draw-phase read, so gating the read stops all motion).
+                        if (com.authorss81.noteflow.services.A11yPolicy.shouldAnimate(reduceMotion) && selectedId != null) {
                             for (edge in drawnEdges) {
                                 if (edge.sourceId != selectedId && edge.targetId != selectedId) continue
                                 val a = center + (shownPositions[edge.sourceId] ?: continue)
@@ -879,7 +884,10 @@ fun KnowledgeGraphScreen(
                         modifier = Modifier
                             .align(Alignment.BottomCenter)
                             .padding(16.dp)
-                            .fillMaxWidth(0.9f),
+                            .fillMaxWidth(0.9f)
+                            // Phase 266: selection changes announce politely
+                            // (first LiveRegion beyond the Snackbar channel).
+                            .semantics { liveRegion = LiveRegionMode.Polite },
                         elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
                     ) {
                         Column(modifier = Modifier.padding(16.dp)) {

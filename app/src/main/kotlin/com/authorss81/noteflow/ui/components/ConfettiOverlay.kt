@@ -21,6 +21,12 @@ private data class ConfettiParticle(
 @Composable
 fun ConfettiOverlay(triggerTime: Long) {
     if (triggerTime <= 0) return
+    // Phase 266: celebratory motion is suppressible — under reduce-motion the
+    // overlay completes instantly (no 1800ms particle flight).
+    if (!com.authorss81.noteflow.services.A11yPolicy.shouldAnimate(
+            com.authorss81.noteflow.theme.LocalReduceMotion.current
+        )
+    ) return
 
     val animProgress = remember(triggerTime) { Animatable(0f) }
     LaunchedEffect(triggerTime) {

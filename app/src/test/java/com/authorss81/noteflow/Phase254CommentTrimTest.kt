@@ -88,18 +88,26 @@ import org.junit.Test
  * strict down-pointer tracking) and EditorScreen lost the constant-true yield
  * flag (one fewer code line). Re-measured: AnnotationCanvas 8742 raw / 7013
  * code, EditorScreen 7436 raw / 6491 code; HomeScreen untouched.
+ *
+ * PHASE 266 RE-BASELINE: WCAG pass 1 — AnnotationCanvas gained the TalkBack
+ * surface semantics (import + .semantics block, +12 raw / +7 code) and
+ * EditorScreen floored two 7sp captions at 10sp (comment-only, +4 raw /
+ * +0 code). HomeScreen's pin-alpha fix is a same-line swap (unchanged).
+ * No KDoc opener added (plain `//` comments only — the KDoc counts below
+ * are unchanged). Re-measured on the phase-266 tree: AnnotationCanvas
+ * 8754 raw / 7020 code, EditorScreen 7440 raw / 6491 code.
  */
 class Phase254CommentTrimTest {
 
-    // Phase-255/256/257/264 re-baselined raw line counts (phase-264 review-fix values measured on the review-fix tree).
+    // Phase-255/256/257/264/266 re-baselined raw line counts (phase-266 values measured on the phase-266 tree).
     private val headRaw = mapOf(
-        "ui/components/AnnotationCanvas.kt" to 8742,
-        "ui/screens/EditorScreen.kt" to 7436,
+        "ui/components/AnnotationCanvas.kt" to 8754,
+        "ui/screens/EditorScreen.kt" to 7440,
         "ui/screens/HomeScreen.kt" to 3845
     )
-    // Phase-255/256/257/264 re-baselined code-line counts (non-blank, non-full-`//` lines).
+    // Phase-255/256/257/264/266 re-baselined code-line counts (non-blank, non-full-`//` lines).
     private val headCode = mapOf(
-        "ui/components/AnnotationCanvas.kt" to 7013,
+        "ui/components/AnnotationCanvas.kt" to 7020,
         "ui/screens/EditorScreen.kt" to 6491,
         "ui/screens/HomeScreen.kt" to 3310
     )

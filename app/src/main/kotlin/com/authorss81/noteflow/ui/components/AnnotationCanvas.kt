@@ -57,6 +57,7 @@ import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
@@ -1797,6 +1798,17 @@ fun AnnotationCanvas(
             // Phase 240 (Bug 2): the canvas needs NO window-origin capture. The
             // pointerInteropFilter bridge, the Compose drag handlers' `change.position`
             // and the phase-196 predictor all work in this box's node-local space.
+            // Phase 266: the drawing surface was silent to TalkBack (toolbar
+            // labeled, canvas unlabeled) — expose a stable description plus a
+            // committed-stroke count (never stroke content/titles). Only the
+            // committed list is read: activePoints mutates per pen sample and
+            // must never be subscribed here (per-sample recomposition).
+            .semantics {
+                contentDescription =
+                    com.authorss81.noteflow.services.A11yPolicy.canvasContentDescription(strokes.size)
+                stateDescription =
+                    com.authorss81.noteflow.services.A11yPolicy.canvasStateDescription(strokes.size)
+            }
             .background(
                 if (divideIntoPages) {
                     if (isDarkTheme) Color(0xFF0F172A) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)

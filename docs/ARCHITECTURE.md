@@ -3291,6 +3291,14 @@ UNTRUSTED files before any staging); `ui/components/Dialogs.kt` `AppUpdateDialog
    producer/`generateBaselineProfile` chain with `--no-configuration-cache` (AGP `CheckAarMetadataTask`/
    `checkTestedAppObfuscation` fields aren't gradle-config-cache-serializable; repo sets
    `org.gradle.configuration-cache=true`).
+- **Implemented in phase-266** (WCAG 2.2 AA pass 1, see `workspace/phase-266/REPORT.md`):
+  new pure-JVM `services/A11yPolicy.kt` (48dp hit floor, 10sp label floor, 0.6 unpinned-pin alpha,
+  1000ms ambient-motion budget, decorative-null allowlist, canvas descriptions); ConfettiOverlay
+  early-returns under reduce-motion; graph pulse draw gated via `A11yPolicy.shouldAnimate` + polite
+  LiveRegion on the selected-node card; 7sp dock captions → 10sp; canvas root exposes TalkBack
+  content/stateDescription (committed count only, never per-sample reads). Most PROMPT evidence
+  verified stale (decorative-with-text nulls correct; small glyphs already 48dp-hit; motion already
+  gated) and pinned as retention tests. Dual-pane focus order deferred (nav-model approval needed).
 - **Implemented in phase-265** (perf budgets + pump guard, see `workspace/phase-265/REPORT.md`):
   `WetBrushFramePump.start()` no longer early-returns below TIRAMISU (Choreographer is API 16+,
   minSdk 26 — the guard dead-ended frame-time/thermal adaptation on API 26-32); the

@@ -3315,7 +3315,7 @@ private fun NotePageCard(
                         Icon(
                             imageVector = if (page.pinned) Icons.Filled.PushPin else Icons.Outlined.PushPin,
                             contentDescription = if (page.pinned) "Unpin" else "Pin",
-                            tint = if (page.pinned) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                            tint = if (page.pinned) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = com.authorss81.noteflow.services.A11yPolicy.UNPINNED_ICON_ALPHA)
                         )
                     }
                 }

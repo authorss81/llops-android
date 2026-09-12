@@ -4212,7 +4212,9 @@ private fun DockQuickToolsRow(
                             Text(
                                 text = "Blend",
                                 style = MaterialTheme.typography.labelSmall,
-                                fontSize = 7.sp,
+                                // Phase 266: 7sp captions are unreadable (WCAG
+                                // 1.4.3/1.4.4 at 200% scale); floor at 10sp.
+                                fontSize = 10.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                             )
                         }
@@ -4262,7 +4264,9 @@ private fun DockQuickToolsColumn(
                             Text(
                                 text = "Blend",
                                 style = MaterialTheme.typography.labelSmall,
-                                fontSize = 7.sp,
+                                // Phase 266: 7sp captions are unreadable (WCAG
+                                // 1.4.3/1.4.4 at 200% scale); floor at 10sp.
+                                fontSize = 10.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                             )
                         }
