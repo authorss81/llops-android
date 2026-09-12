@@ -10,8 +10,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.authorss81.noteflow.services.WikiSuggestionPolicy
@@ -20,6 +22,15 @@ import com.authorss81.noteflow.ui.components.WikiLinkSuggestionPopup
 /**
  * Whole-page Markdown Editor allowing users to write continuous markdown text
  * without segmenting into individual block cards.
+ *
+ * Phase 258: the field keeps its own [TextFieldValue] so the caret/selection is
+ * observable and controllable. [onSelectionChanged] reports the live selection
+ * (the host uses it for at-caret insertions), and [selectionOverride] is a
+ * one-shot caret reposition (bump the value to re-apply). External document
+ * replaces ([value] diverging from the field text — a DB re-read, a version
+ * restore, a slash/wiki insertion) are adopted WITHOUT disturbing an in-flight
+ * IME composition: the adopt effect is a no-op whenever the parent's [value]
+ * already equals the field text.
  */
 @Composable
 fun WholeMarkdownEditor(
@@ -29,8 +40,32 @@ fun WholeMarkdownEditor(
     primaryColor: Color = MaterialTheme.colorScheme.primary,
     serif: Boolean = false,
     wikiLinkTitles: List<String> = emptyList(),
-    onWikiLinkQueryEngaged: () -> Unit = {}
+    onWikiLinkQueryEngaged: () -> Unit = {},
+    // Phase 258: caret plumbing for at-cursor insertions (slash commands, wiki
+    // links). Reports the LIVE field selection; the host stores the caret and
+    // splices inserted blocks there instead of appending at the document end.
+    onSelectionChanged: (TextRange) -> Unit = {},
+    // One-shot caret/selection reposition emitted by an at-caret insertion.
+    // The adopt effect below applies it exactly once (keyed by equality), so a
+    // later recomposition without a new override leaves the user's caret alone.
+    selectionOverride: TextRange? = null
 ) {
+    var fieldValue by remember { mutableStateOf(TextFieldValue(value)) }
+    LaunchedEffect(value, selectionOverride) {
+        val target = selectionOverride
+        if (value != fieldValue.text || (target != null && target != fieldValue.selection)) {
+            val caret = (target ?: fieldValue.selection)
+            val clamped = TextRange(
+                caret.start.coerceIn(0, value.length),
+                caret.end.coerceIn(0, value.length)
+            )
+            fieldValue = TextFieldValue(value, clamped)
+            // Keep the host's caret slot in sync with what was actually applied
+            // (an at-caret insert repositions the caret; the host reads it back
+            // for the NEXT insertion).
+            onSelectionChanged(clamped)
+        }
+    }
     var queryBounds by remember { mutableStateOf<WikiSuggestionPolicy.QueryBounds?>(null) }
     LaunchedEffect(value, wikiLinkTitles) {
         val bounds = WikiSuggestionPolicy.locateQuery(value)
@@ -55,8 +90,12 @@ fun WholeMarkdownEditor(
 
     Box(modifier = modifier.fillMaxSize()) {
         OutlinedTextField(
-            value = value,
-            onValueChange = onValueChange,
+            value = fieldValue,
+            onValueChange = { newFieldValue ->
+                fieldValue = newFieldValue
+                onSelectionChanged(newFieldValue.selection)
+                onValueChange(newFieldValue.text)
+            },
             modifier = Modifier
                 .fillMaxSize()
                 .testTag("markdownBody"),

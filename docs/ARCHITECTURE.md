@@ -2081,9 +2081,9 @@ and the drag clamp (`:3587`). Tests: `Phase248MinimapPaneSizeTest` (11, incl. so
   `services/MarkdownBlockTokenizer.kt` (exact source round-trip), code-span-aware
   inline-math scanner `services/MarkdownInlineMath.kt`, waveform decimation
   `services/WaveformPeakMath.kt`, and the shared renderer + editor
-  `ui/components/markdown/MarkdownRenderer.kt` + `HybridMarkdownEditor.kt`
-  (replaces the raw text field in EDIT/SPLIT panes; typed callouts + interactive
-  checkboxes; `AnimatedCheckmark.kt` respects reduce-motion).
+  `ui/components/markdown/MarkdownRenderer.kt` + `WholeMarkdownEditor.kt`
+  (replaces the raw text field in EDIT/SPLIT panes; phase-258 also deleted the
+  old `HybridMarkdownEditor.kt` block editor — one editor ships now);
   - **Implemented in phase-158** (reader/focus mode, see `workspace/phase-158/REPORT.md`):
     `MarkdownPreviewScreen` gains an instant (no-animation, reduce-motion-safe) reader
     `FilterChip` toggle + `initialReaderMode`/`onConsumeReaderMode` (one-shot, consumed per page).
@@ -2181,6 +2181,29 @@ and the drag clamp (`:3587`). Tests: `Phase248MinimapPaneSizeTest` (11, incl. so
     heading block never duplicates it` (`Phase243MarkdownEditorDuplicationTest`,
     now 9 tests) and pinned `replaceContentRun` as the primary (the phase-151
     source pin asserts the editor contains no `replaceBlockSource(` call).
+  - **Implemented in phase-258** (single whole-document editor, see
+    `workspace/phase-258/REPORT.md`): all EDIT/SPLIT surfaces now compose ONE
+    `WholeMarkdownEditor` through the shared `EditorPane` helper — the dead
+    `HybridMarkdownEditor.kt` (375-line block editor that drove the
+    `replaceContentRun`/`replaceBlock` keystroke path) is DELETED, ending both
+    the "two editors, both ships" duplication and the Hybrid-only stale-index
+    class of bugs. External-content sync is now an all-direction version-token
+    adopt: pure-JVM `services/MarkdownSyncPolicy.kt` `shouldAdoptExternal`
+    adopts a newer async DB read / version restore / slash-insert result ONLY
+    while the editor is pristine (`contentText == savedContent`), so a late
+    decrypted-body echo can never clobber keystrokes, and a NON-empty stale
+    snapshot can never be flushed back over newer DB content. `WholeMarkdownEditor`
+    reports its live caret (`onSelectionChanged`) and accepts a one-shot
+    caret reposition (`selectionOverride`) so slash-command snippets and
+    wiki-link picker inserts splice AT THE CARET via
+    `MarkdownSyncPolicy.insertAtCaret` (surrogate-pair-safe) with a
+    `key(page.id)`-wrapped `EditorPane` per surface and a `DisposableEffect(page.id)`
+    so a rapid A→B page switch flushes A's pending edits with A's own closure.
+    The tokenizer's `replaceBlock`/`replaceContentRun`/`toggleCheckbox` API
+    stays (still exercised by `Phase243MarkdownEditorDuplicationTest` and
+    retargeted by phase-259's incremental perf work). Tests:
+    `Phase258MarkdownSyncTest` (10) + repointed `Phase151MarkdownMainThreadPerfTest`
+    editor pin.
   - **Implemented in phase-68** (B1-AUTH-04, see `workspace/phase-68/REPORT.md`):
     markdown inline-image destinations resolve ONLY inside an allowlisted
     app-private subtree. New pure-JVM `services/InlineImagePathPolicy.kt` is the
@@ -3083,7 +3106,7 @@ UNTRUSTED files before any staging); `ui/components/Dialogs.kt` `AppUpdateDialog
     free tier = 5 Robo/day). Robo finds Compose nodes by `resource-id` (= `Modifier.testTag`) or
     text/`content-desc`, so stable `testTag`s were added at 5 key tap targets: `noteCard`
     (`ui/components/GalleryView.kt:174`), `toolSelectorButton` + `colorSwatchButton`
-    (`ui/screens/EditorScreen.kt` both ink bars), `markdownBody` (`HybridMarkdownEditor.kt:272`),
+    (`ui/screens/EditorScreen.kt` both ink bars), `markdownBody` (`WholeMarkdownEditor.kt:101`),
     `pluginStoreSearch` (`PluginStoreDialog.kt:247`) — no new dependency, no workflow edit.
   - **Implemented in phase-239** (2026-08-29, dropped the dead instrumented-test path, see
     `workspace/phase-239/REPORT.md`): there is NO `app/src/androidTest/` and NEVER will be — `connectedAndroidTest`

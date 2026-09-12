@@ -26,7 +26,7 @@ import org.junit.Test
  */
 class Phase243MarkdownEditorDuplicationTest {
 
-    // ---- Helpers that mirror the HybridMarkdownEditor runtime ----------------
+    // ---- Helpers that mirror the editor's block-edit runtime ------------------
 
     private fun sourceOffsetOfLine(lines: List<String>, startLine: Int): Int {
         var off = 0

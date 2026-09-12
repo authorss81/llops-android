@@ -366,24 +366,25 @@ class Phase151MarkdownMainThreadPerfTest {
     }
 
     @Test
-    fun `the hybrid editor keystroke path never full-tokenizes or line-splits the document`() {
-        val editor = sourceFile("ui/components/markdown/HybridMarkdownEditor.kt")
-        assertFalse("no full-document blocks() call remains", editor.contains("MarkdownBlockTokenizer.blocks("))
-        assertFalse("no full-document checkboxCandidates() call remains",
-            editor.contains("MarkdownBlockTokenizer.checkboxCandidates("))
-        assertFalse("no full-document lines()+join replaceBlockSource call remains",
-            editor.contains("replaceBlockSource("))
-        assertFalse("no per-block candidate filter remains", editor.contains("candidates.filter { it.blockIndex == index }"))
-        assertTrue("the document is tokenized once into a MarkdownDocument",
-            editor.contains("MarkdownBlockTokenizer.tokenize(value)"))
-        assertTrue("the keystroke primary path is the incremental replaceContentRun",
-            editor.contains("MarkdownBlockTokenizer.replaceContentRun(doc, at, endByte, newRaw)"))
-        assertTrue("the keystroke fallback is the incremental replaceBlock",
-            editor.contains("MarkdownBlockTokenizer.replaceBlock(doc, ") || editor.contains("MarkdownBlockTokenizer.replaceBlock(doc,"))
-        assertTrue("candidate indexes come from the pre-indexed map",
-            editor.contains("doc.candidatesByBlock[index] ?: emptyList()"))
-        assertTrue("block sources come from the cached lines",
-            editor.contains("doc.blockSource(block)"))
+    fun `the shipped whole-document editor never block-splits on keystroke`() {
+        val editor = sourceFile("ui/components/markdown/WholeMarkdownEditor.kt")
+        assertTrue("the whole-document editor is the shipped one",
+            editor.contains("fun WholeMarkdownEditor("))
+        assertFalse("no per-keystroke tokenizer call remains in the editor",
+            editor.contains("MarkdownBlockTokenizer."))
+        assertFalse("the whole-field editor never splices blocks on keystroke",
+            editor.contains("replaceContentRun(") || editor.contains("replaceBlock("))
+        assertFalse("the dead hybrid editor bytes are gone from the repo",
+            editor.contains("fun HybridMarkdownEditor("))
+        // Phase 258: the single-editor decision is pinned here — HybridMarkdownEditor
+        // is DELETED (no shipping both), so there is no per-block RawBlockEditor
+        // surface left to resurrect the stale-index duplication.
+        val hybrid = File(repoRoot(), "app/src/main/kotlin/com/authorss81/noteflow/ui/components/markdown/HybridMarkdownEditor.kt")
+        assertFalse("HybridMarkdownEditor.kt is deleted, not repurposed", hybrid.exists())
+        assertTrue("the editor reports its live caret for at-caret inserts",
+            editor.contains("onSelectionChanged"))
+        assertTrue("the editor accepts a post-insert caret reposition",
+            editor.contains("selectionOverride"))
     }
 
     @Test

@@ -33,6 +33,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Splitscreen
@@ -88,8 +89,8 @@ import com.authorss81.noteflow.theme.LocalReduceMotion
 import com.authorss81.noteflow.theme.serifBodyStyle
 import com.authorss81.noteflow.ui.components.BacklinksInspectorBottomSheet
 import com.authorss81.noteflow.ui.components.WikiLinkPickerDialog
-import com.authorss81.noteflow.ui.components.markdown.HybridMarkdownEditor
 import com.authorss81.noteflow.ui.components.markdown.CodeBlockTextView
+import com.authorss81.noteflow.services.MarkdownSyncPolicy
 import com.authorss81.noteflow.ui.viewmodel.NoteflowViewModel
 import com.authorss81.noteflow.utils.nestedScrollGuard
 import java.io.File
@@ -371,7 +372,7 @@ fun MarkdownPreviewScreen(
     var viewMode by remember { mutableStateOf(MarkdownViewMode.SPLIT) }
     var splitOrientation by remember { mutableStateOf(SplitOrientation.AUTO) }
     // Phase 158 (22.5): focus/reading mode. Read-only by construction — the
-    // hybrid editor is never composed while reader mode is active, so a
+    // editor is never composed while reader mode is active, so a
     // long-press can never open an edit surface. rememberSaveable so a rotation
     // keeps the user's reader/editor choice (review-fix).
     var readerMode by rememberSaveable(page.id) { mutableStateOf(initialReaderMode) }
@@ -394,11 +395,36 @@ fun MarkdownPreviewScreen(
     // it, which broke `:app:compileDebugKotlin` at HEAD.
     var savedContent by remember(page.id) { mutableStateOf(initialContent) }
 
-    // Synchronize initial content if loaded asynchronously after initial composition
+    // Phase 258: adopt a NEWER external value (the async decrypted-body read
+    // landing after first composition, a re-read after a version restore) in
+    // BOTH directions — the old empty→non-empty-only heal left a NON-empty stale
+    // snapshot on screen and let the next flushSave write it back over newer DB
+    // content. Adopt only when the editor is PRISTINE (contentText == savedContent,
+    // i.e. no local unsaved edits); a keystroke that landed before a late DB echo
+    // is never clobbered. `savedContent` is the version token. A pending
+    // phase-158 share append is authoritative — the adopt gate is inert while
+    // one is staged so a stale DB echo can never revert the just-appended body.
     LaunchedEffect(page.id, initialContent) {
-        if (contentText.isEmpty() && initialContent.isNotEmpty()) {
+        if (externalBodyUpdate == null &&
+            MarkdownSyncPolicy.shouldAdoptExternal(contentText, savedContent, initialContent)
+        ) {
             contentText = initialContent
             savedContent = initialContent
+        }
+    }
+
+    // Phase 258: live caret report from the whole-doc editor, consumed by the
+    // at-caret insert flows (slash commands). -1 = unknown → legacy append.
+    var caretOffset by remember(page.id) { mutableIntStateOf(-1) }
+    // One-shot caret reposition emitted by an insert; the editor applies it once.
+    var selectionOverride by remember(page.id) { mutableStateOf<TextRange?>(null) }
+    // Phase 258: consume the override a frame after the editor has adopted it —
+    // leaving it set would let the editor's adopt effect snap the caret back to
+    // the inserted block's end after every subsequent keystroke.
+    LaunchedEffect(selectionOverride) {
+        if (selectionOverride != null) {
+            withFrameNanos { }
+            selectionOverride = null
         }
     }
 
@@ -437,7 +463,11 @@ fun MarkdownPreviewScreen(
 
     // 22.9: also flush when the editor leaves composition for any other reason
     // (nav elsewhere, split-pane layout changes, page switch).
-    DisposableEffect(Unit) {
+    // Phase 258 review-fix: keyed by page.id — a rapid A→B page switch must
+    // run the OLD page's onDispose (its remembered contentText/savedContent
+    // delegates AND its save closure) so A's pending edits are flushed instead
+    // of being dropped with the discarded remember(page.id) state.
+    DisposableEffect(page.id) {
         onDispose { flushSave() }
     }
     var splitRatio by remember { mutableFloatStateOf(0.5f) }
@@ -983,27 +1013,24 @@ fun MarkdownPreviewScreen(
                         )
                     } else when (if (usableSplit) viewMode else MarkdownViewMode.EDIT) {
                         MarkdownViewMode.EDIT -> {
-                            Column(modifier = Modifier.fillMaxSize()) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween
-                                ) {
-                                    Button(
-                                        onClick = { showSlashCommands = true },
-                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
-                                    ) {
-                                        Text("/ Slash Commands")
-                                    }
-                                }
-        
-                                WholeMarkdownEditor(
-                                    value = contentText,
-                                    onValueChange = { contentText = it },
-                                    modifier = Modifier.weight(1f).fillMaxWidth().imePadding(),
+                            // Phase 258: one EditorPane for all three edit
+                            // surfaces (EDIT + both SPLIT panes). key(page.id)
+                            // resets the editor's internal caret state on a page
+                            // switch so a stale selection never leaks across pages.
+                            key(page.id) {
+                                EditorPane(
+                                    contentText = contentText,
+                                    onContentTextChange = { contentText = it },
+                                    modifier = Modifier.fillMaxSize(),
                                     primaryColor = primaryColor,
                                     serif = serifReadingMode,
                                     wikiLinkTitles = lockedWikiTitles,
-                                    onWikiLinkQueryEngaged = ::ensureWikiLinkTitles
+                                    ensureWikiLinkTitles = ::ensureWikiLinkTitles,
+                                    onSlashCommands = { showSlashCommands = true },
+                                    slashLabel = "/ Slash Commands",
+                                    editorImePadding = true,
+                                    onSelectionChanged = { caretOffset = it },
+                                    selectionOverride = selectionOverride
                                 )
                             }
                         }
@@ -1026,30 +1053,24 @@ fun MarkdownPreviewScreen(
                                     verticalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
                                     Column(modifier = Modifier.weight(splitRatio).fillMaxWidth()) {
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth().padding(bottom = 2.dp),
-                                            horizontalArrangement = Arrangement.SpaceBetween,
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Text("Markdown Editor", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
-                                            Button(
-                                                onClick = { showSlashCommands = true },
-                                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
-                                            ) {
-                                                Text("/ Commands", style = MaterialTheme.typography.labelSmall)
-                                            }
+                                        key(page.id) {
+                                            EditorPane(
+                                                contentText = contentText,
+                                                onContentTextChange = { contentText = it },
+                                                modifier = Modifier.fillMaxSize(),
+                                                primaryColor = primaryColor,
+                                                serif = serifReadingMode,
+                                                wikiLinkTitles = lockedWikiTitles,
+                                                ensureWikiLinkTitles = ::ensureWikiLinkTitles,
+                                                onSlashCommands = { showSlashCommands = true },
+                                                headerTitle = "Markdown Editor",
+                                                slashLabel = "/ Commands",
+                                                onSelectionChanged = { caretOffset = it },
+                                                selectionOverride = selectionOverride
+                                            )
                                         }
-                                        WholeMarkdownEditor(
-                                            value = contentText,
-                                            onValueChange = { contentText = it },
-                                            modifier = Modifier.weight(1f).fillMaxWidth(),
-                                            primaryColor = primaryColor,
-                                            serif = serifReadingMode,
-                                            wikiLinkTitles = lockedWikiTitles,
-                                            onWikiLinkQueryEngaged = ::ensureWikiLinkTitles
-                                        )
                                     }
-        
+
                                     HorizontalDivider()
         
                                     Column(modifier = Modifier.weight(1f - splitRatio).fillMaxWidth()) {
@@ -1077,30 +1098,24 @@ fun MarkdownPreviewScreen(
                                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
                                     Column(modifier = Modifier.weight(splitRatio).fillMaxHeight()) {
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
-                                            horizontalArrangement = Arrangement.SpaceBetween,
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Text("Markdown Editor", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
-                                            Button(
-                                                onClick = { showSlashCommands = true },
-                                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
-                                            ) {
-                                                Text("/ Commands", style = MaterialTheme.typography.labelSmall)
-                                            }
+                                        key(page.id) {
+                                            EditorPane(
+                                                contentText = contentText,
+                                                onContentTextChange = { contentText = it },
+                                                modifier = Modifier.fillMaxSize(),
+                                                primaryColor = primaryColor,
+                                                serif = serifReadingMode,
+                                                wikiLinkTitles = lockedWikiTitles,
+                                                ensureWikiLinkTitles = ::ensureWikiLinkTitles,
+                                                onSlashCommands = { showSlashCommands = true },
+                                                headerTitle = "Markdown Editor",
+                                                slashLabel = "/ Commands",
+                                                onSelectionChanged = { caretOffset = it },
+                                                selectionOverride = selectionOverride
+                                            )
                                         }
-                                        WholeMarkdownEditor(
-                                            value = contentText,
-                                            onValueChange = { contentText = it },
-                                            modifier = Modifier.weight(1f).fillMaxWidth(),
-                                            primaryColor = primaryColor,
-                                            serif = serifReadingMode,
-                                            wikiLinkTitles = lockedWikiTitles,
-                                            onWikiLinkQueryEngaged = ::ensureWikiLinkTitles
-                                        )
                                     }
-        
+
                                     VerticalDivider()
         
                                     Column(modifier = Modifier.weight(1f - splitRatio).fillMaxHeight()) {
@@ -1147,7 +1162,16 @@ fun MarkdownPreviewScreen(
             if (showSlashCommands) {
                 com.authorss81.noteflow.ui.components.SlashCommandMenuPopup(
                     onSelectCommand = { cmd ->
-                        contentText += "\n" + cmd.snippet
+                        // Phase 258: splice at the caret instead of appending at
+                        // the document end; reposition the caret just past the
+                        // inserted snippet.
+                        val insert = MarkdownSyncPolicy.insertAtCaret(
+                            contentText,
+                            caretOffset,
+                            "\n" + cmd.snippet
+                        )
+                        contentText = insert.text
+                        selectionOverride = TextRange(insert.caretAfter)
                     },
                     onDismiss = { showSlashCommands = false },
                     // Phase 174: slash-menu entry into the same wiki-link
@@ -1409,11 +1433,15 @@ fun MarkdownPreviewScreen(
                     titleTitles = lockedWikiTitles,
                     onSelect = { title ->
                         val snippet = WikiSuggestionPolicy.wikilinkSnippet(title)
-                        contentText = if (contentText.isBlank()) {
-                            snippet
-                        } else {
-                            contentText.trimEnd() + "\n\n$snippet\n"
-                        }
+                        // Phase 258: splice at the caret (never append) so the
+                        // link lands where the user is writing.
+                        val insert = MarkdownSyncPolicy.insertAtCaret(
+                            contentText,
+                            caretOffset,
+                            if (contentText.isEmpty()) snippet else "\n\n$snippet\n"
+                        )
+                        contentText = insert.text
+                        selectionOverride = TextRange(insert.caretAfter)
                         showWikiLinkPicker = false
                         flushSave()
                         viewModel.showSnackbar("Wiki-link inserted into note")
@@ -1427,6 +1455,79 @@ fun MarkdownPreviewScreen(
 
 private val markdownParser by lazy {
     Parser.builder().extensions(listOf(TablesExtension.create())).build()
+}
+
+/**
+ * Phase 258: the SINGLE editor surface shared by all three edit sites (EDIT for
+ * non-split devices, and the SPLIT top/left panes). One implementation, one
+ * slash-menu anchor, one caret-report pipeline — the old per-site duplicated
+ * editor blocks (and the deleted `HybridMarkdownEditor`) are gone. Pass a
+ * [headerTitle] to show the SPLIT-pane header row, or null for the bare
+ * EDIT-mode slash button.
+ */
+@Composable
+private fun EditorPane(
+    contentText: String,
+    onContentTextChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    primaryColor: Color,
+    serif: Boolean,
+    wikiLinkTitles: List<String>,
+    ensureWikiLinkTitles: () -> Unit,
+    onSlashCommands: () -> Unit,
+    slashLabel: String,
+    headerTitle: String? = null,
+    editorImePadding: Boolean = false,
+    onSelectionChanged: (Int) -> Unit,
+    selectionOverride: TextRange?
+) {
+    Column(modifier = modifier) {
+        if (headerTitle != null) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(bottom = 2.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    headerTitle,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                Button(
+                    onClick = onSlashCommands,
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                ) {
+                    Text(slashLabel, style = MaterialTheme.typography.labelSmall)
+                }
+            }
+        } else {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Button(
+                    onClick = onSlashCommands,
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                ) {
+                    Text(slashLabel)
+                }
+            }
+        }
+        WholeMarkdownEditor(
+            value = contentText,
+            onValueChange = onContentTextChange,
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .then(if (editorImePadding) Modifier.imePadding() else Modifier),
+            primaryColor = primaryColor,
+            serif = serif,
+            wikiLinkTitles = wikiLinkTitles,
+            onWikiLinkQueryEngaged = ensureWikiLinkTitles,
+            onSelectionChanged = { onSelectionChanged(it.start) },
+            selectionOverride = selectionOverride
+        )
+    }
 }
 
 @Composable
