@@ -224,7 +224,15 @@ class PluginStoreController(
         val plugin = registry.allPlugins.firstOrNull { it.id == pluginId }
             ?: return DeleteOutcome.Failed(pluginId, "This plugin is not installed.")
         // Remove downloaded assets BEFORE the registry forgets the plugin.
-        plugin.deleteDownloadedAssets(context)
+        // Phase 270: a throwing wipe must not leave the registry installed
+        // with half-deleted assets — log a FIXED code (B2-LOG-04: never the
+        // exception message, which could echo hostile plugin data) and still
+        // run the registry uninstall below so Delete stays atomic.
+        try {
+            plugin.deleteDownloadedAssets(context)
+        } catch (e: Throwable) {
+            logger.error(pluginId, plugin.name, "store delete assets failed; code=DELETE_ASSETS_FAILED")
+        }
         val entry = catalog.entryFor(pluginId)
         return when (val result = registry.uninstallPlugin(pluginId, context)) {
             is PluginUninstallResult.Uninstalled -> {

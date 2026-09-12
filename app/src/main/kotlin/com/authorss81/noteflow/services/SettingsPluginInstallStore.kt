@@ -9,11 +9,12 @@ import com.authorss81.noteflow.plugins.store.PluginInstallStore
  * is remembered.
  */
 class SettingsPluginInstallStore(
-    private val settings: SettingsManager
+    private val settings: SettingsManager,
+    private val optionalIds: Set<String> = PluginInstallDefaults.OPTIONAL_NOT_INSTALLED_BY_DEFAULT
 ) : PluginInstallStore {
 
     override fun isInstalled(pluginId: String): Boolean =
-        !settings.isPluginUninstalled(pluginId)
+        settings.isPluginInstalledWithDefaults(pluginId, optionalIds)
 
     override fun setInstalled(pluginId: String, installed: Boolean) {
         settings.setPluginUninstalled(pluginId, !installed)

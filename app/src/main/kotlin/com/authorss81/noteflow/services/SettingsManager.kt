@@ -1008,6 +1008,29 @@ class SettingsManager(context: Context) {
         prefs.edit().putBoolean("plugin_uninstalled_$pluginId", uninstalled).apply()
     }
 
+    // Phase 270: whether a persisted `plugin_uninstalled_<id>` key exists at
+    // all. OPTIONAL bundled store plugins default to NOT installed when the key
+    // is absent (fresh install = "Not downloaded"); built-ins keep the legacy
+    // absent = installed default. The key itself always wins once written.
+    fun hasPluginUninstalledKey(pluginId: String): Boolean =
+        prefs.contains("plugin_uninstalled_$pluginId")
+
+    // Phase 270: effective install state with the optional-plugin default
+    // applied. Pure delegation to [PluginInstallDefaults.resolveInstalled] so
+    // the decision table stays JVM-unit-testable; the legacy
+    // [isPluginUninstalled] default (absent = false = installed) is unchanged.
+    fun isPluginInstalledWithDefaults(
+        pluginId: String,
+        optionalIds: Set<String> = PluginInstallDefaults.OPTIONAL_NOT_INSTALLED_BY_DEFAULT
+    ): Boolean {
+        val key = "plugin_uninstalled_$pluginId"
+        return if (!prefs.contains(key)) {
+            pluginId !in optionalIds
+        } else {
+            !prefs.getBoolean(key, false)
+        }
+    }
+
     // Phase 23: explicit consent to download a REMOTE (downloadable) plugin.
     // The FIRST download requires the user to say yes in the store; the consent
     // is persisted so a re-download does not re-prompt, and Delete wipes it

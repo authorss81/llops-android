@@ -6,18 +6,29 @@ import org.junit.Test
 
 /**
  * Phase 212: [SettingsPluginInstallStore] — the store's install/delete
- * persistence. Default (absent key) = INSTALLED so existing builds keep every
- * bundled plugin (no migration); Delete writes the explicit uninstalled flag.
+ * persistence. Default (absent key) = INSTALLED for built-ins so existing
+ * builds keep every bundled plugin (no migration); Delete writes the explicit
+ * uninstalled flag. Phase 270: OPTIONAL bundled store plugins (CaseChange)
+ * default to NOT installed when the key is absent (fresh install reads as
+ * "Not downloaded", not "Available — off").
  */
 class SettingsPluginInstallStoreTest {
 
     private val id = "com.authorss81.noteflow.plugins.casechange"
+    private val builtInId = "com.authorss81.noteflow.plugins.rot13"
 
     @Test
-    fun `plugins are installed by default (backward compatible)`() {
+    fun `built-in plugins are installed by default (backward compatible)`() {
         val store = SettingsPluginInstallStore(settingsOver(FakePrefs()))
 
-        assertTrue("absent plugin_uninstalled_<id> must mean installed", store.isInstalled(id))
+        assertTrue("absent plugin_uninstalled_<id> must mean installed for built-ins", store.isInstalled(builtInId))
+    }
+
+    @Test
+    fun `optional plugins are NOT installed by default (fresh install)`() {
+        val store = SettingsPluginInstallStore(settingsOver(FakePrefs()))
+
+        assertFalse("absent plugin_uninstalled_<id> must mean NOT installed for optional plugins", store.isInstalled(id))
     }
 
     @Test

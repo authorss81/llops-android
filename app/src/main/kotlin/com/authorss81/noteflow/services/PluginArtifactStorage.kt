@@ -103,13 +103,18 @@ class PluginArtifactStorage(context: Context) : PluginArtifactResolver {
                         RESERVED_PREFIXES.any { name == it || name.startsWith(it) } -> "assets/" + name.removePrefix("assets/")
                         else -> null
                     } ?: return@forEach
+                    // Phase 270: canonical-containment guard — a crafted entry
+                    // such as `assets/<reserved>/../../evil` passes the
+                    // reserved-prefix allow-list but escapes the payload root
+                    // when joined. Escaping entries are SKIPPED (never written).
+                    val out = PluginPayloadPathPolicy.resolveTarget(root, targetName)
+                        ?: return@forEach
                     if (!wrote) {
                         root.mkdirs()
                         wrote = true
                     }
-                    val out = File(root, targetName)
                     if (out.exists() && out.length() == jarEntry.size.toLong()) return@forEach
-                    out.parentFile.mkdirs()
+                    out.parentFile?.mkdirs()
                     jar.getInputStream(jarEntry).use { input ->
                         out.outputStream().use { output -> input.copyTo(output) }
                     }
