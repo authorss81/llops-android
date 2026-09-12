@@ -108,6 +108,8 @@ painting engine, free features).
 | phase-269 | **Compat hardware low-RAM API** (single AgslGate, paged graph, trim at RUNNING_LOW) | AI Studio audit 2026-09-01 |
 | phase-270 | **Plugins sandbox verify** (optional default, atomic delete, canonical payload) | AI Studio audit 2026-09-01 |
 | phase-271 | **Final verification gate** (prove 255-270, no regressions, F-Droid release-gate) | AI Studio audit 2026-09-01 |
+| phase-272 | **Pan fling with exponential decay** (velocityTracker + 80px/s gate + per-axis animateDecay, cancels on new gesture) | AI Studio port |
+| phase-273 | **Wire FloatingZoomWidget into EditorScreen** (zoom out/in + % presets + fit-width/page + reset above ink bar) | AI Studio port |
 | phase-240 | **Pinch/touch regression fixes** — two-finger pinch no longer rotates the page (`CanvasRotationPolicy` dead-zone 2° + zoom >3% / pan >12px dominance gates) and stroke dots land exactly on the touch (remove the double `canvasBoxWindowOffset` subtraction: `pointerInteropFilter` events are already node-local) — see `workspace/phase-240/REPORT.md`, status `docs/phase-status.md` [DONE] | user-requested |
 
 ## How phases run
