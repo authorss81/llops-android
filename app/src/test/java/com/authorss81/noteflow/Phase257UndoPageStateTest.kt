@@ -133,6 +133,29 @@ class Phase257UndoPageStateTest {
         assertEquals("seen-but-removed ids are dropped, never resurrected", listOf("s1", "s2"), canvas.active)
     }
 
+    @Test
+    fun `undo before the canvas observed its own committed draw leaves the stroke pending until an authoritative load`() {
+        // REVIEW-FIX residual (documented, bounded): a draw whose commit snapshot
+        // [s1,s2,s3] and the undo snapshot [s1,s2] coalesce BEFORE the canvas ever
+        // processed a snapshot carrying s3 leaves s3 as a never-seen pending local.
+        // Reconcile RETAINS it (the only safe choice -- a legit pending draw on a
+        // loaded page is indistinguishable here). The ghost-purge mechanism bounds
+        // it: the NEXT authoritative page snapshot (canvasResetToken change) replaces
+        // the live list wholesale, so the phantom is dropped at the next open/reload
+        // instead of lingering for the whole session.
+        var canvas = CanvasState(active = rememberFirstFrame(listOf("s1", "s2")), lastSeen = setOf("s1", "s2"))
+        canvas.drawLocally("s3")
+        canvas.reconcileWith(listOf("s1", "s2"))
+        assertTrue(
+            "a never-observed pending local is retained until an authoritative snapshot",
+            canvas.active.contains("s3")
+        )
+        // Authoritative snapshot (canvasResetToken bumped): wholesale replace.
+        canvas.active = rememberFirstFrame(listOf("s1", "s2"))
+        canvas.lastSeen = setOf("s1", "s2")
+        assertEquals("the authoritative replace drops the phantom", listOf("s1", "s2"), canvas.active)
+    }
+
     private fun rememberFirstFrame(incoming: List<String>): List<String> = incoming.toList()
 
     // ---------------------------------------------------------------------------
@@ -260,6 +283,57 @@ class Phase257UndoPageStateTest {
         assertTrue(
             "ViewModel.loadEditorCanvasPage must delegate to the repository (never read unlocked)",
             fn.contains("val data = repository.loadEditorCanvasPage(pageId)")
+        )
+    }
+
+    // ---------------------------------------------------------------------------
+    // 4. Review-fix: authoritative-snapshot ghost purge (findings #2/#3)
+    // ---------------------------------------------------------------------------
+
+    @Test
+    fun `canvas ingest effects key on the reset token and replace wholesale on a token change`() {
+        val src = canvasSource()
+        assertEquals(
+            "all three ingest effects must key on (filteredX, canvasResetToken)",
+            3,
+            listOf(
+                "LaunchedEffect(filteredStrokes, canvasResetToken)",
+                "LaunchedEffect(filteredStickyNotes, canvasResetToken)",
+                "LaunchedEffect(filteredMediaEmbeds, canvasResetToken)"
+            ).filter { src.contains(it) }.size
+        )
+        assertEquals(
+            "every token-tracking var must exist",
+            3,
+            listOf("lastAppliedStrokeResetToken", "lastAppliedStickyResetToken", "lastAppliedEmbedResetToken")
+                .filter { src.contains(it) }.size
+        )
+        assertTrue(
+            "a token change must replace the live list wholesale (ghost purge, never-seen locals dropped)",
+            src.contains("if (canvasResetToken != lastAppliedStrokeResetToken)") &&
+                src.contains("lastAppliedStrokeResetToken = canvasResetToken")
+        )
+    }
+
+    @Test
+    fun `editor bumps the canvas reset token exactly when an authoritative snapshot is applied`() {
+        val src = editorSource()
+        assertTrue(
+            "canvasResetToken must be page-keyed",
+            src.contains("var canvasResetToken by remember(page.id)")
+        )
+        val load = src.substring(src.indexOf("LaunchedEffect(page.id, isAuthenticated)"))
+        val authIdx = load.indexOf("viewModel.authenticated.value")
+        val incIdx = load.indexOf("canvasResetToken++")
+        assertTrue("the token bump must exist inside the load effect (after the auth gate)", incIdx > authIdx)
+        val firstElse = load.indexOf("} else {", authIdx)
+        assertTrue(
+            "the bump must sit inside the authenticated branch, after isInitialLoadComplete = true",
+            load.indexOf("isInitialLoadComplete = true") < incIdx && (firstElse < 0 || incIdx < firstElse)
+        )
+        assertTrue(
+            "the token must be forwarded to the canvas",
+            src.contains("canvasResetToken = canvasResetToken")
         )
     }
 }

@@ -7,6 +7,7 @@ import com.authorss81.noteflow.services.EraserGeometryPolicy
 import com.authorss81.noteflow.services.StrokeSegmenter
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -222,5 +223,73 @@ class Phase256EraserPrecisionTest {
             "applyEraser must NEVER emit directly (that was the 30-snapshots-per-swipe bug)",
             src.substring(applyStart, applyEnd).contains("onStrokesChanged(")
         )
+    }
+
+    // ---- 5. Phase 257 review-fix: exact circle/edge interval + mask-exact carve ----
+    // Direct unit tests for the geometry the phase-257 carve rewrite introduced
+    // (`circleSegmentInterval` + the run-boundary semantics). Previously covered
+    // only indirectly through `segment()`; these pin the boundary math itself.
+
+    @Test
+    fun `circleSegmentInterval reports the whole edge inside the circle`() {
+        val r = StrokeSegmenter.circleSegmentInterval(PointF(0f, 0f), PointF(10f, 0f), 5f, 0f, 20f)
+        assertEquals(0f, r!![0], 1e-4f)
+        assertEquals(1f, r[1], 1e-4f)
+    }
+
+    @Test
+    fun `circleSegmentInterval returns null when the circle misses the edge`() {
+        assertNull(StrokeSegmenter.circleSegmentInterval(PointF(0f, 0f), PointF(10f, 0f), 50f, 0f, 5f))
+    }
+
+    @Test
+    fun `circleSegmentInterval returns the exact t-slice where a circle crosses the middle of an edge`() {
+        val r = StrokeSegmenter.circleSegmentInterval(PointF(0f, 0f), PointF(100f, 0f), 50f, 0f, 10f)
+        assertEquals(0.4f, r!![0], 1e-4f)
+        assertEquals(0.6f, r[1], 1e-4f)
+    }
+
+    @Test
+    fun `circleSegmentInterval treats a tangent and a degenerate edge as no carve`() {
+        assertNull(StrokeSegmenter.circleSegmentInterval(PointF(0f, 0f), PointF(10f, 0f), 5f, 5f, 5f))
+        assertNull(StrokeSegmenter.circleSegmentInterval(PointF(5f, 5f), PointF(5f, 5f), 0f, 0f, 10f))
+    }
+
+    @Test
+    fun `non-wet carve keeps every surviving point strictly outside the covering mask`() {
+        // One mask circle cutting the MIDDLE of the only edge: no raw point is
+        // covered, so the carve must split the run without deleting either
+        // endpoint, and every surviving point lies strictly outside the circle.
+        val s = stroke(points = listOf(PointF(0f, 0f), PointF(60f, 0f)), width = 2f)
+        val mask = StrokeSegmenter.ErasePoint(30f, 0f, radius = 6f)
+        val coverage = EraserGeometryPolicy.coverageRadius(6f, 2f)
+        val result = StrokeSegmenter.segment(s, listOf(mask), StrokeSegmenter.DEFAULT_EXTRA_RADIUS)
+        assertTrue("a middle-edge carve must report affected", result.affected)
+        assertEquals("neither endpoint may be deleted by a mid-edge cover", 2, result.surviving.size)
+        for (seg in result.surviving) {
+            for (p in seg.points) {
+                val d2 = (p.x - mask.x) * (p.x - mask.x) + (p.y - mask.y) * (p.y - mask.y)
+                assertTrue(
+                    "survivor point ($p) must be outside the real round mask (d=$d2 > r2=${coverage * coverage})",
+                    d2 > coverage * coverage
+                )
+            }
+        }
+    }
+
+    @Test
+    fun `non-wet carve deletes a raw point sitting exactly on the mask boundary`() {
+        // Point at distance == coverageRadius (7 = 6 + width/2) from the mask
+        // centre is covered (`<=` comparison) and must be removed, leaving two
+        // runs. Mask sits at (26,0); the middle point (33,0) is exactly on the
+        // boundary of the round mask.
+        val s = stroke(points = listOf(PointF(0f, 0f), PointF(33f, 0f), PointF(66f, 0f)), width = 2f)
+        val coverage = EraserGeometryPolicy.coverageRadius(6f, 2f)
+        val mask = StrokeSegmenter.ErasePoint(26f, 0f, radius = 6f)
+        assertEquals("boundary point must sit exactly on the mask edge", coverage, 33f - mask.x, 1e-4f)
+        val result = StrokeSegmenter.segment(s, listOf(mask), StrokeSegmenter.DEFAULT_EXTRA_RADIUS)
+        assertTrue("the covered end point must make the carve affected", result.affected)
+        assertEquals("the covered middle point is deleted, edge runs split", 2, result.surviving.size)
+        assertEquals(listOf(0f, 66f), result.surviving.map { it.points.single().x })
     }
 }

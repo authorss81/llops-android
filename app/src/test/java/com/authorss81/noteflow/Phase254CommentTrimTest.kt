@@ -60,19 +60,25 @@ import org.junit.Test
  * lineSequence keeps a trailing empty line, so the raw counts sit one higher
  * than `wc -l` on a newline-terminated file. Current verified counts are in
  * [headRaw] / [headCode] below.
+ *
+ * PHASE 257 REVIEW-FIX RE-BASELINE: the review-fix round added the
+ * authoritative-snapshot ghost purge (canvasResetToken parameter in
+ * AnnotationCanvas + per-page `canvasResetToken` in EditorScreen, see
+ * Phase257UndoPageStateTest section 4) — AnnotationCanvas +33 raw / +23 code,
+ * EditorScreen +8 raw / +3 code. Re-measured on the review-fix tree.
  */
 class Phase254CommentTrimTest {
 
-    // Phase-255/256/257 re-baselined raw line counts (measured on the phase-257 tree).
+    // Phase-255/256/257 re-baselined raw line counts (measured on the phase-257 review-fix tree).
     private val headRaw = mapOf(
-        "ui/components/AnnotationCanvas.kt" to 8635,
-        "ui/screens/EditorScreen.kt" to 7339,
+        "ui/components/AnnotationCanvas.kt" to 8668,
+        "ui/screens/EditorScreen.kt" to 7347,
         "ui/screens/HomeScreen.kt" to 3757
     )
     // Phase-255/256/257 re-baselined code-line counts (non-blank, non-full-`//` lines).
     private val headCode = mapOf(
-        "ui/components/AnnotationCanvas.kt" to 6933,
-        "ui/screens/EditorScreen.kt" to 6423,
+        "ui/components/AnnotationCanvas.kt" to 6956,
+        "ui/screens/EditorScreen.kt" to 6426,
         "ui/screens/HomeScreen.kt" to 3267
     )
     // Parent baseline KDoc `/**` opener counts (no KDoc opener may be deleted).

@@ -57,9 +57,63 @@ reachable:
 - `app/src/main/kotlin/com/authorss81/noteflow/services/StrokeSegmenter.kt` (carve rewrite + `circleSegmentInterval` + anchor fallback)
 - `app/src/main/kotlin/com/authorss81/noteflow/ui/components/AnnotationCanvas.kt` (3 effects → reconcile helper)
 - `app/src/main/kotlin/com/authorss81/noteflow/ui/screens/EditorScreen.kt` (`layers`/`activeLayerId` page keys)
-- `app/src/test/java/com/authorss81/noteflow/Phase257UndoPageStateTest.kt` (new, 11 tests)
+- `app/src/test/java/com/authorss81/noteflow/Phase257UndoPageStateTest.kt` (new, 10 tests at phase end; 13 after the review-fix round)
 - `app/src/test/java/com/authorss81/noteflow/StrokeSegmenterTest.kt` / `Phase124EraserTest.kt` (unmodified — green via the segmenter fix)
 - `app/src/test/java/com/authorss81/noteflow/Phase256EraserPrecisionTest.kt` (pin fix)
 - `app/src/test/java/com/authorss81/noteflow/Phase254CommentTrimTest.kt` (re-baseline)
 
 `git diff --stat` shows no schema, no dependency, no workflow change; `verification-metadata.xml` untouched.
+
+## Review-fix round (2026-09-12)
+Applied all 7 review findings; the original REPORT claims were corrected and
+the fixes are pinned by tests:
+
+1. **Finding #1 / test-count claim (11) was wrong → 10.** The phase shipped
+   `Phase257UndoPageStateTest` with 10 tests (JUnit XML `tests="10"`), not 11;
+   the "Files changed" row above, the review-fix commit, and
+   `docs/phase-status.md` no longer claim 11. The review-fix round then grew the
+   file to 13 (3 new tests, section 4) — the DoD table reflects the new total.
+2. **Finding #2 / pre-load ghost-stroke residual (fixed).** A stroke drawn while
+   the async load is pending previously became a session-long phantom (rendered
+   forever, could not undo/erase). `AnnotationCanvas` now takes a
+   `canvasResetToken: Int = 0` parameter; all three ingest effects
+   (`LaunchedEffect(filteredStrokes, canvasResetToken)` / sticky notes / media
+   embeds) replace the live list wholesale when the token changes, else fall
+   back to `CanvasStrokeReconcile.reconcile` (undo-safety unaffected).
+3. **Finding #3 / never-observed undo-residual is now explicit + bounded.** A
+   draw whose committed AND undone snapshots coalesce before the canvas ever
+   observes them stays as an untracked pending local (reconcile retains it — the
+   only safe choice) until the next authoritative snapshot purges it via the
+   token. Documented in the reconcile KDoc + behavior test (`undo before the
+   canvas observed its own committed draw ...`).
+4. **Finding #4 / direct geometry coverage.** `Phase256EraserPrecisionTest`
+   gained 6 tests calling `StrokeSegmenter.circleSegmentInterval` + `segment`
+   directly: whole-edge-inside → `[0,1]`, exact mid-edge t-slice, non-touching
+   circle → null, tangent + zero-length edge → null, survivor points strictly
+   outside the covering mask, boundary-point (`==` coverage) deletion.
+5. **Finding #5 / scope note.** Accepted: the phase shipped the phase-256 eraser
+   repair (~160-line `StrokeSegmenter.segment` rewrite + 2 test re-baselines)
+   alongside its own three fixes. The DoD reachable-state argument and the
+   ship-vs-trivial comment are documented in this REPORT; the review-fix round
+   adds no further scope.
+6. **Finding #6 / evidence citation corrected.** The save-mutex row above
+   simply said `NoteRepository.kt:1763-1764`; that is `saveMediaEmbedsForPage`'s
+   `withLock` — `saveStrokesForPage`'s own lock is at `:1501` (all save families
+   share the same `pageSaveLocks` mutex as `loadEditorCanvasPage`).
+7. **Finding #7 / cosmetics.** The shared reconcile is now referenced via the
+   imported `services/CanvasStrokeReconcile.kt` (no fully-qualified name), and
+   `CanvasStrokeReconcile.kt` + `Phase257UndoPageStateTest.kt` gained the
+   missing trailing newlines.
+
+Other review-fix changes: `Phase254CommentTrimTest` re-baselined for the source
+edits (AnnotationCanvas raw=8668 code=6956, EditorScreen raw=7347 code=6426,
+HomeScreen raw=3757 code=3267, measured on the review-fix tree) and
+`Phase257UndoPageStateTest` gained 3 tests (token source pins +
+never-observed-residual behavior), section 4.
+
+### Review-fix DoD results
+| Check | Result |
+|---|---|
+| `gradle :app:assembleDebug` | BUILD SUCCESSFUL |
+| `gradle :app:testDebugUnitTest` | 3692 tests, 0 failures |
+| `gradle :app:lintDebug` | 0 errors |

@@ -853,6 +853,12 @@ fun EditorScreen(
 
     var saveJob by remember { mutableStateOf<Job?>(null) }
     var isInitialLoadComplete by remember(page.id) { mutableStateOf(false) }
+    // Phase 257 review-fix (ghost purge): bumped ONLY when a fresh authoritative
+    // page snapshot is applied in the load effect below (initial load / unlock
+    // reload). The canvas treats a changed token as "replace live lists
+    // wholesale", purging any never-seen pending local drawn during the
+    // async-load window (it can never be committed once load lands).
+    var canvasResetToken by remember(page.id) { mutableStateOf(0) }
     // Phase 250 (Bug 2 — lock during page load wipes the page): a lock() that
     // fires in the window between `loadEditorCanvasPage` returning AND
     // `isInitialLoadComplete = true` used to render the page empty and let a
@@ -898,6 +904,7 @@ fun EditorScreen(
                 pdfTotalPages = maxOf(1, maxPage + 1)
             }
             isInitialLoadComplete = true
+            canvasResetToken++
         } else {
             // The auth gate dropped between the read and the assignment. Keep the
             // page "loaded-but-locked" so no autosave/flush can run (and no wipe
@@ -2521,6 +2528,7 @@ fun EditorScreen(
                 isPdf = isPdf,
                 pdfPageFilter = if (isPdf) currentPdfPage else 0,
                 isContinuousMode = isContinuousMode,
+                canvasResetToken = canvasResetToken,
                 zoomScale = zoomScale,
                 panOffset = panOffset,
                 palmRejectionEnabled = palmRejectionEnabled,

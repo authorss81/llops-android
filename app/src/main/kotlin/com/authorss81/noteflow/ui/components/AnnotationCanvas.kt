@@ -64,6 +64,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.authorss81.noteflow.data.model.CanvasMediaEmbed
 import com.authorss81.noteflow.services.BrushTextureEngine
+import com.authorss81.noteflow.services.CanvasStrokeReconcile
 import com.authorss81.noteflow.services.FloatingWidgetDragPolicy
 import com.authorss81.noteflow.services.MinimapGeometryPolicy
 import com.authorss81.noteflow.services.PressureCurve
@@ -135,6 +136,15 @@ fun AnnotationCanvas(
     pdfPageFilter: Int = 0,
     isPdf: Boolean = false,
     isContinuousMode: Boolean = false,
+    // Phase 257 review-fix (ghost purge): a monotonically-increasing token that
+    // EditorScreen bumps ONLY when it applies a fresh authoritative page
+    // snapshot (initial load / unlock reload). On a change the three ingest
+    // effects below REPLACE their live lists wholesale instead of reconciling,
+    // so a stroke drawn during the async-load window -- which can never be
+    // committed (handleStrokesChange is gated until isInitialLoadComplete) --
+    // is purged instead of lingering as an immovable phantom for the session.
+    // Default 0 keeps non-editor call sites (tests/previews) compiling unchanged.
+    canvasResetToken: Int = 0,
     zoomScale: Float = 1f,
     panOffset: Offset = Offset.Zero,
     palmRejectionEnabled: Boolean = true,
@@ -636,17 +646,26 @@ fun AnnotationCanvas(
     }
     val activeStrokeList = remember(pdfPageFilter, isContinuousMode) { mutableStateListOf<Stroke>().apply { addAll(filteredStrokes) } }
     var lastSeenStrokeIds by remember { mutableStateOf<Set<String>>(emptySet()) }
-    LaunchedEffect(filteredStrokes) {
-        // Phase 257: pure-JVM reconcile (never-seen locals retained, previously
-        // committed-but-removed strokes dropped — undo must NOT resurrect).
-        val reconciled = com.authorss81.noteflow.services.CanvasStrokeReconcile.reconcile(
-            active = activeStrokeList,
-            lastSeen = lastSeenStrokeIds,
-            incoming = filteredStrokes,
-            idOf = { it.id }
-        )
-        activeStrokeList.clear()
-        activeStrokeList.addAll(reconciled)
+    var lastAppliedStrokeResetToken by remember(pdfPageFilter, isContinuousMode) { mutableStateOf(canvasResetToken) }
+    LaunchedEffect(filteredStrokes, canvasResetToken) {
+        if (canvasResetToken != lastAppliedStrokeResetToken) {
+            // Authoritative post-load snapshot: replace wholesale and drop any
+            // never-seen pending locals (strokes drawn before the load landed).
+            activeStrokeList.clear()
+            activeStrokeList.addAll(filteredStrokes)
+            lastAppliedStrokeResetToken = canvasResetToken
+        } else {
+            // Phase 257: pure-JVM reconcile (never-seen locals retained, previously
+            // committed-but-removed strokes dropped -- undo must NOT resurrect).
+            val reconciled = CanvasStrokeReconcile.reconcile(
+                active = activeStrokeList,
+                lastSeen = lastSeenStrokeIds,
+                incoming = filteredStrokes,
+                idOf = { it.id }
+            )
+            activeStrokeList.clear()
+            activeStrokeList.addAll(reconciled)
+        }
         lastSeenStrokeIds = filteredStrokes.map { it.id }.toSet()
     }
 
@@ -678,15 +697,22 @@ fun AnnotationCanvas(
     }
     val activeStickyNoteList = remember(pdfPageFilter, isContinuousMode) { mutableStateListOf<CanvasStickyNote>().apply { addAll(filteredStickyNotes) } }
     var lastSeenStickyIds by remember { mutableStateOf<Set<String>>(emptySet()) }
-    LaunchedEffect(filteredStickyNotes) {
-        val reconciled = com.authorss81.noteflow.services.CanvasStrokeReconcile.reconcile(
-            active = activeStickyNoteList,
-            lastSeen = lastSeenStickyIds,
-            incoming = filteredStickyNotes,
-            idOf = { it.id }
-        )
-        activeStickyNoteList.clear()
-        activeStickyNoteList.addAll(reconciled)
+    var lastAppliedStickyResetToken by remember(pdfPageFilter, isContinuousMode) { mutableStateOf(canvasResetToken) }
+    LaunchedEffect(filteredStickyNotes, canvasResetToken) {
+        if (canvasResetToken != lastAppliedStickyResetToken) {
+            activeStickyNoteList.clear()
+            activeStickyNoteList.addAll(filteredStickyNotes)
+            lastAppliedStickyResetToken = canvasResetToken
+        } else {
+            val reconciled = CanvasStrokeReconcile.reconcile(
+                active = activeStickyNoteList,
+                lastSeen = lastSeenStickyIds,
+                incoming = filteredStickyNotes,
+                idOf = { it.id }
+            )
+            activeStickyNoteList.clear()
+            activeStickyNoteList.addAll(reconciled)
+        }
         lastSeenStickyIds = filteredStickyNotes.map { it.id }.toSet()
     }
 
@@ -695,15 +721,22 @@ fun AnnotationCanvas(
     }
     val activeMediaEmbedList = remember(pdfPageFilter, isContinuousMode) { mutableStateListOf<CanvasMediaEmbed>().apply { addAll(filteredMediaEmbeds) } }
     var lastSeenEmbedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
-    LaunchedEffect(filteredMediaEmbeds) {
-        val reconciled = com.authorss81.noteflow.services.CanvasStrokeReconcile.reconcile(
-            active = activeMediaEmbedList,
-            lastSeen = lastSeenEmbedIds,
-            incoming = filteredMediaEmbeds,
-            idOf = { it.id }
-        )
-        activeMediaEmbedList.clear()
-        activeMediaEmbedList.addAll(reconciled)
+    var lastAppliedEmbedResetToken by remember(pdfPageFilter, isContinuousMode) { mutableStateOf(canvasResetToken) }
+    LaunchedEffect(filteredMediaEmbeds, canvasResetToken) {
+        if (canvasResetToken != lastAppliedEmbedResetToken) {
+            activeMediaEmbedList.clear()
+            activeMediaEmbedList.addAll(filteredMediaEmbeds)
+            lastAppliedEmbedResetToken = canvasResetToken
+        } else {
+            val reconciled = CanvasStrokeReconcile.reconcile(
+                active = activeMediaEmbedList,
+                lastSeen = lastSeenEmbedIds,
+                incoming = filteredMediaEmbeds,
+                idOf = { it.id }
+            )
+            activeMediaEmbedList.clear()
+            activeMediaEmbedList.addAll(reconciled)
+        }
         lastSeenEmbedIds = filteredMediaEmbeds.map { it.id }.toSet()
     }
 

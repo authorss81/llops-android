@@ -28,6 +28,15 @@ object CanvasStrokeReconcile {
      *
      * An item in `lastSeen` that subsequently vanished from `incoming` is an
      * intentional removal and is NOT re-added.
+     *
+     * Bounded residual (phase-257 review-fix, finding #3): an item that was drawn
+     * and then removed (undo/eraser) BEFORE the canvas ever observed a committed
+     * snapshot carrying it is indistinguishable from a legitimately pending draw
+     * (it is absent from both `incoming` and `lastSeen`) and is therefore RETAINED
+     * as a pending local — the only safe choice on a loaded page. Reconcile relies
+     * on `AnnotationCanvas.canvasResetToken` to bound it: the next authoritative
+     * page snapshot replaces the live list wholesale, so such a phantom lives at
+     * most until the next page open/reload (see EditorScreen's per-page token).
      */
     fun <T> reconcile(
         active: List<T>,
