@@ -19,8 +19,8 @@ import java.io.File
  *    override;
  *  - `<trusted-artifacts>` stay limited to the three build-tool groups whose
  *    artifacts publish no signatures (Gradle/AGP/Kotlin-generated);
- *  - `<ignored-keys>` stay the reviewed 18 key-download failures (sha256 still
- *    enforced per artifact — every component keeps its checksum entries);
+  *  - `<ignored-keys>` stay the reviewed 17 key-download failures (sha256 still
+  *    enforced per artifact — every component keeps its checksum entries);
  *  - no `jitpack` repository reference anywhere in the build definition;
  *  - the wrapper distribution stays SHA-pinned and every CI workflow's
  *    `gradle-version` tracks the wrapper version (no silent drift);
@@ -104,11 +104,22 @@ class Phase268BuildTest {
 
     @Test
     fun `no jitpack repository anywhere in the build definition`() {
-        listOf("settings.gradle.kts", "gradle.properties", "gradle/libs.versions.toml").forEach { path ->
-            val text = repoFile(path).readText()
+        listOf(
+            "settings.gradle.kts",
+            "gradle.properties",
+            "gradle/libs.versions.toml",
+            "app/build.gradle.kts",
+            "plugin-sdk/build.gradle.kts",
+            "plugins/llm/build.gradle.kts",
+            "plugins/mlkit/build.gradle.kts",
+            "baselineprofile/build.gradle.kts",
+            "build.gradle.kts"
+        ).forEach { path ->
+            val f = File(repoRoot(), path)
+            if (!f.isFile) return@forEach
             assertFalse(
                 "$path must not reference jitpack (dependency-confusion surface, phase-268)",
-                text.contains("jitpack", ignoreCase = true)
+                f.readText().contains("jitpack", ignoreCase = true)
             )
         }
     }

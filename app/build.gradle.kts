@@ -97,12 +97,15 @@ android {
             // CI's $RUNNER_TEMP/release.keystore) is used as-is; a relative path
             // resolves against the REPO ROOT (so `./release.keystore` =
             // `rootDir/release.keystore`).
-            val ksRawFile = File(ksFilePath ?: "")
-            val ksFile = if (ksRawFile.isAbsolute) ksRawFile else rootProject.file(ksFilePath ?: "")
+            val ksFile = if (ksFilePath.isNullOrBlank()) null
+            else {
+                val raw = File(ksFilePath)
+                if (raw.isAbsolute) raw else rootProject.file(ksFilePath)
+            }
             if (!ksPassword.isNullOrBlank() &&
                 !ksAlias.isNullOrBlank() &&
                 !ksKeyPass.isNullOrBlank() &&
-                ksFile.isFile && ksFile.length() > 0
+                ksFile != null && ksFile.isFile && ksFile.length() > 0
             ) {
                 storeFile = ksFile
                 storePassword = ksPassword
