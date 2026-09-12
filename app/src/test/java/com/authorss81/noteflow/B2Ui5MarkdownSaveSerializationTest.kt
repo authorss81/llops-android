@@ -305,7 +305,13 @@ class B2Ui5MarkdownSaveSerializationTest {
         assertTrue("the read must await the in-flight save settle", read.contains("awaitSettled"))
         assertTrue("the read must use a fresh repository fetch", read.contains("repository.getPageById"))
 
-        val flush = vm.substringAfter("private fun flushPendingEditorSaves", "END").take(2600)
+        // Phase 255 re-baseline: flushPendingEditorSaves grew (merge-union of
+        // deferred saves + commitLatest coordinator, audit commits d778cf9/
+        // 33bbecf) so the pinned strings now sit at char deltas 2879..3431 —
+        // past the old take(2600) window but still INSIDE the function (the
+        // next member starts ~5900 chars later). Widened accordingly; every
+        // assertion below keeps its original meaning.
+        val flush = vm.substringAfter("private fun flushPendingEditorSaves", "END").take(3800)
         assertTrue("the unlock flush must drain deferred bodies", flush.contains("drainBodies()"))
         assertTrue("the flush must issue deferred bodies BEFORE the write (strictly older than any new edit)",
             flush.contains("markdownBodySaveCoordinator.issue"))

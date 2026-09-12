@@ -264,7 +264,13 @@ class B2Ui1LockedFlushTest {
         assertTrue("a lock-beaten markdown save must be stashed, never dropped", markdown.contains("deferBody(deferred)"))
         assertTrue("a mid-write lock must be stashed too, not turned into a loss snackbar", markdown.contains("VaultLockedWriteException"))
 
-        val flush = source.substringAfter("private fun flushPendingEditorSaves", "END").take(2600)
+        // Phase 255 re-baseline: flushPendingEditorSaves grew (merge-union of
+        // deferred saves + commitLatest coordinator, audit commits d778cf9/
+        // 33bbecf) so the pinned strings now sit at char deltas 2879..3431 —
+        // past the old take(2600) window but still INSIDE the function (the
+        // next member starts ~5900 chars later). Widened accordingly; every
+        // assertion below keeps its original meaning.
+        val flush = source.substringAfter("private fun flushPendingEditorSaves", "END").take(3800)
         assertTrue("the unlock flush must drain deferred markdown bodies", flush.contains("drainBodies()"))
         assertTrue("the unlock flush must write the body through the encrypted column", flush.contains("repository.updatePageBody(request.pageId, request.body)"))
         assertTrue(

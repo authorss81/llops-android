@@ -530,6 +530,20 @@ fun AnnotationCanvas(
     // Monotonic gate stamp: last timestamp actually ingested into the stroke.
     var lastIngestedInputTimestampMs by remember { mutableStateOf<Long?>(null) }
 
+    // Phase 255 (MEDIUM): per-gesture ingest state hoisted OUT of the drag
+    // handler so the DISPOSE flush (mid-gesture navigation) can drain the
+    // batcher through the SAME ingestion gate. Snapshot state is deliberate and
+    // safe here: ONLY the gesture/dispose pipelines read/write these five — no
+    // composition reader exists, so writes never invalidate (same pattern as
+    // lastIngestedInputTimestampMs / activeStart above). Per-gesture resets stay
+    // in onDragStart (wet refs) and the eraser branch (window pointer + spatial
+    // bucket), preserving exactly the Phase 249 (Bug 1/Bug 4) semantics.
+    var lastRawWetX by remember { mutableStateOf<Float?>(null) }
+    var lastRawWetY by remember { mutableStateOf<Float?>(null) }
+    var lastRawWetTimeMs by remember { mutableStateOf<Long?>(null) }
+    var eraseHitBucket by remember { mutableStateOf<com.authorss81.noteflow.services.EraseHitBucketPolicy?>(null) }
+    var lastProcessedEraseSampleIndex by remember { mutableIntStateOf(0) }
+
     // Phase 214: model + tension reach the gesture closures without restarting
     // pointerInput (a restart would cancel an in-flight drag). Both apply at
     // the NEXT stroke start — same contract as the strength slider.
@@ -1237,6 +1251,337 @@ fun AnnotationCanvas(
     // `ink.isNotEmpty()` doubles as the duplicate guard: `onDragEnd` clears
     // `activePoints`, so a gesture that already committed its stroke leaves an
     // empty list and no second stroke is emitted here.
+
+    // Phase 255 (MEDIUM — dispose flush): shared ingestion gate. The live drag
+    // handler and the DISPOSE flush below both drain the batcher through this
+    // SINGLE path, so the committed tail uses byte-identical bounds-gate →
+    // stabilizer → wet-throttle logic as live ink. It was hoisted OUT of the
+    // drag handler because onDispose cannot reach a drag-scope closure; the
+    // gesture-scoped state it touches (lastRawWet* / eraser window + spatial
+    // bucket) was hoisted to composable scope with it (see the declarations
+    // after lastIngestedInputTimestampMs). Snapshot reads/writes are safe — no
+    // composition reader exists for any of them — and per-gesture resets in
+    // onDragStart preserve the Phase 249 (Bug 1/Bug 4) semantics exactly.
+
+    // Phase 203: plain per-stroke hit-testing covers both symmetry
+    // copies — a stroke drawn while a mode was active persisted TWO
+    // independent rows (original + baked twin, see
+    // SymmetryCommitPolicy), so erasing either copy deletes exactly
+    // that row and LEAVES the other (the old view-time mirror hit-test
+    // special-case is gone with it).
+    val erasesStroke: (Stroke, Offset) -> Boolean = { stroke, offset ->
+        strokeContainsPoint(stroke, offset)
+    }
+
+    // Phase 19: shared eraser handler. STROKE mode keeps the classic
+    // remove-whole-stroke behaviour. PARTIAL mode segments every hit
+    // polyline (freehand tools with >= 2 points) into surviving runs
+    // using the full accumulated erase path; non-polyline strokes
+    // (text, shapes) fall back to whole-stroke removal — an honest
+    // gate, matching the classic eraser, not a fake "partial".
+    // Phase 124: each erase sample carries the touch pressure captured
+    // at that instant, so PARTIAL stamps a pressure-aware round mask
+    // (heavier press = wider circle), and the sample radius drives the
+    // split geometry via StrokeSegmenter.
+    // Phase 249 (Bug 4): applyEraser is no longer O(strokes × points ×
+    // samples) per drag sample. Each pass processes ONLY the samples
+    // accumulated since the last pass (capped at
+    // MAX_ERASE_SAMPLES_PER_APPLY — the coalesced-history burst size;
+    // anything older was already carved into the surviving strokes'
+    // geometry / eraseMasks), and iterates ONLY strokes whose world
+    // bounding box intersects the eraser cursor circle (spatial
+    // bucket above). The single O(strokes) full-list pass happens
+    // only when a stroke actually changed, to preserve z-order.
+    fun applyEraser(canvasOffset: Offset) {
+        val partial = eraserMode == com.authorss81.noteflow.services.EraserMode.PARTIAL
+        val startIdx = lastProcessedEraseSampleIndex.coerceAtMost(eraseSamples.size)
+        val samples = eraseSamples
+            .subList(startIdx, eraseSamples.size)
+            .takeLast(com.authorss81.noteflow.services.EraseHitBucketPolicy.MAX_ERASE_SAMPLES_PER_APPLY)
+            .map {
+                com.authorss81.noteflow.services.StrokeSegmenter.ErasePoint(
+                    x = it.pos.x,
+                    y = it.pos.y,
+                    radius = com.authorss81.noteflow.services.EraserGeometryPolicy.stampRadius(currentWidth, it.pressure)
+                )
+            }
+        lastProcessedEraseSampleIndex = eraseSamples.size
+        if (samples.isEmpty()) return
+
+        // Phase 249 (Bug 4): limit the scan to strokes whose world
+        // bounding box touches the eraser circle. Built lazily at the
+        // first sample of the drag (seeded with the full current list)
+        // so a long drag never pays a full-list pass per sample.
+        val bucket = eraseHitBucket
+            ?: com.authorss81.noteflow.services.EraseHitBucketPolicy.build(
+                activeStrokeList.toList(),
+                maxStampRadiusPx = com.authorss81.noteflow.services.EraserGeometryPolicy.stampRadius(currentWidth, 1f)
+            ).also { eraseHitBucket = it }
+        val candidates = bucket.candidatesWithinCircle(
+            cx = canvasOffset.x,
+            cy = canvasOffset.y,
+            radiusFor = { stroke ->
+                val stamp = com.authorss81.noteflow.services.EraserGeometryPolicy.stampRadius(currentWidth, 1f)
+                max(
+                    com.authorss81.noteflow.services.EraserGeometryPolicy.coverageRadius(stamp, stroke.width),
+                    com.authorss81.noteflow.services.EraserGeometryPolicy.legacyRadius(
+                        stroke.width,
+                        com.authorss81.noteflow.services.StrokeSegmenter.DEFAULT_EXTRA_RADIUS
+                    )
+                )
+            }
+        )
+        val removed = mutableListOf<Stroke>()
+        val added = mutableListOf<Stroke>()
+        val replacedBy = java.util.HashMap<String, List<Stroke>>()
+        var changed = false
+        for (stroke in candidates) {
+            if (erasesStroke(stroke, canvasOffset)) {
+                changed = true
+                removed.add(stroke)
+                val canPartial = partial &&
+                    stroke.tool.isFreehandTool &&
+                    stroke.points.size > 1 &&
+                    stroke.tool != StrokeTool.LASER
+                if (canPartial) {
+                    val result = com.authorss81.noteflow.services.StrokeSegmenter.segment(
+                        stroke = stroke,
+                        eraseSamples = samples,
+                        extraRadius = com.authorss81.noteflow.services.StrokeSegmenter.DEFAULT_EXTRA_RADIUS
+                    )
+                    replacedBy[stroke.id] = result.surviving
+                    added.addAll(result.surviving)
+                } else {
+                    // Whole-stroke removal (classic eraser behaviour);
+                    // non-polyline strokes (text, shapes) also fall back
+                    // to this — an honest gate, matching the classic
+                    // eraser, not a fake "partial".
+                    replacedBy[stroke.id] = emptyList()
+                }
+            }
+        }
+        if (changed) {
+            // One O(strokes) pass to substitute the carved strokes in
+            // place (z-order preserved); everything else was bucketed.
+            val newList = mutableListOf<Stroke>()
+            for (stroke in activeStrokeList) {
+                val replacement = replacedBy[stroke.id]
+                if (replacement != null) newList.addAll(replacement) else newList.add(stroke)
+            }
+            activeStrokeList.clear()
+            activeStrokeList.addAll(newList)
+            // Phase 249: re-tile only the strokes that moved so the
+            // bucket stays in sync without a full rebuild.
+            bucket.replaceStrokes(removed, added)
+            // Phase 205: derive "other pages" from CURRENT state at
+            // apply time — the captured `strokes` parameter here is a
+            // frozen pointerInput snapshot that resurrected erased
+            // strokes when re-emitted wholesale.
+            onStrokesChanged(
+                com.authorss81.noteflow.services.CanvasCommitListPolicy.emittedList(
+                    currentAll = currentStrokesProvider(),
+                    isContinuousMode = isContinuousMode,
+                    pageOf = { it.pdfPage },
+                    pdfPageFilter = pdfPageFilter,
+                    scopedReplacement = newList
+                )
+            )
+        }
+    }
+
+    // Phase 240 fix (Bug 2): ONE ingestion path for EVERY pointer sample,
+    // live or coalesced-historical. The coordinates are already
+    // CANVAS-BOX-LOCAL (both the passive `pointerInteropFilter`
+    // bridge and the live `change.position` fallback deliver
+    // node-local coords — Compose offsets the dispatch MotionEvent
+    // by the filter node's root offset). NO window-offset subtraction
+    // happens anywhere in this path — the phase-196 predicted tail
+    // (which records the same node-local events) passes the neutral
+    // frame as well. Only the pan/zoom transform below remains.
+    // Returns TRUE iff the sample was actually ingested; the
+    // page-bounds rejection returns FALSE so the monotonic
+    // batch-gate stamp never advances past a REJECTED sample
+    // (review-fix: "last ACCEPTED" must mean accepted).
+    fun ingestPointerSample(
+        boxLocalX: Float,
+        boxLocalY: Float,
+        rawPressure: Float,
+        tiltDegrees: Float,
+        sampleTimestampMs: Long?
+    ): Boolean {
+        val rawCanvasX = (boxLocalX - internalPanOffset.x) / internalZoomScale
+        val rawCanvasY = (boxLocalY - internalPanOffset.y) / internalZoomScale
+
+        val targetPageYStart = calculatePageYOffset(activeTargetPage)
+        val targetPageYEnd = targetPageYStart + pageHeightPx
+
+        // Prevent drawing across page boundaries:
+        // If the pointer coordinates move outside the active target page, do not add points!
+        val isOutsidePage = rawCanvasX < 0f || rawCanvasX > pageWidthPx ||
+            rawCanvasY < targetPageYStart || rawCanvasY > targetPageYEnd
+
+        if (isOutsidePage && currentTool != StrokeTool.EYEDROPPER && currentTool != StrokeTool.ERASER) {
+            return false
+        }
+
+        val currentPressure = PressureCurveHelper.remapPressure(rawPressure, pressureCurve)
+        val currentPoint = PointF(
+            x = rawCanvasX.coerceIn(0f, pageWidthPx),
+            y = rawCanvasY.coerceIn(targetPageYStart, targetPageYEnd),
+            pressure = currentPressure,
+            tilt = tiltDegrees,
+            timestampMs = sampleTimestampMs
+        )
+
+        if (currentTool == StrokeTool.EYEDROPPER) {
+            val canvasPosition = Offset(rawCanvasX, rawCanvasY)
+            eyedropperPosition = Offset(boxLocalX, boxLocalY)
+            sampledColorPreview = sampleColorAt(canvasPosition, activeTargetPage)
+        } else if (currentTool == StrokeTool.ERASER) {
+            val canvasPosition = Offset(rawCanvasX, rawCanvasY)
+            eraseSamples.add(EraseSample(canvasPosition, rawPressure))
+            applyEraser(canvasPosition)
+        } else if (currentTool.isFreehandTool) {
+            // Phase 07: stabilizer smooths touch jitter while staying
+            // responsive; disabled => identical behaviour.
+            // Phase 214: pressure (+tilt) ride through the SAME adaptive
+            // low-pass as x/y, and the curve remap happens AFTER smoothing
+            // so gamma curves cannot amplify un-smoothed digitizer jitter.
+            // Velocity vs the previous ACCEPTED point adapts alpha:
+            // slow writing damps harder, fast strokes stay responsive;
+            // no timing pair yet => static base alpha (pre-214 parity).
+            var drawPoint = currentPoint
+            if (stabilizerEnabled) {
+                val prevAccepted = activePoints.lastOrNull()
+                // Scalar overload: same math as the PointF pair version,
+                // without the two throwaway allocations per sample.
+                val velocity = if (
+                    prevAccepted != null &&
+                    prevAccepted.timestampMs != null &&
+                    sampleTimestampMs != null &&
+                    sampleTimestampMs > prevAccepted.timestampMs!!
+                ) {
+                    BrushStrokeMath.segmentVelocity(
+                        prevAccepted.x,
+                        prevAccepted.y,
+                        prevAccepted.timestampMs,
+                        currentPoint.x,
+                        currentPoint.y,
+                        sampleTimestampMs
+                    )
+                } else {
+                    null
+                }
+                val s = stabilizerFilter.next(
+                    x = currentPoint.x,
+                    y = currentPoint.y,
+                    pressure = rawPressure,
+                    tiltDeg = tiltDegrees,
+                    velocityPxPerMs = velocity,
+                    timestampMs = sampleTimestampMs
+                )
+                drawPoint = PointF(
+                    s.x,
+                    s.y,
+                    PressureCurveHelper.remapPressure(s.pressure ?: rawPressure, pressureCurve),
+                    s.tilt ?: tiltDegrees,
+                    sampleTimestampMs
+                )
+            }
+            // Vector Stroke Smoothing & Touch jitter filtering —
+            // the sample gate is WET-ONLY (phase-228): wet tools
+            // throttle via WetThrottlePolicy.shouldProcess
+            // (phase-249: ≥1.5px RAW digitizer movement OR ≥16ms
+            // REAL MotionEvent uptime since the last accepted
+            // sample) so translucent layers deposit full stamps,
+            // then interpolate the gap; NON-wet tools
+            // (pen/pencil/…) add EVERY live sample with no distance
+            // gate, so nothing is dropped (the old ">1.5px" gate and
+            // the 6px/16ms freehand throttle both dropped points and
+            // were removed 2026-08-27 — see workspace/phase-228/REPORT.md).
+            val isWet = BrushStrokeMath.isWetRenderedTool(currentTool)
+            if (isWet) {
+                // Phase 249 (Bug 1): the wet throttle runs on
+                // the REAL sample timeline and the RAW
+                // digitizer delta. Pre-249 the gate fabricated
+                // `lastTime = now()-16L` / `curTime = now()`
+                // wall-clock stamps unrelated to the MotionEvent
+                // uptime clock, and the `dist >= 6f` floor
+                // measured the STABILIZER-CURBED point — a fast
+                // stroke's EWMA-attenuated delta fell under the
+                // floor and dropped real ink ("dots far from
+                // touch"). `sampleTimestampMs` is the exact
+                // MotionEvent eventTime threaded through the
+                // passive pointerInteropFilter bridge →
+                // StrokeInputBatcher → drain; lastRawWet* is the
+                // previous ACCEPTED RAW sample (pre-smoothing,
+                // pre-clamping world-space digitizer position).
+                // NEVER feed this gate the smoothed `drawPoint`.
+                // Comment: `lastRawWetX/Y/TimeMs` are always set and
+                // cleared as ONE unit (acceptance below + per-stroke
+                // reset at drag start), so they can never be in a mixed
+                // state — when the timestamp ref is null the position
+                // refs are null too and `shouldProcess` fails open (a
+                // fresh stroke's first sample is never throttled by an
+                // absent reference). The old
+                // `?: activePoints.lastOrNull()?.timestampMs` arm was
+                // unreachable and implied a raw/smoothed mixed state.
+                val curTime = sampleTimestampMs
+                val lastTime = lastRawWetTimeMs
+                if (
+                    !com.authorss81.noteflow.services.WetThrottlePolicy.shouldProcess(
+                        lastRawX = lastRawWetX,
+                        lastRawY = lastRawWetY,
+                        lastSampleTimeMs = lastTime,
+                        rawX = rawCanvasX,
+                        rawY = rawCanvasY,
+                        sampleTimeMs = curTime
+                    )
+                ) {
+                    // Phase 255 (Bug dots): return FALSE so the
+                    // outer batcher does NOT advance
+                    // lastIngestedInputTimestampMs past a
+                    // rejected sample. Returning TRUE made the
+                    // gate skip every subsequent sample whose
+                    // timestamp was <= this one, dropping whole
+                    // segments of a fast wet stroke and leaving
+                    // only the first accepted point behind.
+                    return false
+                }
+                lastRawWetX = rawCanvasX
+                lastRawWetY = rawCanvasY
+                lastRawWetTimeMs = curTime
+            }
+            val last = activePoints.lastOrNull()
+            if (isWet && last != null) {
+                val interpolated = wetBrushEngine.interpolateSegment(
+                    prev = Offset(last.x, last.y),
+                    cur = Offset(drawPoint.x, drawPoint.y),
+                    radius = currentWidth * 1.5f
+                )
+                for (interp in interpolated) {
+                    val interpPt = PointF(
+                        x = interp.x,
+                        y = interp.y,
+                        pressure = drawPoint.pressure,
+                        tilt = drawPoint.tilt,
+                        timestampMs = drawPoint.timestampMs
+                    )
+                    activePoints.add(interpPt)
+
+                    wetCanvasEngine.markPaintDeposited(currentTool)
+                }
+                activeEnd = activePoints.lastOrNull() ?: drawPoint
+            } else {
+                activePoints.add(drawPoint)
+                activeEnd = drawPoint
+            }
+        } else {
+            activeEnd = currentPoint
+        }
+        return true
+    }
+
     val disposeToolState = androidx.compose.runtime.rememberUpdatedState(currentTool)
     val disposeColorState = androidx.compose.runtime.rememberUpdatedState(currentColor.toArgb())
     val disposeWidthState = androidx.compose.runtime.rememberUpdatedState(currentWidth)
@@ -1251,6 +1596,31 @@ fun AnnotationCanvas(
     DisposableEffect(Unit) {
         onDispose {
             val tool = disposeToolState.value
+            // Phase 255 (MEDIUM — dispose flush): navigation can tear the canvas
+            // down while the LAST 1-2 ACTION_MOVE events are still queued in the
+            // batcher (pointer-cancel before the framework dispatches a final
+            // onDrag). Drain them through the SAME ingestion gate as live ink
+            // (bounds gate → stabilizer → wet throttle) so the committed stroke
+            // below matches exactly what the user drew — without this, the tail
+            // 10-20ms of a fast stroke was silently dropped. This runs on the UI
+            // thread during composition teardown, which is exactly the
+            // batcher's supported single-threaded contract (see StrokeInputBatcher
+            // KDoc). Lasers are never committed (their ink is a replayed timestamp
+            // trail, not freehand geometry), so the drain is skipped for them.
+            if (tool.isFreehandTool && tool != StrokeTool.LASER && strokeInputBatcher.isNotEmpty) {
+                strokeInputBatcher.drainInto(batchDrainScratch)
+                for (sample in batchDrainScratch) {
+                    if (StrokeBatchPolicy.isStale(sample.timestampMs, lastIngestedInputTimestampMs)) continue
+                    val accepted = ingestPointerSample(
+                        boxLocalX = sample.x,
+                        boxLocalY = sample.y,
+                        rawPressure = sample.pressure,
+                        tiltDegrees = if (sample.tiltRad != 0f) Math.toDegrees(sample.tiltRad.toDouble()).toFloat() else 0f,
+                        sampleTimestampMs = sample.timestampMs
+                    )
+                    if (accepted) lastIngestedInputTimestampMs = sample.timestampMs
+                }
+            }
             val ink = activePoints.toList()
             if (ink.isNotEmpty() && activeTargetPage >= 0 &&
                 tool.isFreehandTool && tool != StrokeTool.LASER
@@ -1697,28 +2067,6 @@ fun AnnotationCanvas(
             // captures the CURRENT smoothing inputs (same pattern as
             // stabilizerEnabled).
             .pointerInput(currentTool, currentColor, currentWidth, pdfPageFilter, isContinuousMode, activeRawBitmapMap, isLayerLocked, symmetryMode, stabilizerEnabled, eraserMode, activeLayerId, layers, stabilizerStrengthPercent, activeBrushPresetId, importedBrushPresets, rulerEnabled) {
-                // Phase 249 (Bug 4): per-gesture eraser state — the spatial
-                // bucket (rebuilt lazily at drag start, re-tiled incrementally
-                // as strokes are carved) and the sample-window pointer (only
-                // samples accumulated SINCE the last applyEraser pass are
-                // processed). Also the previous-ACCEPTED-raw-sample tracker for
-                // the wet throttle (Bug 1). Plain block vars: only the gesture
-                // pipeline reads/writes them, so snapshot state (which would
-                // recompose per stamp) is deliberately avoided.
-                var eraseHitBucket: com.authorss81.noteflow.services.EraseHitBucketPolicy? = null
-                var lastProcessedEraseSampleIndex = 0
-                var lastRawWetX: Float? = null
-                var lastRawWetY: Float? = null
-                var lastRawWetTimeMs: Long? = null
-                // Phase 203: plain per-stroke hit-testing covers both symmetry
-                // copies — a stroke drawn while a mode was active persisted TWO
-                // independent rows (original + baked twin, see
-                // SymmetryCommitPolicy), so erasing either copy deletes exactly
-                // that row and LEAVES the other (the old view-time mirror hit-test
-                // special-case is gone with it).
-                val erasesStroke: (Stroke, Offset) -> Boolean = { stroke, offset ->
-                    strokeContainsPoint(stroke, offset)
-                }
                 // Phase 19: shared eraser handler. STROKE mode keeps the classic
                 // remove-whole-stroke behaviour. PARTIAL mode segments every hit
                 // polyline (freehand tools with >= 2 points) into surviving runs
@@ -1738,102 +2086,8 @@ fun AnnotationCanvas(
                 // bounding box intersects the eraser cursor circle (spatial
                 // bucket above). The single O(strokes) full-list pass happens
                 // only when a stroke actually changed, to preserve z-order.
-                fun applyEraser(canvasOffset: Offset) {
-                    val partial = eraserMode == com.authorss81.noteflow.services.EraserMode.PARTIAL
-                    val startIdx = lastProcessedEraseSampleIndex.coerceAtMost(eraseSamples.size)
-                    val samples = eraseSamples
-                        .subList(startIdx, eraseSamples.size)
-                        .takeLast(com.authorss81.noteflow.services.EraseHitBucketPolicy.MAX_ERASE_SAMPLES_PER_APPLY)
-                        .map {
-                            com.authorss81.noteflow.services.StrokeSegmenter.ErasePoint(
-                                x = it.pos.x,
-                                y = it.pos.y,
-                                radius = com.authorss81.noteflow.services.EraserGeometryPolicy.stampRadius(currentWidth, it.pressure)
-                            )
-                        }
-                    lastProcessedEraseSampleIndex = eraseSamples.size
-                    if (samples.isEmpty()) return
-
-                    // Phase 249 (Bug 4): limit the scan to strokes whose world
-                    // bounding box touches the eraser circle. Built lazily at the
-                    // first sample of the drag (seeded with the full current list)
-                    // so a long drag never pays a full-list pass per sample.
-                    val bucket = eraseHitBucket
-                        ?: com.authorss81.noteflow.services.EraseHitBucketPolicy.build(
-                            activeStrokeList.toList(),
-                            maxStampRadiusPx = com.authorss81.noteflow.services.EraserGeometryPolicy.stampRadius(currentWidth, 1f)
-                        ).also { eraseHitBucket = it }
-                    val candidates = bucket.candidatesWithinCircle(
-                        cx = canvasOffset.x,
-                        cy = canvasOffset.y,
-                        radiusFor = { stroke ->
-                            val stamp = com.authorss81.noteflow.services.EraserGeometryPolicy.stampRadius(currentWidth, 1f)
-                            max(
-                                com.authorss81.noteflow.services.EraserGeometryPolicy.coverageRadius(stamp, stroke.width),
-                                com.authorss81.noteflow.services.EraserGeometryPolicy.legacyRadius(
-                                    stroke.width,
-                                    com.authorss81.noteflow.services.StrokeSegmenter.DEFAULT_EXTRA_RADIUS
-                                )
-                            )
-                        }
-                    )
-                    val removed = mutableListOf<Stroke>()
-                    val added = mutableListOf<Stroke>()
-                    val replacedBy = java.util.HashMap<String, List<Stroke>>()
-                    var changed = false
-                    for (stroke in candidates) {
-                        if (erasesStroke(stroke, canvasOffset)) {
-                            changed = true
-                            removed.add(stroke)
-                            val canPartial = partial &&
-                                stroke.tool.isFreehandTool &&
-                                stroke.points.size > 1 &&
-                                stroke.tool != StrokeTool.LASER
-                            if (canPartial) {
-                                val result = com.authorss81.noteflow.services.StrokeSegmenter.segment(
-                                    stroke = stroke,
-                                    eraseSamples = samples,
-                                    extraRadius = com.authorss81.noteflow.services.StrokeSegmenter.DEFAULT_EXTRA_RADIUS
-                                )
-                                replacedBy[stroke.id] = result.surviving
-                                added.addAll(result.surviving)
-                            } else {
-                                // Whole-stroke removal (classic eraser behaviour);
-                                // non-polyline strokes (text, shapes) also fall back
-                                // to this — an honest gate, matching the classic
-                                // eraser, not a fake "partial".
-                                replacedBy[stroke.id] = emptyList()
-                            }
-                        }
-                    }
-                    if (changed) {
-                        // One O(strokes) pass to substitute the carved strokes in
-                        // place (z-order preserved); everything else was bucketed.
-                        val newList = mutableListOf<Stroke>()
-                        for (stroke in activeStrokeList) {
-                            val replacement = replacedBy[stroke.id]
-                            if (replacement != null) newList.addAll(replacement) else newList.add(stroke)
-                        }
-                        activeStrokeList.clear()
-                        activeStrokeList.addAll(newList)
-                        // Phase 249: re-tile only the strokes that moved so the
-                        // bucket stays in sync without a full rebuild.
-                        bucket.replaceStrokes(removed, added)
-                        // Phase 205: derive "other pages" from CURRENT state at
-                        // apply time — the captured `strokes` parameter here is a
-                        // frozen pointerInput snapshot that resurrected erased
-                        // strokes when re-emitted wholesale.
-                        onStrokesChanged(
-                            com.authorss81.noteflow.services.CanvasCommitListPolicy.emittedList(
-                                currentAll = currentStrokesProvider(),
-                                isContinuousMode = isContinuousMode,
-                                pageOf = { it.pdfPage },
-                                pdfPageFilter = pdfPageFilter,
-                                scopedReplacement = newList
-                            )
-                        )
-                    }
-                }
+                // Phase 255: applyEraser now lives at COMPOSABLE scope (shared by the
+                // drag handler AND the dispose flush); see the hoisted definition above.
                 // Phase 13: the STICKER tool places stickers via tap only; it is
                 // excluded (like TEXT) so a stray drag can never create a stroke.
                 if (currentTool != StrokeTool.TEXT && currentTool != StrokeTool.STICKER) {
@@ -2043,200 +2297,10 @@ fun AnnotationCanvas(
                                 updateZoomAndPan(internalZoomScale, internalPanOffset + dragAmount)
                                 return@detectDragGestures
                             }
-
-                            // Phase 240 fix (Bug 2): ONE ingestion path for EVERY pointer sample,
-                            // live or coalesced-historical. The coordinates are already
-                            // CANVAS-BOX-LOCAL (both the passive `pointerInteropFilter`
-                            // bridge and the live `change.position` fallback deliver
-                            // node-local coords — Compose offsets the dispatch MotionEvent
-                            // by the filter node's root offset). NO window-offset subtraction
-                            // happens anywhere in this path — the phase-196 predicted tail
-                            // (which records the same node-local events) passes the neutral
-                            // frame as well. Only the pan/zoom transform below remains.
-                            // Returns TRUE iff the sample was actually ingested; the
-                            // page-bounds rejection returns FALSE so the monotonic
-                            // batch-gate stamp never advances past a REJECTED sample
-                            // (review-fix: "last ACCEPTED" must mean accepted).
-                            fun ingestPointerSample(
-                                boxLocalX: Float,
-                                boxLocalY: Float,
-                                rawPressure: Float,
-                                tiltDegrees: Float,
-                                sampleTimestampMs: Long?
-                            ): Boolean {
-                                val rawCanvasX = (boxLocalX - internalPanOffset.x) / internalZoomScale
-                                val rawCanvasY = (boxLocalY - internalPanOffset.y) / internalZoomScale
-
-                                val targetPageYStart = calculatePageYOffset(activeTargetPage)
-                                val targetPageYEnd = targetPageYStart + pageHeightPx
-
-                                // Prevent drawing across page boundaries:
-                                // If the pointer coordinates move outside the active target page, do not add points!
-                                val isOutsidePage = rawCanvasX < 0f || rawCanvasX > pageWidthPx ||
-                                        rawCanvasY < targetPageYStart || rawCanvasY > targetPageYEnd
-
-                                if (isOutsidePage && currentTool != StrokeTool.EYEDROPPER && currentTool != StrokeTool.ERASER) {
-                                    return false
-                                }
-
-                                val currentPressure = PressureCurveHelper.remapPressure(rawPressure, pressureCurve)
-                                val currentPoint = PointF(
-                                    x = rawCanvasX.coerceIn(0f, pageWidthPx),
-                                    y = rawCanvasY.coerceIn(targetPageYStart, targetPageYEnd),
-                                    pressure = currentPressure,
-                                    tilt = tiltDegrees,
-                                    timestampMs = sampleTimestampMs
-                                )
-
-                                if (currentTool == StrokeTool.EYEDROPPER) {
-                                    val canvasPosition = Offset(rawCanvasX, rawCanvasY)
-                                    eyedropperPosition = Offset(boxLocalX, boxLocalY)
-                                    sampledColorPreview = sampleColorAt(canvasPosition, activeTargetPage)
-                                } else if (currentTool == StrokeTool.ERASER) {
-                                    val canvasPosition = Offset(rawCanvasX, rawCanvasY)
-                                    eraseSamples.add(EraseSample(canvasPosition, rawPressure))
-                                    applyEraser(canvasPosition)
-                                } else if (currentTool.isFreehandTool) {
-                                    // Phase 07: stabilizer smooths touch jitter while staying
-                                    // responsive; disabled => identical behaviour.
-                                    // Phase 214: pressure (+tilt) ride through the SAME adaptive
-                                    // low-pass as x/y, and the curve remap happens AFTER smoothing
-                                    // so gamma curves cannot amplify un-smoothed digitizer jitter.
-                                    // Velocity vs the previous ACCEPTED point adapts alpha:
-                                    // slow writing damps harder, fast strokes stay responsive;
-                                    // no timing pair yet => static base alpha (pre-214 parity).
-                                    var drawPoint = currentPoint
-                                    if (stabilizerEnabled) {
-                                        val prevAccepted = activePoints.lastOrNull()
-                                        // Scalar overload: same math as the PointF pair version,
-                                        // without the two throwaway allocations per sample.
-                                        val velocity = if (
-                                            prevAccepted != null &&
-                                            prevAccepted.timestampMs != null &&
-                                            sampleTimestampMs != null &&
-                                            sampleTimestampMs > prevAccepted.timestampMs!!
-                                        ) {
-                                            BrushStrokeMath.segmentVelocity(
-                                                prevAccepted.x,
-                                                prevAccepted.y,
-                                                prevAccepted.timestampMs,
-                                                currentPoint.x,
-                                                currentPoint.y,
-                                                sampleTimestampMs
-                                            )
-                                        } else {
-                                            null
-                                        }
-                                        val s = stabilizerFilter.next(
-                                            x = currentPoint.x,
-                                            y = currentPoint.y,
-                                            pressure = rawPressure,
-                                            tiltDeg = tiltDegrees,
-                                            velocityPxPerMs = velocity,
-                                            timestampMs = sampleTimestampMs
-                                        )
-                                        drawPoint = PointF(
-                                            s.x,
-                                            s.y,
-                                            PressureCurveHelper.remapPressure(s.pressure ?: rawPressure, pressureCurve),
-                                            s.tilt ?: tiltDegrees,
-                                            sampleTimestampMs
-                                        )
-                                    }
-                                    // Vector Stroke Smoothing & Touch jitter filtering —
-                                    // the sample gate is WET-ONLY (phase-228): wet tools
-                                    // throttle via WetThrottlePolicy.shouldProcess
-                                    // (phase-249: ≥1.5px RAW digitizer movement OR ≥16ms
-                                    // REAL MotionEvent uptime since the last accepted
-                                    // sample) so translucent layers deposit full stamps,
-                                    // then interpolate the gap; NON-wet tools
-                                    // (pen/pencil/…) add EVERY live sample with no distance
-                                    // gate, so nothing is dropped (the old ">1.5px" gate and
-                                    // the 6px/16ms freehand throttle both dropped points and
-                                    // were removed 2026-08-27 — see workspace/phase-228/REPORT.md).
-                                    val isWet = BrushStrokeMath.isWetRenderedTool(currentTool)
-                                    if (isWet) {
-                                        // Phase 249 (Bug 1): the wet throttle runs on
-                                        // the REAL sample timeline and the RAW
-                                        // digitizer delta. Pre-249 the gate fabricated
-                                        // `lastTime = now()-16L` / `curTime = now()`
-                                        // wall-clock stamps unrelated to the MotionEvent
-                                        // uptime clock, and the `dist >= 6f` floor
-                                        // measured the STABILIZER-CURBED point — a fast
-                                        // stroke's EWMA-attenuated delta fell under the
-                                        // floor and dropped real ink ("dots far from
-                                        // touch"). `sampleTimestampMs` is the exact
-                                        // MotionEvent eventTime threaded through the
-                                        // passive pointerInteropFilter bridge →
-                                        // StrokeInputBatcher → drain; lastRawWet* is the
-                                        // previous ACCEPTED RAW sample (pre-smoothing,
-                                        // pre-clamping world-space digitizer position).
-                                        // NEVER feed this gate the smoothed `drawPoint`.
-                                        // Comment: `lastRawWetX/Y/TimeMs` are always set and
-                                        // cleared as ONE unit (acceptance below + per-stroke
-                                        // reset at drag start), so they can never be in a mixed
-                                        // state — when the timestamp ref is null the position
-                                        // refs are null too and `shouldProcess` fails open (a
-                                        // fresh stroke's first sample is never throttled by an
-                                        // absent reference). The old
-                                        // `?: activePoints.lastOrNull()?.timestampMs` arm was
-                                        // unreachable and implied a raw/smoothed mixed state.
-                                        val curTime = sampleTimestampMs
-                                        val lastTime = lastRawWetTimeMs
-                                        if (
-                                            !com.authorss81.noteflow.services.WetThrottlePolicy.shouldProcess(
-                                                lastRawX = lastRawWetX,
-                                                lastRawY = lastRawWetY,
-                                                lastSampleTimeMs = lastTime,
-                                                rawX = rawCanvasX,
-                                                rawY = rawCanvasY,
-                                                sampleTimeMs = curTime
-                                            )
-                                        ) {
-                                            // Phase 255 (Bug dots): return FALSE so the
-                                            // outer batcher does NOT advance
-                                            // lastIngestedInputTimestampMs past a
-                                            // rejected sample. Returning TRUE made the
-                                            // gate skip every subsequent sample whose
-                                            // timestamp was <= this one, dropping whole
-                                            // segments of a fast wet stroke and leaving
-                                            // only the first accepted point behind.
-                                            return false
-                                        }
-                                        lastRawWetX = rawCanvasX
-                                        lastRawWetY = rawCanvasY
-                                        lastRawWetTimeMs = curTime
-                                    }
-                                    val last = activePoints.lastOrNull()
-                                    if (isWet && last != null) {
-                                            val interpolated = wetBrushEngine.interpolateSegment(
-                                                prev = Offset(last.x, last.y),
-                                                cur = Offset(drawPoint.x, drawPoint.y),
-                                                radius = currentWidth * 1.5f
-                                            )
-                                            for (interp in interpolated) {
-                                                val interpPt = PointF(
-                                                    x = interp.x,
-                                                    y = interp.y,
-                                                    pressure = drawPoint.pressure,
-                                                    tilt = drawPoint.tilt,
-                                                    timestampMs = drawPoint.timestampMs
-                                                )
-                                                activePoints.add(interpPt)
-
-                                                wetCanvasEngine.markPaintDeposited(currentTool)
-                                            }
-                                            activeEnd = activePoints.lastOrNull() ?: drawPoint
-                                        } else {
-                                            activePoints.add(drawPoint)
-                                            activeEnd = drawPoint
-                                        }
-                                } else {
-                                    activeEnd = currentPoint
-                                }
-                                return true
-                            }
-
+                                        // Phase 255: ingestPointerSample is now HOISTED to
+                                        // composable scope (defined above the dispose flush)
+                                        // so the dispose path drains the batcher through the
+                                        // SAME gate; the drag handler just calls it.
                             // Phase 214: consume coalesced history FIRST so every
                             // getHistorical* sample flows through the SAME pipeline
                             // (bounds gate → smooth → wet gate) as live ones. Freehand
@@ -2246,9 +2310,22 @@ fun AnnotationCanvas(
                             // documented in workspace/phase-214/REPORT.md).
                             val drainedCount = strokeInputBatcher.drainInto(batchDrainScratch)
                             if (drainedCount > 1 && currentTool.isFreehandTool) {
-                                val prevAcceptedTime = lastIngestedInputTimestampMs
+                                // Phase 255 (HIGH): test the gate against the LIVE
+                                // lastIngestedInputTimestampMs, never a freeze taken
+                                // before the loop. The pre-loop `prevAcceptedTime`
+                                // never advanced to the just-accepted sample, so a
+                                // duplicate-eventTime burst (the same physical sample
+                                // delivered again as the NEXT event's historical) passed
+                                // the gate and injected a zero-distance sample that
+                                // polluted the wet-throttle distance gate
+                                // (WetThrottlePolicy.shouldProcess, MIN_PX 1.5f —
+                                // see workspace/phase-255/REPORT.md evidence table).
+                                // Within ONE event getHistoricalEventTime(h) is strictly
+                                // increasing, so only CROSS-EVENT duplicates die here;
+                                // the sibling `else if (drainedCount > 0)` branch below
+                                // already used the live stamp consistently.
                                 for (sample in batchDrainScratch) {
-                                    if (StrokeBatchPolicy.isStale(sample.timestampMs, prevAcceptedTime)) continue
+                                    if (StrokeBatchPolicy.isStale(sample.timestampMs, lastIngestedInputTimestampMs)) continue
                                     // Phase 240 fix (Bug 2): pointerInteropFilter already
                                     // delivers node-LOCAL coordinates (Compose offsets the
                                     // dispatch MotionEvent by the filter node's root offset —
@@ -2282,8 +2359,17 @@ fun AnnotationCanvas(
                                     if (accepted) lastIngestedInputTimestampMs = newest.timestampMs
                                 }
                             } else {
-                                // Direct Compose PointerInputChange fallback: use change.uptimeMillis and node-local change.position
-                                val changeTime = change.uptimeMillis
+                                // Direct Compose PointerInputChange fallback: node-local
+                                // change.position with a SINGLE uptime clock. The passive
+                                // pointerInteropFilter above already captured THIS event's
+                                // MotionEvent.eventTime (lastTimestampMs) and it runs
+                                // EARLIER on the modifier chain, so the batcher stamps and
+                                // this fallback now agree. change.uptimeMillis is a
+                                // different dispatch layer (120Hz panels show an off-by-1
+                                // vs eventTime) that could make the first live sample after
+                                // a batch look stale/duplicate — see
+                                // workspace/phase-255/REPORT.md evidence table.
+                                val changeTime = lastTimestampMs ?: change.uptimeMillis
                                 val accepted = ingestPointerSample(
                                     boxLocalX = change.position.x,
                                     boxLocalY = change.position.y,

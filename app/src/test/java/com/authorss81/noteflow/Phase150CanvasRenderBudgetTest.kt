@@ -436,15 +436,23 @@ class Phase150CanvasRenderBudgetTest {
     fun `the ViewModel raises the one-time layers-capped notice on load and clears at lock`() {
         val vm = sourceFile("ui/viewmodel/NoteflowViewModel.kt")
         val loader = vm.substringAfter("suspend fun loadEditorCanvasPage").substringBefore("suspend fun loadAllActivePages")
-        assertTrue("the loader compares the raw count against the retained list", loader.contains("repository.getLayerCountForPage(pageId)"))
+        // Phase 255 re-baseline: the raw-vs-retained comparison moved INTO
+        // NoteRepository.loadEditorCanvasPage (it returns RepositoryCanvasData
+        // carrying rawLayerCount); the ViewModel now compares the retained list
+        // (data.layers.size) against that raw count through the policy.
+        assertTrue("the loader compares the retained list against the raw count", loader.contains("data.layers.size"))
+        assertTrue("the raw count from the repo loader feeds the omission policy", loader.contains("LayerRenderBudgetPolicy.omittedLayerCount(data.rawLayerCount)"))
         assertTrue("the notice runs through the one-time gate", loader.contains("maybeNotifyLayersCapped("))
         assertTrue("the folder count comes from the policy", loader.contains("LayerRenderBudgetPolicy.omittedLayerCount") || loader.contains("LayerRenderBudgetPolicy.omittedLayerCount("))
         assertTrue("the one-time set exists and is keyed per page", vm.contains("layerCappedNotifiedPages = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()"))
         assertTrue("the lock path clears the session gate", vm.contains("layerCappedNotifiedPages.clear()"))
-        // Phase-150 review fix 6: the RAW count is read BEFORE the bounded load
-        // (so a genuinely empty page's post-insert default layer can't skew it).
-        val countIdx = loader.indexOf("repository.getLayerCountForPage(pageId)")
-        val loadIdx = loader.indexOf("repository.getLayersForPage(pageId)")
+        // Phase-150 review fix 6 (now enforced inside the repo loader): the RAW
+        // count is read BEFORE the bounded layer load (so a genuinely empty
+        // page's post-insert default layer can't skew it).
+        val repo = sourceFile("data/repository/NoteRepository.kt")
+        val repoLoader = repo.substringAfter("suspend fun loadEditorCanvasPage")
+        val countIdx = repoLoader.indexOf("getLayerCountForPage(pageId)")
+        val loadIdx = repoLoader.indexOf("getLayersForPage(pageId)")
         assertTrue("raw count is read before the bounded layer load", countIdx != -1 && loadIdx != -1 && countIdx < loadIdx)
     }
 

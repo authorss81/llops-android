@@ -44,6 +44,17 @@ package com.authorss81.noteflow.services
  * ring. The volatile writes still publish the array slots safely for the
  * single-threaded case. Overflow overwrites the OLDEST samples (a stroke that
  * outruns the consumer keeps its freshest geometry, never stalls).
+ *
+ * PHASE 255 CONTRACT PIN: there is now a SECOND consumer — `AnnotationCanvas`'s
+ * `DisposableEffect(Unit).onDispose` flush (mid-gesture navigation) drains the
+ * ring through `ingestPointerSample` before the stroke is committed. That drain
+ * runs on the UI thread too (Compose runs `onDispose` during main-thread
+ * composition teardown), so the single-threaded producer/consumer contract is
+ * preserved — a real gesture drain and the dispose drain can never overlap on
+ * separate threads. ANY future consumer MUST keep this rule: do not add a drain
+ * that can execute concurrently with the drag handler (e.g. from a background
+ * coroutine), or the overflow-at-head fast path in [offer] will race on the
+ * `head` index and silently desync the ring.
  */
 class RawInputSample(
     /** Box-local X (pointerInteropFilter node space, see class doc — NOT window). */

@@ -52,6 +52,7 @@ import com.authorss81.noteflow.plugins.NoteflowPlugin
 import com.authorss81.noteflow.plugins.PluginCapability
 import com.authorss81.noteflow.plugins.PluginResult
 import com.authorss81.noteflow.ui.components.VersionHistoryBottomSheet
+import com.authorss81.noteflow.ui.components.markdown.WholeMarkdownEditor
 import com.authorss81.noteflow.ui.components.WebSearchDialog
 import com.authorss81.noteflow.ui.components.DictionaryDialog
 import com.authorss81.noteflow.ui.components.WeatherDialog
@@ -384,6 +385,15 @@ fun MarkdownPreviewScreen(
     }
     var contentText by remember(page.id) { mutableStateOf(initialContent) }
 
+    // 22.9: never silently discard edits — flush content before navigating back.
+    // Dedupe: only write when the content actually changed, and never twice for the
+    // same snapshot (BackHandler and onDispose both funnel through flushSave, so a
+    // back press results in exactly one write, and an unchanged screen writes zero).
+    // Phase 255 (pre-existing HEAD compile fix): declared ABOVE the async-load
+    // sync effect — commit 33bbecf referenced savedContent there before declaring
+    // it, which broke `:app:compileDebugKotlin` at HEAD.
+    var savedContent by remember(page.id) { mutableStateOf(initialContent) }
+
     // Synchronize initial content if loaded asynchronously after initial composition
     LaunchedEffect(page.id, initialContent) {
         if (contentText.isEmpty() && initialContent.isNotEmpty()) {
@@ -402,11 +412,6 @@ fun MarkdownPreviewScreen(
             runCatching { ImportExportService.getImportsDir(LocalContext.current) }.getOrNull()
         } else null)
 
-    // 22.9: never silently discard edits — flush content before navigating back.
-    // Dedupe: only write when the content actually changed, and never twice for the
-    // same snapshot (BackHandler and onDispose both funnel through flushSave, so a
-    // back press results in exactly one write, and an unchanged screen writes zero).
-    var savedContent by remember(page.id) { mutableStateOf(initialContent) }
     fun flushSave() {
         if (savedContent != contentText) {
             savedContent = contentText

@@ -189,7 +189,14 @@ class HistoryBatchTest {
         // accepted — a page-bounds rejection must not consume its timestamp.
         assertTrue(src.contains("val accepted = ingestPointerSample("))
         assertTrue(src.contains("if (accepted) lastIngestedInputTimestampMs = sample.timestampMs"))
-        assertTrue(src.contains("if (accepted && lastTimestampMs != null) lastIngestedInputTimestampMs = lastTimestampMs"))
+        // Phase 255: the direct-PointerInputChange fallback now advances the
+        // gate from the single shared `changeTime` stamp, which prefers THIS
+        // event's MotionEvent.eventTime (captured by the passive bridge) and
+        // falls back to change.uptimeMillis only when no MotionEvent has been
+        // seen yet. The advance is still guarded by `if (accepted)`, so a
+        // rejected sample never consumes its timestamp.
+        assertTrue(src.contains("lastIngestedInputTimestampMs = changeTime"))
+        assertTrue(src.contains("val changeTime = lastTimestampMs ?: change.uptimeMillis"))
         // Freehand ingests the WHOLE batch; other tools stay newest-only.
         assertTrue(src.contains("drainedCount > 1 && currentTool.isFreehandTool"))
         assertTrue(src.contains("batchDrainScratch.last()"))

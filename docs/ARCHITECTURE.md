@@ -800,6 +800,53 @@
 > original Bug 1's jitter drift), documented in the `ROTATION_DEAD_ZONE_DEGREES`
 > KDoc. Comments/docs only — no logic change.
 
+> **Implemented in phase-255** (2026-09-12, canvas ingest: stale-timestamp dots +
+> batcher tail loss, see `workspace/phase-255/REPORT.md`): three ingest-gate fixes on
+> top of the AI Studio strict canvas audit, plus a HOISTED shared ingestion gate.
+> (1) **HIGH — frozen-prev monotonic gate**: the drag batch drain used to snapshot
+> `prevAcceptedTime` BEFORE its loop, so a cross-event duplicate `eventTime` burst
+> passed the stale gate and injected a zero-distance sample into the wet-throttle
+> distance gate (`WetThrottlePolicy` MIN_PX 1.5f) → a `points.size==1` dot instead
+> of a mark. The loop now tests EVERY sample against the live
+> `lastIngestedInputTimestampMs` and advances it on each accepted sample
+> (`AnnotationCanvas.kt:2327-2348`; no `val prevAcceptedTime =` survives in code).
+> (2) **MEDIUM — single uptime clock**: the drag fallback stamped samples with
+> `change.uptimeMillis`, a different dispatch layer than the batcher's
+> `eventTime` (120 Hz panels showed an off-by-1 that made the first live sample
+> after a batch look stale/duplicate). The passive bridge's `motionEvent.eventTime`
+> (`lastTimestampMs`, `AnnotationCanvas.kt:1702`) is now preferred via
+> `val changeTime = lastTimestampMs ?: change.uptimeMillis` (`:2372`); `uptimeMillis`
+> remains only as the `?:` fallback. (3) **MEDIUM — dispose-flush tail loss**:
+> mid-gesture navigation tore the canvas down through `DisposableEffect(Unit).onDispose`
+> and committed `activePoints.toList()` WITHOUT draining the batcher, silently
+> dropping the last 10-20 ms tail (2-3 queued ACTION_MOVE samples). The dispose
+> flush (`:1596-1623`) now drains `strokeInputBatcher` through the SAME shared
+> `ingestPointerSample` gate as live ink — freehand-and-not-LASER only, monotonic
+> gate applied, live stamp advanced per accepted sample — before the dispose
+> Stroke is built (`val ink = activePoints.toList()` `:1624`). The gate itself was
+> hoisted OUT of the drag closure to composable scope (`fun ingestPointerSample`,
+> `:1405`) together with the per-gesture state it touches (wet `lastRawWet*` refs +
+> eraser window/spatial bucket) so the dispose path can reach it; per-gesture
+> resets stay in `onDragStart` (phase-249 Bug 1/Bug 4 semantics preserved).
+> `StrokeInputBatcher.kt` KDoc pins the SECOND-consumer UI-thread contract (`:48-57`;
+> a dispose drain and a gesture drain can never overlap across threads). Tests:
+> new `Phase255CanvasIngestTest` (6 — pure-JVM frozen-prev vs live-gate divergence on
+> a duplicate burst + source pins for all three fixes) and pin re-baselines:
+> `HistoryBatchTest` `:192` (live `changeTime` advance), `Phase254CommentTrimTest`
+> (snapshot rebased to the phase-255 counts after the dot-fix + phase-255 code
+> growth), `B2Ui1LockedFlushTest`/`B2Ui5MarkdownSaveSerializationTest` flush windows
+> widened take(2600)→take(3800) (the audit commits grew `flushPendingEditorSaves` past
+> the old window; pinned behavior verified intact at deltas 2879..3431),
+> `Phase150CanvasRenderBudgetTest` raw-count-vs-retained pin rebased to the
+> relocated repository read (`NoteRepository.loadEditorCanvasPage` `:1472` reads
+> `getLayerCountForPage` before the bounded layer load). A pre-existing HEAD defect
+> was repaired as a prerequisite (`MarkdownPreviewScreen.kt` `savedContent` declared
+> above the async-load effect + `WholeMarkdownEditor` import; HEAD
+> `:app:compileDebugKotlin` failed with `Unresolved reference 'savedContent'` at
+> `MarkdownPreviewScreen.kt:391`). `gradle :app:testDebugUnitTest` **3665 / 0 failures**,
+> `assembleDebug` green, `lintDebug` 0 errors. No schema, no deps,
+> `verification-metadata.xml` untouched, `.github/workflows/` untouched.
+
 > **Implemented in phase-245** (2026-08-30, drawing "weird shape" + dots
 > comparison, see `workspace/phase-245/REPORT.md`): (1) **the long-press
 > Quick-Color Ring now yields to a stroke.** The ring donut (backing disc +

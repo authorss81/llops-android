@@ -12,7 +12,7 @@ import org.junit.Test
  * element labels, pure divider banners) and collapsed blank-line runs in three
  * large UI files: AnnotationCanvas.kt, EditorScreen.kt and HomeScreen.kt.
  *
- * These pins guard the hard invariants of a comment-only change:
+* These pins guard the hard invariants of a comment-only change:
  *  1. Every file has FEWER raw lines than at the phase-254 parent (real comment
  *     removal — the baselines are the verified pre-trim counts at `d703831^`).
  *  2. Every file has the SAME number of executable ("code") lines as at the
@@ -30,25 +30,34 @@ import org.junit.Test
  *  6. No run of 2+ consecutive blank lines remains (the PROMPT's "at most 1
  *     consecutive blank line" target).
  *
- * NOTE on the PROMPT's literals: the PROMPT listed markers (`fail-closed`,
- * `phase-240`, `phase-242`, `phase-250`, `phase-238`, `phase-252`, `phase-22`)
- * that do NOT exist in these three files — they were absent at the parent too
- * (verified via `git show d703831^`), so nothing of that form was deleted. The
- * pins below therefore assert the REAL provenance markers present in each file,
- * whose counts are verified identical pre/post trim.
+ * PHASE 255 RE-BASELINE: invariants 1-2 were measured against the phase-254
+ * parent (`d703831^`, raw 8479/7386/3762, code 6852/6422/3267). Later phases
+ * legitimately ADDED code to these files — the pen-dot audit fixes
+ * (f7510ac/b5842ee/074341b, working-tree HEAD) grew AnnotationCanvas' code by
+ * +30, phase-246 review fixes grew EditorScreen by +1, and phase 255's ingest
+ * refactor (shared ingestPointerSample + dispose flush + hoisted wet/eraser
+ * state) grew AnnotationCanvas by a further +13 code / +86 raw lines. An exact
+ * "fewer-than-parent / exact-parent" snapshot cannot survive a later code
+ * change, so invariants 1-2 are RE-BASED to the verified phase-255 counts
+ * below and now act as change-detectors: ANY code OR comment change to these
+ * three files must be consciously reflected here, and the phase-254
+ * comment-hygiene invariants (3-6) — the ones that actually still guard the
+ * trim — continue to assert on all three files unchanged.
  */
 class Phase254CommentTrimTest {
 
-    // Parent-of-phase-254 baseline raw line counts (measured at 32bbfe8 / d703831^).
+    // Phase-255 re-baselined raw line counts (measured on the phase-255 tree).
+    // Parent-of-phase-254 was 8479/7386/3762 (see class KDoc for the deltas).
     private val headRaw = mapOf(
-        "ui/components/AnnotationCanvas.kt" to 8479,
-        "ui/screens/EditorScreen.kt" to 7386,
-        "ui/screens/HomeScreen.kt" to 3762
+        "ui/components/AnnotationCanvas.kt" to 8533,
+        "ui/screens/EditorScreen.kt" to 7336,
+        "ui/screens/HomeScreen.kt" to 3757
     )
-    // Parent baseline code-line counts (non-blank, non-full-`//` lines).
+    // Phase-255 re-baselined code-line counts (non-blank, non-full-`//` lines).
+    // Parent-of-phase-254 was 6852/6422/3267 (see class KDoc for the deltas).
     private val headCode = mapOf(
-        "ui/components/AnnotationCanvas.kt" to 6852,
-        "ui/screens/EditorScreen.kt" to 6422,
+        "ui/components/AnnotationCanvas.kt" to 6895,
+        "ui/screens/EditorScreen.kt" to 6423,
         "ui/screens/HomeScreen.kt" to 3267
     )
     // Parent baseline KDoc `/**` opener counts (no KDoc opener may be deleted).
@@ -121,23 +130,24 @@ class Phase254CommentTrimTest {
     }
 
     @Test
-    fun `all three trimmed files have fewer raw lines than at HEAD`() {
-        headRaw.forEach { (rel, head) ->
+    fun `all three trimmed files match the phase-255 rebased raw line count`() {
+        headRaw.forEach { (rel, baseline) ->
             val cur = countRaw(mainSource(rel))
-            assertTrue(
-                "$rel: raw lines must drop below the HEAD baseline ($head), was $cur",
-                cur < head
+            assertEquals(
+                "$rel: raw line count drifted from the phase-255 re-baseline ($baseline); re-baseline deliberately or trim comment bloat",
+                baseline,
+                cur
             )
         }
     }
 
     @Test
-    fun `all three trimmed files keep exactly their HEAD code-line count (no code lost)`() {
-        headCode.forEach { (rel, head) ->
+    fun `all three trimmed files match the phase-255 rebased code-line count`() {
+        headCode.forEach { (rel, baseline) ->
             val cur = countCode(mainSource(rel))
             assertEquals(
-                "$rel: trimming comments must NOT change the executable line count (code lost?)",
-                head,
+                "$rel: code-line count drifted from the phase-255 re-baseline ($baseline); re-baseline deliberately",
+                baseline,
                 cur
             )
         }
