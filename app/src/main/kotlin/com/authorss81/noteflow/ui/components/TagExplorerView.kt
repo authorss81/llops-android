@@ -42,8 +42,19 @@ fun TagExplorerView(
     // stale notebook's build before it can overwrite the vault (B2-DOS-11).
     val selectedNotebook by viewModel.selectedNotebook.collectAsState()
     val notebookId = selectedNotebook?.id
+    // Phase 259: the vault rebuilds on page mutations (not just notebook
+    // switches) and never keeps decrypted tags past a lock.
+    val corpusGeneration by viewModel.repository.searchCorpusGenerationFlow.collectAsState()
+    val authenticated by viewModel.authenticated.collectAsState()
 
-    LaunchedEffect(notebookId, selectedNotebook?.tags) {
+    LaunchedEffect(notebookId, selectedNotebook?.tags, corpusGeneration, authenticated) {
+        // Phase 259: a lock racing (or preceding) the build must never leave
+        // the previous notebook's decrypted tag list in state.
+        if (!authenticated) {
+            tagHierarchy = emptyList()
+            isLoading = false
+            return@LaunchedEffect
+        }
         isLoading = true
         if (notebookId == null) {
             tagHierarchy = emptyList()

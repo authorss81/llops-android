@@ -76,6 +76,15 @@ object MarkdownBlockTokenizer {
         Regex("""^\s{0,3}([-*+]|\d{1,9}[.)])\s+\[([ xX])\]\s*(.*)$""")
 
     /**
+     * Phase 259: precompiled closing-fence matchers — [findClosingFence] built
+     * `Regex("""^\s{0,3}${fence}{3,}\s*$""")` per fenced block (a compile per
+     * code block per tokenize). The two shapes are static; the opener's fence
+     * char/length is checked structurally after the match.
+     */
+    private val closingBacktickFenceRe = Regex("""^\s{0,3}`{3,}\s*$""")
+    private val closingTildeFenceRe = Regex("""^\s{0,3}~{3,}\s*$""")
+
+    /**
      * One-pass tokenization result: the [blocks], the checkbox [candidates] and
      * the candidates pre-indexed by block index — computed together so a keystroke
      * in the hybrid editor never runs two full passes (R2-b2b5-FEA-03).
@@ -169,8 +178,8 @@ object MarkdownBlockTokenizer {
             val line = lines[i]
             when {
                 fenceRe.containsMatchIn(line) -> {
-                    val fence = fenceRe.find(line)!!.groupValues[1].first()
-                    val closer = findClosingFence(lines, i + 1, to, fence)
+                    val run = fenceRe.find(line)!!.groupValues[1]
+                    val closer = findClosingFence(lines, i + 1, to, run[0], run.length)
                     blocks.add(MarkdownBlock(MarkdownBlockType.CODE_FENCE, i, closer))
                     i = closer + 1
                 }
@@ -203,7 +212,11 @@ object MarkdownBlockTokenizer {
                     )
                     i = j
                 }
-                line.contains("|") && i + 1 <= to && tableSeparatorRe.matches(lines[i + 1].trim()) -> {
+                // Phase 259: the delimiter row must contain a pipe — the old
+                // shape also matched a bare `---`, so prose with a pipe
+                // (`a | b`) followed by a thematic break became a false TABLE.
+                line.contains("|") && i + 1 <= to && lines[i + 1].contains("|") &&
+                    tableSeparatorRe.matches(lines[i + 1].trim()) -> {
                     var j = i + 2
                     while (j <= to && lines[j].contains("|")) j++
                     blocks.add(MarkdownBlock(MarkdownBlockType.TABLE, i, j - 1))
@@ -240,16 +253,31 @@ object MarkdownBlockTokenizer {
         if (line.trimStart().startsWith("$$")) return true
         if (quoteRe.containsMatchIn(line)) return true
         if (isListItemLine(line)) return true
-        if (line.contains("|") && index + 1 <= to && tableSeparatorRe.matches(lines[index + 1].trim())) {
+        // Phase 259: same pipe-in-delimiter gate as the table branch above.
+        if (line.contains("|") && index + 1 <= to && lines[index + 1].contains("|") &&
+            tableSeparatorRe.matches(lines[index + 1].trim())
+        ) {
             return true
         }
         return false
     }
 
-    private fun findClosingFence(lines: List<String>, from: Int, to: Int, fence: Char): Int {
-        val closing = Regex("""^\s{0,3}${fence}{3,}\s*$""")
+    private fun findClosingFence(lines: List<String>, from: Int, to: Int, fence: Char, openLen: Int): Int {
+        // Phase 259: no per-block Regex compile — match the precompiled shape
+        // for the opener's fence char, then require the closing run to be at
+        // least as long as the opener (CommonMark: closing run >= opening run).
         for (i in from..to) {
-            if (closing.matches(lines[i])) return i
+            val line = lines[i]
+            val shapeMatches = if (fence == '`') {
+                closingBacktickFenceRe.matches(line)
+            } else {
+                closingTildeFenceRe.matches(line)
+            }
+            if (!shapeMatches) continue
+            var len = 0
+            val trimmed = line.trimStart()
+            while (len < trimmed.length && trimmed[len] == fence) len++
+            if (len >= openLen) return i
         }
         return to
     }
@@ -571,12 +599,26 @@ object MarkdownBlockTokenizer {
         endByte: Int,
         newSource: String
     ): MarkdownDocument {
+        // Phase 259: offsets are UTF-16 CHAR offsets into [MarkdownDocument.content]
+        // (the `startByte` name is historical — Compose TextField and Kotlin String
+        // indexing are UTF-16 units, so surrogate-pair emoji stay consistent).
+        // content is `\n`-joined by [tokenize], hence the +1 separator math in
+        // [lineIndexAtByte] — callers must pass offsets into doc.content, never
+        // into a pre-normalized `\r\n` source. Out-of-range runs clamp instead
+        // of resolving to a drifted line.
+        // A negative start stays a no-op (phase-243 contract); only the upper
+        // end clamps so a past-the-end run resolves to the last line instead
+        // of a drifted one.
         if (startByte < 0 || endByte <= startByte) return doc
+        val totalLen = doc.content.length
+        val start = startByte.coerceIn(0, totalLen)
+        val end = endByte.coerceIn(0, totalLen)
+        if (end <= start) return doc
         val src = doc.lines
         val n = src.size
         if (n == 0) return doc
-        val l0 = lineIndexAtByte(src, startByte)
-        val l1 = lineIndexAtByte(src, (endByte - 1).coerceAtLeast(0))
+        val l0 = lineIndexAtByte(src, start)
+        val l1 = lineIndexAtByte(src, (end - 1).coerceAtLeast(0))
         val newLines = newSource.lines()
         val out = ArrayList<String>(n - (l1 - l0 + 1) + newLines.size)
         out.addAll(src.subList(0, l0))

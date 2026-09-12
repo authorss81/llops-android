@@ -7,6 +7,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.security.MessageDigest
 
 data class WikiLink(
     val rawText: String,
@@ -109,15 +110,78 @@ object WikiLinkParser {
      * they were computed from, so a different subset/list within the same epoch is
      * never served a result built for another list. The epoch still guards lock/re-key
      * and in-app mutations (which bump `updatedAt`).
+     *
+     * Phase 259: the raw `id:updatedAt;` materialization (~100KB on a 2k-page
+     * vault) is hashed to a fixed 64-char SHA-256 hex digest before it becomes a
+     * cache key — identical equality semantics, bounded key size per panel open.
+     * Pure JVM (`java.security.MessageDigest`), no platform calls.
      */
-    private fun pagesFingerprint(pages: List<NotePageEntity>): String {
+    internal fun pagesFingerprint(pages: List<NotePageEntity>): String {
         if (pages.isEmpty()) return ""
         val sb = StringBuilder(pages.size * 16)
         for (p in pages) {
             sb.append(p.id).append(':').append(p.updatedAt).append(';')
         }
-        return sb.toString()
+        val digest = MessageDigest.getInstance("SHA-256").digest(
+            sb.toString().toByteArray(Charsets.UTF_8)
+        )
+        return buildString(digest.size * 2) {
+            for (b in digest) {
+                val v = b.toInt() and 0xFF
+                append(HEX_CHARS[v ushr 4])
+                append(HEX_CHARS[v and 0x0F])
+            }
+        }
     }
+
+    private const val HEX_CHARS = "0123456789abcdef"
+
+    /**
+     * Phase 259: char ranges of fenced code blocks (` ``` ` / `~~~`, CommonMark
+     * up-to-3-spaces indent, info strings allowed, closing fence = same char,
+     * at least as long). `[[links]]` and `#tags` inside these ranges are literal
+     * code text, never vault edges — without this a pasted code sample creates
+     * false graph edges. Line-based, O(lines); empty unless the text contains a
+     * fence marker at all (fast path for the common case).
+     */
+    internal fun fenceRanges(text: String): List<IntRange> {
+        if (!text.contains("```") && !text.contains("~~~")) return emptyList()
+        val lines = text.lines()
+        val ranges = mutableListOf<IntRange>()
+        var offset = 0
+        var openStart = -1
+        var openFence = ' '
+        var openLen = 0
+        for (line in lines) {
+            val lineStart = offset
+            val lineEnd = offset + line.length
+            val trimmed = line.trimStart()
+            val indent = line.length - trimmed.length
+            if (indent <= 3 && trimmed.isNotEmpty() && (trimmed[0] == '`' || trimmed[0] == '~')) {
+                val fenceChar = trimmed[0]
+                var len = 0
+                while (len < trimmed.length && trimmed[len] == fenceChar) len++
+                val rest = trimmed.substring(len)
+                if (len >= 3 && (fenceChar == '~' || !rest.contains('`'))) {
+                    if (openStart < 0) {
+                        openStart = lineStart
+                        openFence = fenceChar
+                        openLen = len
+                    } else if (fenceChar == openFence && len >= openLen && rest.isBlank()) {
+                        ranges.add(openStart..lineEnd)
+                        openStart = -1
+                    }
+                }
+            }
+            offset = lineEnd + 1 // lines() strips the single \n separator
+            if (offset > text.length + 1) break
+        }
+        if (openStart >= 0) ranges.add(openStart..text.length)
+        return ranges
+    }
+
+    private fun IntRange.containsIndex(index: Int): Boolean =
+        index >= start && index <= endInclusive
 
     // Test seam so a test can deterministically cancel a backlink scan mid-build; null in release.
     @Volatile
@@ -204,9 +268,12 @@ object WikiLinkParser {
         // R2-b2b5-FEA-01 (phase-152): cap at construction, not after — a page
         // body that repeats `[[x]]` thousands of times contributes at most
         // MAX_LINKS_PER_PAGE links to any single scan.
+        // Phase 259: matches inside fenced code blocks are skipped (false edges).
+        val fences = fenceRanges(text)
         val out = ArrayList<WikiLink>(minOf(16, MAX_LINKS_PER_PAGE))
         for (match in wikiLinkRegex.findAll(text)) {
             if (out.size >= MAX_LINKS_PER_PAGE) break
+            if (fences.isNotEmpty() && fences.any { it.containsIndex(match.range.first) }) continue
             val rawText = match.value
             val targetTitle = match.groupValues[1].trim()
             val alias = match.groupValues[2].takeIf { it.isNotBlank() }?.trim()
@@ -223,7 +290,12 @@ object WikiLinkParser {
         return out
     }
 
-    fun extractTags(text: String): List<String> = extractTagsBounded(text, Int.MAX_VALUE)
+    /**
+     * Phase 259: the unbounded public entry now routes through the bounded
+     * extractor capped at [MAX_TAGS] — a single pathological page can no longer
+     * materialize an unbounded tag list (OOM) before protection applies.
+     */
+    fun extractTags(text: String): List<String> = extractTagsBounded(text, MAX_TAGS)
 
     /**
      * Bounded variant used by the tag-hierarchy builder: the per-page distinct-tag
@@ -233,11 +305,15 @@ object WikiLinkParser {
      */
     private fun extractTagsBounded(text: String, maxTags: Int): List<String> {
         if (text.isBlank()) return emptyList()
+        // Phase 259: matches inside fenced code blocks are skipped (false tags).
+        val fences = fenceRanges(text)
         val tags = mutableListOf<String>()
         val seen = HashSet<String>(minOf(4096, maxTags))
         for (match in tagRegex.findAll(text)) {
             if (seen.size >= maxTags) break
+            if (fences.isNotEmpty() && fences.any { it.containsIndex(match.range.first) }) continue
             val tag = match.groupValues[1].lowercase().trim('/')
+            if (tag.isEmpty()) continue
             if (seen.add(tag)) {
                 tags.add(tag)
             }

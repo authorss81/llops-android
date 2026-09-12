@@ -281,7 +281,7 @@
 | `ui/screens/` | `EditorScreen.kt` (6181), `MarkdownPreviewScreen.kt`, `HomeScreen.kt`, `KnowledgeGraphScreen.kt`, `LockScreen.kt` | Top-level screens |
 | `ui/viewmodel/` | `NoteflowViewModel.kt` (~1500) | God-ViewModel: DB, security, plugins, all state flows |
 | `theme/` | `Theme.kt`, `GlassSurfaces.kt`, `GlassThemeMath.kt`, `Motion.kt`, `Type.kt`, `Color.kt` | Material3 + frosted-glass design system |
-| `utils/` | `ConstantTime.kt`, `BitmapPool.kt`, `DeviceCompatibilityManager.kt`, `NestedScrollGuard.kt` (nested-scroll crash prevention, active in debug+release since phase-237; phase-231 debug canary), `WikiLinkParser.kt` (dup, see notes) | Pure helpers |
+| `utils/` | `ConstantTime.kt`, `BitmapPool.kt`, `DeviceCompatibilityManager.kt`, `NestedScrollGuard.kt` (nested-scroll crash prevention, active in debug+release since phase-237; phase-231 debug canary), `WikiLinkParser.kt` (phase-259: `@Deprecated` delegating facade over services — new code must import services directly) | Pure helpers |
 
 > **Implemented in phase-188** (2026-08-20, GalleryView robustness, see
 > `workspace/phase-188/REPORT.md`): the user visual-review "exploration" set of 4
@@ -846,6 +846,18 @@
 > `MarkdownPreviewScreen.kt:391`). `gradle :app:testDebugUnitTest` **3665 / 0 failures**,
 > `assembleDebug` green, `lintDebug` 0 errors. No schema, no deps,
 > `verification-metadata.xml` untouched, `.github/workflows/` untouched.
+
+> **Implemented in phase-259** (2026-09-12, wiki/graph/search hardening, see
+> `workspace/phase-259/REPORT.md`): `utils/WikiLinkParser` is now a `@Deprecated`
+> delegating facade (ONE escaped-title regex — the unescaped per-page `\b$page\b`
+> crash is gone; links/tags inherit the services caps + fence filter);
+> `services/WikiLinkParser` hashes page fingerprints (SHA-256, 64 chars), caps
+> public `extractTags` at MAX_TAGS, and skips fenced-code matches; graph/tag panels
+> rekey on the new `NoteRepository.searchCorpusGenerationFlow` (mutation+lock/re-key)
+> with lock-clearing; deepSearch is ledger-silent + cancellable; `VaultSearchPolicy`
+> searches the tags column and head-bounds fuzzy bodies (8192); tokenizer precompiles
+> fence closers and requires a pipe in table delimiters. Tests:
+> `Phase259WikiGraphSearchTest` (17); phase-152/210 pins rebased to the hoisted maps.
 
 > **Implemented in phase-245** (2026-08-30, drawing "weird shape" + dots
 > comparison, see `workspace/phase-245/REPORT.md`): (1) **the long-press

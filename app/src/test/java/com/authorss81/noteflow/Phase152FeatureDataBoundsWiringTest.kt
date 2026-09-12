@@ -54,13 +54,20 @@ class Phase152FeatureDataBoundsWiringTest {
     @Test
     fun `the per frame tag filter is memoized per page not per edge`() {
         val source = readKnowledgeGraphScreen()
+        // Phase 259: the verdict map moved OUT of the draw block into a
+        // remember hoisted on (nodes, filter, focus) — same per-page
+        // memoization, computed once per composition instead of per frame.
         assertTrue(
-            "the draw block must memoize the filter verdict per page",
+            "the filter verdict must be memoized per page via a remember-hoisted map",
+            source.contains("val filteredById = remember(nodes, filterTags, requireAllTags, focusResult)")
+        )
+        assertFalse(
+            "the per-frame HashMap allocation in the draw block must be gone",
             source.contains("val filteredById = HashMap<String, Boolean>(nodes.size)")
         )
         assertTrue(
             "the edge loop must consult the memoized verdict",
-            source.contains("fun pageFiltered(id: String, node: GraphNode)")
+            source.contains("fun pageFiltered(id: String): Boolean")
         )
         assertFalse(
             "the edge loop must not re-split tags per edge via isFilteredOut(src.page)",

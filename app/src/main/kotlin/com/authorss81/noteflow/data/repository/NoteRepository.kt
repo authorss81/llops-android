@@ -22,7 +22,12 @@ import com.authorss81.noteflow.services.VoiceRecordingPolicy
 import com.authorss81.noteflow.services.WaveformPeakMath
 import com.authorss81.noteflow.services.WikiLinkParser
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
@@ -248,6 +253,21 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
     val currentSearchCorpusGeneration: Long
         get() = synchronized(searchCorpusLock) { searchCorpusGeneration }
 
+    /**
+     * Phase 259: observable form of [currentSearchCorpusGeneration] for
+     * composition-scoped consumers (KnowledgeGraphScreen, TagExplorerView).
+     * Bumped under [searchCorpusLock] together with the counter in BOTH
+     * [invalidateSearchCorpus] (page mutation) and [clearPlaintextCaches]
+     * (lock / re-key) — a graph/tag panel keyed on this flow rebuilds after an
+     * edit/rename instead of serving its once-built snapshot forever.
+     */
+    private val _searchCorpusGenerationFlow = MutableStateFlow(0L)
+    val searchCorpusGenerationFlow: StateFlow<Long> = _searchCorpusGenerationFlow.asStateFlow()
+
+    private fun bumpSearchCorpusGeneration() {
+        _searchCorpusGenerationFlow.value = searchCorpusGeneration
+    }
+
     private fun invalidateSearchCorpus() {
         synchronized(searchCorpusLock) {
             searchCorpusGeneration++
@@ -259,6 +279,7 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
             // one row's decrypt instead of the whole capped window.
             searchCorpusDirty = true
             searchCorpusIsCapped = false
+            bumpSearchCorpusGeneration()
         }
         // B2-DOS-11: the WikiLink/tag builders must not serve a scan from a previous
         // unlock epoch — this hook fires on lock, key replacement and every page
@@ -283,6 +304,7 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
             cachedSearchCorpus = null
             searchCorpusDirty = true
             searchCorpusIsCapped = false
+            bumpSearchCorpusGeneration()
         }
         WikiLinkParser.invalidateCaches()
     }
@@ -649,8 +671,15 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
         val matches = ArrayList<NotePageEntity>()
         var offset = 0
         while (true) {
+            // Phase 259: cancellable per batch (a new keystroke pre-empts via
+            // the ViewModel's shared search Job) AND ledger-silent — this is a
+            // filter/rank read like the corpus path, so undecryptable rows are
+            // dropped (never a rankable marker) and failures are NOT recorded
+            // toward the B1-DB-8 persistent threshold (the display reads already
+            // count them; recording here double-tripped it per deep scan).
+            currentCoroutineContext().ensureActive()
             val batch = db.pageDao().getAllActivePagesPaged(VaultSearchPolicy.DEEP_SCAN_BATCH_SIZE, offset)
-                .map { decryptPageIfNeeded(it) }
+                .mapNotNull { decryptPageOrNullForCorpus(it) }
             if (batch.isEmpty()) break
             matches += batch.filter { page -> VaultSearchPolicy.pageMatches(page, q) }
             if (batch.size < VaultSearchPolicy.DEEP_SCAN_BATCH_SIZE) break

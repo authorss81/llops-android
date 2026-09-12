@@ -84,6 +84,8 @@ import com.authorss81.noteflow.ui.viewmodel.NoteflowViewModel
 import com.authorss81.noteflow.utils.DeviceCompatibilityManager
 import com.authorss81.noteflow.utils.DeviceTier
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.PI
@@ -203,10 +205,14 @@ fun KnowledgeGraphScreen(
         )
     }
 
-    // 29.1 + Phase 38: build the graph once. Edge scan runs via
-    // WikiLinkParser.buildWikiLinkEdges (cached per unlock epoch, scan-set
-    // capped). Physics layout is deterministic pure-JVM math.
-    LaunchedEffect(Unit) {
+    // 29.1 + Phase 38: build the graph once per corpus generation. Edge scan
+    // runs via WikiLinkParser.buildWikiLinkEdges (cached per unlock epoch,
+    // scan-set capped). Physics layout is deterministic pure-JVM math.
+    // Phase 259: keyed on the repository's corpus generation (bumped by every
+    // page mutation / lock / re-key) — the pre-259 `LaunchedEffect(Unit)` built
+    // once and stayed stale after an edit/rename until the screen reopened.
+    val corpusGeneration by viewModel.repository.searchCorpusGenerationFlow.collectAsState()
+    LaunchedEffect(corpusGeneration) {
         // R2-b2b1-UI-01 (phase-134): getAllActivePages decrypts the WHOLE vault —
         // seconds on big vaults. It was a bare repository call: a lock() disposing
         // the pool mid-decrypt threw an uncaught closed-pool ISE inside this
@@ -289,16 +295,29 @@ fun KnowledgeGraphScreen(
         }
 
         // Deterministic layout (repulsion + spring + gravity + collision bounds)
-        // OFF the main thread.
+        // OFF the main thread. Phase 259: cancellable — a corpus bump (edit
+        // during layout) restarts this effect; the stale build aborts instead
+        // of overwriting the fresh one.
+        currentCoroutineContext().ensureActive()
         val settled = withContext(Dispatchers.Default) {
             GraphLayoutMath.layout(starting, edgeRefs, profile.iterations)
         }
+        currentCoroutineContext().ensureActive()
         val settledByPage = settled.associateBy { it.id }
 
+        // Phase 259: connection degrees in ONE edge pass — the old per-node
+        // `edgeRefs.count { ... }` was O(nodes × edges) on the main thread.
+        val degree = HashMap<String, Int>(kept.size * 2)
+        for (e in edgeRefs) {
+            degree[e.sourceId] = (degree[e.sourceId] ?: 0) + 1
+            degree[e.targetId] = (degree[e.targetId] ?: 0) + 1
+        }
+
+        val startingByPage = starting.associateBy { it.id }
         val placed = kept.map { page ->
-            val startV = starting.first { it.id == page.id }
+            val startV = startingByPage.getValue(page.id)
             val v = settledByPage[page.id] ?: startV
-            val connectionCount = edgeRefs.count { it.sourceId == page.id || it.targetId == page.id }
+            val connectionCount = degree[page.id] ?: 0
             val radius = (22f + connectionCount * 5f).coerceAtMost(52f)
             val clusterId = clusterMap[page.id] ?: 0
             GraphNode(
@@ -374,6 +393,10 @@ fun KnowledgeGraphScreen(
     val currentSelectedNodeId by rememberUpdatedState(selectedNodeId)
     val currentOnOpenPage by rememberUpdatedState(onOpenPage)
     val currentPanOffset by rememberUpdatedState(panOffset)
+    // Phase 259: the tap lambda is keyed on Unit (never relaunches), so it
+    // must read the node list through an updated-state ref — the pre-259 code
+    // iterated the first-composition `nodes` (empty until the build landed).
+    val currentNodes by rememberUpdatedState(nodes)
 
     val isFilteredOut: (NotePageEntity) -> Boolean = remember(filterTags, requireAllTags) {
         { page ->
@@ -389,12 +412,25 @@ fun KnowledgeGraphScreen(
 
     // Phase 210 — neighborhood focus. The focused id set comes from the pure-JVM
     // BFS policy; the surviving edge set reuses GraphSubgraphFilter.edgesWithin
-    // (the same both-endpoints-inside rule the notebook subgraph view uses), so
+    // (the same both-endpoints-inside rule the notebook subgraph uses), so
     // focus mode draws ONLY edges inside the neighborhood and lets the existing
     // dimming pipeline fade every node outside it.
+    // Phase 259: per-frame allocation discipline — nodeById and the tag/focus
+    // filter verdicts are static per (nodes, filter, focus) and hoisted out of
+    // the draw scope via remember. shownPositions stays per-frame: it folds the
+    // animated settle-tween progress, which changes every frame by design.
+    val nodeById = remember(nodes) { nodes.associateBy { it.page.id } }
     val graphEdgeRefs = remember(edges) { edges.map { GraphEdgeRef(it.sourceId, it.targetId) } }
     val focusResult = remember(selectedNodeId, graphEdgeRefs, focusEnabled, focusHops) {
         GraphNeighborhoodFocusPolicy.focus(selectedNodeId, focusEnabled, graphEdgeRefs, focusHops)
+    }
+    // Phase 259: the tag-filter + focus verdict per page, hoisted out of the
+    // per-frame draw scope (the old code rebuilt a HashMap and re-split tag
+    // strings via getOrPut on every frame).
+    val filteredById = remember(nodes, filterTags, requireAllTags, focusResult) {
+        nodes.associate { n ->
+            n.page.id to (isFilteredOut(n.page) || (focusResult != null && n.page.id !in focusResult.focusedIds))
+        }
     }
 
     // Phase 210 — search navigation. Deterministic ranked matches; Enter cycles,
@@ -592,7 +628,7 @@ fun KnowledgeGraphScreen(
                                 val center = Offset(size.width.toFloat() / 2f, size.height.toFloat() / 2f)
                                 val canvasPos = (tapOffset - center - currentPanOffset) / zoomScale
                                 var hit: GraphNode? = null
-                                for (n in nodes) {
+                                for (n in currentNodes) {
                                     val p = Offset(
                                         n.start.x + (n.end.x - n.start.x) * layoutProgress.value,
                                         n.start.y + (n.end.y - n.start.y) * layoutProgress.value
@@ -633,10 +669,11 @@ fun KnowledgeGraphScreen(
                     ) {
                         val center = Offset(size.width / 2f, size.height / 2f)
                         val progress = layoutProgress.value
+                        // Phase 259: nodeById + filteredById are remember-hoisted
+                        // above; only the progress-folded positions are per-frame
+                        // (the settle tween changes them every frame by design).
                         val shownPositions = HashMap<String, Offset>(nodes.size)
-                        val nodeById = HashMap<String, GraphNode>(nodes.size)
                         for (n in nodes) {
-                            nodeById[n.page.id] = n
                             shownPositions[n.page.id] = Offset(
                                 n.start.x + (n.end.x - n.start.x) * progress,
                                 n.start.y + (n.end.y - n.start.y) * progress
@@ -648,16 +685,14 @@ fun KnowledgeGraphScreen(
                         // memoized per page so the per-frame edge loop (and the
                         // pulse loop below) never re-splits a page's tag string
                         // for every incident edge.
-                        val selectedId = selectedNodeId
-                        val filteredById = HashMap<String, Boolean>(nodes.size)
                         // Phase 210: neighborhood focus rides the SAME dimming
                         // pipeline as the tag filter — anything outside the
                         // focused N-hop set fades exactly like a tag-filtered
                         // node, so there is one visual language for "de-emphasized".
-                        fun outOfFocus(id: String): Boolean =
-                            focusResult != null && id !in focusResult.focusedIds
-                        fun pageFiltered(id: String, node: GraphNode): Boolean =
-                            filteredById.getOrPut(id) { isFilteredOut(node.page) || outOfFocus(id) }
+                        // Phase 259: verdicts come from the remember-hoisted
+                        // filteredById map (no per-frame HashMap, no getOrPut).
+                        val selectedId = selectedNodeId
+                        fun pageFiltered(id: String): Boolean = filteredById[id] == true
                         // Phase 210 + GraphSubgraphFilter: in focus mode only the
                         // edges WITHIN the neighborhood are drawn at all (the same
                         // both-endpoints rule the notebook subgraph uses); without
@@ -668,8 +703,8 @@ fun KnowledgeGraphScreen(
                         for (edge in drawnEdges) {
                             val src = nodeById[edge.sourceId] ?: continue
                             val tgt = nodeById[edge.targetId] ?: continue
-                            val srcFiltered = pageFiltered(edge.sourceId, src)
-                            val tgtFiltered = pageFiltered(edge.targetId, tgt)
+                            val srcFiltered = pageFiltered(edge.sourceId)
+                            val tgtFiltered = pageFiltered(edge.targetId)
                             val isHighlighted = searchQuery.isNotBlank() && (
                                 src.page.title.contains(searchQuery, ignoreCase = true) ||
                                     tgt.page.title.contains(searchQuery, ignoreCase = true)
@@ -711,7 +746,7 @@ fun KnowledgeGraphScreen(
                                 n.page.title.contains(searchQuery, ignoreCase = true)
                             val isActiveMatch = activeMatchId == n.page.id
                             val isSelected = selectedId == n.page.id
-                            val filteredOut = pageFiltered(n.page.id, n)
+                            val filteredOut = pageFiltered(n.page.id)
                             // Phase 210 review fix: the ACTIVE search match is
                             // always drawn at full opacity — auto-pan centers it,
                             // so a focus-dimmed target would be an invisible

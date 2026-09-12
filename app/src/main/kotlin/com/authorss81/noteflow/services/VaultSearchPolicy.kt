@@ -36,6 +36,16 @@ object VaultSearchPolicy {
     /** Batch size for the explicit deep-scan (refine) pass. */
     const val DEEP_SCAN_BATCH_SIZE = 1500
 
+    /**
+     * Phase 259: head bound for the per-keystroke FUZZY body scan. The fuzzy
+     * tier is an in-order subsequence walk — O(query × scanned length) per
+     * non-matching page per keystroke. Titles/tags are short (scanned whole);
+     * bodies are scanned only up to this prefix so a 100KB note cannot burn a
+     * full-body fuzzy walk on every keypress. EXACT substring probes still cover
+     * the whole body (single-pass, no gap bookkeeping).
+     */
+    const val FUZZY_BODY_SCAN_CAP = 8192
+
     /** A query with no searchable content is never worth a scan. */
     fun isBlankQuery(query: String?): Boolean = query.isNullOrBlank()
 
@@ -85,11 +95,24 @@ object VaultSearchPolicy {
         if (page.extractedText?.contains(query, ignoreCase = true) == true) {
             return SearchMatchTier.EXACT
         }
+        // Phase 259: the CSV `tags` column is searchable — pre-fix a tag-only
+        // hit (`pageMatches` skipped `tags`) never matched at all.
+        if (page.tags.contains(query, ignoreCase = true)) return SearchMatchTier.EXACT
         val body = page.extractedText
         val fuzzyTitle = FuzzyMatch.subsequenceDensity(query, page.title)
         if (fuzzyTitle != null) return SearchMatchTier.FUZZY
-        if (body != null && FuzzyMatch.subsequenceDensity(query, body) != null) {
-            return SearchMatchTier.FUZZY
+        if (FuzzyMatch.subsequenceDensity(query, page.tags) != null) return SearchMatchTier.FUZZY
+        // Phase 259: fuzzy body probe is head-bounded (see FUZZY_BODY_SCAN_CAP)
+        // instead of a full-body walk per keystroke per non-matching page.
+        if (body != null) {
+            val head = if (body.length > FUZZY_BODY_SCAN_CAP) {
+                body.substring(0, FUZZY_BODY_SCAN_CAP)
+            } else {
+                body
+            }
+            if (FuzzyMatch.subsequenceDensity(query, head) != null) {
+                return SearchMatchTier.FUZZY
+            }
         }
         return null
     }

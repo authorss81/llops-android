@@ -52,7 +52,10 @@ class Phase210GraphDepthPinsTest {
         )
         assertTrue(
             "out-of-focus nodes must ride the EXISTING dimming pipeline (pageFiltered)",
-            Regex("isFilteredOut\\(node\\.page\\) \\|\\| outOfFocus\\(id\\)").containsMatchIn(screen)
+            // Phase 259: the verdict moved into the remember-hoisted filteredById
+            // map (same single visual language, computed once per composition
+            // instead of per frame via getOrPut) — pin the hoisted form.
+            Regex("isFilteredOut\\(n\\.page\\) \\|\\| \\(focusResult != null && n\\.page\\.id !in focusResult\\.focusedIds\\)").containsMatchIn(screen)
         )
     }
 
