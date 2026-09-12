@@ -26,6 +26,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -343,10 +344,27 @@ class MainActivity : FragmentActivity() {
                     while (authenticated) {
                         val message = viewModel.nextSnackbarMessage() ?: break
                         viewModel.consumeSnackbar(message)
-                        snackbarHostState.showSnackbar(
+                        // Phase 269: one-shot actions (e.g. a permission denial
+                        // carrying "Open Settings"). The tap routes by actionId;
+                        // unknown ids are ignored (fail closed, never a dead tap
+                        // that pretends to act).
+                        val result = snackbarHostState.showSnackbar(
                             message = message.text,
+                            actionLabel = message.actionLabel,
                             duration = if (message.isLong) SnackbarDuration.Long else SnackbarDuration.Short
                         )
+                        if (result == SnackbarResult.ActionPerformed &&
+                            message.actionId == NoteflowViewModel.SNACKBAR_ACTION_OPEN_APP_SETTINGS
+                        ) {
+                            runCatching {
+                                startActivity(
+                                    android.content.Intent(
+                                        android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                        android.net.Uri.fromParts("package", packageName, null)
+                                    )
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -1358,14 +1376,20 @@ class MainActivity : FragmentActivity() {
 
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
-        if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_BACKGROUND || level == android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL) {
+        // Phase 269: clear at every level >= RUNNING_LOW (10) — the pre-269
+        // BACKGROUND(40)/CRITICAL(15)-only gate let a RUNNING_LOW squeeze OOM
+        // while the 64 MB pool still held tens of MB. The grain tiles ride
+        // along (small, but no reason to retain them under pressure).
+        if (com.authorss81.noteflow.utils.MemoryTrimPolicy.shouldClearCaches(level)) {
             com.authorss81.noteflow.utils.BitmapPool.clear()
+            com.authorss81.noteflow.ui.components.PaperGrainTileCache.clear()
         }
     }
 
     override fun onLowMemory() {
         super.onLowMemory()
         com.authorss81.noteflow.utils.BitmapPool.clear()
+        com.authorss81.noteflow.ui.components.PaperGrainTileCache.clear()
     }
 
     /**

@@ -214,7 +214,11 @@ class Phase206EventDrivenTimersTest {
         assertTrue(
             "the pump must rebuild when gpuWetBrushesEnabled flips so the provider " +
                 "never serves a first-composition captured value",
-            canvas.contains("remember(wetBrushEngine, gpuWetBrushesEnabled)")
+            canvas.contains("remember(wetBrushEngine, gpuWetBrushesEnabled, canvasDeviceTier)")
+        )
+        assertTrue(
+            "phase 269: the pump must also rebuild on tier change (LOW_END parks the engine in vector fallback)",
+            canvas.contains("isAgslSupported = com.authorss81.noteflow.utils.AgslGate.isSupported(")
         )
     }
 

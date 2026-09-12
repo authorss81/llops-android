@@ -15,37 +15,36 @@ object DeviceCompatibilityManager {
 
     /**
      * Auto-detects the device tier based on CPU cores, RAM size, low-ram flag, and heuristics.
+     *
+     * Phase 269: the thresholds live in [DeviceTierPolicy.classifyTier] (pure
+     * JVM, documented + unit-tested there); this function only reads the
+     * platform inputs and delegates. A broken context (no ActivityManager /
+     * unreadable memory info) fails CLOSED to LOW_END — the pre-269 MID_RANGE
+     * fallback granted the AGSL GPU path on unknown hardware.
      */
     fun detectDeviceTier(context: Context): DeviceTier {
         try {
             val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
-            if (activityManager != null && activityManager.isLowRamDevice) {
+                ?: return DeviceTier.LOW_END
+            if (activityManager.isLowRamDevice) {
                 return DeviceTier.LOW_END
             }
 
             // Get total RAM
             val memInfo = ActivityManager.MemoryInfo()
-            activityManager?.getMemoryInfo(memInfo)
+            activityManager.getMemoryInfo(memInfo)
             val totalRamGb = memInfo.totalMem.toDouble() / (1024.0 * 1024.0 * 1024.0)
 
-            // Get CPU Cores
+            // Get CPU Cores (logical — see DeviceTierPolicy for why RAM gates flagship too)
             val cpuCores = Runtime.getRuntime().availableProcessors()
 
-            // Heuristics:
-            // Low-end: ≤ 2 cores or ≤ 3.0 GB RAM
-            if (cpuCores <= 2 || totalRamGb <= 3.0) {
-                return DeviceTier.LOW_END
-            }
-
-            // Flagship: > 6 cores AND > 6.0 GB RAM
-            if (cpuCores > 6 && totalRamGb > 6.0) {
-                return DeviceTier.FLAGSHIP
-            }
-
-            // Default to Mid-Range
-            return DeviceTier.MID_RANGE
+            return DeviceTierPolicy.classifyTier(
+                isLowRamDevice = false,
+                totalRamGb = totalRamGb,
+                cpuCores = cpuCores
+            )
         } catch (e: Exception) {
-            return DeviceTier.MID_RANGE
+            return DeviceTier.LOW_END
         }
     }
 
@@ -65,21 +64,17 @@ object DeviceCompatibilityManager {
     }
 
     // Capability Checks
+    /**
+     * Phase 269: delegates to the single [AgslGate] truth (SDK >= 33 AND tier
+     * != LOW_END) — the same gate `AnnotationCanvas` allocates/uses behind,
+     * so a LOW_END re-enable of `gpuWetBrushes` can no longer run the shader.
+     */
     fun isAgslSupported(context: Context, settings: SettingsManager): Boolean {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return false
         val tier = getDeviceTier(context, settings)
-        if (tier == DeviceTier.LOW_END) {
-            // On Low-End, restrict AGSL wet brushes to save memory/prevent lag
-            return false
-        }
-        return true
+        return AgslGate.isSupported(Build.VERSION.SDK_INT, tier)
     }
 
     fun isDynamicColorSupported(): Boolean {
         return Build.VERSION.SDK_INT >= Build.VERSION_CODES.S // API 31+
-    }
-
-    fun isHardwareBitmapsSupported(): Boolean {
-        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.O // API 26+
     }
 }

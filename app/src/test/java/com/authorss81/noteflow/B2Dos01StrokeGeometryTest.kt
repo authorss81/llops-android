@@ -335,11 +335,16 @@ class B2Dos01StrokeGeometryTest {
     // ---------- phase-201 (PERF 2.7): GPU compositing tier gating ----------
 
     @Test
-    fun `wet-layer AGSL gates read ShaderCapabilityHelper instead of raw SDK checks`() {
+    fun `wet-layer AGSL gates read AgslGate instead of raw SDK checks`() {
         val source = readAnnotationCanvasSource()
         assertTrue(
-            "useAgslWetMixing must gate on ShaderCapabilityHelper.isAgslSupported (single tier table)",
-            source.contains("val useAgslWetMixing = ShaderCapabilityHelper.isAgslSupported")
+            "useAgslWetMixing must gate on AgslGate.isSupported (phase 269 single tier truth: SDK>=33 AND non-LOW_END)",
+            source.contains("AgslGate.isSupported")
+        )
+        assertFalse(
+            "the SDK-only check must not drive any allocation/use site (LOW_END re-enable path)",
+            source.contains("val useAgslWetMixing = ShaderCapabilityHelper.isAgslSupported") ||
+                source.contains("if (ShaderCapabilityHelper.isAgslSupported && wetMixingEffect != null)")
         )
         val wetPassBlock =
             source.substringAfter("private fun DrawScope.drawWetLayerPass", "END")
@@ -349,8 +354,8 @@ class B2Dos01StrokeGeometryTest {
             wetPassBlock != "END"
         )
         assertTrue(
-            "drawWetLayerPass must gate the shader body on ShaderCapabilityHelper",
-            wetPassBlock.contains("if (ShaderCapabilityHelper.isAgslSupported && wetMixingEffect != null)")
+            "drawWetLayerPass must gate the shader body on the caller-computed AgslGate verdict",
+            wetPassBlock.contains("if (agslShaderAllowed && wetMixingEffect != null)")
         )
         // Phase 201 (PERF 2.7): android.graphics.Paint has NO setRenderEffect at
         // any API level — the only public RenderEffect carriers are View and

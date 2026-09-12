@@ -68,12 +68,14 @@ object PaperGrainTileCache {
     }
 
     /**
-     * Test hook: drops every cached tile + brush.
+     * Drops every cached tile + brush.
      *
-     * Review-fix (phase-200) honesty note: this is deliberately NOT wired to
-     * `onTrimMemory` — the LRU is hard-capped at [PaperGrainPolicy.MAX_CACHED_TILES]
-     * tiles (≈576 KB worst case), so a trim callback would have nothing to add.
-     * Wire it only if `TILE_SIZE_PX` or `MAX_CACHED_TILES` ever grow meaningfully.
+     * Phase 269: wired to `MainActivity.onTrimMemory` (every level >=
+     * RUNNING_LOW via `MemoryTrimPolicy`) + `onLowMemory`. Eviction drops
+     * references WITHOUT `Bitmap.recycle()` — a previously handed-out brush
+     * may still be referenced by a recorded display list, and recycling under
+     * it would crash the frame; GC reclaims the pixels once no brush
+     * references remain. Regeneration is ~1 ms per tile on next draw.
      */
     fun clear() {
         tiles.clear()

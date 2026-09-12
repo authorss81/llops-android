@@ -139,7 +139,8 @@ class Phase134LockVaultInflightTest {
         assertTrue("editor must re-check the auth gate before assigning", editor.contains("if (viewModel.authenticated.value) {"))
 
         val graph = java.io.File(repoRoot(), "app/src/main/kotlin/com/authorss81/noteflow/ui/screens/KnowledgeGraphScreen.kt").readText()
-        assertTrue("graph must load pages through the guarded accessor", graph.contains("viewModel.loadAllActivePages()"))
+        assertTrue("graph must load pages through the guarded capped accessor (phase 269: tier cap before decrypt)", graph.contains("viewModel.loadCappedActivePages("))
+        assertTrue("graph must read its honest culled-notice COUNT through the guarded accessor", graph.contains("viewModel.loadActivePageCount()"))
 
         val backlinks = java.io.File(repoRoot(), "app/src/main/kotlin/com/authorss81/noteflow/ui/components/BacklinksInspector.kt").readText()
         assertTrue("backlinks must load pages through the guarded accessor", backlinks.contains("viewModel.loadAllActivePages()"))

@@ -104,19 +104,30 @@ import org.junit.Test
  * Re-measured on the review-fix tree (lineSequence counts include the
  * trailing line): AnnotationCanvas 8758 raw / 7020 code, EditorScreen 7445
  * raw / 6491 code.
+ *
+ * PHASE 269 RE-BASELINE: compat hardware pass — AnnotationCanvas gained the
+ * override-aware tier (canvasDeviceTier), the try/caught tier-gated effect
+ * allocation, the threaded deviceTier param + caller-computed
+ * agslShaderAllowed, and the uniform-upload fallback (+62 raw / +34 code);
+ * EditorScreen gained the tier state/keyed effect, the honest GPU row, the
+ * mic rationale dialog + permanent-denial action and the sheet tier param
+ * (+100 raw / +66 code). HomeScreen untouched. No KDoc opener added (plain
+ * `//` comments only — the KDoc counts below are unchanged). Re-measured on
+ * the phase-269 tree: AnnotationCanvas 8820 raw / 7054 code, EditorScreen
+ * 7545 raw / 6557 code.
  */
 class Phase254CommentTrimTest {
 
-    // Phase-255/256/257/264/266 re-baselined raw line counts (review-fix values measured on the review-fix tree).
+    // Phase-255/256/257/264/266/269 re-baselined raw line counts (review-fix values measured on the review-fix tree).
     private val headRaw = mapOf(
-        "ui/components/AnnotationCanvas.kt" to 8758,
-        "ui/screens/EditorScreen.kt" to 7445,
+        "ui/components/AnnotationCanvas.kt" to 8820,
+        "ui/screens/EditorScreen.kt" to 7545,
         "ui/screens/HomeScreen.kt" to 3845
     )
-    // Phase-255/256/257/264/266 re-baselined code-line counts (non-blank, non-full-`//` lines).
+    // Phase-255/256/257/264/266/269 re-baselined code-line counts (non-blank, non-full-`//` lines).
     private val headCode = mapOf(
-        "ui/components/AnnotationCanvas.kt" to 7020,
-        "ui/screens/EditorScreen.kt" to 6491,
+        "ui/components/AnnotationCanvas.kt" to 7054,
+        "ui/screens/EditorScreen.kt" to 6557,
         "ui/screens/HomeScreen.kt" to 3310
     )
     // Parent baseline KDoc `/**` opener counts (no KDoc opener may be deleted).

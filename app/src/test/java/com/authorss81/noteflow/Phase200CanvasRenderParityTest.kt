@@ -159,12 +159,19 @@ class Phase200CanvasRenderParityTest {
     @Test
     fun `grain is gated off on low-end devices by policy`() {
         val src = canvasSource()
-        val gateIdx = src.indexOf("val paperGrainEnabled = remember(grainContext) {")
+        // Phase 269: override-aware tier (getDeviceTier, keyed on the
+        // deviceTierOverride) — the pre-269 direct detectDeviceTier bypassed
+        // the user's tier override.
+        val gateIdx = src.indexOf("val paperGrainEnabled = remember(canvasDeviceTier) {")
         assertTrue(gateIdx > 0)
-        val gate = src.substring(gateIdx, src.indexOf("}", src.indexOf("detectDeviceTier")))
+        val gate = src.substring(gateIdx, gateIdx + 400)
         assertTrue(gate.contains("PaperGrainPolicy.enabled("))
-        assertTrue(gate.contains("DeviceCompatibilityManager.detectDeviceTier"))
+        assertTrue(gate.contains("canvasDeviceTier"))
         assertTrue(gate.contains("DeviceTier.LOW_END"))
+        assertTrue(
+            "grain gate must honor the override (no direct detectDeviceTier)",
+            !src.contains("detectDeviceTier(")
+        )
     }
 
     @Test

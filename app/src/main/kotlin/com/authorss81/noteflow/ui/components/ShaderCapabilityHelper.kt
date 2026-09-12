@@ -1,6 +1,8 @@
 package com.authorss81.noteflow.ui.components
 
 import android.os.Build
+import com.authorss81.noteflow.utils.AgslGate
+import com.authorss81.noteflow.utils.DeviceTier
 
 /**
  * Phase 201 (PERF 2.7) — single decision table for the GPU compositing tier
@@ -23,10 +25,23 @@ import android.os.Build
  */
 object ShaderCapabilityHelper {
 
-    /** AGSL RuntimeShader support (Android 13 / API 33). */
+    /**
+     * Phase 269: OS-level AGSL capability ONLY (Android 13 / API 33) — for
+     * settings-visibility decisions, NEVER the render gate. The render gate is
+     * the tier-aware [agslSupportedFor]/[AgslGate.isSupported]: on LOW_END
+     * hardware this property is true while the shader must stay off.
+     */
     val isAgslSupported: Boolean
         get() = agslSupportedFor(Build.VERSION.SDK_INT)
 
     fun agslSupportedFor(sdkInt: Int): Boolean =
-        sdkInt >= Build.VERSION_CODES.TIRAMISU // API 33
+        AgslGate.sdkCapable(sdkInt)
+
+    /**
+     * Phase 269: the full single-truth gate (SDK >= 33 AND tier != LOW_END) —
+     * the same [AgslGate.isSupported] `DeviceCompatibilityManager` and every
+     * `AnnotationCanvas` allocation/use site read.
+     */
+    fun agslSupportedFor(sdkInt: Int, tier: DeviceTier): Boolean =
+        AgslGate.isSupported(sdkInt, tier)
 }

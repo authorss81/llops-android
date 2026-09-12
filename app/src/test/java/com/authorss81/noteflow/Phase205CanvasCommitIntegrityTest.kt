@@ -241,12 +241,13 @@ class Phase205CanvasCommitIntegrityTest {
             gpuGate.contains("nativeCanvas.isHardwareAccelerated")
         )
         val creationGate = src
-            .substringAfter("val wetMixingEffect = remember {")
-            .take(300)
+            .substringAfter("val wetMixingEffect = remember(canvasDeviceTier) {")
+            .take(600)
         assertTrue(
-            "the effect object itself is created ONLY on the AGSL tier",
-            creationGate.contains("ShaderCapabilityHelper.isAgslSupported") &&
-                creationGate.contains("AgslShaders.WetMixingEffect()")
+            "the effect object itself is created ONLY on the AGSL tier (phase 269: tier-aware AgslGate, try/caught for fragile drivers)",
+            creationGate.contains("AgslGate.isSupported") &&
+                creationGate.contains("AgslShaders.WetMixingEffect()") &&
+                creationGate.contains("catch (e: Exception)")
         )
     }
 }

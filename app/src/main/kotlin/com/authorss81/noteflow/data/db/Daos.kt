@@ -102,6 +102,15 @@ interface NotePageDao {
     @Query("SELECT * FROM pages WHERE deleted = 0 ORDER BY updatedAt DESC")
     suspend fun getAllActivePages(): List<NotePageEntity>
 
+    // Phase 269 (compat): newest-first capped read for the Knowledge Graph.
+    // The pre-269 screen decrypted the WHOLE vault (`getAllActivePages`) and
+    // only then culled to the tier cap — OOM on Go-class devices before the
+    // low-end notice could render. The tier cap is applied HERE (SQL LIMIT),
+    // so at most `limit` rows are ever materialized + decrypted. Ordering is
+    // newest-first to match `GraphTierSelector.cullToCap` (most-recent wins).
+    @Query("SELECT * FROM pages WHERE deleted = 0 ORDER BY updatedAt DESC LIMIT :limit")
+    suspend fun getActivePagesNewestCapped(limit: Int): List<NotePageEntity>
+
     // B2-DOS-02 (phase-78): BOUNDED reads for vault search. The search corpus is
     // loaded through the capped/paged queries below so a keystroke search never
     // decrypts more than VaultSearchPolicy.SEARCH_CORPUS_CAP rows, and the

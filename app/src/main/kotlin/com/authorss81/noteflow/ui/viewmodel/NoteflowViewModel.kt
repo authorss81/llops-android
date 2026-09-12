@@ -1619,8 +1619,18 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     val confettiTrigger: StateFlow<Long> = _confettiTrigger.asStateFlow()
 
     /** 22.9: root snackbar pipeline — replaces transient, TalkBack-invisible Toasts. */
-    data class SnackbarMessage(val text: String, val isLong: Boolean = false)
+    // Phase 269: optional one-shot action (`actionLabel` + `actionId`). The
+    // root collector in MainActivity renders the label and routes the tap by
+    // id (e.g. `SNACKBAR_ACTION_OPEN_APP_SETTINGS`); null = text-only, so
+    // every existing caller is unaffected.
+    data class SnackbarMessage(
+        val text: String,
+        val isLong: Boolean = false,
+        val actionLabel: String? = null,
+        val actionId: String? = null
+    )
 
+    /** Root-collector action: open the app's system Settings page. See companion. */
     // R2-b2b1-UI-04 (phase-153): the root channel is a BOUNDED StateFlow FIFO
     // so `lock()` can CLEAR it (a MutableSharedFlow has no clear primitive —
     // pre-fix, messages emitted past a lock kept rendering over the LockScreen)
@@ -1630,6 +1640,15 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     val snackbarMessages: StateFlow<List<SnackbarMessage>> = _snackbarMessages.asStateFlow()
 
     fun showSnackbar(text: String, isLong: Boolean = false) {
+        showSnackbar(text, isLong, null, null)
+    }
+
+    /**
+     * Phase 269: emission with an optional one-shot action. The lock-boundary
+     * gate is text-based (unchanged): an action never smuggles a
+     * vault-content message past a lock.
+     */
+    fun showSnackbar(text: String, isLong: Boolean, actionLabel: String?, actionId: String?) {
         // R2-b2b1-UI-04: while the vault is locked (or the pre-unlock LockScreen
         // is up) ONLY survive-lock notices may queue — every other message
         // (restore/import outcomes, note titles, plugin results) is dropped at
@@ -1640,7 +1659,7 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
         }
         val current = _snackbarMessages.value
         _snackbarMessages.value =
-            (current + SnackbarMessage(text, isLong)).takeLast(com.authorss81.noteflow.services.SnackbarLockPolicy.MAX_PENDING)
+            (current + SnackbarMessage(text, isLong, actionLabel, actionId)).takeLast(com.authorss81.noteflow.services.SnackbarLockPolicy.MAX_PENDING)
     }
 
     /** Root-collector ack: remove the exactly-shown instance ([message]) from the FIFO. */
@@ -3439,6 +3458,9 @@ fun updatePageTags(id: String, tags: String) {
     // ---------- Security & Master Password ----------
     companion object {
         const val MAX_FAILED_ATTEMPTS = 5
+
+        /** Phase 269: root-collector snackbar action — open the app's system Settings page. */
+        const val SNACKBAR_ACTION_OPEN_APP_SETTINGS = "open_app_settings"
     }
 
     /**
@@ -4559,6 +4581,27 @@ fun updatePageTags(id: String, tags: String) {
     suspend fun loadAllActivePages(): List<NotePageEntity> =
         withLockedPoolGuard("vault pages", emptyList()) {
             repository.getAllActivePages()
+        }
+
+    /**
+     * Phase 269 (compat): guarded newest-first capped vault read for the
+     * Knowledge Graph — at most [limit] rows are ever materialized +
+     * decrypted (see `NoteRepository.getNewestActivePagesCapped`), so the
+     * tier cap lands BEFORE any decrypt work. Same lock-race guard as
+     * [loadAllActivePages] (armed-empty on a lock race).
+     */
+    suspend fun loadCappedActivePages(limit: Int): List<NotePageEntity> =
+        withLockedPoolGuard("vault pages", emptyList()) {
+            repository.getNewestActivePagesCapped(limit)
+        }
+
+    /**
+     * Phase 269 (compat): guarded vault COUNT for the graph's honest
+     * "showing the N most recent" notice — a COUNT query, never a decrypt.
+     */
+    suspend fun loadActivePageCount(): Int =
+        withLockedPoolGuard("vault page count", 0) {
+            repository.getActivePageCount()
         }
 
     /**

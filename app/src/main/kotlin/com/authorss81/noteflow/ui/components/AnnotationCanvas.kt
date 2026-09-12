@@ -1146,10 +1146,19 @@ fun AnnotationCanvas(
     // UNDER the ink pass). Low-end devices skip the grain entirely — it is a
     // cosmetic overlay, and skipping it keeps their draw path unchanged.
     val grainContext = LocalContext.current
-    val paperGrainEnabled = remember(grainContext) {
+    // Phase 269: override-aware tier, shared by the grain gate AND the AGSL
+    // single-truth gate below. Keyed on `deviceTierOverride` so a settings
+    // change re-resolves instead of serving a first-composition capture; the
+    // pre-269 grain path called `detectDeviceTier` directly and bypassed the
+    // user's tier override entirely. Reuses the canvas-owned SettingsManager
+    // (hoisted here so both gates share one instance).
+    val brushRenderSettings = remember(grainContext) { com.authorss81.noteflow.services.SettingsManager(grainContext) }
+    val canvasDeviceTier = remember(grainContext, brushRenderSettings.deviceTierOverride) {
+        com.authorss81.noteflow.utils.DeviceCompatibilityManager.getDeviceTier(grainContext, brushRenderSettings)
+    }
+    val paperGrainEnabled = remember(canvasDeviceTier) {
         com.authorss81.noteflow.services.PaperGrainPolicy.enabled(
-            com.authorss81.noteflow.utils.DeviceCompatibilityManager.detectDeviceTier(grainContext) ==
-                com.authorss81.noteflow.utils.DeviceTier.LOW_END
+            canvasDeviceTier == com.authorss81.noteflow.utils.DeviceTier.LOW_END
         )
     }
     val paperGrainBrush = remember(paperGrainEnabled, isDarkPaper) {
@@ -1201,8 +1210,26 @@ fun AnnotationCanvas(
     // parent hands down a fresh List instance. The DisposableEffect below
     // still clears everything on unmount; LayerRenderBudgetPolicy bounds the
     // resident bytes in between.
-    val wetMixingEffect = remember {
-        if (ShaderCapabilityHelper.isAgslSupported) AgslShaders.WetMixingEffect() else null
+    // Phase 269: single-truth AGSL allocation — the tier-aware AgslGate, not
+    // the SDK-only capability. A LOW_END re-enable of `gpuWetBrushes` can no
+    // longer allocate the RuntimeShader. Construction is try/caught: some
+    // API-33+ drivers (e.g. Mali-G31 Go parts) throw at RuntimeShader compile
+    // time, and a shader crash must fall back to the vector path, never crash
+    // the editor. A null effect routes every wet pass through the plain path.
+    val wetMixingEffect = remember(canvasDeviceTier) {
+        try {
+            if (com.authorss81.noteflow.utils.AgslGate.isSupported(
+                    android.os.Build.VERSION.SDK_INT,
+                    canvasDeviceTier
+                )
+            ) {
+                AgslShaders.WetMixingEffect()
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            null
+        }
     }
     val wetCanvasEngine = remember { com.authorss81.noteflow.services.WetCanvasEngine() }
     val wetBrushEngine = remember { com.authorss81.noteflow.services.WetBrushEngine() }
@@ -1224,7 +1251,7 @@ fun AnnotationCanvas(
     val context = androidx.compose.ui.platform.LocalContext.current
     // Phase 18: brush-physics render settings — velocity width modulation, nib angle.
     // Persisted via the existing SettingsManager (SharedPreferences) path; NO DB schema change.
-    val brushRenderSettings = remember(context) { com.authorss81.noteflow.services.SettingsManager(context) }
+    // (Instance hoisted to the grain/tier block above in phase 269 — reused here.)
     // Phase 219: read per-template-type visual overrides once per recomposition.
     fun templateOverridesFor(tpl: String): TemplateOverrides {
         val spacing = brushRenderSettings.templatePref(tpl, "spacing", "").ifEmpty { null }?.toFloatOrNull()
@@ -1274,10 +1301,15 @@ fun AnnotationCanvas(
     // settings toggle REBUILDS the pump (DisposableEffect below stops the old
     // one) instead of manualOverrideProvider serving a value captured at the
     // first composition forever.
-    val wetFramePump = remember(wetBrushEngine, gpuWetBrushesEnabled) {
+    val wetFramePump = remember(wetBrushEngine, gpuWetBrushesEnabled, canvasDeviceTier) {
         WetBrushFramePump(
             wetBrushEngine = wetBrushEngine,
-            isAgslSupported = ShaderCapabilityHelper.isAgslSupported,
+            // Phase 269: tier-aware gate — a LOW_END device parks the engine in
+            // vector fallback even when the user toggle is on.
+            isAgslSupported = com.authorss81.noteflow.utils.AgslGate.isSupported(
+                android.os.Build.VERSION.SDK_INT,
+                canvasDeviceTier
+            ),
             manualOverrideProvider = { gpuWetBrushesEnabled },
             thermalStatusProvider = { ThermalSanityHelper.getCurrentThermalStatus(context) }
         )
@@ -3333,7 +3365,8 @@ fun AnnotationCanvas(
                         scatterAmountPercent = scatterAmountPercent,
                         paperTextureStrength = paperTextureStrength,
                         alphaLockLayerIds = resolvedAlphaLockIds,
-                        clippingMaskLayerIds = resolvedClippingMaskIds
+                        clippingMaskLayerIds = resolvedClippingMaskIds,
+                        deviceTier = canvasDeviceTier
                     )
                 } else if (!divideIntoPages) {
                     val (canvasW, infiniteH) = computeCanvasWorld(size.width)
@@ -3389,7 +3422,8 @@ fun AnnotationCanvas(
                         scatterAmountPercent = scatterAmountPercent,
                         paperTextureStrength = paperTextureStrength,
                         alphaLockLayerIds = resolvedAlphaLockIds,
-                        clippingMaskLayerIds = resolvedClippingMaskIds
+                        clippingMaskLayerIds = resolvedClippingMaskIds,
+                        deviceTier = canvasDeviceTier
                     )
                 } else {
                     val renderPageCount = dynamicPageCount
@@ -3534,7 +3568,8 @@ blenderStrengthPercent = blenderStrengthPercent,
                              scatterAmountPercent = scatterAmountPercent,
                              paperTextureStrength = paperTextureStrength,
                              alphaLockLayerIds = resolvedAlphaLockIds,
-                             clippingMaskLayerIds = resolvedClippingMaskIds
+                             clippingMaskLayerIds = resolvedClippingMaskIds,
+                             deviceTier = canvasDeviceTier
                          )
                     }
                 }
@@ -5818,7 +5853,10 @@ private fun DrawScope.drawCompositedLayersStrokes(
     // Phase 222: per-layer alpha-lock (set of layer ids with alpha-lock on).
     alphaLockLayerIds: Set<String> = emptySet(),
     // Phase 222: per-layer clipping mask (set of layer ids with clipping mask on).
-    clippingMaskLayerIds: Set<String> = emptySet()
+    clippingMaskLayerIds: Set<String> = emptySet(),
+    // Phase 269: override-aware tier for the single AgslGate truth (the
+    // DrawScope extension cannot read composition state itself).
+    deviceTier: com.authorss81.noteflow.utils.DeviceTier = com.authorss81.noteflow.utils.DeviceTier.MID_RANGE
 ) {
     // capture time (see SymmetryCommitPolicy): a stroke drawn while a mode was
     // active persisted BOTH rows (original + mirrored twin), so re-mirroring
@@ -5962,10 +6000,16 @@ private fun DrawScope.drawCompositedLayersStrokes(
         // layer) the wet layer renders through the normal path — pixel-identical
         // but with ZERO shader/saveLayer work instead of a full-page per-frame
         // offscreen passes (phase-04 audit item 3).
-        // Phase 201 (PERF 2.7): the tier gate reads ShaderCapabilityHelper (the
-        // single decision table): AGSL RuntimeShader→RenderEffect compositing is
-        // API 33+ only; API 26-32 fall through to the vector/CPU paths below.
-        val useAgslWetMixing = ShaderCapabilityHelper.isAgslSupported &&
+        // Phase 201 (PERF 2.7): the tier gate reads the single AgslGate truth:
+        // AGSL RuntimeShader→RenderEffect compositing is API 33+ AND non-LOW_END;
+        // API 26-32 and LOW_END fall through to the vector/CPU paths below.
+        // Phase 269: `deviceTier` (override-aware, threaded from the canvas) —
+        // the pre-269 SDK-only check ran the shader on LOW_END API-33+ after a
+        // settings re-enable.
+        val useAgslWetMixing = com.authorss81.noteflow.utils.AgslGate.isSupported(
+                android.os.Build.VERSION.SDK_INT,
+                deviceTier
+            ) &&
                 gpuWetBrushesEnabled &&
                 graphicsLayer != null &&
                 wetBrushEngine != null &&
@@ -6004,7 +6048,13 @@ private fun DrawScope.drawCompositedLayersStrokes(
                 strokeShadowEnabled = strokeShadowEnabled,
                 blenderStrengthPercent = blenderStrengthPercent,
                 scatterAmountPercent = scatterAmountPercent,
-                paperTextureStrength = paperTextureStrength
+                paperTextureStrength = paperTextureStrength,
+                // Phase 269: the caller-computed single-gate verdict — the pass
+                // must never re-derive SDK-only capability internally.
+                agslShaderAllowed = com.authorss81.noteflow.utils.AgslGate.isSupported(
+                    android.os.Build.VERSION.SDK_INT,
+                    deviceTier
+                )
             )
             continue
         }
@@ -6234,9 +6284,13 @@ private fun DrawScope.drawWetLayerPass(
     blenderStrengthPercent: Int = 85,
     scatterAmountPercent: Int = 0,
     // Phase 227: texture-strength dial mapped into `uPaperGrain`.
-    paperTextureStrength: Int = com.authorss81.noteflow.services.PaperTextureStrengthPolicy.DEFAULT
+    paperTextureStrength: Int = com.authorss81.noteflow.services.PaperTextureStrengthPolicy.DEFAULT,
+    // Phase 269: caller-computed AgslGate verdict (tier-aware). The pre-269
+    // body re-checked the SDK-only capability here, re-opening the LOW_END
+    // shader path this gate closed above.
+    agslShaderAllowed: Boolean
 ) {
-    if (ShaderCapabilityHelper.isAgslSupported && wetMixingEffect != null) {
+    if (agslShaderAllowed && wetMixingEffect != null) {
         val brushPos = activePoints.lastOrNull() ?: activeStart
         val prevPos = if (activePoints.size >= 2) activePoints[activePoints.size - 2] else activeStart
 
@@ -6284,7 +6338,11 @@ private fun DrawScope.drawWetLayerPass(
             if (candidate.intersect(pageBounds)) {
                 nodeOriginX = candidate.left.toInt()
                 nodeOriginY = candidate.top.toInt()
-                wetMixingEffect.update(
+                // Phase 269: uniform upload can throw on fragile AGSL drivers
+                // (Mali-G31 class) — a throw drops to the plain layer below,
+                // never out of the draw pass.
+                try {
+                    wetMixingEffect.update(
                     prevX = segBaseX - nodeOriginX,
                     prevY = segBaseY - nodeOriginY,
                     brushX = brushX - nodeOriginX,
@@ -6315,9 +6373,13 @@ private fun DrawScope.drawWetLayerPass(
                     strokeSeed = liveStrokeSeed,
                     brushStyle = preset.brushStyle,
                     vibrancy = vibrancyBoost
-                )
-                hasEffect = true
-                dirty = candidate
+                    )
+                    hasEffect = true
+                    dirty = candidate
+                } catch (e: Exception) {
+                    hasEffect = false
+                    dirty = null
+                }
             }
         }
 

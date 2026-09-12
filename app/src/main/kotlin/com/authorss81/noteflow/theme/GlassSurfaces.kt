@@ -150,8 +150,13 @@ fun FrostedGlassSurface(
 ) {
     val scheme = MaterialTheme.colorScheme
     val context = LocalContext.current
-    val tier = remember {
-        DeviceCompatibilityManager.getDeviceTier(context, SettingsManager(context))
+    // Phase 269: keyed on the tier override — the pre-269 bare `remember`
+    // served the first-composition tier forever, so a settings override never
+    // restyled already-composed glass surfaces. The override is read live from
+    // prefs on every composition (cheap); only the tier resolve is memoized.
+    val glassSettings = remember(context) { SettingsManager(context) }
+    val tier = remember(context, glassSettings.deviceTierOverride) {
+        DeviceCompatibilityManager.getDeviceTier(context, glassSettings)
     }
     val style = GlassSurfaceMath.resolveStyle(applyBlur, tier, tonal)
 

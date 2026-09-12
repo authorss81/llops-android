@@ -366,8 +366,50 @@ fun EditorScreen(
         if (isGranted) {
             voiceNoteManager.startRecording(page.id)
         } else {
-            viewModel.showSnackbar("Microphone permission is required to record voice notes")
+            // Phase 269: permanent denial (user ticked "Don't ask again" or a
+            // device policy blocks the mic) carries an "Open Settings" action
+            // that deep-links the app's system Settings page via the root
+            // snackbar pipeline — a plain "permission required" notice with no
+            // path forward is a dead end.
+            val permanentlyDenied = (context as? android.app.Activity)?.let { activity ->
+                !androidx.core.app.ActivityCompat.shouldShowRequestPermissionRationale(
+                    activity,
+                    android.Manifest.permission.RECORD_AUDIO
+                )
+            } ?: false
+            if (permanentlyDenied) {
+                viewModel.showSnackbar(
+                    "Microphone permission was denied. Enable it in Settings to record voice notes.",
+                    isLong = true,
+                    actionLabel = "Open Settings",
+                    actionId = com.authorss81.noteflow.ui.viewmodel.NoteflowViewModel.SNACKBAR_ACTION_OPEN_APP_SETTINGS
+                )
+            } else {
+                viewModel.showSnackbar("Microphone permission is required to record voice notes")
+            }
         }
+    }
+    // Phase 269: pre-request rationale. When Android signals a rationale is
+    // due (user denied once before), the WHY is shown first with an explicit
+    // Allow / Not-now choice instead of firing a bare system prompt.
+    var showMicRationaleDialog by remember { mutableStateOf(false) }
+    if (showMicRationaleDialog) {
+        AlertDialog(
+            onDismissRequest = { showMicRationaleDialog = false },
+            title = { Text("Microphone access") },
+            text = {
+                Text("Voice notes need the microphone to record audio. Recordings are encrypted into your vault and never leave the device except through your own sync or share actions.")
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showMicRationaleDialog = false
+                    recordAudioPermissionLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
+                }) { Text("Allow") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showMicRationaleDialog = false }) { Text("Not now") }
+            }
+        )
     }
 
     // Phase 07: custom paper-texture pack (tiled page background, per-page pref).
@@ -570,6 +612,13 @@ fun EditorScreen(
     }
     var divideIntoPages by remember { mutableStateOf(true) }
     var gpuWetBrushesEnabled by remember { mutableStateOf(viewModel.settings.gpuWetBrushesEnabled) }
+    // Phase 269: override-aware device tier, shared by the low-end effect, the
+    // AGSL honesty gates and the settings rows. Keyed on `deviceTierOverride`
+    // so a settings change re-resolves instead of serving a first-composition
+    // capture (the pre-269 `LaunchedEffect(Unit)` + SDK-only checks did).
+    val editorDeviceTier = remember(context, viewModel.settings.deviceTierOverride) {
+        com.authorss81.noteflow.utils.DeviceCompatibilityManager.getDeviceTier(context, viewModel.settings)
+    }
     var shapeAutoSnapEnabled by remember { mutableStateOf(viewModel.settings.shapeAutoSnapEnabled) }
     // Phase 223: ruler (straight-line snap) toggle.
     var rulerEnabled by remember { mutableStateOf(viewModel.settings.rulerEnabled) }
@@ -767,15 +816,20 @@ fun EditorScreen(
         }
     }
 
-        LaunchedEffect(Unit) {
-            val detectedTier = com.authorss81.noteflow.utils.DeviceCompatibilityManager.getDeviceTier(context, viewModel.settings)
+        LaunchedEffect(editorDeviceTier) {
+            val detectedTier = editorDeviceTier
             if (detectedTier == com.authorss81.noteflow.utils.DeviceTier.LOW_END) {
                 if (!viewModel.settings.lowEndWarningShown) {
                     gpuWetBrushesEnabled = false
                     viewModel.settings.gpuWetBrushesEnabled = false
                     viewModel.settings.lowEndWarningShown = true
+                    // Phase 269: honest — the tier-aware AgslGate keeps the
+                    // shader off on this device even if the toggle is flipped,
+                    // so no override is promised (the Canvas & Paper Options
+                    // toggle renders disabled-with-explanation here). The
+                    // soft-blend vector fallback stays fully usable.
                     viewModel.showSnackbar(
-                        "GPU Wet Brushes disabled for low-end device performance. You can override this in settings.",
+                        "GPU Wet Brushes turned off for low-end device performance — the shader stays off on this device (soft-blend fallback is used).",
                         isLong = true
                     )
                 }
@@ -1855,7 +1909,19 @@ fun EditorScreen(
                                 if (hasPermission) {
                                     voiceNoteManager.startRecording(page.id)
                                 } else {
-                                    recordAudioPermissionLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
+                                    // Phase 269: rationale first when due, bare
+                                    // system prompt otherwise (see dialog above).
+                                    val showRationale = (context as? android.app.Activity)?.let { activity ->
+                                        androidx.core.app.ActivityCompat.shouldShowRequestPermissionRationale(
+                                            activity,
+                                            android.Manifest.permission.RECORD_AUDIO
+                                        )
+                                    } ?: false
+                                    if (showRationale) {
+                                        showMicRationaleDialog = true
+                                    } else {
+                                        recordAudioPermissionLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
+                                    }
                                 }
                             }
                         },
@@ -2943,7 +3009,9 @@ fun EditorScreen(
                     }
                 },
                 onDismiss = { toolbarState = FloatingToolbarState.COLLAPSED },
-                onSnackbar = { text, isLong -> viewModel.showSnackbar(text, isLong) }
+                onSnackbar = { text, isLong -> viewModel.showSnackbar(text, isLong) },
+                // Phase 269: tier-aware AGSL honesty notice in the picker.
+                deviceTier = editorDeviceTier
             )
         }
         FloatingToolbarState.COLOR_PICKER -> {
@@ -3067,6 +3135,11 @@ fun EditorScreen(
                     gpuWetBrushesEnabled = enabled
                     viewModel.settings.gpuWetBrushesEnabled = enabled
                 },
+                // Phase 269: tier-aware — LOW_END renders the row disabled.
+                gpuWetBrushesAvailable = com.authorss81.noteflow.utils.AgslGate.isSupported(
+                    android.os.Build.VERSION.SDK_INT,
+                    editorDeviceTier
+                ),
                 shapeAutoSnapEnabled = shapeAutoSnapEnabled,
                 onShapeAutoSnapToggle = { enabled ->
                     shapeAutoSnapEnabled = enabled
@@ -4329,7 +4402,10 @@ private fun ToolPickerBottomSheet(
     onEraserModeChange: (com.authorss81.noteflow.services.EraserMode) -> Unit = {},
     onToolSelect: (StrokeTool) -> Unit,
     onDismiss: () -> Unit,
-    onSnackbar: (String, Boolean) -> Unit = { _, _ -> }
+    onSnackbar: (String, Boolean) -> Unit = { _, _ -> },
+    // Phase 269: override-aware tier for the AGSL honesty notice (threaded
+    // from the editor — the sheet cannot read composition tier state itself).
+    deviceTier: com.authorss81.noteflow.utils.DeviceTier = com.authorss81.noteflow.utils.DeviceTier.MID_RANGE
 ) {
     val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
     val reduceMotion = com.authorss81.noteflow.theme.LocalReduceMotion.current
@@ -4484,7 +4560,14 @@ private fun ToolPickerBottomSheet(
             ) {
                 items(gpuTools) { tool ->
                     val selected = tool == currentTool
-                    val isUnsupported = !com.authorss81.noteflow.ui.components.ShaderCapabilityHelper.isAgslSupported
+                    // Phase 269: tier-aware — on LOW_END (or API < 33) the
+                    // canvas renders the soft-blend vector fallback, so the
+                    // one-time notice fires there too (honest degraded state,
+                    // never a silently missing shader).
+                    val isUnsupported = !com.authorss81.noteflow.utils.AgslGate.isSupported(
+                        android.os.Build.VERSION.SDK_INT,
+                        deviceTier
+                    )
 
                     Surface(
                         onClick = {
@@ -4492,7 +4575,11 @@ private fun ToolPickerBottomSheet(
                             if (isUnsupported && !hasShownShaderWarning) {
                                 hasShownShaderWarning = true
                                 onSnackbar(
-                                    "Real-time wet blending requires Android 13+ — using soft-blend watercolor fallback on this device.",
+                                    if (android.os.Build.VERSION.SDK_INT < com.authorss81.noteflow.utils.AgslGate.AGSL_MIN_SDK) {
+                                        "Real-time wet blending requires Android 13+ — using soft-blend watercolor fallback on this device."
+                                    } else {
+                                        "GPU wet blending stays off on low-end devices — using soft-blend watercolor fallback."
+                                    },
                                     true
                                 )
                             }
@@ -5456,6 +5543,10 @@ private fun CanvasSettingsBottomSheet(
     isPdf: Boolean,
     gpuWetBrushesEnabled: Boolean = true,
     onGpuWetBrushesToggle: (Boolean) -> Unit = {},
+    // Phase 269: tier-aware shader availability (AgslGate: API 33+ AND
+    // non-LOW_END). When false the row renders disabled-with-explanation —
+    // never a silently-ineffective switch.
+    gpuWetBrushesAvailable: Boolean = true,
     shapeAutoSnapEnabled: Boolean = false,
     onShapeAutoSnapToggle: (Boolean) -> Unit = {},
     // Phase 213: per-stroke soft drop shadows (default ON; low-end devices are
@@ -5889,8 +5980,12 @@ private fun CanvasSettingsBottomSheet(
                 }
             }
 
-            // GPU Wet Brushes Toggle (conditional on AGSL availability)
-            if (com.authorss81.noteflow.ui.components.ShaderCapabilityHelper.isAgslSupported) {
+            // GPU Wet Brushes Toggle (conditional on AGSL availability).
+            // Phase 269: visibility is the SDK capability (API 33+); the
+            // ENABLED state is the full AgslGate (`gpuWetBrushesAvailable`) so
+            // LOW_END shows an honest disabled row instead of a toggle whose
+            // re-enable the canvas gate would silently ignore.
+            if (com.authorss81.noteflow.utils.AgslGate.sdkCapable(android.os.Build.VERSION.SDK_INT)) {
                 Spacer(modifier = Modifier.height(16.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -5902,7 +5997,11 @@ private fun CanvasSettingsBottomSheet(
                         Column {
                             Text("GPU Wet Brushes", style = MaterialTheme.typography.titleMedium)
                             Text(
-                                "AGSL wet-mixing oil & watercolors",
+                                if (gpuWetBrushesAvailable) {
+                                    "AGSL wet-mixing oil & watercolors"
+                                } else {
+                                    "Not available on low-end devices — vector fallback is used"
+                                },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -5910,6 +6009,7 @@ private fun CanvasSettingsBottomSheet(
                     }
                     Switch(
                         checked = gpuWetBrushesEnabled,
+                        enabled = gpuWetBrushesAvailable,
                         onCheckedChange = onGpuWetBrushesToggle
                     )
                 }

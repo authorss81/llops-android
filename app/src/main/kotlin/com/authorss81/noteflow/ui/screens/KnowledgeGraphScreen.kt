@@ -215,27 +215,37 @@ fun KnowledgeGraphScreen(
     // once and stayed stale after an edit/rename until the screen reopened.
     val corpusGeneration by viewModel.repository.searchCorpusGenerationFlow.collectAsState()
     LaunchedEffect(corpusGeneration) {
-        // R2-b2b1-UI-01 (phase-134): getAllActivePages decrypts the WHOLE vault —
-        // seconds on big vaults. It was a bare repository call: a lock() disposing
-        // the pool mid-decrypt threw an uncaught closed-pool ISE inside this
-        // composition scoped coroutine. Now the read is guarded (armed-empty +
-        // notice) and the results are only applied while the auth gate is still up.
-        val active = viewModel.loadAllActivePages()
-        if (!viewModel.authenticated.value) return@LaunchedEffect
-        allPages = active
-
+        // Phase 269 (compat): the tier cap lands BEFORE any vault decrypt.
+        // Pre-269 this effect decrypted the WHOLE vault (`loadAllActivePages`)
+        // and only then culled to the tier cap — OOM on Go-class devices
+        // before the low-end notice could render. Now: tier → profile cap →
+        // cheap COUNT → newest-first capped load (at most `cap` rows are ever
+        // materialized + decrypted) → deterministic cull as a safety net.
         // Device tier → physics workload. This is the phase-38 low-end lever.
         val tier = DeviceCompatibilityManager.getDeviceTier(context, viewModel.settings)
         val lowEnd = tier == DeviceTier.LOW_END
-        val profile = GraphTierSelector.profileFor(lowEnd, active.size)
+        // R2-b2b1-UI-01 (phase-134): every vault read below is guarded
+        // (armed-empty + notice on a lock() pool-dispose race) and results are
+        // only applied while the auth gate is still up.
+        val totalCount = viewModel.loadActivePageCount()
+        if (!viewModel.authenticated.value) return@LaunchedEffect
+        val profile = GraphTierSelector.profileFor(lowEnd, totalCount)
+        val active = viewModel.loadCappedActivePages(profile.nodeCap)
+        if (!viewModel.authenticated.value) return@LaunchedEffect
+        allPages = active
 
         // Deterministic cull BEFORE layout: keep the most recent [cap] pages so
-        // an enormous vault still settles in time on weak hardware.
+        // an enormous vault still settles in time on weak hardware. Phase 269:
+        // a no-op safety net in the common case — the SQL LIMIT above already
+        // bounded the load to `profile.nodeCap` newest rows.
         val keptIds = GraphTierSelector.cullToCap(
             active.map { it.id to it.updatedAt },
             profile.nodeCap
         )
-        lowEndFallback = active.size > keptIds.size
+        // Phase 269: honest truncation signal from the pre-load COUNT (the
+        // loaded list is already capped, so comparing against it would always
+        // read "nothing culled").
+        lowEndFallback = totalCount > keptIds.size
         lowEndNotice = lowEndFallback || lowEnd
 
         val kept = active.filter { it.id in keptIds }

@@ -310,7 +310,7 @@
 | `ui/screens/` | `EditorScreen.kt` (6181), `MarkdownPreviewScreen.kt`, `HomeScreen.kt`, `KnowledgeGraphScreen.kt`, `LockScreen.kt` | Top-level screens |
 | `ui/viewmodel/` | `NoteflowViewModel.kt` (~1500) | God-ViewModel: DB, security, plugins, all state flows |
 | `theme/` | `Theme.kt`, `GlassSurfaces.kt`, `GlassThemeMath.kt`, `Motion.kt`, `Type.kt`, `Color.kt` | Material3 + frosted-glass design system |
-| `utils/` | `ConstantTime.kt`, `BitmapPool.kt`, `DeviceCompatibilityManager.kt`, `NestedScrollGuard.kt` (nested-scroll crash prevention, active in debug+release since phase-237; phase-231 debug canary), `WikiLinkParser.kt` (phase-259: `@Deprecated` delegating facade over services — new code must import services directly) | Pure helpers |
+| `utils/` | `ConstantTime.kt`, `BitmapPool.kt`, `DeviceCompatibilityManager.kt`, `DeviceTierPolicy.kt`, `AgslGate.kt`, `MemoryTrimPolicy.kt` (phase-269: recalibrated tier table, single AGSL truth, trim≥RUNNING_LOW), `NestedScrollGuard.kt` (nested-scroll crash prevention, active in debug+release since phase-237; phase-231 debug canary), `WikiLinkParser.kt` (phase-259: `@Deprecated` delegating facade over services — new code must import services directly) | Pure helpers |
 
 > **Implemented in phase-261** (2026-09-12, WebDAV DNS-masquerade + backup
 > staging hygiene, see `workspace/phase-261/REPORT.md`): `isLocalNetworkHost`
@@ -3324,6 +3324,16 @@ UNTRUSTED files before any staging); `ui/components/Dialogs.kt` `AppUpdateDialog
   `app/build.gradle.kts`; the layer/pool/corpus memory budget keeps its two-tier guarantee
   (active page never evicted mid-draw, everything else under 64 MB) with `onTrimMemory`/
   `onLowMemory` + `lock()` pool clears pinned by `Phase265PerfTest`.
+- **Implemented in phase-269** (compat hardware pass, see `workspace/phase-269/REPORT.md`):
+  `utils/AgslGate.kt` is the SINGLE AGSL truth (SDK≥33 AND tier≠LOW_END) — the manager,
+  the tier-aware `ShaderCapabilityHelper` overload, and every canvas allocation/use site read
+  it (shader construction + uniform upload try/caught to the vector fallback); `utils/
+  DeviceTierPolicy.kt` owns the recalibrated table (≤2 GB/≤2c/Go→LOW, 6c+6 GB→FLAGSHIP,
+  3 GB→MID, unknown fail-closed LOW; vacuous `isHardwareBitmapsSupported` deleted);
+  `utils/MemoryTrimPolicy.kt` clears pool + grain tiles at every trim level ≥RUNNING_LOW;
+  the graph loads tier-cap-FIRST via `getActivePagesNewestCapped` (SQL LIMIT) + COUNT-backed
+  culled notice; snackbar actions (`SNACKBAR_ACTION_OPEN_APP_SETTINGS`) feed the mic
+  rationale/permanent-denial flow; deprecated `USE_FINGERPRINT` removed.
 - **Implemented in phase-211** (release hygiene, see `workspace/phase-211/REPORT.md`): (1) the blanket
   `-keep class androidx.ink.** { *; }` + stale `-keep com.google.protobuf.** { *; }` are GONE from
   `app/proguard-rules.pro` — ink's own AARs declare shrink-safety ("Intentionally empty proguard rules"),

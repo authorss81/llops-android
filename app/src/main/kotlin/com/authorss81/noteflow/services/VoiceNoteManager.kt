@@ -368,6 +368,16 @@ class VoiceNoteManager(private val context: Context) {
             }
             mediaRecorder = null
 
+            // Phase 269: mid-record revoke surfaces here — the OS kills the
+            // audio source, so `stop()` throws (caught above) or the file
+            // stays empty (handled below). Name the cause explicitly instead
+            // of the generic stop error.
+            val micRevokedAtStop = context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) !=
+                PackageManager.PERMISSION_GRANTED
+            if (micRevokedAtStop) {
+                stopError = "Recording stopped — microphone permission was revoked mid-recording."
+            }
+
             val tempFile = currentOutputFile ?: return@synchronized null
             val blobFile = currentBlobFile
             currentOutputFile = null

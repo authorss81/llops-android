@@ -3,7 +3,8 @@
 
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
-    <uses-permission android:name="android.permission.USE_FINGERPRINT" />
+    <!-- Phase 269: the legacy fingerprint permission removed — deprecated
+         since API 28, USE_BIOMETRIC above is the supported declaration. -->
     <!-- INTERNET is used ONLY for the real optional WebDAV sync feature
          (WebDavSyncService.kt): encrypted vault backups uploaded/downloaded
          to/from the user's own WebDAV/Nextcloud server (HTTPS enforced). No

@@ -415,6 +415,22 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
     }
 
     /**
+     * Phase 269 (compat): newest-first capped vault read for the Knowledge
+     * Graph. At most [limit] rows are materialized + decrypted (SQL LIMIT +
+     * per-row decrypt), so a huge vault can never OOM a Go-class device
+     * before the tier cull. Non-positive limits fail closed to empty.
+     */
+    suspend fun getNewestActivePagesCapped(limit: Int): List<NotePageEntity> = withContext(Dispatchers.IO) {
+        if (limit <= 0) return@withContext emptyList()
+        db.pageDao().getActivePagesNewestCapped(limit).map { decryptPageIfNeeded(it) }
+    }
+
+    /** Phase 269 (compat): cheap COUNT for the graph's honest culled notice. */
+    suspend fun getActivePageCount(): Int = withContext(Dispatchers.IO) {
+        db.pageDao().getActivePageCountOnce()
+    }
+
+    /**
      * Phase 38: the cached, decrypted corpus backing palette/quick-switcher
      * searches. Same cache as [searchPages] — loaded once per epoch, invalidated
      * on mutation/lock — so a keystroke never re-decrypts the vault.
