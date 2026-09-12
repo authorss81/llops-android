@@ -2,7 +2,6 @@ package com.authorss81.noteflow
 
 import java.io.File
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -93,9 +92,21 @@ class Phase205CanvasCommitIntegrityTest {
             "the drag-end handler must emit through CanvasCommitListPolicy synchronously",
             dragEndRegion.contains("com.authorss81.noteflow.services.CanvasCommitListPolicy.emittedList")
         )
-        assertFalse(
-            "the drag-end handler must not launch a coroutine around the commit",
-            dragEndRegion.contains("coroutineScope.launch")
+        // Phase 272 amends this pin: drag-end now launches exactly ONE coroutine —
+        // the PAN/black-space fling decay (fast release keeps panning). The stroke
+        // commit itself stays synchronous: the fling block returns before the
+        // SELECT branch and never touches stroke emission.
+        val flingBlock = dragEndRegion
+            .substringAfter("if (isPanningBlackSpace || currentTool == StrokeTool.PAN) {")
+            .substringBefore("return@detectDragGestures")
+        assertTrue(
+            "the drag-end launch belongs to the phase-272 PAN fling block",
+            flingBlock.contains("flingJob = coroutineScope.launch")
+        )
+        assertEquals(
+            "no other coroutine may launch in drag-end — the stroke commit stays synchronous",
+            1,
+            count(dragEndRegion, "coroutineScope.launch")
         )
     }
 

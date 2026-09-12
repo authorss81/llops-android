@@ -16,6 +16,7 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.AnimationSpec
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.VectorConverter
+import androidx.compose.animation.core.animateDecay
 import androidx.compose.animation.core.animateTo
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.spring
@@ -353,6 +354,11 @@ fun AnnotationCanvas(
 
     val coroutineScope = rememberCoroutineScope()
     var debounceJob by remember { mutableStateOf<Job?>(null) }
+    // Phase 272: pan fling — release velocity on PAN/black-space drags decays
+    // with exponentialDecay(0.8f) per axis. Bounded: a single job, cancelled
+    // on any new gesture (drag start, second finger, drag cancel).
+    val velocityTracker = remember { androidx.compose.ui.input.pointer.util.VelocityTracker() }
+    var flingJob by remember { mutableStateOf<Job?>(null) }
 
     fun updateZoomAndPan(newScale: Float, newOffset: Offset) {
         internalZoomScale = newScale
@@ -1969,6 +1975,8 @@ fun AnnotationCanvas(
                     while (true) {
                         val event = awaitPointerEvent()
                         if (event.changes.size > 1) {
+                            // Phase 272: a second finger starts a pinch — stop any pan fling.
+                            flingJob?.cancel()
                             val zoomChange = event.calculateZoom()
                             val panChange = event.calculatePan()
                             if (zoomChange != 1f || panChange != Offset.Zero) {
@@ -2269,6 +2277,10 @@ fun AnnotationCanvas(
                 if (currentTool != StrokeTool.TEXT && currentTool != StrokeTool.STICKER) {
                     detectDragGestures(
                         onDragStart = { offset ->
+                            // Phase 272: a new gesture cancels any running pan fling
+                            // and restarts velocity tracking for this gesture.
+                            flingJob?.cancel()
+                            velocityTracker.resetTracking()
                             if (isLayerLocked && currentTool != StrokeTool.SELECT && currentTool != StrokeTool.PAN && currentTool != StrokeTool.EYEDROPPER) {
                                 return@detectDragGestures
                             }
@@ -2474,6 +2486,7 @@ fun AnnotationCanvas(
                             }
 
                             if (isPanningBlackSpace || currentTool == StrokeTool.PAN) {
+                                velocityTracker.addPosition(change.uptimeMillis, change.position)
                                 updateZoomAndPan(internalZoomScale, internalPanOffset + dragAmount)
                                 return@detectDragGestures
                             }
@@ -2573,6 +2586,33 @@ fun AnnotationCanvas(
                             dropPredictedTail()
                             if (isDraggingCard) {
                                 isDraggingCard = false
+                                return@detectDragGestures
+                            }
+                            // Phase 272: PAN/black-space fling — a fast release keeps
+                            // panning with exponentialDecay(0.8f) per axis (fast scroll,
+                            // slow settle); a slow release stops dead (pre-272 behaviour).
+                            if (isPanningBlackSpace || currentTool == StrokeTool.PAN) {
+                                val flingVelocity = velocityTracker.calculateVelocity()
+                                if (abs(flingVelocity.y) > 80f || abs(flingVelocity.x) > 80f) {
+                                    flingJob?.cancel()
+                                    flingJob = coroutineScope.launch {
+                                        val decay = androidx.compose.animation.core.exponentialDecay<Float>(frictionMultiplier = 0.8f)
+                                        val animX = Animatable(internalPanOffset.x)
+                                        val animY = Animatable(internalPanOffset.y)
+                                        kotlinx.coroutines.joinAll(
+                                            launch {
+                                                animX.animateDecay(flingVelocity.x, decay) {
+                                                    updateZoomAndPan(internalZoomScale, Offset(value, animY.value))
+                                                }
+                                            },
+                                            launch {
+                                                animY.animateDecay(flingVelocity.y, decay) {
+                                                    updateZoomAndPan(internalZoomScale, Offset(animX.value, value))
+                                                }
+                                            }
+                                        )
+                                    }
+                                }
                                 return@detectDragGestures
                             }
                             if (currentTool == StrokeTool.SELECT) {
@@ -2828,6 +2868,8 @@ fun AnnotationCanvas(
                             onDrawingEnd()
                         },
                         onDragCancel = {
+                            // Phase 272: an interrupted gesture never flings.
+                            flingJob?.cancel()
                             wetFramePump.stop()
                             isDraggingCard = false
                             isTranslatingSelection = false

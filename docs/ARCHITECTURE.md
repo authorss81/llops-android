@@ -312,6 +312,15 @@
 | `theme/` | `Theme.kt`, `GlassSurfaces.kt`, `GlassThemeMath.kt`, `Motion.kt`, `Type.kt`, `Color.kt` | Material3 + frosted-glass design system |
 | `utils/` | `ConstantTime.kt`, `BitmapPool.kt`, `DeviceCompatibilityManager.kt`, `DeviceTierPolicy.kt`, `AgslGate.kt`, `MemoryTrimPolicy.kt` (phase-269: recalibrated tier table, single AGSL truth, trim≥RUNNING_LOW), `NestedScrollGuard.kt` (nested-scroll crash prevention, active in debug+release since phase-237; phase-231 debug canary), `WikiLinkParser.kt` (phase-259: `@Deprecated` delegating facade over services — new code must import services directly) | Pure helpers |
 
+> **Implemented in phase-272** (2026-09-12, pan fling with exponential decay,
+> see `workspace/phase-272/REPORT.md`): PAN/black-space drags track release
+> velocity (`velocityTracker`, `AnnotationCanvas.kt:360`) and fling faster than
+> 80px/s through per-axis `Animatable` + `animateDecay(exponentialDecay(0.8f))`
+> driving `updateZoomAndPan` (`:2591-2621`); cancelled on two-finger/drag-start/
+> drag-cancel. Zoom clamp `0.5f..4.0f` untouched; one bounded job, no poller.
+> Tests: `Phase272PanFlingTest` (9); phase-205 drag-end pin amended (single
+> fling launch), phase-254 re-baselined (canvas 8877/7094).
+
 > **Implemented in phase-261** (2026-09-12, WebDAV DNS-masquerade + backup
 > staging hygiene, see `workspace/phase-261/REPORT.md`): `isLocalNetworkHost`
 > no longer `startsWith`-matches DNS (`10.evil.com` NOT local; literals via
