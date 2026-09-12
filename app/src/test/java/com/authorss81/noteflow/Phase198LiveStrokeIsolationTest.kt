@@ -142,7 +142,9 @@ class Phase198LiveStrokeIsolationTest {
         // The STROKE-erase highlight loop moved with it. Phase 203: plain
         // per-stroke hit-test — mirrored twins are real rows now, so the old
         // mirror-the-query-point expression is gone.
-        val highlight = src.indexOf("val hits = strokeContainsPoint(stroke, cursorPos)")
+        // Phase 256 goes further: the highlight is now the SAME segment-aware,
+        // pressure-aware decision the removal path uses.
+        val highlight = src.indexOf("val hits = com.authorss81.noteflow.services.StrokeSegmenter.strokeTouchedBy(")
         assertTrue(highlight > overlayTag)
         assertFalse(
             "the view-time erase-through-mirror special-case must not resurrect",

@@ -221,19 +221,21 @@ class Phase203SymmetryCaptureBakeTest {
     @Test
     fun `eraser hit-test has no view-time mirror special-case left`() {
         val src = canvas()
-        val lambda = src
-            .substringAfter("val erasesStroke: (Stroke, Offset) -> Boolean = { stroke, offset ->")
+        // Phase 256: the hit is the segment-aware, per-sample-radius test — and
+        // it still has NO mirror special-casing (twins are real rows).
+        val fn = src
+            .substringAfter("fun erasesStroke(stroke: Stroke, samples: List<")
             .substringBefore("fun applyEraser(")
-        assertTrue(lambda.contains("strokeContainsPoint(stroke, offset)"))
-        assertFalse("erase-through-mirror must not resurrect", lambda.contains("mirror"))
-        assertFalse(lambda.contains("SymmetryHelper"))
+        assertTrue(fn.contains("StrokeSegmenter.strokeTouchedBy("))
+        assertFalse("erase-through-mirror must not resurrect", fn.contains("mirror"))
+        assertFalse(fn.contains("SymmetryHelper"))
     }
 
     @Test
     fun `eraser cursor highlight predicts plain row deletion too`() {
         val src = canvas()
         val overlayStart = src.indexOf("private fun LiveStrokePreview(")
-        val highlightIdx = src.indexOf("val hits = strokeContainsPoint(stroke, cursorPos)", overlayStart)
+        val highlightIdx = src.indexOf("val hits = com.authorss81.noteflow.services.StrokeSegmenter.strokeTouchedBy(", overlayStart)
         assertTrue(highlightIdx > overlayStart)
         val highlightRegion = src.substring(highlightIdx, highlightIdx + 200)
         assertFalse(highlightRegion.contains("mirror"))

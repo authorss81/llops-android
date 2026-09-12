@@ -453,6 +453,19 @@ fun AnnotationCanvas(
     // when no pointer is pressed.
     var eraserCursorCanvas by remember { mutableStateOf<androidx.compose.ui.geometry.Offset?>(null) }
 
+    // Phase 256: the touch pressure of the current eraser pointer, so the STROKE
+    // highlight predicts the eraser with the SAME pressure-aware radius the
+    // removal decision uses — a light press highlights only what a light stamp
+    // deletes, never the whole max-radius circle.
+    var eraserCursorPressure by remember { mutableFloatStateOf(0.5f) }
+    // Phase 256 (H2): ONE onStrokesChanged per eraser gesture. applyEraser
+    // mutates the live stroke list during the drag and sets this flag; the
+    // composable-scope commit helper drains it exactly once at gesture end (or
+    // on dispose mid-gesture), so undo gets a single entry per swipe — the old
+    // per-ACTION_MOVE onStrokesChanged emissions pushed 30+ undo snapshots per
+    // gesture and churned the autosave queue.
+    var eraserDidMutateDuringDrag by remember { mutableStateOf(false) }
+
     // Phase 215: lasso path for the SELECT tool, in canvas (world) coords.
     // Mutated per drag sample; ONLY the dedicated selection-overlay node reads
     // it in its draw scope (phase-198 discipline: per-sample mutations must not
@@ -1269,9 +1282,18 @@ fun AnnotationCanvas(
     // SymmetryCommitPolicy), so erasing either copy deletes exactly
     // that row and LEAVES the other (the old view-time mirror hit-test
     // special-case is gone with it).
-    val erasesStroke: (Stroke, Offset) -> Boolean = { stroke, offset ->
-        strokeContainsPoint(stroke, offset)
-    }
+    // Phase 256 H1: the removal decision is now SEGMENT-AWARE and
+    // PRESSURE-AWARE — a stroke is hit when any erase sample's mask reaches
+    // its centerline (including BETWEEN widely spaced polyline points), and
+    // each sample's mask uses its OWN captured pressure radius, never the
+    // max-pressure stamp. A light press 8-12 px outside a light stamp's real
+    // mask can no longer delete a stroke.
+    fun erasesStroke(stroke: Stroke, samples: List<com.authorss81.noteflow.services.StrokeSegmenter.ErasePoint>): Boolean =
+        com.authorss81.noteflow.services.StrokeSegmenter.strokeTouchedBy(
+            stroke,
+            samples,
+            com.authorss81.noteflow.services.StrokeSegmenter.DEFAULT_EXTRA_RADIUS
+        )
 
     // Phase 19: shared eraser handler. STROKE mode keeps the classic
     // remove-whole-stroke behaviour. PARTIAL mode segments every hit
@@ -1295,16 +1317,23 @@ fun AnnotationCanvas(
     fun applyEraser(canvasOffset: Offset) {
         val partial = eraserMode == com.authorss81.noteflow.services.EraserMode.PARTIAL
         val startIdx = lastProcessedEraseSampleIndex.coerceAtMost(eraseSamples.size)
-        val samples = eraseSamples
-            .subList(startIdx, eraseSamples.size)
-            .takeLast(com.authorss81.noteflow.services.EraseHitBucketPolicy.MAX_ERASE_SAMPLES_PER_APPLY)
-            .map {
-                com.authorss81.noteflow.services.StrokeSegmenter.ErasePoint(
-                    x = it.pos.x,
-                    y = it.pos.y,
-                    radius = com.authorss81.noteflow.services.EraserGeometryPolicy.stampRadius(currentWidth, it.pressure)
-                )
-            }
+        // Phase 256 H2: densify the new-sample window to
+        // ERASE_DENSIFY_MAX_GAP_PX so the mask radius interpolation has no
+        // 10-40 px blind spots along a fast swipe, and the bucket + decisions
+        // below always see a continuous erase path.
+        val samples = com.authorss81.noteflow.services.StrokeSegmenter.densifyErasePoints(
+            eraseSamples
+                .subList(startIdx, eraseSamples.size)
+                .takeLast(com.authorss81.noteflow.services.EraseHitBucketPolicy.MAX_ERASE_SAMPLES_PER_APPLY)
+                .map {
+                    com.authorss81.noteflow.services.StrokeSegmenter.ErasePoint(
+                        x = it.pos.x,
+                        y = it.pos.y,
+                        radius = com.authorss81.noteflow.services.EraserGeometryPolicy.stampRadius(currentWidth, it.pressure)
+                    )
+                },
+            com.authorss81.noteflow.services.StrokeSegmenter.ERASE_DENSIFY_MAX_GAP_PX
+        )
         lastProcessedEraseSampleIndex = eraseSamples.size
         if (samples.isEmpty()) return
 
@@ -1336,7 +1365,9 @@ fun AnnotationCanvas(
         val replacedBy = java.util.HashMap<String, List<Stroke>>()
         var changed = false
         for (stroke in candidates) {
-            if (erasesStroke(stroke, canvasOffset)) {
+            // Phase 256 H1: gate with the max-radius bucket (above), decide with
+            // the TRUE per-sample pressure radii — never the max-pressure stamp.
+            if (erasesStroke(stroke, samples)) {
                 changed = true
                 removed.add(stroke)
                 val canPartial = partial &&
@@ -1373,19 +1404,37 @@ fun AnnotationCanvas(
             // Phase 249: re-tile only the strokes that moved so the
             // bucket stays in sync without a full rebuild.
             bucket.replaceStrokes(removed, added)
-            // Phase 205: derive "other pages" from CURRENT state at
-            // apply time — the captured `strokes` parameter here is a
-            // frozen pointerInput snapshot that resurrected erased
-            // strokes when re-emitted wholesale.
-            onStrokesChanged(
-                com.authorss81.noteflow.services.CanvasCommitListPolicy.emittedList(
-                    currentAll = currentStrokesProvider(),
-                    isContinuousMode = isContinuousMode,
-                    pageOf = { it.pdfPage },
-                    pdfPageFilter = pdfPageFilter,
-                    scopedReplacement = newList
-                )
+            // Phase 256 (H2): the commit is DEFERRED to gesture end. During the
+            // drag this flag is set instead of emitting onStrokesChanged per
+            // ACTION_MOVE — EditorScreen's undo stack then receives ONE snapshot
+            // per erase swipe instead of one per sample, and the autosave queue
+            // stops churning. commitEraserMutationIfAny() emits exactly once at
+            // drag end / cancel-with-mutation / dispose teardown.
+            eraserDidMutateDuringDrag = true
+        }
+    }
+
+    // Phase 256 (H2): drain the deferred eraser mutation into ONE
+    // onStrokesChanged emission. Called exactly once per mutation at gesture
+    // end (or during dispose teardown if the gesture was cut short). The
+    // payload is established with the SAME Phase 205 recipe as the pre-256
+    // emission — "other pages" from CURRENT parent state, the eraser'd page
+    // from the live list — so a frozen pointerInput snapshot can never
+    // resurrect erased strokes.
+    fun commitEraserMutationIfAny() {
+        if (!eraserDidMutateDuringDrag) return
+        eraserDidMutateDuringDrag = false
+        onStrokesChanged(
+            com.authorss81.noteflow.services.CanvasCommitListPolicy.emittedList(
+                currentAll = currentStrokesProvider(),
+                isContinuousMode = isContinuousMode,
+                pageOf = { it.pdfPage },
+                pdfPageFilter = pdfPageFilter,
+                scopedReplacement = activeStrokeList
             )
+        )
+        if (com.authorss81.noteflow.services.MotionPolicy.hapticsAllowed(hapticsEnabled, reduceMotion)) {
+            hapticFeedback.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
         }
     }
 
@@ -1440,6 +1489,9 @@ fun AnnotationCanvas(
         } else if (currentTool == StrokeTool.ERASER) {
             val canvasPosition = Offset(rawCanvasX, rawCanvasY)
             eraseSamples.add(EraseSample(canvasPosition, rawPressure))
+            // Phase 256: the highlight decision reads the bulk of the CURRENT
+            // press (same pressure the stamp at this pointer position will use).
+            eraserCursorPressure = rawPressure
             applyEraser(canvasPosition)
         } else if (currentTool.isFreehandTool) {
             // Phase 07: stabilizer smooths touch jitter while staying
@@ -1596,6 +1648,11 @@ fun AnnotationCanvas(
     DisposableEffect(Unit) {
         onDispose {
             val tool = disposeToolState.value
+            // Phase 256 (H2): if the teardown cut an eraser gesture short (its
+            // deferred onStrokesChanged never fired), drain the pending
+            // mutation through the SAME single-emission path so the already
+            // visible deletions are persisted.
+            commitEraserMutationIfAny()
             // Phase 255 (MEDIUM — dispose flush): navigation can tear the canvas
             // down while the LAST 1-2 ACTION_MOVE events are still queued in the
             // batcher (pointer-cancel before the framework dispatches a final
@@ -1832,11 +1889,16 @@ fun AnnotationCanvas(
                 awaitPointerEventScope {
                     while (true) {
                         val event = awaitPointerEvent()
-                        val pressed = event.changes.firstOrNull { it.pressed }?.position
-                        eraserCursorCanvas = pressed?.let { screenPos ->
+                        val pressedChange = event.changes.firstOrNull { it.pressed }
+                        eraserCursorCanvas = pressedChange?.let { screenPos ->
+                            // Phase 256: capture the CURRENT press along with the
+                            // position so the STROKE aim highlight predicts the
+                            // pressure-aware removal decision (a light hover shows
+                            // only the light stamp's true reach).
+                            eraserCursorPressure = screenPos.pressure
                             Offset(
-                                x = (screenPos.x - internalPanOffset.x) / internalZoomScale,
-                                y = (screenPos.y - internalPanOffset.y) / internalZoomScale
+                                x = (screenPos.position.x - internalPanOffset.x) / internalZoomScale,
+                                y = (screenPos.position.y - internalPanOffset.y) / internalZoomScale
                             )
                         }
                     }
@@ -2235,6 +2297,10 @@ fun AnnotationCanvas(
                             } else if (currentTool == StrokeTool.ERASER) {
                                 eraseSamples.clear()
                                 eraseSamples.add(EraseSample(canvasOffset, lastPressure))
+                                eraserCursorPressure = lastPressure
+                                // Phase 256 (H2): a fresh gesture starts with a
+                                // clean one-commit budget.
+                                eraserDidMutateDuringDrag = false
                                 // Phase 249 (Bug 4): fresh sample window and spatial
                                 // bucket per gesture — the strokes may have changed
                                 // since the previous eraser drag, and only NEW
@@ -2462,6 +2528,12 @@ fun AnnotationCanvas(
                                 }
                                 gradientDragStart = null
                                 gradientDragCurrent = null
+                            } else if (currentTool == StrokeTool.ERASER) {
+                                // Phase 256 (H2): ONE onStrokesChanged per swipe.
+                                // applyEraser only mutated the live list and armed
+                                // the flag during the drag; this drains it so
+                                // EditorScreen's undo stack gets a single entry.
+                                commitEraserMutationIfAny()
                             } else if (currentTool != StrokeTool.ERASER) {
                                 if (activePoints.isNotEmpty() || (activeStart != null && activeEnd != null)) {
                                     val pointsToSimplify = activePoints.toList()
@@ -2655,6 +2727,10 @@ fun AnnotationCanvas(
                             // behind (the pre-cancel path is preserved untouched).
                             lassoActive = false
                             lassoPathPoints.clear()
+                            // Phase 215: an interrupted lasso leaves NO selection
+                            // behind (the pre-cancel path is preserved untouched).
+                            lassoActive = false
+                            lassoPathPoints.clear()
                             activePoints.clear()
                             predictedTailTracker.clear()
                             // Phase 214: same boundary hygiene as onDragEnd.
@@ -2662,6 +2738,12 @@ fun AnnotationCanvas(
                             lastIngestedInputTimestampMs = null
                             activeStart = null
                             activeEnd = null
+                            // Phase 256 (H2): a cancelled eraser gesture still
+                            // committed its live mutations visually (the strokes
+                            // left the list during the drag) — drain the same
+                            // single emission so they persist, matching the old
+                            // emit-immediately behaviour, then reset the budget.
+                            commitEraserMutationIfAny()
                             onDrawingEnd()
                         }
                     )
@@ -3474,6 +3556,7 @@ blenderStrengthPercent = blenderStrengthPercent,
                     currentColorSeed = currentColorSeed,
                     currentGradientToColor = currentGradientToColor,
                     eraserCursorProvider = { eraserCursorCanvas },
+                    eraserCursorPressureProvider = { eraserCursorPressure },
                     eraserMode = eraserMode,
                     activeStrokes = activeStrokeList,
                     scatterAmountPercent = scatterAmountPercent,
@@ -4131,6 +4214,10 @@ private fun LiveStrokePreview(
     currentColorSeed: Int,
     currentGradientToColor: Color,
     eraserCursorProvider: () -> Offset?,
+    // Phase 256: the CURRENT press pressure, providers so the STROKE aim
+    // highlight predicts the pressure-aware removal decision (a light press
+    // highlights only what that light stamp's real mask would delete).
+    eraserCursorPressureProvider: () -> Float,
     eraserMode: com.authorss81.noteflow.services.EraserMode,
     activeStrokes: List<Stroke>,
     // Phase 220: pro brush controls — scatter for bitmap stamps.
@@ -4330,8 +4417,26 @@ private fun LiveStrokePreview(
                     // rows, so the highlight predicts exactly the row(s) the
                     // eraser would delete (the old mirror-the-query-point
                     // special-case is gone with the view-time erase path).
+                    // Phase 256 H1: SAME decision as the removal path — the aim
+                    // sample carries the CURRENT press's pressure radius and the
+                    // hit-test is segment-aware, so the highlight can never show
+                    // a golden halo around a stroke the light stamp will NOT
+                    // actually delete (the old max-radius point test did).
+                    val aimRadius = com.authorss81.noteflow.services.EraserGeometryPolicy.stampRadius(
+                        currentWidth,
+                        eraserCursorPressureProvider()
+                    )
+                    val aim = com.authorss81.noteflow.services.StrokeSegmenter.ErasePoint(
+                        cursorPos.x,
+                        cursorPos.y,
+                        radius = aimRadius
+                    )
                     for (stroke in activeStrokes) {
-                        val hits = strokeContainsPoint(stroke, cursorPos)
+                        val hits = com.authorss81.noteflow.services.StrokeSegmenter.strokeTouchedBy(
+                            stroke,
+                            listOf(aim),
+                            com.authorss81.noteflow.services.StrokeSegmenter.DEFAULT_EXTRA_RADIUS
+                        )
                         if (!hits) continue
                         if (stroke.points.size > 1) {
                             val path = androidx.compose.ui.graphics.Path().apply {

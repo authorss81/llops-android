@@ -43,20 +43,26 @@ import org.junit.Test
  * three files must be consciously reflected here, and the phase-254
  * comment-hygiene invariants (3-6) — the ones that actually still guard the
  * trim — continue to assert on all three files unchanged.
+ *
+ * PHASE 256 RE-BASELINE: AnnotationCanvas grew again (+41 code / +104 raw) for
+ * the eraser-precision work — densified, segment-aware hit tests
+ * (StrokeSegmenter.strokeTouchedBy gates), a deferred one-commit-per-gesture
+ * eraser (commitEraserMutationIfAny + eraserDidMutateDuringDrag), and
+ * pressure-aware STROKE highlight (eraserCursorPressureProvider). The trimmed
+ * KDoc/provenance/blank invariants are still asserted unchanged below.
  */
 class Phase254CommentTrimTest {
 
-    // Phase-255 re-baselined raw line counts (measured on the phase-255 tree).
-    // Parent-of-phase-254 was 8479/7386/3762 (see class KDoc for the deltas).
+    // Phase-255/256 re-baselined raw line counts (measured on the phase-256 tree).
+    // Phase-255 was 8533 raw / 6895 code; phase 256 +104 raw / +41 code.
     private val headRaw = mapOf(
-        "ui/components/AnnotationCanvas.kt" to 8533,
+        "ui/components/AnnotationCanvas.kt" to 8637,
         "ui/screens/EditorScreen.kt" to 7336,
         "ui/screens/HomeScreen.kt" to 3757
     )
-    // Phase-255 re-baselined code-line counts (non-blank, non-full-`//` lines).
-    // Parent-of-phase-254 was 6852/6422/3267 (see class KDoc for the deltas).
+    // Phase-255/256 re-baselined code-line counts (non-blank, non-full-`//` lines).
     private val headCode = mapOf(
-        "ui/components/AnnotationCanvas.kt" to 6895,
+        "ui/components/AnnotationCanvas.kt" to 6936,
         "ui/screens/EditorScreen.kt" to 6423,
         "ui/screens/HomeScreen.kt" to 3267
     )
@@ -129,12 +135,14 @@ class Phase254CommentTrimTest {
         return max
     }
 
+    // ---- 4. Eraser composes through plain deletion ---------------------------------
+
     @Test
-    fun `all three trimmed files match the phase-255 rebased raw line count`() {
+    fun `all three trimmed files match the phase-256 rebased raw line count`() {
         headRaw.forEach { (rel, baseline) ->
             val cur = countRaw(mainSource(rel))
             assertEquals(
-                "$rel: raw line count drifted from the phase-255 re-baseline ($baseline); re-baseline deliberately or trim comment bloat",
+                "$rel: raw line count drifted from the phase-256 re-baseline ($baseline); re-baseline deliberately or trim comment bloat",
                 baseline,
                 cur
             )
@@ -142,11 +150,11 @@ class Phase254CommentTrimTest {
     }
 
     @Test
-    fun `all three trimmed files match the phase-255 rebased code-line count`() {
+    fun `all three trimmed files match the phase-256 rebased code-line count`() {
         headCode.forEach { (rel, baseline) ->
             val cur = countCode(mainSource(rel))
             assertEquals(
-                "$rel: code-line count drifted from the phase-255 re-baseline ($baseline); re-baseline deliberately",
+                "$rel: code-line count drifted from the phase-256 re-baseline ($baseline); re-baseline deliberately",
                 baseline,
                 cur
             )
