@@ -32,19 +32,19 @@ package com.authorss81.noteflow.services
  */
 internal object BackupPortabilityPolicy {
 
-    /**
-     * Phase 261: explicit UI warning (phase-252 copy) shown at the documented
-     * device-keyed sync call sites (WebDAV upload, LocalSend vault backup).
-     * Those producers intentionally opt out of the portability gate
-     * (`requireBackupPassword = false`); the archive they ship stays
-     * device-bound by design, so the dialogs must say so loudly — never
-     * silently.
-     */
-    const val DEVICE_KEYED_SYNC_WARNING: String =
-        "Sync sends a device-encrypted backup that is locked to this device's " +
-            "hardware and cannot be restored on any other device. " +
-            "For a portable backup that restores anywhere, set a master " +
-            "password and use Backup instead."
+    // Review-fix: the phase-261 warning const lived here but was never
+    // referenced — both sync dialogs render the LOCALIZED copy from
+    // `strings.xml` (`webdav_device_keyed_notice` /
+    // `localsend_device_keyed_notice`), which a Kotlin const cannot serve.
+    // A third unreferenced copy could only drift, so it was deleted; the
+    // single source of truth is `strings.xml`, pinned by the Phase261
+    // `sync call sites carry the explicit device-keyed warning` test
+    // (which asserts no such const exists here anymore).
+    // The documented device-keyed producers
+    // (WebDAV upload, LocalSend vault backup) opt out of the portability
+    // gate via `requireBackupPassword = false`; the archive they ship stays
+    // device-bound by design, so the dialogs must say so loudly — never
+    // silently.
 
     /**
      * The [IllegalArgumentException] message thrown by the service gate. Honest

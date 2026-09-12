@@ -414,11 +414,15 @@ class B2Dos07BackupExportStreamingTest {
 
     @Test
     fun `staging file never becomes a public download name`() {
-        // The staging zip is cacheDir-only with a suffix; only the ENCRYPTED
-        // output may carry the policy download name (B2-CRYPTO-06 naming).
-        assertEquals("noteflow_backup_x.noteflow.zip-staging", BackupExportPolicy.stagingFileName("noteflow_backup_x.noteflow"))
-        assertFalse(BackupExportPolicy.stagingFileName("n.nfb").contains(".noteflow"))
-        assertTrue(BackupExportPolicy.stagingFileName("n.nfb").endsWith(BackupExportPolicy.STAGING_SUFFIX))
+        // The staging zip is a cacheDir-only createTempFile artifact; only the
+        // ENCRYPTED output may carry the policy download name (B2-CRYPTO-06
+        // naming). Review-fix: the predictable stagingFileName() helper is
+        // gone, so the pin asserts the live createTempFile SUFFIX itself can
+        // never collide with a public download name.
+        assertEquals(".zip-staging", BackupExportPolicy.STAGING_SUFFIX)
+        assertTrue(BackupExportPolicy.STAGING_SUFFIX.startsWith("."))
+        assertFalse(BackupExportPolicy.STAGING_SUFFIX.contains(".noteflow"))
+        assertFalse(BackupExportPolicy.STAGING_SUFFIX.contains(".nfb"))
     }
 
     // ---------------------------------------------------------------------

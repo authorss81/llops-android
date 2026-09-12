@@ -78,8 +78,11 @@ object BackupExportPolicy {
 
     private const val IDLE_READ_LIMIT: Int = 16
 
-    /** A staged zip file name derived from the encrypted backup's public name. */
-    fun stagingFileName(backupName: String): String = "$backupName$STAGING_SUFFIX"
+    // Review-fix: the predictable `stagingFileName()` helper is deleted — the
+    // stage is a policy-owned `createTempFile` via [useStagingZip] and no
+    // caller may hold a predictable staging path anymore (the B2Dos07 pin
+    // asserts this). [STAGING_SUFFIX] stays: it is the live `createTempFile`
+    // suffix above, and its never-public shape is pinned directly.
 
     /**
      * Streams the vault archive into [dest] via `ZipOutputStream(dest)` — each

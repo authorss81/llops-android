@@ -118,8 +118,10 @@ class WebDavSyncService(private val context: Context) {
          * `InetAddress.getByName` (`isLoopbackAddress` / `isSiteLocalAddress` /
          * `isLinkLocalAddress`) plus explicit `fc00::/7`, `fe80::/10`,
          * IPv4-mapped (`::ffff:10.x`), and full `127/8` structural checks.
-         * `InetAddress.getByName` only ever sees an IP literal (DNS names
-         * return false before any resolution), so no DNS round-trip happens.
+         * `InetAddress.getByName` only ever sees a shape-validated IP literal
+         * (DNS names and colon/dot garbage return false before any resolution —
+         * review-fix: the old `contains(':') → true` shortcut let any
+         * colon-bearing string reach the resolver), so no DNS round-trip happens.
          */
         fun isLocalNetworkHost(host: String): Boolean {
             val h = normalizeLocalHost(host)
@@ -156,24 +158,34 @@ class WebDavSyncService(private val context: Context) {
         }
 
         private fun isNumericIpCandidate(h: String): Boolean {
-            if (h.contains(':')) return true
+            // Review-fix: a bare `contains(':') → true` let ANY colon-bearing
+            // string (e.g. `foo:bar`) reach `InetAddress.getByName`. Only a
+            // shape-validated IPv6 literal (hex groups + colons, optional
+            // dotted mapped tail, ≥2 colons so a `host:port` leftover or a
+            // single-colon token like `dead:beef` never passes) proceeds.
+            if (h.contains(':')) {
+                if (h.count { it == ':' } < 2) return false
+                return h.isNotEmpty() && h.all {
+                    it.isDigit() || it in 'a'..'f' || it == ':' || it == '.'
+                }
+            }
             if (!h.contains('.')) {
-                if (h.startsWith("0x") || h.startsWith("0X")) {
+                if (h.startsWith("0x")) {
                     val hex = h.drop(2)
                     return hex.isNotEmpty() && hex.length <= 8 &&
-                        hex.all { it in '0'..'9' || it in 'a'..'f' }
+                        hex.all { it.isDigit() || it in 'a'..'f' }
                 }
                 return h.isNotEmpty() && h.all { it.isDigit() }
             }
+            // Review-fix: dotted quads must be all-decimal so this gate agrees
+            // with `parseIpv4Value` (which has no hex-segment form). A hex-
+            // dotted host like `0x7f.0.0.1` is NOT a candidate and fails
+            // closed (refused HTTP) instead of depending on per-platform
+            // resolver quirks. The single full-value `0x…` 32-bit form above
+            // is still accepted and classified structurally.
             val segments = h.split('.')
             if (segments.size !in 2..4) return false
-            return segments.all { s ->
-                s.isNotEmpty() && (
-                    s.all { it.isDigit() } ||
-                        (s.startsWith("0x") && s.drop(2).isNotEmpty() &&
-                            s.drop(2).all { it in '0'..'9' || it in 'a'..'f' })
-                    )
-            }
+            return segments.all { s -> s.isNotEmpty() && s.all { it.isDigit() } }
         }
 
         private fun isUniqueLocalV6(addr: InetAddress): Boolean {

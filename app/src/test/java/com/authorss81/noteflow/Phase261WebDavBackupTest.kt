@@ -45,6 +45,33 @@ class Phase261WebDavBackupTest {
         assertFalse(WebDavSyncService.isLocalNetworkHost("8.8.8.8"))
         assertFalse(WebDavSyncService.isLocalNetworkHost("172.32.0.1"))
         assertFalse(WebDavSyncService.isLocalNetworkHost("172.15.255.255"))
+        assertFalse(WebDavSyncService.isLocalNetworkHost("2001:db8::1"))
+    }
+
+    @Test
+    fun `colon garbage never reaches the resolver`() {
+        // Review-fix: the old contains(':') shortcut passed any colon-bearing
+        // string to InetAddress.getByName. Only shape-validated IPv6 literals
+        // proceed now — single-colon tokens and non-hex garbage are NOT local.
+        assertFalse(WebDavSyncService.isLocalNetworkHost("foo:bar"))
+        assertFalse(WebDavSyncService.isLocalNetworkHost("12345:garbage"))
+        assertFalse(WebDavSyncService.isLocalNetworkHost("dead:beef"))
+    }
+
+    @Test
+    fun `public ipv4-mapped ipv6 is NOT local`() {
+        // The mapped prefix alone must not confer locality — only a PRIVATE
+        // embedded tail does (::ffff:10.x stays local per the literals test).
+        assertFalse(WebDavSyncService.isLocalNetworkHost("::ffff:8.8.8.8"))
+    }
+
+    @Test
+    fun `hex-dotted ipv4 fails closed`() {
+        // Review-fix: dotted candidates are decimal-only so the gate agrees
+        // with the structural parser — hex-dotted hosts are refused HTTP
+        // instead of depending on per-platform resolver quirks.
+        assertFalse(WebDavSyncService.isLocalNetworkHost("0x7f.0.0.1"))
+        assertFalse(WebDavSyncService.isLocalNetworkHost("0x0a.0.0.1"))
     }
 
     // --- literals: private/loopback/link-local/ULA/mapped ARE local ---
@@ -201,7 +228,10 @@ class Phase261WebDavBackupTest {
         val strings = resStrings()
         assertTrue(strings.contains("webdav_device_keyed_notice"))
         assertTrue(strings.contains("localsend_device_keyed_notice"))
+        // Review-fix: the device-keyed warning's single source of truth is
+        // strings.xml — the unreferenced DEVICE_KEYED_SYNC_WARNING const was
+        // deleted so a third copy cannot drift; pin its absence.
         val policy = mainSource("services/BackupPortabilityPolicy.kt")
-        assertTrue(policy.contains("DEVICE_KEYED_SYNC_WARNING"))
+        assertFalse(policy.contains("DEVICE_KEYED_SYNC_WARNING"))
     }
 }
