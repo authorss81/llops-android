@@ -123,24 +123,24 @@ import org.junit.Test
  * Re-measured: AnnotationCanvas 8835 raw / 7062 code, EditorScreen 7557 raw /
  * 6565 code; HomeScreen unchanged.
  *
- * PHASE 272 RE-BASELINE: pan fling with exponential decay — AnnotationCanvas
- * gained the velocityTracker/flingJob state, three cancel sites (two-finger,
- * drag-start, drag-cancel), the PAN-branch addPosition sample, and the
- * onDragEnd per-axis exponentialDecay(0.8f) fling (+42 raw / +32 code, all
- * `//` comments — no KDoc opener added). EditorScreen/HomeScreen untouched.
- * Re-measured on the phase-272 tree: AnnotationCanvas 8877 raw / 7094 code.
+ * PHASE 272 REVIEW-FIX RE-BASELINE: flingJob is now a plain non-State array
+ * holder (no recomposition), LaunchedEffect(currentTool) cancels the fling on
+ * tool switch, and the release gate honors reduce-motion via
+ * CanvasNavigationPolicy.shouldAnimate (+12 raw / +5 code, all `//`
+ * comments — no KDoc opener added). EditorScreen/HomeScreen untouched.
+ * Re-measured on the phase-272 review-fix tree: AnnotationCanvas 8889 raw / 7099 code.
  */
 class Phase254CommentTrimTest {
 
     // Phase-255/256/257/264/266/269/272 re-baselined raw line counts (review-fix values measured on the review-fix tree).
     private val headRaw = mapOf(
-        "ui/components/AnnotationCanvas.kt" to 8877,
+        "ui/components/AnnotationCanvas.kt" to 8889,
         "ui/screens/EditorScreen.kt" to 7557,
         "ui/screens/HomeScreen.kt" to 3845
     )
     // Phase-255/256/257/264/266/269/272 re-baselined code-line counts (non-blank, non-full-`//` lines).
     private val headCode = mapOf(
-        "ui/components/AnnotationCanvas.kt" to 7094,
+        "ui/components/AnnotationCanvas.kt" to 7099,
         "ui/screens/EditorScreen.kt" to 6565,
         "ui/screens/HomeScreen.kt" to 3310
     )

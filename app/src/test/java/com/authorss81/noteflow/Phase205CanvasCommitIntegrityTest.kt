@@ -101,7 +101,7 @@ class Phase205CanvasCommitIntegrityTest {
             .substringBefore("return@detectDragGestures")
         assertTrue(
             "the drag-end launch belongs to the phase-272 PAN fling block",
-            flingBlock.contains("flingJob = coroutineScope.launch")
+            flingBlock.contains("flingJob[0] = coroutineScope.launch")
         )
         assertEquals(
             "no other coroutine may launch in drag-end — the stroke commit stays synchronous",

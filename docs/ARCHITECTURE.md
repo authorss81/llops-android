@@ -314,12 +314,15 @@
 
 > **Implemented in phase-272** (2026-09-12, pan fling with exponential decay,
 > see `workspace/phase-272/REPORT.md`): PAN/black-space drags track release
-> velocity (`velocityTracker`, `AnnotationCanvas.kt:360`) and fling faster than
+> velocity (`velocityTracker`, `AnnotationCanvas.kt:362`) and fling faster than
 > 80px/s through per-axis `Animatable` + `animateDecay(exponentialDecay(0.8f))`
-> driving `updateZoomAndPan` (`:2591-2621`); cancelled on two-finger/drag-start/
-> drag-cancel. Zoom clamp `0.5f..4.0f` untouched; one bounded job, no poller.
-> Tests: `Phase272PanFlingTest` (9); phase-205 drag-end pin amended (single
-> fling launch), phase-254 re-baselined (canvas 8877/7094).
+> driving `updateZoomAndPan` (`:2601-2628`, skipped under reduce-motion via
+> `CanvasNavigationPolicy.shouldAnimate`); cancelled on two-finger/drag-start/
+> drag-cancel/tool-switch (`LaunchedEffect(currentTool)`). `flingJob` is a plain
+> non-State array holder (never recomposes). Zoom clamp `0.5f..4.0f` untouched;
+> one bounded job, no poller.
+> Tests: `Phase272PanFlingTest` (11); phase-205 drag-end pin amended (single
+> fling launch), phase-254 re-baselined (canvas 8889/7099).
 
 > **Implemented in phase-261** (2026-09-12, WebDAV DNS-masquerade + backup
 > staging hygiene, see `workspace/phase-261/REPORT.md`): `isLocalNetworkHost`

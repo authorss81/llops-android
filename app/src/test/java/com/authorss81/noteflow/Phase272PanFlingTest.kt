@@ -34,8 +34,8 @@ class Phase272PanFlingTest {
             src.contains("velocityTracker") && src.contains("VelocityTracker()")
         )
         assertTrue(
-            "flingJob state present",
-            src.contains("flingJob") && src.contains("mutableStateOf<Job?>")
+            "flingJob holder present as a plain non-State array (never recomposes)",
+            src.contains("val flingJob = remember { arrayOfNulls<Job>(1) }")
         )
     }
 
@@ -47,7 +47,7 @@ class Phase272PanFlingTest {
         val twoFinger = src.indexOf("if (event.changes.size > 1)")
         assertTrue("two-finger block present", twoFinger >= 0)
         val window = src.substring(twoFinger, (twoFinger + 400).coerceAtMost(src.length))
-        assertTrue("two-finger cancels fling", window.contains("flingJob?.cancel()"))
+        assertTrue("two-finger cancels fling", window.contains("flingJob[0]?.cancel()"))
     }
 
     @Test
@@ -56,7 +56,7 @@ class Phase272PanFlingTest {
         val start = src.indexOf("onDragStart = { offset ->")
         assertTrue("onDragStart present", start >= 0)
         val window = src.substring(start, (start + 600).coerceAtMost(src.length))
-        assertTrue("drag start cancels fling", window.contains("flingJob?.cancel()"))
+        assertTrue("drag start cancels fling", window.contains("flingJob[0]?.cancel()"))
         assertTrue("drag start resets velocity", window.contains("velocityTracker.resetTracking()"))
     }
 
@@ -66,7 +66,7 @@ class Phase272PanFlingTest {
         val cancel = src.indexOf("onDragCancel = {")
         assertTrue("onDragCancel present", cancel >= 0)
         val window = src.substring(cancel, (cancel + 400).coerceAtMost(src.length))
-        assertTrue("drag cancel cancels fling", window.contains("flingJob?.cancel()"))
+        assertTrue("drag cancel cancels fling", window.contains("flingJob[0]?.cancel()"))
     }
 
     // ---- 3. velocity sampling + decay wiring --------------------------------
@@ -89,7 +89,25 @@ class Phase272PanFlingTest {
         assertTrue("per-axis decay animation", src.contains("animateDecay"))
         assertTrue(
             "fling keeps panning through the shared setter",
-            src.contains("flingJob = coroutineScope.launch")
+            src.contains("flingJob[0] = coroutineScope.launch")
+        )
+    }
+
+    @Test
+    fun `tool switch cancels fling`() {
+        val src = canvasSource()
+        val effect = src.indexOf("LaunchedEffect(currentTool)")
+        assertTrue("tool-switch effect present", effect >= 0)
+        val window = src.substring(effect, (effect + 200).coerceAtMost(src.length))
+        assertTrue("tool switch cancels fling", window.contains("flingJob[0]?.cancel()"))
+    }
+
+    @Test
+    fun `fling skipped under reduce-motion`() {
+        val src = canvasSource()
+        assertTrue(
+            "fling gated on the shared shouldAnimate gate",
+            src.contains("CanvasNavigationPolicy.shouldAnimate(reduceMotion)")
         )
     }
 

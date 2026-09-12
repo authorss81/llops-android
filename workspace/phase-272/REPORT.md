@@ -9,13 +9,14 @@ settle). Any new gesture cancels the fling.
 
 | # | Claim | File:line |
 |---|-------|-----------|
-| 1 | `velocityTracker` + `flingJob` state after `coroutineScope`/`debounceJob` | `ui/components/AnnotationCanvas.kt:358-361` |
-| 2 | Two-finger block cancels fling first | `AnnotationCanvas.kt:1978-1979` (`if (event.changes.size > 1) {` + `flingJob?.cancel()`) |
-| 3 | `onDragStart` cancels fling + `resetTracking()` | `AnnotationCanvas.kt:2281-2283` |
-| 4 | PAN branch samples `addPosition(uptimeMillis, position)`, keeps `updateZoomAndPan` | `AnnotationCanvas.kt:2488-2491` |
-| 5 | `onDragEnd`: after `isDraggingCard` early-return, PAN fling — `calculateVelocity()`, `abs(y)>80f \|\| abs(x)>80f`, per-axis `Animatable` + `animateDecay(v, exponentialDecay(0.8f))` driving `updateZoomAndPan`, then `return@detectDragGestures` before SELECT | `AnnotationCanvas.kt:2591-2621` |
-| 6 | `onDragCancel` cancels fling first | `AnnotationCanvas.kt:2871-2872` |
-| 7 | Zoom limits untouched (`0.5f..4.0f`) | `AnnotationCanvas.kt:1983` (same `coerceIn(0.5f, 4.0f)`) |
+| 1 | `velocityTracker` + `flingJob` holder after `coroutineScope`/`debounceJob` | `ui/components/AnnotationCanvas.kt:362-363` |
+| 2 | Two-finger block cancels fling first | `AnnotationCanvas.kt:1985-1986` (`if (event.changes.size > 1) {` + `flingJob[0]?.cancel()`) |
+| 3 | `onDragStart` cancels fling + `resetTracking()` | `AnnotationCanvas.kt:2289-2290` |
+| 4 | PAN branch samples `addPosition(uptimeMillis, position)`, keeps `updateZoomAndPan` | `AnnotationCanvas.kt:2496-2498` |
+| 5 | `onDragEnd`: after `isDraggingCard` early-return, PAN fling — `calculateVelocity()`, `abs(y)>80f \|\| abs(x)>80f` AND `CanvasNavigationPolicy.shouldAnimate(reduceMotion)` (review-fix 7b), per-axis `Animatable` + `animateDecay(v, exponentialDecay(0.8f))` driving `updateZoomAndPan`, then `return@detectDragGestures` before SELECT | `AnnotationCanvas.kt:2601-2628` |
+| 6 | `onDragCancel` cancels fling first | `AnnotationCanvas.kt:2884` |
+| 6b | Tool switch cancels fling (`LaunchedEffect(currentTool)`, review-fix 7c) | `AnnotationCanvas.kt:366-368` |
+| 7 | Zoom limits untouched (`0.5f..4.0f`) | `AnnotationCanvas.kt:1990` (same `coerceIn(0.5f, 4.0f)`) |
 | 8 | No scrollbar state added (no `lastScrollTimestamp`/`isDraggingScrollbar`) | grep-verified absent |
 
 ## 2. Deviations from PROMPT (intent honored)
@@ -44,10 +45,11 @@ settle). Any new gesture cancels the fling.
 
 ## 4. Tests
 
-- New `Phase272PanFlingTest` (9 tests): fling state declared; cancel sites
-  (two-finger, drag-start + reset, drag-cancel); PAN-branch sampling; release
+- New `Phase272PanFlingTest` (11 tests): fling holder declared (plain non-State
+  array); cancel sites (two-finger, drag-start + reset, drag-cancel,
+  tool-switch); reduce-motion gate; PAN-branch sampling; release
   wiring (`calculateVelocity` + `> 80f` + `exponentialDecay`/`0.8f` +
-  `animateDecay` + `flingJob = coroutineScope.launch`); zoom-clamp intact;
+  `animateDecay` + `flingJob[0] = coroutineScope.launch`); zoom-clamp intact;
   threshold boundary semantics; import-free exponential-decay settle math
   (monotone decay, bounded displacement, early-travel majority).
 - `gradle :app:assembleDebug` — green.
@@ -58,7 +60,28 @@ settle). Any new gesture cancels the fling.
   gesture code shares no path with the markdown tokenizer).
 - `gradle :app:lintDebug` — 0 errors.
 
-## 5. Constraints honored
+## 6. Review fixes (2026-09-12, findings 7a–7d)
+
+- **7a — fling holder no longer State**: `var flingJob by remember {
+  mutableStateOf<Job?>(null) }` → `val flingJob =
+  remember { arrayOfNulls<Job>(1) }` (stdlib, no import); all sites use
+  `flingJob[0]`. Starting/cancelling a fling can never schedule a
+  recomposition now. Pins updated (`Phase272PanFlingTest` state/cancel/release
+  assertions + `Phase205CanvasCommitIntegrityTest` fling-block pin).
+- **7b — reduce-motion honored**: the release gate ANDs the shared
+  `CanvasNavigationPolicy.shouldAnimate(reduceMotion)` gate (same gate as
+  `navigateCanvasTo`); under reduce-motion fast releases stop dead (pre-272
+  behaviour) instead of animating. Pinned by a new test.
+- **7c — tool switch cancels**: new `LaunchedEffect(currentTool) {
+  flingJob[0]?.cancel() }` — tool switches restart the gesture `pointerInput`
+  scopes but the fling lives in the composition scope, so without this it kept
+  panning in the old mode. Pinned by a new test.
+- **7d — evidence line numbers re-measured** on the review-fix tree (table
+  above); prior ranges were off by up to ~7 lines.
+- Re-baselined `Phase254CommentTrimTest` (canvas **8889 raw / 7099 code**,
+  +12 / +5, all `//` comments, KDoc openers still 22).
+
+## 7. Constraints honored
 
 No Room schema change, no new dependencies, no `.github/workflows/` edits,
 `verification-metadata.xml` untouched. Low-RAM: one bounded job (two float
