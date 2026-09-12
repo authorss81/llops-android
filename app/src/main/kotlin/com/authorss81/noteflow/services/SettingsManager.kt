@@ -42,10 +42,17 @@ class SettingsManager(context: Context) {
 
     // Phase 125 — enhanced interactive tutorial persistence. tutorialResumeIndex
     // survives "Skip" (exit early) so the next open resumes where the user left
-    // off; it is reset to 0 when the tutorial is completed.
+    // off; it is reset to 0 when the tutorial is completed. Phase 267:
+    // sanitized on read AND write so an ADB-written negative/huge value can
+    // never drive the tutorial pager out of range.
     var tutorialResumeIndex: Int
-        get() = prefs.getInt("tutorial_resume_index", 0)
-        set(value) = prefs.edit().putInt("tutorial_resume_index", value.coerceAtLeast(0)).apply()
+        get() = SettingsPrefsPolicy.sanitizeTutorialResumeIndex(
+            prefs.getInt("tutorial_resume_index", 0)
+        )
+        set(value) = prefs.edit().putInt(
+            "tutorial_resume_index",
+            SettingsPrefsPolicy.sanitizeTutorialResumeIndex(value)
+        ).apply()
 
     // Phase 156: first-run triage intro shown/dismissed for passwordless vaults.
     // One-time — once set it is never auto-shown again (⋮ → "Show help again"
@@ -65,28 +72,53 @@ class SettingsManager(context: Context) {
     // B2-CRYPTO-09 (phase-107): one-time per-record field AAD migration flag.
     // Set after NoteRepository.migrateFieldRecordAad has bound every pre-phase-107
     // ciphertext to its table|recordId|fieldName context, so the (O-rows) pass is
-    // not re-run on every unlock.
+    // not re-run on every unlock. Phase 267: commit(), not apply() — a
+    // kill-before-flush used to leave the flag unset and re-run the whole I/O
+    // pass on the next unlock.
     var fieldAadMigrated: Boolean
         get() = prefs.getBoolean("field_aad_migrated", false)
-        set(value) = prefs.edit().putBoolean("field_aad_migrated", value).apply()
+        set(value) {
+            prefs.edit().putBoolean("field_aad_migrated", value).commit()
+        }
 
     // B1-DB-4 (phase-44): one-time migration of legacy plaintext note-body
     // files. Set after NoteRepository.migrateLegacyPlaintextNoteBodies has
     // moved every pre-fix .md/.txt body into the encrypted extractedText column
     // and deleted the plaintext source files, so the O(rows) pass is not re-run
-    // on every unlock. Stays unset while any file remains.
+    // on every unlock. Stays unset while any file remains. Phase 267: commit(),
+    // not apply() (kill-before-flush re-ran the sweep on next unlock).
     var noteBodyPlaintextMigrated: Boolean
         get() = prefs.getBoolean("note_body_plaintext_migrated", false)
-        set(value) = prefs.edit().putBoolean("note_body_plaintext_migrated", value).apply()
+        set(value) {
+            prefs.edit().putBoolean("note_body_plaintext_migrated", value).commit()
+        }
 
     // B1-DB-3 (phase-54): one-time migration of legacy PLAINTEXT voice notes.
     // Set after NoteRepository.migrateLegacyPlaintextVoiceNotes has encrypted
     // every referenced pre-fix `.m4a` into `.enc` blobs and deleted the
     // plaintext, so the O(rows) pass is not re-run on every unlock. Stays unset
-    // while any referenced plaintext remains.
+    // while any referenced plaintext remains. Phase 267: commit(), not apply()
+    // (kill-before-flush re-ran the sweep on next unlock).
     var voiceNotesEncryptedMigrated: Boolean
         get() = prefs.getBoolean("voice_notes_encrypted_migrated", false)
-        set(value) = prefs.edit().putBoolean("voice_notes_encrypted_migrated", value).apply()
+        set(value) {
+            prefs.edit().putBoolean("voice_notes_encrypted_migrated", value).commit()
+        }
+
+    // Phase 267: prefs-schema version. Stamped (commit(), disk-acknowledged) by
+    // NoteflowViewModel.initializeDataCore after the one-time migrations above,
+    // so a future prefs-shape change can gate its own migration instead of
+    // re-running unversioned passes. 0 = pre-phase-267 (unversioned).
+    var prefsVersion: Int
+        get() = prefs.getInt("prefs_version", 0).coerceAtLeast(0)
+        set(value) {
+            prefs.edit().putInt("prefs_version", value.coerceAtLeast(0)).commit()
+        }
+
+    /** Stamps [SettingsPrefsPolicy.CURRENT_PREFS_VERSION]; false when the write failed. */
+    fun stampPrefsVersion(): Boolean = prefs.edit()
+        .putInt("prefs_version", SettingsPrefsPolicy.CURRENT_PREFS_VERSION)
+        .commit()
 
     var activeNotebookId: String?
         get() = prefs.getString("active_notebook_id", null)
@@ -139,12 +171,25 @@ class SettingsManager(context: Context) {
     }
 
     var failedUnlockAttempts: Int
-        get() = prefs.getInt("failed_unlock_attempts", 0)
-        set(value) = prefs.edit().putInt("failed_unlock_attempts", value).apply()
+        get() = SettingsPrefsPolicy.sanitizeFailedAttempts(
+            prefs.getInt("failed_unlock_attempts", 0)
+        )
+        set(value) = prefs.edit().putInt(
+            "failed_unlock_attempts",
+            SettingsPrefsPolicy.sanitizeFailedAttempts(value)
+        ).apply()
 
+    // Phase 267: capped on read AND write at now + one max backoff window, so
+    // an ADB-written far-future value can never become a permanent lockout.
     var lockoutUntilEpochMs: Long
-        get() = prefs.getLong("lockout_until_epoch_ms", 0L)
-        set(value) = prefs.edit().putLong("lockout_until_epoch_ms", value).apply()
+        get() = SettingsPrefsPolicy.sanitizeLockoutUntilEpochMs(
+            prefs.getLong("lockout_until_epoch_ms", 0L),
+            System.currentTimeMillis()
+        )
+        set(value) = prefs.edit().putLong(
+            "lockout_until_epoch_ms",
+            SettingsPrefsPolicy.sanitizeLockoutUntilEpochMs(value, System.currentTimeMillis())
+        ).apply()
 
     var biometricAuthEnabled: Boolean
         get() = prefs.getBoolean("biometric_auth_enabled", false)
@@ -291,14 +336,27 @@ class SettingsManager(context: Context) {
         set(value) = prefs.edit().putInt("scatter_amount_percent", value.coerceIn(0, 100)).apply()
 
     // Pressure-response curve (LINEAR = identity, so default behaviour is unchanged).
+    // Phase 267: normalized through SettingsPrefsPolicy on read AND write — a
+    // corrupt/hand-edited key falls back to "linear" instead of persisting garbage.
     var pressureCurveKey: String
-        get() = prefs.getString("pressure_curve_key", "linear") ?: "linear"
-        set(value) = prefs.edit().putString("pressure_curve_key", value).apply()
+        get() = SettingsPrefsPolicy.sanitizePressureCurveKey(
+            prefs.getString("pressure_curve_key", "linear")
+        )
+        set(value) = prefs.edit().putString(
+            "pressure_curve_key",
+            SettingsPrefsPolicy.sanitizePressureCurveKey(value)
+        ).apply()
 
-    // Mirror mode (OFF = unchanged classic rendering).
+    // Mirror mode (OFF = unchanged classic rendering). Phase 267: same
+    // read+write normalization as pressureCurveKey above.
     var symmetryModeKey: String
-        get() = prefs.getString("symmetry_mode_key", "off") ?: "off"
-        set(value) = prefs.edit().putString("symmetry_mode_key", value).apply()
+        get() = SettingsPrefsPolicy.sanitizeSymmetryModeKey(
+            prefs.getString("symmetry_mode_key", "off")
+        )
+        set(value) = prefs.edit().putString(
+            "symmetry_mode_key",
+            SettingsPrefsPolicy.sanitizeSymmetryModeKey(value)
+        ).apply()
 
     // Phase 222: tilt-shading gate (stylus angle → width/alpha modulation).
     var tiltShadingEnabled: Boolean
@@ -331,7 +389,8 @@ class SettingsManager(context: Context) {
         prefs.edit().apply {
             if (path == null) {
                 remove("paper_texture_$pageId")
-            } else {
+            } else if (SettingsPrefsPolicy.isTexturePathAcceptable(path)) {
+                // Phase 267: refuse absurd ADB-length paths (fail closed, keep old).
                 putString("paper_texture_$pageId", path)
             }
         }.apply()
@@ -350,10 +409,20 @@ class SettingsManager(context: Context) {
 
     // Phase 219: per-template-type visual overrides (line spacing, grid opacity,
     // dot radius, accent color). Stored as a JSON string keyed by template type
-    // ("lined", "grid", "dots"). No DB schema impact — prefs only.
+    // ("lined", "grid", "dots"). No DB schema impact — prefs only. Phase 267:
+    // writes past the budget are refused (fail closed, old value kept) and
+    // over-budget reads fail safe to "{}", so an unbounded ADB blob can never
+    // force a huge JSONObject parse on the read path.
     var templatePrefsJson: String
-        get() = prefs.getString("template_prefs_json", "{}") ?: "{}"
-        set(value) = prefs.edit().putString("template_prefs_json", value).apply()
+        get() {
+            val stored = prefs.getString("template_prefs_json", "{}") ?: "{}"
+            return if (SettingsPrefsPolicy.isTemplatePrefsJsonAcceptable(stored)) stored else "{}"
+        }
+        set(value) {
+            if (SettingsPrefsPolicy.isTemplatePrefsJsonAcceptable(value)) {
+                prefs.edit().putString("template_prefs_json", value).apply()
+            }
+        }
 
     /** Read a single template-type override or the default. */
     fun templatePref(templateType: String, key: String, default: String): String {
@@ -409,17 +478,32 @@ class SettingsManager(context: Context) {
 
     // Phase 155: user-imported `.inkbrush` brush presets persisted as a JSON
     // array (shared prefs only — NO DB schema impact). Re-importing the same
-    // file dedupes via BrushPresetFileCodec.derivedId.
+    // file dedupes via BrushPresetFileCodec.derivedId. Phase 267: same
+    // write-refuse / read-fail-safe budget as templatePrefsJson above.
     var importedBrushPresetsJson: String
-        get() = prefs.getString("imported_brush_presets_json", "[]") ?: "[]"
-        set(value) = prefs.edit().putString("imported_brush_presets_json", value).apply()
+        get() {
+            val stored = prefs.getString("imported_brush_presets_json", "[]") ?: "[]"
+            return if (SettingsPrefsPolicy.isImportedPresetsJsonAcceptable(stored)) stored else "[]"
+        }
+        set(value) {
+            if (SettingsPrefsPolicy.isImportedPresetsJsonAcceptable(value)) {
+                prefs.edit().putString("imported_brush_presets_json", value).apply()
+            }
+        }
 
     // Phase 19: dual erasers — "STROKE" (classic whole-stroke eraser) is the
     // default so existing behaviour is unchanged; "PARTIAL" trims each touched
     // stroke into surviving segments. SharedPreferences only, no DB schema change.
+    // Phase 267: normalized on read AND write (case-insensitive match, unknown
+    // falls back to STROKE) so a corrupt key can never persist.
     var eraserModeKey: String
-        get() = prefs.getString("eraser_mode_key", "STROKE") ?: "STROKE"
-        set(value) = prefs.edit().putString("eraser_mode_key", value).apply()
+        get() = SettingsPrefsPolicy.sanitizeEraserModeKey(
+            prefs.getString("eraser_mode_key", "STROKE")
+        )
+        set(value) = prefs.edit().putString(
+            "eraser_mode_key",
+            SettingsPrefsPolicy.sanitizeEraserModeKey(value)
+        ).apply()
 
     // Phase 209: recent-search history — the last [RecentSearchPolicy.CAP]
     // non-blank EXECUTED vault-search queries, persisted as a `search_recent_<n>`
@@ -433,49 +517,85 @@ class SettingsManager(context: Context) {
     // undecryptable entries read back as null — a plaintext fallback is never
     // taken. The ring insert/dedupe/cap math lives in RecentSearchPolicy (pure
     // JVM); these accessors are the glue and sanitize on read-back.
-    fun getRecentSearches(): List<String> =
+    // Phase 267: the KeyStore load-or-mint and every encrypt/decrypt batch run
+    // under [recentSearchLock] with ONE cached key and ONE Cipher per batch —
+    // the pre-fix code loaded/generated the keystore key per call (unsynchronized,
+    // racing mint-vs-mint into a dropped KeyAlreadyExists) and allocated a fresh
+    // Cipher per ring entry.
+    fun getRecentSearches(): List<String> = synchronized(recentSearchLock) {
+        val cipher = recentSearchCipherOrNull()
         RecentSearchPolicy.sanitize(
-            (0 until RecentSearchPolicy.CAP).map { decryptRingValue(prefs.getString("search_recent_$it", null)) }
+            (0 until RecentSearchPolicy.CAP).map {
+                decryptRingValue(prefs.getString("search_recent_$it", null), cipher)
+            }
         )
+    }
 
     fun setRecentSearches(queries: List<String>) {
         val clean = RecentSearchPolicy.sanitize(queries)
-        prefs.edit().apply {
-            for (i in 0 until RecentSearchPolicy.CAP) {
-                val enc = if (i < clean.size) encryptRingValue(clean[i]) else null
-                if (enc != null) putString("search_recent_$i", enc) else remove("search_recent_$i")
-            }
-        }.apply()
+        synchronized(recentSearchLock) {
+            val cipher = recentSearchCipherOrNull()
+            prefs.edit().apply {
+                for (i in 0 until RecentSearchPolicy.CAP) {
+                    val enc = if (i < clean.size) encryptRingValue(clean[i], cipher) else null
+                    if (enc != null) putString("search_recent_$i", enc) else remove("search_recent_$i")
+                }
+            }.apply()
+        }
+    }
+
+    /**
+     * Phase 267: single Cipher for the current synchronized batch (re-initialized
+     * per entry — every ENCRYPT init mints a fresh random IV, so reuse is safe),
+     * or null when the keystore is unavailable (callers fail closed).
+     */
+    private fun recentSearchCipherOrNull(): Cipher? = try {
+        if (recentSearchKeyOrNull() == null) null
+        else Cipher.getInstance("AES/GCM/NoPadding")
+    } catch (t: Throwable) {
+        null
     }
 
     /** Mint-or-load the dedicated, non-extractable AES-256-GCM keystore key. */
     private fun recentSearchKeyOrNull(): SecretKey? = try {
+        cachedRecentSearchKey?.let { return it }
         val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-        (keyStore.getKey(RECENT_SEARCHES_KEY_ALIAS, null) as? SecretKey)?.let { return it }
+        (keyStore.getKey(RECENT_SEARCHES_KEY_ALIAS, null) as? SecretKey)?.let {
+            cachedRecentSearchKey = it
+            return it
+        }
         if (keyStore.containsAlias(RECENT_SEARCHES_KEY_ALIAS)) {
             runCatching { keyStore.deleteEntry(RECENT_SEARCHES_KEY_ALIAS) }
         }
-        val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
-        generator.init(
-            KeyGenParameterSpec.Builder(
-                RECENT_SEARCHES_KEY_ALIAS,
-                KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
+        val minted = try {
+            val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
+            generator.init(
+                KeyGenParameterSpec.Builder(
+                    RECENT_SEARCHES_KEY_ALIAS,
+                    KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
+                )
+                    .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                    .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                    .setKeySize(256)
+                    .build()
             )
-                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-                .setKeySize(256)
-                .build()
-        )
-        generator.generateKey()
+            generator.generateKey()
+        } catch (e: java.security.KeyStoreException) {
+            // Lost a cross-process mint race (alias now exists): re-read the
+            // winner instead of dropping the whole batch.
+            (keyStore.getKey(RECENT_SEARCHES_KEY_ALIAS, null) as? SecretKey)
+        }
+        cachedRecentSearchKey = minted
+        minted
     } catch (t: Throwable) {
         null
     }
 
     /** AES-GCM encrypt to `iv(12) || ciphertext`, base64 — or null (fail-closed). */
-    private fun encryptRingValue(plain: String): String? {
+    private fun encryptRingValue(plain: String, cipher: Cipher?): String? {
         return try {
+            if (cipher == null) return null
             val key = recentSearchKeyOrNull() ?: return null
-            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.ENCRYPT_MODE, key)
             val cipherText = cipher.doFinal(plain.toByteArray(Charsets.UTF_8))
             val combined = ByteArray(RECENT_SEARCH_IV_BYTES + cipherText.size)
@@ -492,13 +612,12 @@ class SettingsManager(context: Context) {
      * decrypt also silently retires any pre-review-fix PLAINTEXT entry left by
      * the original phase-209 build (it can never validate against GCM).
      */
-    private fun decryptRingValue(stored: String?): String? {
+    private fun decryptRingValue(stored: String?, cipher: Cipher?): String? {
         return try {
-            if (stored.isNullOrBlank()) return null
+            if (stored.isNullOrBlank() || cipher == null) return null
             val key = recentSearchKeyOrNull() ?: return null
             val combined = Base64.decode(stored, Base64.NO_WRAP)
             if (combined.size <= RECENT_SEARCH_IV_BYTES) return null
-            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(
                 Cipher.DECRYPT_MODE,
                 key,
@@ -536,13 +655,22 @@ class SettingsManager(context: Context) {
     // per-note/DB concern (per-stroke mode still round-trips through the stroke
     // payload per phase-27). Rounded through ColorModePersistencePolicy so the
     // pref key + fail-closed decode live in one testable decision table.
+    // Phase 267: the stored value additionally round-trips through
+    // SettingsPrefsPolicy on read AND write, so a hand-edited unknown key
+    // resolves to SOLID here (not just at the StrokeColorMode.fromKey call
+    // sites) and can never be re-persisted as garbage.
     var brushColorModeKey: String
-        get() = prefs.getString(
-            ColorModePersistencePolicy.PREF_KEY_COLOR_MODE,
-            ColorModePersistencePolicy.DEFAULT_MODE.persistenceKey
-        ) ?: ColorModePersistencePolicy.DEFAULT_MODE.persistenceKey
+        get() = SettingsPrefsPolicy.sanitizeBrushColorModeKey(
+            prefs.getString(
+                ColorModePersistencePolicy.PREF_KEY_COLOR_MODE,
+                ColorModePersistencePolicy.DEFAULT_MODE.persistenceKey
+            )
+        )
         set(value) = prefs.edit()
-            .putString(ColorModePersistencePolicy.PREF_KEY_COLOR_MODE, value)
+            .putString(
+                ColorModePersistencePolicy.PREF_KEY_COLOR_MODE,
+                SettingsPrefsPolicy.sanitizeBrushColorModeKey(value)
+            )
             .apply()
 
     // Phase 122 (review fix): the brush BASE colour and the GRADIENT end colour
@@ -575,22 +703,70 @@ class SettingsManager(context: Context) {
         get() = prefs.getBoolean("brush_velocity_modulation_enabled", false)
         set(value) = prefs.edit().putBoolean("brush_velocity_modulation_enabled", value).apply()
 
+    // Phase 267: clamped 0..1 on read AND write (non-finite ADB values fail
+    // safe to the 1.0 default); the BrushStudioDialog slider only ever emits
+    // 0.1..1.0, so honest writes are untouched.
     var velocityModulationIntensity: Float
-        get() = prefs.getFloat("brush_velocity_modulation_intensity", 1.0f)
-        set(value) = prefs.edit().putFloat("brush_velocity_modulation_intensity", value).apply()
+        get() = SettingsPrefsPolicy.sanitizeVelocityIntensity(
+            prefs.getFloat(
+                "brush_velocity_modulation_intensity",
+                SettingsPrefsPolicy.DEFAULT_VELOCITY_INTENSITY
+            )
+        )
+        set(value) = prefs.edit().putFloat(
+            "brush_velocity_modulation_intensity",
+            SettingsPrefsPolicy.sanitizeVelocityIntensity(value)
+        ).apply()
 
     // Calligraphic & chisel nib angles — defaults match the classic fixed angles (45/30).
+    // Phase 267: clamped -45..90 on read AND write (the dialog slider range);
+    // non-finite ADB values fail safe to the per-dial default.
     var calligraphicNibAngleDeg: Float
-        get() = prefs.getFloat("brush_calligraphic_nib_angle_deg", 45f)
-        set(value) = prefs.edit().putFloat("brush_calligraphic_nib_angle_deg", value).apply()
+        get() = SettingsPrefsPolicy.sanitizeNibAngleDeg(
+            prefs.getFloat(
+                "brush_calligraphic_nib_angle_deg",
+                SettingsPrefsPolicy.DEFAULT_CALLIGRAPHIC_NIB_ANGLE_DEG
+            ),
+            SettingsPrefsPolicy.DEFAULT_CALLIGRAPHIC_NIB_ANGLE_DEG
+        )
+        set(value) = prefs.edit().putFloat(
+            "brush_calligraphic_nib_angle_deg",
+            SettingsPrefsPolicy.sanitizeNibAngleDeg(
+                value,
+                SettingsPrefsPolicy.DEFAULT_CALLIGRAPHIC_NIB_ANGLE_DEG
+            )
+        ).apply()
 
     var chiselNibAngleDeg: Float
-        get() = prefs.getFloat("brush_chisel_nib_angle_deg", 30f)
-        set(value) = prefs.edit().putFloat("brush_chisel_nib_angle_deg", value).apply()
+        get() = SettingsPrefsPolicy.sanitizeNibAngleDeg(
+            prefs.getFloat(
+                "brush_chisel_nib_angle_deg",
+                SettingsPrefsPolicy.DEFAULT_CHISEL_NIB_ANGLE_DEG
+            ),
+            SettingsPrefsPolicy.DEFAULT_CHISEL_NIB_ANGLE_DEG
+        )
+        set(value) = prefs.edit().putFloat(
+            "brush_chisel_nib_angle_deg",
+            SettingsPrefsPolicy.sanitizeNibAngleDeg(
+                value,
+                SettingsPrefsPolicy.DEFAULT_CHISEL_NIB_ANGLE_DEG
+            )
+        ).apply()
 
+    // Phase 267: only a real DeviceTier name survives; anything else (including
+    // an ADB-written typo) reads back as null = auto-detect, and writes of
+    // unknown values remove the override instead of persisting garbage.
     var deviceTierOverride: String?
-        get() = prefs.getString("device_tier_override", null)
-        set(value) = prefs.edit().putString("device_tier_override", value).apply()
+        get() = SettingsPrefsPolicy.sanitizeDeviceTierOverride(
+            prefs.getString("device_tier_override", null)
+        )
+        set(value) {
+            val clean = SettingsPrefsPolicy.sanitizeDeviceTierOverride(value)
+            prefs.edit().apply {
+                if (clean == null) remove("device_tier_override")
+                else putString("device_tier_override", clean)
+            }.apply()
+        }
 
     // Phase 28: GLASS-theme frosted blur. OFF by default on LOW_END devices is
     // handled by GlassBlurGate (tier-aware); this is the user's master switch.
@@ -628,13 +804,21 @@ class SettingsManager(context: Context) {
     // 22.1 + B1-PLAT-4 (phase-60): auto-lock after this many seconds of inactivity
     // while foregrounded (0 = off). Ships ENABLED (5 min) by default so a
     // foregrounded, unattended vault cannot stay readable indefinitely on a
-    // no-keyguard device.
+    // no-keyguard device. Phase 267: sanitized 0..86400 on read AND write via
+    // AutoLockPolicy.sanitize — an ADB-written -1 can no longer silently
+    // disable the lock and a huge value can no longer push the deadline out
+    // past any realistic session.
     var autoLockTimeoutSeconds: Int
-        get() = prefs.getInt(
-            "auto_lock_timeout_seconds",
-            AutoLockPolicy.DEFAULT_AUTO_LOCK_TIMEOUT_SECONDS
+        get() = AutoLockPolicy.sanitize(
+            prefs.getInt(
+                "auto_lock_timeout_seconds",
+                AutoLockPolicy.DEFAULT_AUTO_LOCK_TIMEOUT_SECONDS
+            )
         )
-        set(value) = prefs.edit().putInt("auto_lock_timeout_seconds", value).apply()
+        set(value) = prefs.edit().putInt(
+            "auto_lock_timeout_seconds",
+            AutoLockPolicy.sanitize(value)
+        ).apply()
 
     val hasMasterPassword: Boolean
         // B1-CRYPTO-03 (phase-62): a stored-but-unparseable credential blob
@@ -645,6 +829,19 @@ class SettingsManager(context: Context) {
         // half-pairs (salt without wrapper) resolve to null here exactly as
         // pre-fix, so devices already bricked by the old bug are unchanged.
         get() = masterPasswordCredentialOrLegacy != null || prefs.contains("master_password_credential")
+
+    /**
+     * Phase 267 (structural check): true when a `master_password_credential`
+     * blob is PRESENT but fails [MasterPasswordCredential.parse] — garbage (or
+     * a future-version blob this build cannot read) that [hasMasterPassword]
+     * still counts as "protected" (fail closed: the vault stays locked).
+     * Unlock surfaces distinguish this from "wrong password" so an unwinnable
+     * credential can never burn the lockout counter — the recovery path is the
+     * existing restore-from-backup / start-fresh flow, never a password retry.
+     */
+    val hasCorruptMasterPasswordCredential: Boolean
+        get() = masterPasswordCredentialOrLegacy == null &&
+            prefs.contains("master_password_credential")
 
     var lowEndWarningShown: Boolean
         get() = prefs.getBoolean("low_end_warning_shown", false)
@@ -779,8 +976,10 @@ class SettingsManager(context: Context) {
     // opt-in flag, the ever-enabled flag, the uninstalled flag, the persisted
     // catalog entry blob and every namespaced `plugins.<id>.*` setting. Used by
     // the store's Delete action (delete = gone + settings wiped; disable = off
-    // but re-enableable).
-    fun wipePluginState(pluginId: String) {
+    // but re-enableable). Phase 267: commit(), not apply(), returning the
+    // disk-acknowledged result — a kill-before-flush used to leave the wrapper
+    // half-deleted (e.g. opt-in gone but journal kept, or vice versa).
+    fun wipePluginState(pluginId: String): Boolean {
         val prefix = "plugins.$pluginId."
         val keys = prefs.all.keys.filter { key ->
             key == "plugin_enabled_$pluginId" ||
@@ -792,7 +991,7 @@ class SettingsManager(context: Context) {
                 key == "plugin_invocation_journal_$pluginId" ||
                 key.startsWith(prefix)
         }
-        prefs.edit().apply { keys.forEach { remove(it) } }.apply()
+        return prefs.edit().apply { keys.forEach { remove(it) } }.commit()
     }
 
     // Phase 173: bounded per-plugin invocation journal (Settings → Plugins →
@@ -902,13 +1101,21 @@ class SettingsManager(context: Context) {
         return out
     }
 
-    fun clearSecuritySettings() {
-        prefs.edit()
+    /**
+     * Phase 267: commit(), not apply(), returning the disk-acknowledged result.
+     * This removes the master-password credential + biometric flag — a
+     * kill-before-flush used to leave the wrapper on disk (`hasMasterPassword`
+     * stays true) while the caller had already flipped in-memory state to
+     * passwordless. Callers MUST abort when this returns false (same contract
+     * as `commitMasterPasswordCredential`).
+     */
+    fun clearSecuritySettings(): Boolean {
+        return prefs.edit()
             .remove("master_password_credential")
             .remove("master_password_salt")
             .remove("master_password_wrapped_dek")
             .remove("biometric_auth_enabled")
-            .apply()
+            .commit()
     }
 
     companion object {
@@ -917,5 +1124,16 @@ class SettingsManager(context: Context) {
 
         /** GCM standard 12-byte IV prefix of every stored ring blob. */
         private const val RECENT_SEARCH_IV_BYTES = 12
+
+        /**
+         * Phase 267: guards the recent-search KeyStore load-or-mint AND every
+         * encrypt/decrypt batch (the cached key + batch Cipher are only ever
+         * touched under this lock — Cipher is not thread-safe).
+         */
+        private val recentSearchLock = Any()
+
+        /** Phase 267: process-lifetime cache — KeyStore.load is ~ms per call. */
+        @Volatile
+        private var cachedRecentSearchKey: SecretKey? = null
     }
 }

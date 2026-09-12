@@ -141,7 +141,14 @@ class B1Plat04AutoLockTest {
         val key = "auto_lock_timeout_seconds"
         assertTrue(
             "the auto-lock key must read through the shared policy default",
-            source.contains("getInt(\n            \"$key\",\n            AutoLockPolicy.DEFAULT_AUTO_LOCK_TIMEOUT_SECONDS\n        )")
+            source.contains("AutoLockPolicy.DEFAULT_AUTO_LOCK_TIMEOUT_SECONDS")
+        )
+        // Phase 267: the read additionally round-trips through the 0..86400
+        // sanitize so an ADB-written -1/huge value can never silently disable
+        // the lock or push the deadline out past any realistic session.
+        assertTrue(
+            "the auto-lock key must be sanitized on read",
+            source.contains("AutoLockPolicy.sanitize(") && source.contains("\"$key\"")
         )
         assertFalse(
             "the phase-30 `0 = disabled` default must be gone",

@@ -28,6 +28,16 @@ object AutoLockPolicy {
     const val DEFAULT_AUTO_LOCK_TIMEOUT_SECONDS: Int = 300
 
     /**
+     * Phase 267: sanitize a persisted/UI-supplied timeout to the enforceable
+     * window 0..86400 (0 = off, max 24 h). A negative value must never disable
+     * the lock by accident and a huge value must never push the deadline past
+     * any realistic foreground session — both are reachable via ADB-edited
+     * prefs, so BOTH the read and the write path round-trip through here.
+     */
+    fun sanitize(timeoutSeconds: Int): Int =
+        timeoutSeconds.coerceIn(0, SettingsPrefsPolicy.MAX_AUTO_LOCK_TIMEOUT_SECONDS)
+
+    /**
      * Lock decision for a foreground inactivity check.
      *
      * [timeoutSeconds] <= 0 means "off" and never locks. Otherwise the vault

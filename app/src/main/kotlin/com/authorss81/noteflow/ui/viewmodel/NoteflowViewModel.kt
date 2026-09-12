@@ -2016,6 +2016,11 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
                     // Keep the flag unset; re-run on the next unlock.
                 }
             }
+            // Phase 267: stamp the prefs-schema version once the one-time
+            // migration passes above have settled (commit(), disk-acknowledged —
+            // a kill-before-flush only repeats the idempotent stamp, never a
+            // data migration).
+            settings.stampPrefsVersion()
             // Phase 168: cold-start restore opens the LAST-USED notebook.
             // `lastNotebookId` (written on every selection change + on exit) is the
             // primary source; `activeNotebookId` remains the legacy fallback for
@@ -2155,8 +2160,21 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun setAutoLockTimeoutSeconds(seconds: Int) {
+        // Phase 267: the SettingsManager setter sanitizes (0..86400) — publish
+        // the post-sanitize read-back, never the raw caller value, so the flow
+        // and the disk can never disagree (e.g. ADB -1 disabling the lock).
         settings.autoLockTimeoutSeconds = seconds
-        _autoLockTimeoutSeconds.value = seconds
+        _autoLockTimeoutSeconds.value = settings.autoLockTimeoutSeconds
+    }
+
+    /**
+     * Phase 267: the auto-lock flow was seeded ONCE from prefs at construction,
+     * so an out-of-band prefs change (ADB, or a second SettingsManager instance)
+     * left the flow stale until process death. MainActivity calls this on every
+     * ON_RESUME so the deadline loop re-arms from the current disk value.
+     */
+    fun refreshAutoLockTimeout() {
+        _autoLockTimeoutSeconds.value = settings.autoLockTimeoutSeconds
     }
 
     fun markFirstRunComplete() {
@@ -2170,8 +2188,9 @@ class NoteflowViewModel(application: Application) : AndroidViewModel(application
 
     /** Persists the current slide so a skipped/closed run resumes there next time. */
     fun updateTutorialResumeIndex(index: Int) {
+        // Phase 267: publish the post-sanitize read-back (see setAutoLockTimeoutSeconds).
         settings.tutorialResumeIndex = index
-        _tutorialResumeIndex.value = index
+        _tutorialResumeIndex.value = settings.tutorialResumeIndex
     }
 
     fun triggerConfetti() {
@@ -3692,6 +3711,11 @@ fun updatePageTags(id: String, tags: String) {
 
     suspend fun verifyMasterPassword(password: String): Boolean {
         if (lockoutActive()) return false
+        // Phase 267: a present-but-unparseable credential blob
+        // (settings.hasCorruptMasterPasswordCredential) lands here and returns
+        // WITHOUT burning the lockout counter — retrying a password can never
+        // fix an unwinnable credential, so it must not count as a wrong guess.
+        // Recovery is the existing restore-from-backup / start-fresh flow.
         if (settings.masterPasswordCredentialOrLegacy == null) return false
         return try {
             val dek = unwrapMasterDek(password)
@@ -3789,9 +3813,12 @@ fun updatePageTags(id: String, tags: String) {
      * (B1-AUTH-02 data-layer posture).
      */
     private fun recordFailedMasterPasswordVerification() {
-        val newCount = _failedUnlockAttempts.value + 1
+        // Phase 267: the counter is capped by the SettingsManager setter — publish
+        // the post-sanitize read-back so the flow can never carry an ADB-inflated
+        // (or Int-overflowed) value the disk refused.
+        settings.failedUnlockAttempts = _failedUnlockAttempts.value + 1
+        val newCount = settings.failedUnlockAttempts
         _failedUnlockAttempts.value = newCount
-        settings.failedUnlockAttempts = newCount
         if (newCount >= MAX_FAILED_ATTEMPTS) {
             // Persisted lockout + exponential backoff; survives app restarts.
             val delayMs = computeLockoutDelayMs(newCount)
@@ -3942,7 +3969,11 @@ fun updatePageTags(id: String, tags: String) {
         // readable after the password is removed (rows stay encrypted at rest).
         return try {
             security.storeDek(dek, authRequired = false)
-            settings.clearSecuritySettings()
+            // Phase 267: the credential wipe is disk-acknowledged — abort BEFORE
+            // flipping any in-memory state when it failed, or the wrapper stays
+            // on disk while the session claims passwordless (same contract as
+            // commitMasterPasswordCredential in set/changeMasterPassword).
+            if (!settings.clearSecuritySettings()) return false
             _hasMasterPassword.value = false
             _authenticated.value = true
             // B1-AUTH-07 (phase-92 review fix, FINDING #4): share the verified-password

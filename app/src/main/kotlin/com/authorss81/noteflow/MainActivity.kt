@@ -221,6 +221,11 @@ class MainActivity : FragmentActivity() {
                     if (com.authorss81.noteflow.services.OnPauseCoverPolicy.shouldDismissOnResume(pauseCoverActive)) {
                         pauseCoverActive = false
                     }
+                    // Phase 267: re-arm the auto-lock deadline loop from the
+                    // current disk value (the flow is seeded once at ViewModel
+                    // construction and an out-of-band prefs change would
+                    // otherwise stay stale until process death).
+                    viewModel.refreshAutoLockTimeout()
                 }
                 Lifecycle.Event.ON_STOP -> {
                     lastActivityAtMs = System.currentTimeMillis()
@@ -357,10 +362,13 @@ class MainActivity : FragmentActivity() {
             // FloatingWindowPolicy.isLikelyFloatingWindow on the REAL measured window
             // (BoxWithConstraints) — plain multi-window mode alone (e.g. a usable
             // 700x1000 tablet split pane, or a phone portrait split) never fires it.
+            // Phase 267: uses the ViewModel's singleton SettingsManager — the
+            // pre-fix code constructed a SECOND SharedPreferences instance per
+            // composition that raced the singleton on the same file.
             FloatingWindowNoticeLauncher(
                 authenticated = authenticated,
                 inMultiWindowMode = inMultiWindowMode,
-                settingsManager = com.authorss81.noteflow.services.SettingsManager(this@MainActivity),
+                settingsManager = viewModel.settings,
                 snackbarHostState = snackbarHostState
             )
 

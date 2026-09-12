@@ -3291,6 +3291,16 @@ UNTRUSTED files before any staging); `ui/components/Dialogs.kt` `AppUpdateDialog
    producer/`generateBaselineProfile` chain with `--no-configuration-cache` (AGP `CheckAarMetadataTask`/
    `checkTestedAppObfuscation` fields aren't gradle-config-cache-serializable; repo sets
    `org.gradle.configuration-cache=true`).
+- **Implemented in phase-267** (settings commit/clamp/keys/threads, see
+  `workspace/phase-267/REPORT.md`): new pure-JVM `services/SettingsPrefsPolicy.kt`
+  (auto-lock 0..86400 via `AutoLockPolicy.sanitize`, tutorial 0..10k, attempts 0..10k,
+  lockout ≤ now+15min, enum-key round-trips, velocity 0..1, nibs −45..90, tier allow-list,
+  template/presets/path budgets, `CURRENT_PREFS_VERSION=1`); `wipePluginState`/
+  `clearSecuritySettings`/migration flags use disk-acknowledged `commit()` (bool return,
+  `removeMasterPassword` aborts on wipe failure); recent-search KeyStore under one lock
+  with cached key + one Cipher per batch; `hasCorruptMasterPasswordCredential` structural
+  flag (no lockout burn); `MainActivity` uses the `viewModel.settings` singleton +
+  `ON_RESUME refreshAutoLockTimeout()`. Pins: `Phase267SettingsTest` (21).
 - **Implemented in phase-266** (WCAG 2.2 AA pass 1, see `workspace/phase-266/REPORT.md`):
   new pure-JVM `services/A11yPolicy.kt` (48dp hit floor, 10sp label floor, 0.6 unpinned-pin alpha,
   1000ms ambient-motion budget, decorative-null allowlist, canvas descriptions); ConfettiOverlay
