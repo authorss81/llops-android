@@ -53,8 +53,7 @@ fun FloatingZoomWidget(
     onFitWidth: () -> Unit,
     onFitPage: () -> Unit,
     onResetZoom: () -> Unit,
-    modifier: Modifier = Modifier,
-    isPdfOrDocument: Boolean = true
+    modifier: Modifier = Modifier
 ) {
     var isExpanded by remember { mutableStateOf(true) }
     var showPresetMenu by remember { mutableStateOf(false) }

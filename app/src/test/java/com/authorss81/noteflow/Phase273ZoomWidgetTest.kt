@@ -2,6 +2,7 @@ package com.authorss81.noteflow
 
 import java.io.File
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -14,7 +15,10 @@ import org.junit.Test
  *   - the callbacks write the editor's own `zoomScale`/`panOffset` states (the
  *     same states passed to `AnnotationCanvas` — no shadow zoom state),
  *   - the fit math (`screenW/1080f`, `screenH/(1528f+64f)`, clamp `0.25f..5.0f`)
- *     is present.
+ *     is present,
+ *   - fit viewports measure the live window (`fitZoomViewportPx`: WindowMetrics
+ *     on API 30+, displayMetrics fallback below),
+ *   - the dead `isPdfOrDocument` param stays removed (review-fix).
  */
 class Phase273ZoomWidgetTest {
 
@@ -69,9 +73,9 @@ class Phase273ZoomWidgetTest {
             "onResetZoom must restore zoomScale to 1",
             widget.contains("zoomScale = 1.0f")
         )
-        assertTrue(
-            "widget must read the editor isPdf flag",
-            widget.contains("isPdfOrDocument = isPdf")
+        assertFalse(
+            "dead isPdfOrDocument param must stay removed",
+            src.contains("isPdfOrDocument")
         )
     }
 
@@ -82,6 +86,17 @@ class Phase273ZoomWidgetTest {
         assertTrue("fit-width math must divide by 1080f", widget.contains("screenW / 1080f"))
         assertTrue("fit-page math must divide by 1528f + 64f", widget.contains("screenH / (1528f + 64f)"))
         assertTrue("fit math must clamp to 0.25f..5.0f", widget.contains("coerceIn(0.25f, 5.0f)"))
+    }
+
+    @Test
+    fun `fit zoom measures the live window with a pre-30 fallback`() {
+        val src = editorSource()
+        val widget = src.substring(src.indexOf("FloatingZoomWidget("))
+        assertTrue("fit-width must read the live viewport width", widget.contains("fitZoomViewportPx(context).first"))
+        assertTrue("fit-page must read the live viewport height", widget.contains("fitZoomViewportPx(context).second"))
+        assertTrue("helper must use WindowMetrics on API 30+", src.contains("currentWindowMetrics"))
+        assertTrue("helper must gate WindowMetrics on API 30", src.contains("VERSION_CODES.R"))
+        assertTrue("helper must keep the displayMetrics fallback", src.contains("displayMetrics.widthPixels"))
     }
 
     @Test

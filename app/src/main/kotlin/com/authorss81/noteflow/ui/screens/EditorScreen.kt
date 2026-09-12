@@ -171,6 +171,20 @@ val StrokeSelectionSaver: Saver<com.authorss81.noteflow.data.model.StrokeSelecti
         }
     )
 
+// Phase 273 review-fix: live window size for fit-zoom. WindowMetrics on API 30+
+// measures the live window (foldables/multi-window), not the full display;
+// displayMetrics below API 30. Tap-driven only — never called per frame.
+private fun fitZoomViewportPx(context: android.content.Context): Pair<Float, Float> {
+    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+        val bounds = context.getSystemService(android.view.WindowManager::class.java)
+            ?.currentWindowMetrics?.bounds
+        if (bounds != null) return bounds.width().toFloat() to bounds.height().toFloat()
+    }
+    @Suppress("DEPRECATION")
+    val dm = context.resources.displayMetrics
+    return dm.widthPixels.toFloat() to dm.heightPixels.toFloat()
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun EditorScreen(
@@ -2828,7 +2842,14 @@ fun EditorScreen(
                 maxHeight.value.roundToInt()
             )
 
-            // Floating Zoom Controls Widget — positioned above the ink bar
+            // Floating Zoom Controls Widget — positioned above the ink bar.
+            // Fit math mirrors the canvas portrait page box (AnnotationCanvas
+            // pageWidthPx/pageHeightPx = 1080x1528; +64f is the inter-page gap
+            // stride): fit-width fills the viewport with one page width,
+            // fit-page fits one page height plus the gap. Pan resets only X so
+            // the current page row is kept. The 0.25f..5.0f band is wider than
+            // the pinch-gesture 0.5f..4.0f clamp by design — the canvas accepts
+            // external zoomScale verbatim, so the % readout matches the render.
             AnimatedVisibility(
                 visible = toolbarState != FloatingToolbarState.HIDDEN_DRAWING,
                 enter = com.authorss81.noteflow.theme.MotionSystem.enter(fadeIn()),
@@ -2842,13 +2863,13 @@ fun EditorScreen(
                     zoomScale = zoomScale,
                     onZoomChange = { newZoom -> zoomScale = newZoom },
                     onFitWidth = {
-                        val screenW = context.resources.displayMetrics.widthPixels.toFloat()
+                        val screenW = fitZoomViewportPx(context).first
                         val targetZoom = (screenW / 1080f).coerceIn(0.25f, 5.0f)
                         zoomScale = targetZoom
                         panOffset = Offset(0f, panOffset.y)
                     },
                     onFitPage = {
-                        val screenH = context.resources.displayMetrics.heightPixels.toFloat()
+                        val screenH = fitZoomViewportPx(context).second
                         val targetZoom = (screenH / (1528f + 64f)).coerceIn(0.25f, 5.0f)
                         zoomScale = targetZoom
                         panOffset = Offset(0f, panOffset.y)
@@ -2856,8 +2877,7 @@ fun EditorScreen(
                     onResetZoom = {
                         zoomScale = 1.0f
                         panOffset = Offset(0f, panOffset.y)
-                    },
-                    isPdfOrDocument = isPdf
+                    }
                 )
             }
 

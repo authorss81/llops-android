@@ -49,3 +49,34 @@ satisfying the prompt's explicit scoping requirement ("inside the same
 
 No Room schema change, no new dependencies, no `.github/workflows/` edits,
 `verification-metadata.xml` untouched, no new permissions.
+
+## Review fixes (FINDINGS 1–5)
+
+1. Dead `isPdfOrDocument` param REMOVED (was declared at
+   `FloatingZoomWidget.kt:57`, never read in the widget body): signature is
+   now `(zoomScale, onZoomChange, onFitWidth, onFitPage, onResetZoom,
+   modifier)` and the call site drops `isPdfOrDocument = isPdf`
+   (`EditorScreen.kt`, `FloatingZoomWidget(` block). No other callers exist.
+2. Fit viewports measure the LIVE window: new file-private
+   `fitZoomViewportPx(context)` (`EditorScreen.kt`, above `EditorScreen`) —
+   `WindowManager.currentWindowMetrics.bounds` on API 30+ (foldables /
+   multi-window), `displayMetrics` fallback below (narrowly
+   `@Suppress("DEPRECATION")`). Zero new imports (FQN style, per repo
+   pattern); tap-driven only, never per frame. `onFitWidth`/`onFitPage` read
+   `.first`/`.second`, keeping the pinned `screenW / 1080f`,
+   `screenH / (1528f + 64f)`, `coerceIn(0.25f, 5.0f)` strings intact.
+3. Zoom-band asymmetry documented in place (no code change — verified
+   harmless: the canvas `LaunchedEffect(zoomScale, panOffset)` sync accepts
+   external zoom verbatim, so the 0.25..5.0 widget band always matches the
+   render despite the 0.5..4.0 pinch clamp).
+4. Fit-math derivation documented in place: 1080x1528 = the canvas portrait
+   page box (`AnnotationCanvas.kt:674-675`), +64f the inter-page gap stride;
+   pan resets X only so the current page row is kept.
+5. Tests: `Phase273ZoomWidgetTest` 5 → 6 (isPdf assertion replaced by an
+   `isPdfOrDocument`-absence pin; new live-window test pins `.first` /
+   `.second` + `currentWindowMetrics` + `VERSION_CODES.R` + the
+   `displayMetrics` fallback). `Phase254CommentTrimTest` re-baselined per its
+   own procedure (net EditorScreen +20 raw / +9 code: helper +14/+10,
+   rationale comments +8/+0, dead-param removal -2/-2): EditorScreen 7611
+   raw / 6606 code; AnnotationCanvas/HomeScreen untouched; no KDoc opener
+   added, no divider banner, no 2-blank run.

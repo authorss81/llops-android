@@ -137,19 +137,28 @@ import org.junit.Test
  * untouched. No KDoc opener added (plain `//` comment only — the KDoc counts
  * below are unchanged). Re-measured on the phase-273 tree: EditorScreen
  * 7591 raw / 6597 code.
+ *
+ * PHASE 273 REVIEW-FIX RE-BASELINE: the dead `isPdfOrDocument` widget param
+ * is removed (widget + call site, -2 raw / -2 code); fit viewports measure
+ * the live window via `fitZoomViewportPx` (WindowMetrics on API 30+,
+ * displayMetrics fallback; +14 raw / +10 code); the fit-math derivation and
+ * zoom-band rationale are documented in plain `//` comments (+8 raw / +0
+ * code). Net EditorScreen +20 raw / +9 code. AnnotationCanvas/HomeScreen
+ * untouched. No KDoc opener added. Re-measured: EditorScreen 7611 raw /
+ * 6606 code.
  */
 class Phase254CommentTrimTest {
 
     // Phase-255/256/257/264/266/269/272/273 re-baselined raw line counts (review-fix values measured on the review-fix tree).
     private val headRaw = mapOf(
         "ui/components/AnnotationCanvas.kt" to 8889,
-        "ui/screens/EditorScreen.kt" to 7591,
+        "ui/screens/EditorScreen.kt" to 7611,
         "ui/screens/HomeScreen.kt" to 3845
     )
     // Phase-255/256/257/264/266/269/272/273 re-baselined code-line counts (non-blank, non-full-`//` lines).
     private val headCode = mapOf(
         "ui/components/AnnotationCanvas.kt" to 7099,
-        "ui/screens/EditorScreen.kt" to 6597,
+        "ui/screens/EditorScreen.kt" to 6606,
         "ui/screens/HomeScreen.kt" to 3310
     )
     // Parent baseline KDoc `/**` opener counts (no KDoc opener may be deleted).

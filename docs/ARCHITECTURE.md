@@ -334,6 +334,17 @@
 > fit-page `screenH/(1528f+64f)`, clamp `0.25f..5.0f`, reset `1.0f`).
 > Tests: `Phase273ZoomWidgetTest` (5); phase-254 re-baselined (EditorScreen
 > 7591/6597).
+>
+> **Phase-273 review fixes** (same day, FINDINGS 1–5): the dead
+> `isPdfOrDocument` widget param is removed (signature + call site — no other
+> callers); fit viewports measure the live window via file-private
+> `EditorScreen.kt fitZoomViewportPx` (`WindowMetrics` on API 30+,
+> `displayMetrics` fallback below, FQN zero-import style); the fit-math
+> derivation (1080x1528 = canvas portrait page box + 64f gap stride, pan-X-only
+> reset) and the intentional 0.25..5.0-vs-pinch-0.5..4.0 asymmetry are
+> documented in place (canvas accepts external zoom verbatim). Tests:
+> `Phase273ZoomWidgetTest` 5→6 (absence pin + live-window pins); phase-254
+> re-baselined (EditorScreen 7611/6597).
 
 > **Implemented in phase-261** (2026-09-12, WebDAV DNS-masquerade + backup
 > staging hygiene, see `workspace/phase-261/REPORT.md`): `isLocalNetworkHost`
