@@ -193,21 +193,9 @@ object StrokeSegmenter {
      */
     fun strokeTouchedBy(stroke: Stroke, eraseSamples: List<ErasePoint>, extraRadius: Float): Boolean {
         if (eraseSamples.isEmpty()) return false
-        // Point-less rule strokes (rect/arrow/ellipse snapshots): landmark
-        // points only (nearest live eraser path to a corner/edge hits).
-        if (stroke.points.isEmpty()) {
-            fun hit(x: Float, y: Float): Boolean {
-                for (e in eraseSamples) {
-                    val r = coverageRadiusFor(stroke, e, extraRadius).coerceAtLeast(1f)
-                    if (distSqToSegment(e.x, e.y, x, y, x, y) <= r * r) return true
-                }
-                return false
-            }
-            val startHit = stroke.start?.let { hit(it.x, it.y) } ?: false
-            if (startHit) return true
-            val endHit = stroke.end?.let { hit(it.x, it.y) } ?: false
-            return endHit
-        }
+        // Point-less rule strokes and polylines share the same segment-aware
+        // test: polylineTouched falls back to the start/end landmark anchors
+        // when there are no points (Phase 257).
         return polylineTouched(stroke, stroke.points, eraseSamples, extraRadius)
     }
 
@@ -225,7 +213,21 @@ object StrokeSegmenter {
         samples: List<ErasePoint>,
         extraRadius: Float
     ): Boolean {
-        if (points.isEmpty()) return false
+        if (points.isEmpty()) {
+            // Point-less rule strokes (rect/arrow/ellipse snapshots): only the
+            // start/end landmark anchors can be hit. Phase 257 restored this
+            // fallback — it was lost in the phase-256 refactor, so the STROKE
+            // eraser could no longer tap a shape stroke that carried no points.
+            fun hit(x: Float, y: Float): Boolean {
+                for (e in samples) {
+                    val r = coverageRadiusFor(stroke, e, extraRadius).coerceAtLeast(1f)
+                    if (distSqToSegment(e.x, e.y, x, y, x, y) <= r * r) return true
+                }
+                return false
+            }
+            return (stroke.start?.let { hit(it.x, it.y) } ?: false) ||
+                (stroke.end?.let { hit(it.x, it.y) } ?: false)
+        }
         val densified = densifyPoints(points, ERASE_DENSIFY_MAX_GAP_PX)
         for (p in densified) {
             for (e in samples) {
@@ -281,8 +283,14 @@ object StrokeSegmenter {
         }
 
         // Phase 256 H2: densify the stroke polyline so masks landing BETWEEN two
-        // widely spaced raw points still mark coverage, then an edge pass below
-        // splits any edge a mask actually crosses through its middle.
+        // widely spaced raw points still mark coverage. The densified lattice is
+        // used by the WET branch (mask-punch decisions below); the pen/pencil
+        // carve farther down keeps the ORIGINAL points and splits edges at their
+        // exact mask-circle crossing so it can never smuggle back the middle of
+        // a carved edge — while staying mask-exact at run boundaries (Phase 257:
+        // the previous blanket edge-pass over-marked BOTH endpoints, carving up
+        // to a dense-step beyond the real circle and deleting points OUTSIDE the
+        // round mask).
         val workPoints = densifyPoints(stroke.points, ERASE_DENSIFY_MAX_GAP_PX)
         val covered = BooleanArray(workPoints.size)
         var anyCovered = false
@@ -346,31 +354,129 @@ object StrokeSegmenter {
             return SegmentResult(surviving = listOf(masked), affected = true)
         }
 
+        // ---- Non-wet carve: original points only + segment-aware edge splits ----
+        // A point is REMOVED iff a mask circle covers the point centerline. A
+        // mask that only crosses the MIDDLE of an edge (no point covered) still
+        // cuts the stroke there — the run is split between the two edge points,
+        // and neither point that lies outside the circle is deleted. This is the
+        // mask-exact partial eraser: survivors are subsets of the ORIGINAL ink,
+        // and every surviving point lies strictly OUTSIDE its covering circle.
+        val original = stroke.points
+
+        // Smallest edge carve worth splitting on (float noise guard).
+        val EDGE_CARVE_EPS = 1e-3f
+
+        fun pointCovered(p: PointF): Boolean {
+            for (e in eraseSamples) {
+                val r = coverageRadiusFor(stroke, e, extraRadius).coerceAtLeast(1f)
+                val dx = p.x - e.x
+                val dy = p.y - e.y
+                if (dx * dx + dy * dy <= r * r) return true
+            }
+            return false
+        }
+
+        /** Total length of the union of mask-circle intersections on edge a->b ([0,1]). */
+        fun edgeCoveredLength(a: PointF, b: PointF): Float {
+            val intervals = ArrayList<FloatArray>(eraseSamples.size)
+            for (e in eraseSamples) {
+                val int = circleSegmentInterval(a, b, e.x, e.y, coverageRadiusFor(stroke, e, extraRadius).coerceAtLeast(1f))
+                if (int != null) intervals.add(int)
+            }
+            if (intervals.isEmpty()) return 0f
+            intervals.sortBy { it[0] }
+            var total = 0f
+            var curStart = intervals[0][0]
+            var curEnd = intervals[0][1]
+            for (k in 1 until intervals.size) {
+                val t0 = intervals[k][0]
+                val t1 = intervals[k][1]
+                if (t0 <= curEnd) {
+                    if (t1 > curEnd) curEnd = t1
+                } else {
+                    total += curEnd - curStart
+                    curStart = t0
+                    curEnd = t1
+                }
+            }
+            return total + (curEnd - curStart)
+        }
+
+        var affected = false
+        if (original.any { pointCovered(it) }) affected = true
+        for (i in 0 until original.size - 1) {
+            if (edgeCoveredLength(original[i], original[i + 1]) > EDGE_CARVE_EPS) {
+                affected = true
+                break
+            }
+        }
+        if (!affected) {
+            return SegmentResult(listOf(stroke), affected = false)
+        }
+
         val survivors = mutableListOf<Stroke>()
         val run = mutableListOf<PointF>()
 
         fun flushRun() {
             if (run.isNotEmpty()) {
-                survivors.add(
-                    buildSegment(stroke, run.toList())
-                )
+                survivors.add(buildSegment(stroke, run.toList()))
                 run.clear()
             }
         }
 
-        // Phase 256: surviving runs come from the DENSIFIED work polyline, so a
-        // long-edge gap can never smuggle back the edge the mask crossed. (The
-        // wet branch above already returned — this loop is pen/pencil splits.)
-        for (i in workPoints.indices) {
-            if (covered[i]) {
+        for (i in original.indices) {
+            val p = original[i]
+            if (pointCovered(p)) {
                 flushRun()
             } else {
-                run.add(workPoints[i])
+                if (i > 0 && edgeCoveredLength(original[i - 1], p) > EDGE_CARVE_EPS) {
+                    flushRun()
+                }
+                run.add(p)
             }
         }
         flushRun()
 
         return SegmentResult(surviving = survivors, affected = true)
+    }
+
+    /**
+     * Parameter interval(s) of edge a->b lying INSIDE the mask circle centred at
+     * (cx, cy) with radius [r], as a single [t0, t1] slice of [0, 1], or null
+     * when the circle does not intersect the edge. Degenerate (zero-length)
+     * edges return null — a single point's coverage is the point test's job.
+     *
+     * Phase 257: this exact quadratic replaces the old blanket edge-pass (which
+     * marked BOTH endpoints of a crossing edge covered), so a survivor run
+     * boundary lands exactly where the mask circle cuts the ink.
+     */
+    internal fun circleSegmentInterval(
+        a: PointF,
+        b: PointF,
+        cx: Float,
+        cy: Float,
+        r: Float
+    ): FloatArray? {
+        val dx = b.x - a.x
+        val dy = b.y - a.y
+        val len2 = dx * dx + dy * dy
+        if (len2 <= 1e-9f) return null
+        val fx = a.x - cx
+        val fy = a.y - cy
+        val c = fx * fx + fy * fy - r * r
+        val bq = 2f * (fx * dx + fy * dy)
+        val disc = bq * bq - 4f * len2 * c
+        if (disc < 0f) {
+            // No crossing: whole edge covered iff its start is inside the circle.
+            return if (c <= 0f) floatArrayOf(0f, 1f) else null
+        }
+        val sq = kotlin.math.sqrt(disc)
+        var t0 = (-bq - sq) / (2f * len2)
+        var t1 = (-bq + sq) / (2f * len2)
+        t0 = maxOf(0f, t0)
+        t1 = minOf(1f, t1)
+        if (t1 <= t0) return null
+        return floatArrayOf(t0, t1)
     }
 
     private fun buildSegment(stroke: Stroke, run: List<PointF>): Stroke =

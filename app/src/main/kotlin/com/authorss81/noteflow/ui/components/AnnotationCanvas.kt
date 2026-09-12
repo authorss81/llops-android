@@ -637,18 +637,17 @@ fun AnnotationCanvas(
     val activeStrokeList = remember(pdfPageFilter, isContinuousMode) { mutableStateListOf<Stroke>().apply { addAll(filteredStrokes) } }
     var lastSeenStrokeIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     LaunchedEffect(filteredStrokes) {
-        val incomingMap = filteredStrokes.associateBy { it.id }
-        // Only retain pending that were never seen as committed (new local stroke pending propagation),
-        // not strokes that were previously seen and now intentionally removed (undo).
-        val pendingLocalStrokes = activeStrokeList.filter { it.id !in incomingMap && it.id !in lastSeenStrokeIds }
+        // Phase 257: pure-JVM reconcile (never-seen locals retained, previously
+        // committed-but-removed strokes dropped — undo must NOT resurrect).
+        val reconciled = com.authorss81.noteflow.services.CanvasStrokeReconcile.reconcile(
+            active = activeStrokeList,
+            lastSeen = lastSeenStrokeIds,
+            incoming = filteredStrokes,
+            idOf = { it.id }
+        )
         activeStrokeList.clear()
-        activeStrokeList.addAll(filteredStrokes)
-        for (pending in pendingLocalStrokes) {
-            if (activeStrokeList.none { it.id == pending.id }) {
-                activeStrokeList.add(pending)
-            }
-        }
-        lastSeenStrokeIds = incomingMap.keys
+        activeStrokeList.addAll(reconciled)
+        lastSeenStrokeIds = filteredStrokes.map { it.id }.toSet()
     }
 
     // 23.4: single source of truth for the canvas world size (renderer +
@@ -680,16 +679,15 @@ fun AnnotationCanvas(
     val activeStickyNoteList = remember(pdfPageFilter, isContinuousMode) { mutableStateListOf<CanvasStickyNote>().apply { addAll(filteredStickyNotes) } }
     var lastSeenStickyIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     LaunchedEffect(filteredStickyNotes) {
-        val incomingMap = filteredStickyNotes.associateBy { it.id }
-        val pendingLocal = activeStickyNoteList.filter { it.id !in incomingMap && it.id !in lastSeenStickyIds }
+        val reconciled = com.authorss81.noteflow.services.CanvasStrokeReconcile.reconcile(
+            active = activeStickyNoteList,
+            lastSeen = lastSeenStickyIds,
+            incoming = filteredStickyNotes,
+            idOf = { it.id }
+        )
         activeStickyNoteList.clear()
-        activeStickyNoteList.addAll(filteredStickyNotes)
-        for (pending in pendingLocal) {
-            if (activeStickyNoteList.none { it.id == pending.id }) {
-                activeStickyNoteList.add(pending)
-            }
-        }
-        lastSeenStickyIds = incomingMap.keys
+        activeStickyNoteList.addAll(reconciled)
+        lastSeenStickyIds = filteredStickyNotes.map { it.id }.toSet()
     }
 
     val filteredMediaEmbeds = remember(mediaEmbeds, pdfPageFilter, isContinuousMode) {
@@ -698,16 +696,15 @@ fun AnnotationCanvas(
     val activeMediaEmbedList = remember(pdfPageFilter, isContinuousMode) { mutableStateListOf<CanvasMediaEmbed>().apply { addAll(filteredMediaEmbeds) } }
     var lastSeenEmbedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     LaunchedEffect(filteredMediaEmbeds) {
-        val incomingMap = filteredMediaEmbeds.associateBy { it.id }
-        val pendingLocal = activeMediaEmbedList.filter { it.id !in incomingMap && it.id !in lastSeenEmbedIds }
+        val reconciled = com.authorss81.noteflow.services.CanvasStrokeReconcile.reconcile(
+            active = activeMediaEmbedList,
+            lastSeen = lastSeenEmbedIds,
+            incoming = filteredMediaEmbeds,
+            idOf = { it.id }
+        )
         activeMediaEmbedList.clear()
-        activeMediaEmbedList.addAll(filteredMediaEmbeds)
-        for (pending in pendingLocal) {
-            if (activeMediaEmbedList.none { it.id == pending.id }) {
-                activeMediaEmbedList.add(pending)
-            }
-        }
-        lastSeenEmbedIds = incomingMap.keys
+        activeMediaEmbedList.addAll(reconciled)
+        lastSeenEmbedIds = filteredMediaEmbeds.map { it.id }.toSet()
     }
 
     fun calculatePageYOffset(pageIndex: Int): Float {

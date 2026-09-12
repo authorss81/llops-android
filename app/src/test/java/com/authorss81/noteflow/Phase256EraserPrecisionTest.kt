@@ -203,11 +203,16 @@ class Phase256EraserPrecisionTest {
         )
         // The deferral: applyEraser sets the flag; it does NOT emit onStrokesChanged.
         assertTrue("the deferral flag must be armed on mutation", src.contains("eraserDidMutateDuringDrag = true"))
-        // The single drain happens exactly once per terminal path.
+        // The single drain is CALLED exactly once per terminal path. The function
+        // DECLARATION and prose comments also spell "commitEraserMutationIfAny()",
+        // so count only line-anchored call sites (whitespace before the name).
+        val callSiteCount = src.lineSequence()
+            .filter { it.trimStart().startsWith("commitEraserMutationIfAny()") }
+            .count()
         assertEquals(
             "commitEraserMutationIfAny must be called once per gesture-end path (drag-end, cancel, dispose)",
             3,
-            src.split("commitEraserMutationIfAny()").size - 1
+            callSiteCount
         )
         // No stray emission remains inside the per-sample apply path.
         val applyStart = src.indexOf("fun applyEraser(canvasOffset: Offset)")

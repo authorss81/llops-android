@@ -554,8 +554,11 @@ fun EditorScreen(
         stateSaver = com.authorss81.noteflow.ui.screens.StrokeSelectionSaver
     ) { mutableStateOf(com.authorss81.noteflow.data.model.StrokeSelection.EMPTY) }
 
-    var layers by remember { mutableStateOf<List<LayerEntity>>(emptyList()) }
-    var activeLayerId by remember { mutableStateOf<String?>(null) }
+    // Phase 257: page-keyed like strokes/undoStack above — an unkeyed remember
+    // would leak the previous page's layer set + active layer into the new page's
+    // first frames (cross-page layer bleed) until the async load overwrites them.
+    var layers by remember(page.id) { mutableStateOf<List<LayerEntity>>(emptyList()) }
+    var activeLayerId by remember(page.id) { mutableStateOf<String?>(null) }
     var showLayersSheet by remember { mutableStateOf(false) }
 
     val surfaceColor = MaterialTheme.colorScheme.surface

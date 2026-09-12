@@ -50,19 +50,28 @@ import org.junit.Test
  * eraser (commitEraserMutationIfAny + eraserDidMutateDuringDrag), and
  * pressure-aware STROKE highlight (eraserCursorPressureProvider). The trimmed
  * KDoc/provenance/blank invariants are still asserted unchanged below.
+ *
+ * PHASE 257 RE-BASELINE: three deliberate corrections to the phase-256 numbers
+ * (they were measured against a tree that had drifted and never actually
+ * matched HEAD): (a) AnnotationCanvas shrank by the shared pure-JVM reconcile
+ * extraction (services/CanvasStrokeReconcile.kt absorbed the three inline
+ * LaunchedEffect merges, -1 raw / -3 code), (b) EditorScreen gained the
+ * page-key wiring for layers/activeLayerId (+3 raw / +0 code), and (c) Kotlin's
+ * lineSequence keeps a trailing empty line, so the raw counts sit one higher
+ * than `wc -l` on a newline-terminated file. Current verified counts are in
+ * [headRaw] / [headCode] below.
  */
 class Phase254CommentTrimTest {
 
-    // Phase-255/256 re-baselined raw line counts (measured on the phase-256 tree).
-    // Phase-255 was 8533 raw / 6895 code; phase 256 +104 raw / +41 code.
+    // Phase-255/256/257 re-baselined raw line counts (measured on the phase-257 tree).
     private val headRaw = mapOf(
-        "ui/components/AnnotationCanvas.kt" to 8637,
-        "ui/screens/EditorScreen.kt" to 7336,
+        "ui/components/AnnotationCanvas.kt" to 8635,
+        "ui/screens/EditorScreen.kt" to 7339,
         "ui/screens/HomeScreen.kt" to 3757
     )
-    // Phase-255/256 re-baselined code-line counts (non-blank, non-full-`//` lines).
+    // Phase-255/256/257 re-baselined code-line counts (non-blank, non-full-`//` lines).
     private val headCode = mapOf(
-        "ui/components/AnnotationCanvas.kt" to 6936,
+        "ui/components/AnnotationCanvas.kt" to 6933,
         "ui/screens/EditorScreen.kt" to 6423,
         "ui/screens/HomeScreen.kt" to 3267
     )
