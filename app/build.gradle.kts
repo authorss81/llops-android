@@ -276,12 +276,12 @@ tasks.configureEach {
 // freshly committed profile is compiled in; a recurrence of the AGP
 // "String index out of range: 62" crash surfaces as an explicit failure.
 // Unsigned proof WITHOUT a keystore (B1-PLAT-1 refuses assembleRelease
-// keystore-less by design): `gradle :app:minifyReleaseWithR8` and
-// `gradle :app:lintRelease` are quality-only tasks outside
-// RELEASE_SIGNING_TASK_NAMES, so they run keystore-less and still exercise
-// R8 fullMode + shrinkResources; a green minify emits
-// app/build/outputs/mapping/release/mapping.txt. The guarded disable above
-// stays until a real profile lands.
+// keystore-less by design): `gradle :app:minifyReleaseWithR8` is the
+// quality-only task outside RELEASE_SIGNING_TASK_NAMES, so it runs
+// keystore-less and still exercises R8 fullMode + shrinkResources; a green
+// minify emits app/build/outputs/mapping/release/mapping.txt
+// (`lintRelease` is likewise keystore-less-runnable but exercises lint
+// only, not R8). The guarded disable above stays until a real profile lands.
 
 // B1-PLAT-1 (phase-57) fail-fast gate: whenever a task that produces a SIGNED
 // RELEASE artifact is requested while the release keystore is not configured,

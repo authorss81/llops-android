@@ -10,7 +10,8 @@ class Phase265PerfTest {
     @Test
     fun `frame pump starts on all API levels - no TIRAMISU guard`() {
         val src = readSource("app/src/main/kotlin/com/authorss81/noteflow/ui/components/WetBrushFramePump.kt")
-        val startBody = src.substringAfter("fun start()")
+        val startBody = funBody(src, "fun start()")
+        assertTrue("WetBrushFramePump.kt must still define start()", startBody.isNotEmpty())
         assertFalse(
             "start() must not early-return below TIRAMISU (Choreographer exists since API 16, minSdk 26)",
             startBody.contains("TIRAMISU")
@@ -65,14 +66,12 @@ class Phase265PerfTest {
     @Test
     fun `memory pressure and lock boundaries recycle the bitmap pool`() {
         val activity = readSource("app/src/main/kotlin/com/authorss81/noteflow/MainActivity.kt")
-        val trimBody = activity.substringAfter("override fun onTrimMemory")
-            .substringBefore("override fun onLowMemory")
+        val trimBody = funBody(activity, "override fun onTrimMemory")
         assertTrue(
             "onTrimMemory must clear the pool (memory-pressure path)",
             trimBody.contains("BitmapPool.clear()")
         )
-        val lowBody = activity.substringAfter("override fun onLowMemory")
-            .substringBefore("@Composable", "END")
+        val lowBody = funBody(activity, "override fun onLowMemory")
         assertTrue(
             "onLowMemory must clear the pool",
             lowBody.contains("BitmapPool.clear()")
@@ -105,6 +104,22 @@ class Phase265PerfTest {
             "the producer exception must stay documented as --no-configuration-cache",
             build.contains("--no-configuration-cache")
         )
+    }
+
+    private fun funBody(src: String, signature: String): String {
+        val sig = src.indexOf(signature)
+        if (sig < 0) return ""
+        val open = src.indexOf('{', sig)
+        if (open < 0) return ""
+        var depth = 0
+        for (i in open until src.length) {
+            if (src[i] == '{') depth++
+            if (src[i] == '}') {
+                depth--
+                if (depth == 0) return src.substring(open, i + 1)
+            }
+        }
+        return ""
     }
 
     private fun readSource(relativePath: String): String {

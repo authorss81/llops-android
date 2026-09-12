@@ -168,9 +168,11 @@ class Phase206EventDrivenTimersTest {
         // feature — Choreographer exists since API 16 and minSdk is 26, so the
         // guard left API 26-32 with a dead pump (EMA stuck at 16.6ms, thermal
         // tier never degrading). start() must arm on every API level now.
+        // Scoped to the start() body (brace-matched) so an unrelated future
+        // TIRAMISU use elsewhere in the file cannot false-fail this pin.
         assertFalse(
             "phase-265: start() must not gate on TIRAMISU (dead pump on API 26-32)",
-            pump.contains("Build.VERSION_CODES.TIRAMISU")
+            funBody(pump, "fun start()").contains("TIRAMISU")
         )
         assertTrue(
             "thermal sampling must be throttled to <=1 Hz, not per-frame",
@@ -330,6 +332,22 @@ class Phase206EventDrivenTimersTest {
     }
 
     // ---------- helpers ----------
+
+    private fun funBody(src: String, signature: String): String {
+        val sig = src.indexOf(signature)
+        if (sig < 0) return ""
+        val open = src.indexOf('{', sig)
+        if (open < 0) return ""
+        var depth = 0
+        for (i in open until src.length) {
+            if (src[i] == '{') depth++
+            if (src[i] == '}') {
+                depth--
+                if (depth == 0) return src.substring(open, i + 1)
+            }
+        }
+        return ""
+    }
 
     private fun readSource(relativePath: String): String {
         val file = File(repoRoot(), relativePath)
