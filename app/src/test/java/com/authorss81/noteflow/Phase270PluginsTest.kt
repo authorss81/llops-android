@@ -1,6 +1,7 @@
 package com.authorss81.noteflow
 
 import android.content.Context
+import com.authorss81.noteflow.plugins.CaseChangePlugin
 import com.authorss81.noteflow.plugins.InMemoryPluginSettingsStore
 import com.authorss81.noteflow.plugins.NoteflowPlugin
 import com.authorss81.noteflow.plugins.PluginAvailability
@@ -15,15 +16,19 @@ import com.authorss81.noteflow.plugins.store.InMemoryPluginInstallStore
 import com.authorss81.noteflow.plugins.store.PluginStoreCatalog
 import com.authorss81.noteflow.plugins.store.PluginStoreController
 import com.authorss81.noteflow.services.FakePrefs
+import com.authorss81.noteflow.services.PluginArtifactStorage
 import com.authorss81.noteflow.services.PluginInstallDefaults
 import com.authorss81.noteflow.services.PluginPayloadPathPolicy
 import com.authorss81.noteflow.services.SettingsPluginInstallStore
 import com.authorss81.noteflow.services.settingsOver
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 
 /**
  * Phase 270 (plugin install-default + delete atomicity + payload path):

@@ -70,11 +70,7 @@ class PluginArtifactStorage(context: Context) : PluginArtifactResolver {
         File(appContext.filesDir, "noteflow/plugin-payloads/$pluginId")
 
     /** Reserved payload roots an artifact may carry (anything else is ignored). */
-    private val RESERVED_PREFIXES = listOf(
-        "assets/mlkit-google-ocr-models/",
-        "assets/translate_models_metadata.json",
-        "assets/rapid_response_client_defaults.xml"
-    )
+    private val reservedPrefixes: List<String> get() = Companion.RESERVED_PREFIXES
 
     private fun payloadMarker(pluginId: String, sha256: String?): File =
         File(payloadDir(pluginId), ".payload-${(sha256 ?: "unknown").take(16)}")
@@ -90,42 +86,65 @@ class PluginArtifactStorage(context: Context) : PluginArtifactResolver {
         val markerFile = payloadMarker(entry.id, entry.sha256)
         val root = payloadDir(entry.id)
         if (markerFile.exists()) return null
+        return extractEntries(root, markerFile, entry.id, artifact, currentAbi)
+    }
 
-        val abiPrefix = "lib/$currentAbi/"
-        try {
-            JarFile(artifact).use { jar ->
-                var wrote = false
-                jar.entries().asSequence().forEach { jarEntry ->
-                    if (jarEntry.isDirectory) return@forEach
-                    val name = jarEntry.name
-                    val targetName = when {
-                        name.startsWith(abiPrefix) -> "lib/$currentAbi/${name.substringAfterLast('/')}"
-                        RESERVED_PREFIXES.any { name == it || name.startsWith(it) } -> "assets/" + name.removePrefix("assets/")
-                        else -> null
-                    } ?: return@forEach
-                    // Phase 270: canonical-containment guard — a crafted entry
-                    // such as `assets/<reserved>/../../evil` passes the
-                    // reserved-prefix allow-list but escapes the payload root
-                    // when joined. Escaping entries are SKIPPED (never written).
-                    val out = PluginPayloadPathPolicy.resolveTarget(root, targetName)
-                        ?: return@forEach
-                    if (!wrote) {
-                        root.mkdirs()
-                        wrote = true
+    /**
+     * Phase 270 review-fix: the extraction loop over injectable dirs/ABI, so a
+     * pure-JVM test can drive it end-to-end with a crafted zip (no Context).
+     * Lives on the companion so no Context-holding instance is needed.
+     */
+    companion object {
+        /** Reserved payload roots an artifact may carry (anything else is ignored). */
+        private val RESERVED_PREFIXES = listOf(
+            "assets/mlkit-google-ocr-models/",
+            "assets/translate_models_metadata.json",
+            "assets/rapid_response_client_defaults.xml"
+        )
+
+        internal fun extractEntries(
+            root: File,
+            markerFile: File,
+            entryId: String,
+            artifact: File,
+            abi: String
+        ): String? {
+            val abiPrefix = "lib/$abi/"
+            try {
+                JarFile(artifact).use { jar ->
+                    var wrote = false
+                    jar.entries().asSequence().forEach { jarEntry ->
+                        if (jarEntry.isDirectory) return@forEach
+                        val name = jarEntry.name
+                        val targetName = when {
+                            name.startsWith(abiPrefix) -> "lib/$abi/${name.substringAfterLast('/')}"
+                            RESERVED_PREFIXES.any { name == it || name.startsWith(it) } -> "assets/" + name.removePrefix("assets/")
+                            else -> null
+                        } ?: return@forEach
+                        // Phase 270: canonical-containment guard — a crafted entry
+                        // such as `assets/<reserved>/../../evil` passes the
+                        // reserved-prefix allow-list but escapes the payload root
+                        // when joined. Escaping entries are SKIPPED (never written).
+                        val out = PluginPayloadPathPolicy.resolveTarget(root, targetName)
+                            ?: return@forEach
+                        if (!wrote) {
+                            root.mkdirs()
+                            wrote = true
+                        }
+                        if (out.exists() && out.length() == jarEntry.size.toLong()) return@forEach
+                        out.parentFile?.mkdirs()
+                        jar.getInputStream(jarEntry).use { input ->
+                            out.outputStream().use { output -> input.copyTo(output) }
+                        }
                     }
-                    if (out.exists() && out.length() == jarEntry.size.toLong()) return@forEach
-                    out.parentFile?.mkdirs()
-                    jar.getInputStream(jarEntry).use { input ->
-                        out.outputStream().use { output -> input.copyTo(output) }
-                    }
+                    // A marker records the extraction only for artifacts that carry
+                    // payloads at all; payload-less plugins (grep: none today) skip.
+                    if (wrote) markerFile.writeText(entryId)
                 }
-                // A marker records the extraction only for artifacts that carry
-                // payloads at all; payload-less plugins (grep: none today) skip.
-                if (wrote) markerFile.writeText(entry.id)
+                return null
+            } catch (e: Throwable) {
+                return "The plugin payloads couldn't be extracted (${e::class.java.simpleName})."
             }
-            return null
-        } catch (e: Throwable) {
-            return "The plugin payloads couldn't be extracted (${e::class.java.simpleName})."
         }
     }
 

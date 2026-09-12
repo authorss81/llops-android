@@ -29,7 +29,7 @@ class CaseChangePlugin : NoteflowPlugin, TextTransformPlugin {
     }
 
     override val manifest = PluginManifest(
-        id = "com.authorss81.noteflow.plugins.casechange",
+        id = PLUGIN_ID,
         name = "Case Converter",
         version = SemanticVersion(1, 0, 0),
         minSupportedApi = MIN_API,
@@ -78,8 +78,10 @@ class CaseChangePlugin : NoteflowPlugin, TextTransformPlugin {
         return sb.toString()
     }
 
-    private companion object {
-        const val MIN_API = 26
-        const val SETTING_MODE = "mode"
+    companion object {
+        /** Canonical id of the optional store plugin (single source of truth). */
+        const val PLUGIN_ID = "com.authorss81.noteflow.plugins.casechange"
+        private const val MIN_API = 26
+        private const val SETTING_MODE = "mode"
     }
 }

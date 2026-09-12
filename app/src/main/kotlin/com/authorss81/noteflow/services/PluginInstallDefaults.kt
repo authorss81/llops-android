@@ -1,5 +1,7 @@
 package com.authorss81.noteflow.services
 
+import com.authorss81.noteflow.plugins.CaseChangePlugin
+
 /**
  * Phase 270: install defaults for the plugin store's install lifecycle.
  *
@@ -16,14 +18,20 @@ package com.authorss81.noteflow.services
  */
 object PluginInstallDefaults {
 
-    /** Optional bundled plugin ids that default to NOT installed. */
+    /**
+     * Optional bundled plugin ids that default to NOT installed. Built from the
+     * plugins' own canonical ids (single source of truth) — a new optional
+     * plugin must add its id here or it regresses to installed-by-default.
+     */
     val OPTIONAL_NOT_INSTALLED_BY_DEFAULT: Set<String> = setOf(
-        "com.authorss81.noteflow.plugins.casechange"
+        CaseChangePlugin.PLUGIN_ID
     )
 
     /** Default install state for [pluginId] when no persisted key exists. */
-    fun defaultInstalled(pluginId: String): Boolean =
-        pluginId !in OPTIONAL_NOT_INSTALLED_BY_DEFAULT
+    fun defaultInstalled(
+        pluginId: String,
+        optionalIds: Set<String> = OPTIONAL_NOT_INSTALLED_BY_DEFAULT
+    ): Boolean = pluginId !in optionalIds
 
     /**
      * Resolve the effective install state: an existing persisted key wins
@@ -33,7 +41,8 @@ object PluginInstallDefaults {
     fun resolveInstalled(
         pluginId: String,
         keyExists: Boolean,
-        storedUninstalled: Boolean
+        storedUninstalled: Boolean,
+        optionalIds: Set<String> = OPTIONAL_NOT_INSTALLED_BY_DEFAULT
     ): Boolean =
-        if (!keyExists) defaultInstalled(pluginId) else !storedUninstalled
+        if (!keyExists) defaultInstalled(pluginId, optionalIds) else !storedUninstalled
 }

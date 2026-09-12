@@ -34,12 +34,14 @@ object PluginPayloadPathPolicy {
         if (targetName.split('/').any { it == ".." }) return null
         return try {
             val rootCanonical = root.canonicalPath
-            val out = File(root, targetName)
-            val outCanonical = out.canonicalPath
+            val outCanonical = File(root, targetName).canonicalPath
             if (outCanonical != rootCanonical &&
                 outCanonical.startsWith(rootCanonical + File.separator)
             ) {
-                out
+                // Phase 270 review-fix: hand back the CANONICAL file, not the
+                // joined one, so a symlink planted under the root between the
+                // check and the write cannot redirect the extraction.
+                File(outCanonical)
             } else {
                 null
             }

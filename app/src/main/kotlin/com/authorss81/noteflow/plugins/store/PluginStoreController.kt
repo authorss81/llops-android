@@ -223,23 +223,30 @@ class PluginStoreController(
     fun delete(pluginId: String, context: Context?): DeleteOutcome {
         val plugin = registry.allPlugins.firstOrNull { it.id == pluginId }
             ?: return DeleteOutcome.Failed(pluginId, "This plugin is not installed.")
-        // Remove downloaded assets BEFORE the registry forgets the plugin.
-        // Phase 270: a throwing wipe must not leave the registry installed
-        // with half-deleted assets — log a FIXED code (B2-LOG-04: never the
-        // exception message, which could echo hostile plugin data) and still
-        // run the registry uninstall below so Delete stays atomic.
-        try {
-            plugin.deleteDownloadedAssets(context)
-        } catch (e: Throwable) {
-            logger.error(pluginId, plugin.name, "store delete assets failed; code=DELETE_ASSETS_FAILED")
-        }
         val entry = catalog.entryFor(pluginId)
+        // Phase 270 review-fix: uninstall FIRST. A Refused uninstall (e.g. the
+        // settings wipe failed — "nothing was uninstalled") then touches
+        // nothing, instead of leaving an installed plugin whose assets are
+        // already gone. The plugin reference above stays valid for the wipe.
         return when (val result = registry.uninstallPlugin(pluginId, context)) {
             is PluginUninstallResult.Uninstalled -> {
+                // Phase 270: a throwing wipe must not fail the delete — log a
+                // FIXED code (B2-LOG-04: never the exception message, which
+                // could echo hostile plugin data). The registry is already
+                // clean; worst case orphaned bytes are overwritten on reinstall.
+                try {
+                    plugin.deleteDownloadedAssets(context)
+                } catch (_: Exception) {
+                    logger.error(pluginId, plugin.name, "store delete assets failed; code=DELETE_ASSETS_FAILED")
+                }
                 // A downloadable plugin's artifact + entry blob are owned by the
                 // runtime/store, not the plugin itself — remove them too.
                 if (entry != null && !entry.bundled) {
-                    remoteInstaller?.deleteArtifact(entry.entry)
+                    try {
+                        remoteInstaller?.deleteArtifact(entry.entry)
+                    } catch (_: Exception) {
+                        logger.error(pluginId, plugin.name, "store delete remote artifact failed; code=DELETE_REMOTE_ARTIFACT_FAILED")
+                    }
                 }
                 logger.lifecycle("store-delete", pluginId, plugin.name)
                 DeleteOutcome.Deleted(pluginId)
