@@ -262,6 +262,27 @@ tasks.configureEach {
     }
 }
 
+// Phase 265 (PERF runbook): baseline-profile generation + unsigned proof.
+// Generation (needs a connected device/emulator, NOT CI — android.yml skips
+// llops-bot so no signed assembleRelease under fullMode+shrinkResources has
+// run on CI):
+//   gradle :app:generateBaselineProfile --no-configuration-cache
+// (--no-configuration-cache: repo sets org.gradle.configuration-cache=true in
+// gradle.properties, but AGP's CheckAarMetadataTask/checkTestedAppObfuscation
+// fields aren't config-cache-serializable; the flag applies ONLY to the
+// producer/generation invocation, ordinary builds keep the cache ON.)
+// Then commit the written src/main/baselineProfiles/*.txt and run ONE more
+// release build AFTER generation (configuration-time check above) so the
+// freshly committed profile is compiled in; a recurrence of the AGP
+// "String index out of range: 62" crash surfaces as an explicit failure.
+// Unsigned proof WITHOUT a keystore (B1-PLAT-1 refuses assembleRelease
+// keystore-less by design): `gradle :app:minifyReleaseWithR8` and
+// `gradle :app:lintRelease` are quality-only tasks outside
+// RELEASE_SIGNING_TASK_NAMES, so they run keystore-less and still exercise
+// R8 fullMode + shrinkResources; a green minify emits
+// app/build/outputs/mapping/release/mapping.txt. The guarded disable above
+// stays until a real profile lands.
+
 // B1-PLAT-1 (phase-57) fail-fast gate: whenever a task that produces a SIGNED
 // RELEASE artifact is requested while the release keystore is not configured,
 // abort before R8/minify burns minutes. Only release signing/packaging task names

@@ -1,6 +1,5 @@
 package com.authorss81.noteflow.ui.components
 
-import android.os.Build
 import android.view.Choreographer
 
 /**
@@ -78,9 +77,16 @@ class WetBrushFramePump(
         }
     }
 
-    /** Arms the pump for an in-progress stroke. No-op below API 33 or if already armed. */
+    /**
+     * Arms the pump for an in-progress stroke. No-op if already armed.
+     *
+     * Phase 265: the pre-265 `if (SDK < TIRAMISU) return` guard is removed.
+     * [Choreographer] exists since API 16 and minSdk is 26, so the guard left
+     * API 26-32 (most of the minSdk fleet) with a dead pump — recordFrameTime /
+     * updateTierAndFallback never ran, the frame-time EMA sat at 16.6ms and the
+     * thermal tier never degraded. No API-33-only call exists on this path.
+     */
     fun start() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
         if (!active.compareAndSet(false, true)) return
         // Skip the stale first delta after any idle gap: a huge elapsed value
         // would poison the wet engine's frame-time EMA.

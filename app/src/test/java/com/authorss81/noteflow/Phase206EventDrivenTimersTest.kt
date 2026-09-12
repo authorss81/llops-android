@@ -164,9 +164,13 @@ class Phase206EventDrivenTimersTest {
             "doFrame must bail out when inactive (gated repost)",
             doFrame.contains("if (!active.get()) return")
         )
-        assertTrue(
-            "start() must no-op below API 33 (parity with the pre-206 gate)",
-            pump.contains("Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU")
+        // Phase 265: the pre-206 "parity" TIRAMISU gate was a HIGH bug, not a
+        // feature — Choreographer exists since API 16 and minSdk is 26, so the
+        // guard left API 26-32 with a dead pump (EMA stuck at 16.6ms, thermal
+        // tier never degrading). start() must arm on every API level now.
+        assertFalse(
+            "phase-265: start() must not gate on TIRAMISU (dead pump on API 26-32)",
+            pump.contains("Build.VERSION_CODES.TIRAMISU")
         )
         assertTrue(
             "thermal sampling must be throttled to <=1 Hz, not per-frame",

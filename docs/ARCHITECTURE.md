@@ -3288,9 +3288,16 @@ UNTRUSTED files before any staging); `ui/components/Dialogs.kt` `AppUpdateDialog
   `collectNonMinifiedReleaseBaselineProfile` → `mergeReleaseBaselineProfile` → `copyReleaseBaselineProfileIntoSrc`;
   (c) CI caveat corrected — `.github/workflows/android.yml` SKIPS llops-bot commits, so no signed
   `assembleRelease` under fullMode+shrinkResources has run on CI; (d) REPORT anchors refreshed. Caveat: run the
-  producer/`generateBaselineProfile` chain with `--no-configuration-cache` (AGP `CheckAarMetadataTask`/
-  `checkTestedAppObfuscation` fields aren't gradle-config-cache-serializable; repo sets
-  `org.gradle.configuration-cache=true`).
+   producer/`generateBaselineProfile` chain with `--no-configuration-cache` (AGP `CheckAarMetadataTask`/
+   `checkTestedAppObfuscation` fields aren't gradle-config-cache-serializable; repo sets
+   `org.gradle.configuration-cache=true`).
+- **Implemented in phase-265** (perf budgets + pump guard, see `workspace/phase-265/REPORT.md`):
+  `WetBrushFramePump.start()` no longer early-returns below TIRAMISU (Choreographer is API 16+,
+  minSdk 26 — the guard dead-ended frame-time/thermal adaptation on API 26-32); the
+  `compileArtProfile` guard stays with a generation runbook + keystore-less mapping proof in
+  `app/build.gradle.kts`; the layer/pool/corpus memory budget keeps its two-tier guarantee
+  (active page never evicted mid-draw, everything else under 64 MB) with `onTrimMemory`/
+  `onLowMemory` + `lock()` pool clears pinned by `Phase265PerfTest`.
 - **Implemented in phase-211** (release hygiene, see `workspace/phase-211/REPORT.md`): (1) the blanket
   `-keep class androidx.ink.** { *; }` + stale `-keep com.google.protobuf.** { *; }` are GONE from
   `app/proguard-rules.pro` — ink's own AARs declare shrink-safety ("Intentionally empty proguard rules"),
@@ -3330,7 +3337,7 @@ androidx.biometric 1.1.0 · coroutines 1.9.0.
 5. `extractNativeLibs="true"` (`useLegacyPackaging=true`) required for SQLCipher `.so` on SDK 36 (16KB pages).
    - **Implemented in phase-176**: measured — extractNativeLibs=false grows every download (universal +13.7 MB) AND re-exposes the dlopen crash, so extraction stays ON. Operative control is the manifest attr (`AndroidManifest.xml:14`), which overrides `useLegacyPackaging`; both stay true. Release payload also excludes `DebugProbesKt.bin` / `kotlin-tooling-metadata.json` / `firebase-*.properties` (R2-KS-27); R8 `mapping.txt` retention + deferred CI archival documented in `docs/RELEASE.md`.
 6. `allowBackup="false"` + data-extraction rules — never re-enable. FLAG_SECURE in non-debug.
-7. Baseline profiles disabled (AGP bug); unit tests use `isReturnDefaultValues = true` (no Robolectric).
+7. Baseline-profile `compileArtProfile` disable is GUARDED (lifts when a real profile lands; runbook in `app/build.gradle.kts`); unit tests use `isReturnDefaultValues = true` (no Robolectric).
 8. `INTERNET` used only by WebDAV sync + LocalSend. WebDAV HTTPS-only unless local-network opt-in.
 9. Duplicate `WikiLinkParser` (`utils/` vs `services/`) — `services/` is the one screens use.
 10. Two plugin-state persistence layers exist (`SettingsPlugin*Store.kt` vs `plugins/runtime/Plugin*Store.kt`) —
