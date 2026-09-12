@@ -101,6 +101,7 @@ import com.authorss81.noteflow.services.StrokeSelectionActionPolicy
 import com.authorss81.noteflow.services.SelectionTransformPolicy
 import com.authorss81.noteflow.services.ClipboardGuard
 import com.authorss81.noteflow.ui.components.AnnotationCanvas
+import com.authorss81.noteflow.ui.components.FloatingZoomWidget
 import com.authorss81.noteflow.ui.components.decodeBoundedImage
 import com.authorss81.noteflow.ui.components.rememberSaFExporter
 import com.authorss81.noteflow.ui.components.SaFExportResult
@@ -2826,6 +2827,39 @@ fun EditorScreen(
                 maxWidth.value.roundToInt(),
                 maxHeight.value.roundToInt()
             )
+
+            // Floating Zoom Controls Widget — positioned above the ink bar
+            AnimatedVisibility(
+                visible = toolbarState != FloatingToolbarState.HIDDEN_DRAWING,
+                enter = com.authorss81.noteflow.theme.MotionSystem.enter(fadeIn()),
+                exit = com.authorss81.noteflow.theme.MotionSystem.exit(fadeOut()),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .navigationBarsPadding()
+                    .padding(bottom = if (shapeLandscape) 24.dp else 88.dp)
+            ) {
+                FloatingZoomWidget(
+                    zoomScale = zoomScale,
+                    onZoomChange = { newZoom -> zoomScale = newZoom },
+                    onFitWidth = {
+                        val screenW = context.resources.displayMetrics.widthPixels.toFloat()
+                        val targetZoom = (screenW / 1080f).coerceIn(0.25f, 5.0f)
+                        zoomScale = targetZoom
+                        panOffset = Offset(0f, panOffset.y)
+                    },
+                    onFitPage = {
+                        val screenH = context.resources.displayMetrics.heightPixels.toFloat()
+                        val targetZoom = (screenH / (1528f + 64f)).coerceIn(0.25f, 5.0f)
+                        zoomScale = targetZoom
+                        panOffset = Offset(0f, panOffset.y)
+                    },
+                    onResetZoom = {
+                        zoomScale = 1.0f
+                        panOffset = Offset(0f, panOffset.y)
+                    },
+                    isPdfOrDocument = isPdf
+                )
+            }
 
             AnimatedVisibility(
                 visible = toolbarState != FloatingToolbarState.HIDDEN_DRAWING,

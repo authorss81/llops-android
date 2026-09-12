@@ -129,19 +129,27 @@ import org.junit.Test
  * CanvasNavigationPolicy.shouldAnimate (+12 raw / +5 code, all `//`
  * comments — no KDoc opener added). EditorScreen/HomeScreen untouched.
  * Re-measured on the phase-272 review-fix tree: AnnotationCanvas 8889 raw / 7099 code.
+ *
+ * PHASE 273 RE-BASELINE: EditorScreen wires the ported FloatingZoomWidget
+ * above the ink bar (import + AnimatedVisibility block over the editor's own
+ * zoomScale/panOffset states, +34 raw / +32 code: one `//` comment + one
+ * blank line are the only non-code lines). AnnotationCanvas/HomeScreen
+ * untouched. No KDoc opener added (plain `//` comment only — the KDoc counts
+ * below are unchanged). Re-measured on the phase-273 tree: EditorScreen
+ * 7591 raw / 6597 code.
  */
 class Phase254CommentTrimTest {
 
-    // Phase-255/256/257/264/266/269/272 re-baselined raw line counts (review-fix values measured on the review-fix tree).
+    // Phase-255/256/257/264/266/269/272/273 re-baselined raw line counts (review-fix values measured on the review-fix tree).
     private val headRaw = mapOf(
         "ui/components/AnnotationCanvas.kt" to 8889,
-        "ui/screens/EditorScreen.kt" to 7557,
+        "ui/screens/EditorScreen.kt" to 7591,
         "ui/screens/HomeScreen.kt" to 3845
     )
-    // Phase-255/256/257/264/266/269/272 re-baselined code-line counts (non-blank, non-full-`//` lines).
+    // Phase-255/256/257/264/266/269/272/273 re-baselined code-line counts (non-blank, non-full-`//` lines).
     private val headCode = mapOf(
         "ui/components/AnnotationCanvas.kt" to 7099,
-        "ui/screens/EditorScreen.kt" to 6565,
+        "ui/screens/EditorScreen.kt" to 6597,
         "ui/screens/HomeScreen.kt" to 3310
     )
     // Parent baseline KDoc `/**` opener counts (no KDoc opener may be deleted).

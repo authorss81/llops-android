@@ -323,6 +323,17 @@
 > one bounded job, no poller.
 > Tests: `Phase272PanFlingTest` (11); phase-205 drag-end pin amended (single
 > fling launch), phase-254 re-baselined (canvas 8889/7099).
+>
+> **Implemented in phase-273** (2026-09-12, wire FloatingZoomWidget, see
+> `workspace/phase-273/REPORT.md`): the ported `FloatingZoomWidget`
+> (`ui/components/FloatingZoomWidget.kt`, untouched) is composed in
+> `EditorScreen.kt:2830-2873` — first child of the dock's `BoxWithConstraints`
+> (posture-aware padding 24dp/88dp, hidden with the ink bar under
+> `HIDDEN_DRAWING`) over the editor's own `zoomScale`/`panOffset` (same states
+> `AnnotationCanvas` consumes at `:2609-2610`; fit-width `screenW/1080f`,
+> fit-page `screenH/(1528f+64f)`, clamp `0.25f..5.0f`, reset `1.0f`).
+> Tests: `Phase273ZoomWidgetTest` (5); phase-254 re-baselined (EditorScreen
+> 7591/6597).
 
 > **Implemented in phase-261** (2026-09-12, WebDAV DNS-masquerade + backup
 > staging hygiene, see `workspace/phase-261/REPORT.md`): `isLocalNetworkHost`
