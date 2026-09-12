@@ -244,6 +244,82 @@ class Phase262VoiceTest {
         assertTrue(c.contains("WaveformPeakMath.scrubTargetMs"))
     }
 
+    // ---------- Review fixes ----------
+
+    @Test
+    fun `streaming temps are matched and swept without touching real blobs`() {
+        val dir = Files.createTempDirectory("voice262sweep").toFile()
+        try {
+            val blob = File(dir, "voice_p1_1.enc").apply { writeText("enc") }
+            val encTmp = File(dir, "voice_p1_1.enc.tmp").apply { writeText("tmp") }
+            val rekeyTmp = File(dir, "voice_p1_2.enc.rekey.tmp").apply { writeText("tmp") }
+            val recTmp = File(dir, "voice_rec_p1_1_m.tmp").apply { writeText("tmp") }
+            assertTrue(VoiceNoteCrypto.isStreamingTempName("voice_p1_1.enc.tmp"))
+            assertTrue(VoiceNoteCrypto.isStreamingTempName("voice_p1_2.enc.rekey.tmp"))
+            assertFalse(VoiceNoteCrypto.isStreamingTempName("voice_p1_1.enc"))
+            assertFalse(VoiceNoteCrypto.isStreamingTempName("voice_p1_1.m4a"))
+            assertEquals(2, VoiceNoteCrypto.sweepStreamingTemps(dir))
+            assertTrue("finished blob must survive the sweep", blob.isFile)
+            assertTrue("recording temps are not streaming temps", recTmp.isFile)
+            assertFalse(encTmp.exists())
+            assertFalse(rekeyTmp.exists())
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `voice dir streaming sweep is wired into record release and migrate paths`() {
+        val vnm = manager()
+        assertTrue(vnm.contains("sweepStreamingTemps"))
+        val repo = repository()
+        val migrateAt = repo.indexOf("suspend fun migrateLegacyPlaintextVoiceNotes")
+        assertTrue(migrateAt >= 0)
+        val body = repo.substring(migrateAt, minOf(repo.length, migrateAt + 4000))
+        assertTrue(body.contains("sweepStreamingTemps"))
+    }
+
+    @Test
+    fun `decrypt falls back to legacy FIELD_AAD blobs`() {
+        val dir = Files.createTempDirectory("voice262aad").toFile()
+        try {
+            val dek = ByteArray(32) { (it * 7 + 3).toByte() }
+            val raw = ByteArray(6000) { (it % 251).toByte() }
+            val combined = com.authorss81.noteflow.services.EncryptionService.encryptAad(
+                raw, dek, com.authorss81.noteflow.services.EncryptionService.FIELD_AAD
+            )
+            val blob = File(dir, "voice_p1_9.enc").apply { writeBytes(combined) }
+            val restored = File(dir, "out.m4a")
+            assertTrue(
+                "pre-domain-separation blob must still play via the FIELD_AAD retry",
+                VoiceNoteCrypto.decryptRecordingFile(blob, restored, dek)
+            )
+            assertEquals(raw.size.toLong(), restored.length())
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `playback honors audio-focus denial and splits the confinement message`() {
+        val vnm = manager()
+        assertTrue(vnm.contains("if (!requestPlaybackFocus())"))
+        assertTrue(vnm.contains("Could not get audio focus"))
+        assertTrue(vnm.contains("outside the vault voice folder"))
+    }
+
+    @Test
+    fun `waveform seeks once per gesture without drag-start seek`() {
+        val c = card()
+        assertTrue(c.contains("detectTapGestures"))
+        assertTrue(c.contains("detectHorizontalDragGestures"))
+        assertTrue(c.contains("WaveformPeakMath.scrubTargetMs"))
+        assertFalse(
+            "onDragStart fires on every touch-down, double-seeking taps",
+            c.contains("onDragStart =")
+        )
+    }
+
     @Test
     fun `speed selector guards unknown speeds`() {
         val c = card()

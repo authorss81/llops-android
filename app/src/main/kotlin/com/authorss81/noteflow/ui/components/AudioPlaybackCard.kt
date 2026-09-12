@@ -219,7 +219,9 @@ fun AudioPlaybackCard(
             // Phase 262: tap-to-seek PLUS drag-scrub — the pre-fix tap-only
             // gesture made fine seeking on a 30-min memo a tap-lottery. Both
             // gestures route through WaveformPeakMath.scrubTargetMs (clamped).
-            var dragRatio by remember(embed.id) { mutableStateOf<Float?>(null) }
+            // Review fix: no onDragStart seek — it fires on every touch-down
+            // (taps included), so a simple tap sought twice (down + up).
+            // Taps seek on release via detectTapGestures; drags seek on move.
             Canvas(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -234,17 +236,11 @@ fun AudioPlaybackCard(
                     }
                     .pointerInput(embed.id, durationMs) {
                         detectHorizontalDragGestures(
-                            onDragStart = { offset ->
-                                dragRatio = (offset.x / size.width).coerceIn(0f, 1f)
-                                onSeekTo(WaveformPeakMath.scrubTargetMs(dragRatio!!, durationMs))
-                            },
                             onHorizontalDrag = { change, _ ->
                                 change.consume()
-                                dragRatio = (change.position.x / size.width).coerceIn(0f, 1f)
-                                onSeekTo(WaveformPeakMath.scrubTargetMs(dragRatio!!, durationMs))
-                            },
-                            onDragEnd = { dragRatio = null },
-                            onDragCancel = { dragRatio = null }
+                                val dragRatio = (change.position.x / size.width).coerceIn(0f, 1f)
+                                onSeekTo(WaveformPeakMath.scrubTargetMs(dragRatio, durationMs))
+                            }
                         )
                     }
             ) {

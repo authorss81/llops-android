@@ -35,11 +35,28 @@ sweep, drag-scrub + speed guard). One pre-existing stale pin updated
   first draft added a 9th in the prepared-callback — removed (error banner
   without a new log line), count stays 8.
 
+## Review fixes (FINDINGS 1–5)
+1. `*.enc.tmp` / `*.rekey.tmp` streaming temps leaked no sweeper — new
+   `VoiceNoteCrypto.isStreamingTempName` + `sweepStreamingTemps`, wired into
+   the migrate orphan sweep (`NoteRepository.kt`) and the recurring
+   `startRecording`/`release` sweeps (`VoiceNoteManager.kt`); real blobs and
+   recording temps untouched (pinned).
+2. Denied audio focus was ignored — `startPlayback` now fails closed with
+   "Could not get audio focus — playback didn't start." (temp destroyed, no
+   player, no noisy receiver).
+3. `onDragStart` sought on every touch-down, double-seeking taps — removed;
+   taps seek on release, drags on move (pinned: no `onDragStart` in the card).
+4. Streaming decrypt/re-key retried under legacy `FIELD_AAD` (parity with
+   `EncryptionService.decryptAad`); re-keyed blobs always re-bound to the
+   blob-name AAD. Pinned by a behavior test over a real FIELD_AAD blob.
+5. Confinement refusal split from the missing-file message ("outside the
+   vault voice folder").
+
 ## Verification
 - `gradle :app:assembleDebug` green.
-- `gradle :app:testDebugUnitTest` **3763 tests, 0 failures / 0 errors**
-  (incl. 15 new `Phase262VoiceTest`).
-- `gradle :app:lintDebug` 0 errors.
+- `gradle :app:testDebugUnitTest` **3768 tests, 0 failures / 0 errors**
+  (incl. 20 `Phase262VoiceTest`: 15 phase + 5 review-fix pins).
+- `gradle :app:lintDebug` 0 errors (BUILD SUCCESSFUL, only pre-existing warnings).
 - No Room schema change, no new dependencies, no `.github/workflows/` edits,
   `verification-metadata.xml` untouched, `allowBackup=false` untouched, no
   plaintext rows introduced (fail-closed paths delete plaintext temps).

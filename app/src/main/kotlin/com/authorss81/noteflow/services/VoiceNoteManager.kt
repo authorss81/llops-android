@@ -171,6 +171,13 @@ class VoiceNoteManager(private val context: Context) {
         // exists on disk no longer than the recording itself. Any stale plaintext
         // temp from an interrupted pre-fix session is swept first.
         VoiceNoteCrypto.sweepPlaintextTemps(context.cacheDir)
+        // Review fix: the recurring sweep must also cover phase-262 streaming
+        // temps (`*.enc.tmp`/`*.rekey.tmp`) in the voice dir — the migrate
+        // sweep is flag-gated (runs once), but a kill-crash can leak a tmp on
+        // any later encrypt/re-key.
+        runCatching {
+            VoiceNoteCrypto.sweepStreamingTemps(File(context.filesDir, "voice_notes"))
+        }
 
         // Phase 262: unpredictable cache/blob names — the pre-fix
         // `voice_<ms>.m4a` stamp was guessable; a random suffix is appended.
@@ -538,12 +545,18 @@ class VoiceNoteManager(private val context: Context) {
         // user is actively listening (deleted on stop/completion/release).
         // Decrypt off the main thread so a slow read never janks the UI.
         // Phase 262: also confined to filesDir/voice_notes (DB `../` escape).
-        if (!VoiceNoteCrypto.isEncryptedBlobName(blob.name) || !blob.isFile || blob.length() < 2L ||
-            !isConfinedVoiceBlob(blob)
-        ) {
+        // Review fix: the confinement refusal carries its own message — the
+        // old single branch blamed a missing/empty file for a path escape.
+        if (!VoiceNoteCrypto.isEncryptedBlobName(blob.name) || !blob.isFile || blob.length() < 2L) {
             _isPlaying.value = false
             _activePlayingFilePath.value = null
             _playbackError.value = "Audio file is missing or empty — it can't be played."
+            return
+        }
+        if (!isConfinedVoiceBlob(blob)) {
+            _isPlaying.value = false
+            _activePlayingFilePath.value = null
+            _playbackError.value = "Audio file is outside the vault voice folder — it can't be played."
             return
         }
 
@@ -573,7 +586,17 @@ class VoiceNoteManager(private val context: Context) {
             }
 
             try {
-                requestPlaybackFocus()
+                // Review fix: a denied focus request used to be ignored and
+                // playback started anyway. Fail closed with an honest message
+                // (no noisy receiver, no player, decrypted temp destroyed).
+                if (!requestPlaybackFocus()) {
+                    _isPlaying.value = false
+                    _activePlayingFilePath.value = null
+                    deletePlaybackTemp()
+                    abandonPlaybackFocus()
+                    _playbackError.value = "Could not get audio focus — playback didn't start."
+                    return@launch
+                }
                 registerNoisyReceiver()
                 // Phase 262 CRITICAL: prepareAsync() — the pre-fix blocking
                 // prepare() parsed the whole 32 MB AAC on Dispatchers.Main
@@ -776,6 +799,11 @@ class VoiceNoteManager(private val context: Context) {
         stopPlayback()
         scope.cancel()
         VoiceNoteCrypto.sweepPlaintextTemps(context.cacheDir)
+        // Review fix: recurring sweep of phase-262 streaming temps in the
+        // voice dir (see startRecording — the migrate sweep runs once only).
+        runCatching {
+            VoiceNoteCrypto.sweepStreamingTemps(File(context.filesDir, "voice_notes"))
+        }
         val discarded = discardOnRelease
         discardOnRelease = false
         return discarded

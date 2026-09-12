@@ -1442,7 +1442,11 @@ class NoteRepository(private var db: NoteflowDatabase, private val importsRoot: 
             .mapNotNull { File(it.contentUrlOrPath ?: "").parentFile } + voiceNotesDir())
             .filterNotNull()
             .distinct()
-        val orphansDeleted = dirs.sumOf { VoiceNoteCrypto.deleteOrphanPlaintext(it, retainedPlaintext) }
+        val orphansDeleted = dirs.sumOf { VoiceNoteCrypto.deleteOrphanPlaintext(it, retainedPlaintext) } +
+            // Review fix: also sweep phase-262 streaming-crypto temps
+            // (`*.enc.tmp`/`*.rekey.tmp`) — a process-kill between tmp creation
+            // and rename leaks them and no other matcher covers them.
+            dirs.sumOf { VoiceNoteCrypto.sweepStreamingTemps(it) }
 
         if (rowsMigrated > 0 || orphansDeleted > 0) invalidateSearchCorpus()
         VoiceNoteMigrationResult(

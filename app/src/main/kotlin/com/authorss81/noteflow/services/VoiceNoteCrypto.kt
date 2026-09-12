@@ -217,11 +217,20 @@ object VoiceNoteCrypto {
         if (!blob.isFile || !isEncryptedBlobName(blob.name)) return false
         if (blob.length() > MAX_BLOB_BYTES) return false
         if (blob.length() < WIRE_HEADER_BYTES + 16L) return false
+        // Review fix: retry under the legacy global FIELD_AAD, mirroring
+        // EncryptionService.decryptAad's pre-B2-CRYPTO-03 fallback. Voice blobs
+        // have always been blob-name-AAD-bound, so the second pass only ever
+        // fires for a hypothetical legacy blob — both passes are side-effect
+        // free on failure (destination removed, blob untouched).
+        return decryptRecordingFileWithAad(blob, destination, dek, aadFor(blob.name)) ||
+            decryptRecordingFileWithAad(blob, destination, dek, EncryptionService.FIELD_AAD)
+    }
+
+    private fun decryptRecordingFileWithAad(blob: File, destination: File, dek: ByteArray, aad: ByteArray): Boolean {
         // Phase 262: STREAMING decrypt — header (version + IV) is read first,
         // then the body is piped through Cipher.update in 64 KB chunks. No
         // whole-file readBytes on either side.
         return try {
-            val aad = aadFor(blob.name)
             FileInputStream(blob).use { input ->
                 val version = input.read()
                 if (version != WIRE_VERSION.toInt()) return false
@@ -269,6 +278,13 @@ object VoiceNoteCrypto {
         if (!blob.isFile || !isEncryptedBlobName(blob.name)) return false
         if (blob.length() > MAX_BLOB_BYTES) return false
         if (blob.length() < WIRE_HEADER_BYTES + 16L) return false
+        // Review fix: same legacy-FIELD_AAD retry as the decrypt path — a
+        // failed first pass leaves the blob untouched, so the retry is safe.
+        return reencryptAudioBlobWithOldAad(blob, oldDek, newDek, aadFor(blob.name)) ||
+            reencryptAudioBlobWithOldAad(blob, oldDek, newDek, EncryptionService.FIELD_AAD)
+    }
+
+    private fun reencryptAudioBlobWithOldAad(blob: File, oldDek: ByteArray, newDek: ByteArray, aad: ByteArray): Boolean {
         // Phase 262: STREAMING re-key — decrypt-update bytes are fed straight
         // into the encrypt-update chain chunk by chunk, so the full plaintext
         // never materializes (pre-fix held plaintext + both payloads in heap).
@@ -276,7 +292,6 @@ object VoiceNoteCrypto {
         // original blob byte-for-byte intact.
         var tmp: File? = null
         return try {
-            val aad = aadFor(blob.name)
             tmp = File(blob.parentFile, blob.name + ".rekey.tmp")
             FileInputStream(blob).use { input ->
                 val version = input.read()
@@ -294,7 +309,9 @@ object VoiceNoteCrypto {
                 val newIv = EncryptionService.newIv()
                 val enc = Cipher.getInstance("AES/GCM/NoPadding")
                 enc.init(Cipher.ENCRYPT_MODE, SecretKeySpec(newDek, "AES"), GCMParameterSpec(128, newIv))
-                enc.updateAAD(aad)
+                // The re-keyed blob is ALWAYS bound to the blob-name AAD —
+                // only the OLD (decrypt-side) AAD may fall back to legacy.
+                enc.updateAAD(aadFor(blob.name))
                 FileOutputStream(tmp!!).use { out ->
                     out.write(WIRE_VERSION.toInt())
                     out.write(newIv)
@@ -373,6 +390,39 @@ object VoiceNoteCrypto {
                 if (file.delete()) deleted++
             } catch (e: Exception) {
                 // force deletion is out of scope; count as not deleted
+            }
+        }
+        return deleted
+    }
+
+    /**
+     * True iff a file name is a phase-262 STREAMING crypto temp: the sibling
+     * `<blob>.enc.tmp` (encrypt) / `<blob>.rekey.tmp` (re-key) staged beside
+     * the `.enc` blob in `voice_notes/`. These match NEITHER
+     * [isPlaintextRecordingName] (no `.m4a`) NOR [isVoiceTempName] (no
+     * `voice_rec_/voice_pb_` prefix), so without this matcher a process-kill
+     * between tmp creation and rename would leak them forever. They are always
+     * expendable: a crashed encrypt never produced its blob, and a crashed
+     * re-key left the original blob byte-for-byte intact (review fix).
+     */
+    fun isStreamingTempName(fileName: String): Boolean {
+        val lower = fileName.lowercase()
+        return lower.endsWith(".enc.tmp") || lower.endsWith(".rekey.tmp")
+    }
+
+    /**
+     * Removes stale streaming-crypto temps ([isStreamingTempName]) under [dir].
+     * Returns the number of files deleted.
+     */
+    fun sweepStreamingTemps(dir: File): Int {
+        if (!dir.isDirectory) return 0
+        var deleted = 0
+        for (file in dir.listFiles()?.filter { it.isFile } ?: emptyList()) {
+            if (!isStreamingTempName(file.name)) continue
+            try {
+                if (file.delete()) deleted++
+            } catch (_: Exception) {
+                // nothing to do — a later sweep retries
             }
         }
         return deleted
