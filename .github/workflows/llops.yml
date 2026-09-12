@@ -49,13 +49,13 @@ concurrency:
 
 env:
   OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
-  # Model fallback chain (best coding models first, free tier preferred) — user ordered 2026-08-29
-  # 1. GLM 5.2:free (Z.ai) — strong coding, free via OpenRouter
-  # 2. MiniMax M3:free — 50.8% SWE Atlas class, cost-effective
-  # 3. Big Pickle — stealth free, 50.81% SWE Atlas Codebase QnA
-  # 4. Muse Spark 1.2 Contributor Free — Meta coding-tuned, 80% Terminal-Bench
+  # Model fallback chain (best coding models first, free tier preferred) — user ordered 2026-09-12
+  # 1. Muse Spark 1.2 Contributor Free — Meta coding-tuned, 80% Terminal-Bench (first)
+  # 2. GLM 5.2:free (Z.ai) — strong coding, free via OpenRouter
+  # 3. MiniMax M3:free — 50.8% SWE Atlas class, cost-effective
+  # 4. Big Pickle — stealth free, 50.81% SWE Atlas Codebase QnA
   # Fallbacks: Nemotron 3 Ultra/Lightning, MiMo, Hy3, Ling, Laguna, Nemotron Super
-  OPENCODE_MODEL: openrouter/z-ai/glm-5.2:free,openrouter/minimax/minimax-m3:free,opencode/big-pickle,opencode/muse-spark-1.2-contributor-free,opencode/nemotron-3-ultra-free,opencode/nemotron-3.5-lightning-free,opencode/mimo-v2.5-free,opencode/hy3-free,opencode/ling-3.0-flash-fin-free,opencode/laguna-s-2.1-free,openrouter/nvidia/nemotron-3-super-120b-a12b:free
+  OPENCODE_MODEL: opencode/muse-spark-1.2-contributor-free,openrouter/z-ai/glm-5.2:free,openrouter/minimax/minimax-m3:free,opencode/big-pickle,opencode/nemotron-3-ultra-free,opencode/nemotron-3.5-lightning-free,opencode/mimo-v2.5-free,opencode/hy3-free,opencode/ling-3.0-flash-fin-free,opencode/laguna-s-2.1-free,openrouter/nvidia/nemotron-3-super-120b-a12b:free
 jobs:
   select-phase:
     # Fix 4: no checkout — read marker files via the GitHub API (one trees call,
